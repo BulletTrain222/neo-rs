@@ -1,6 +1,6 @@
 # SPEC-0050: Shops and economy
 
-- Answers: proactive (open close-out), none requested (money, shop purchases and buy hooks); R-0030 (points 1 to 3; Open question 29 resolved)
+- Answers: proactive (open close-out), none requested (money, shop purchases and buy hooks); R-0225 (the shop copies beside 1427); R-0030 (points 1 to 3; Open question 29 resolved)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001). Check the coin denomination and coin id words listed under "Where it lives on the disc" before trusting the coin values.
 - Confidence: per section. Checked against the disc: the coin denominations and coin ids, the wallet rules, the buy path order and messages, the buy-hook registrations, the price multiplier (call sites, gate, cap and the field it scales), the script spend amounts, the boot grant codes and the price caption. Coin ids, denominations and blank rows: High. Wallet rules: High. Buy path order and refusal messages: High; the queueing when a request slot is busy: High; the free-item path when the add is busy: Medium. Negative prices: Medium-High. Buy hooks: High for the registration gates and item tests; Medium for the meaning of the level-line ids. Price multiplier: High for the call sites, the gate, the cap and the field it scales; Medium for its effect on items without a set price and for repeat calls. Spend amounts: High for the packs listed. Grant codes: Medium (no known caller). Price caption: High for which line shows what. No selling: High, as a negative result from the code and the text. Shop stock and prices (flag-1 placements, price = placement fixed count, take or copy, carry limit, once-per-area items, treasure map numbers): High. Buy candidate choice: Medium. Multiplier timing and its flag setter: High for the setter, Medium-High for the order after spawn. Act and hero grouping of the shops: Medium-Low, except Market Town (act 3, reached before the Black Knight): High. New-game wallet and items: High. Wheel game: rules in SPEC-0059 (High). Conditional placement flags (section 12) and the large-stash triggers (section 12.1): High.
@@ -122,13 +122,13 @@ A level script can register a callback for one item (host row 260, SPEC-0030). T
 | 856 | 113 | always, in the pack's init | 220 | 19 |
 | 859 | 130 | always, in the pack's init | 220 | 34 |
 | 1140 | 116 | only when flag 10 is set at init | 220 | 0 |
-| 1429 | 109 | always, in the pack's init | 248 | 20 |
+| 1433 | 109 | always, in the pack's init | 248 | 20 |
 
-Behavior of each callback: it reads the item id from the buy-info record. If the id equals its item and the test flag is clear, it shows its level line. Otherwise it does nothing. The callback body sets no flag, and every purchase made in the pack passes through the hook, so the line shows again on each buy of that item while the test flag stays clear (Medium-High). Which code sets flags 220 and 248 is open.
+Behavior of each callback: it reads the item id from the buy-info record. If the id equals its item and the test flag is clear, it shows its level line. Otherwise it does nothing. The hooks of 856 and 1433 also write 1 into the record's flag word in that case, which cancels the buy (SPEC-0030 row 260): item 113 cannot be bought in 856 while flag 220 is clear, and item 109 (Golden Shield) cannot be bought in 1433 while flag 248 is clear. The hooks of 859 and 1140 only show the line, and the buy goes through. The callback body sets no flag, and every purchase made in the pack passes through the hook, so the line shows again on each buy of that item while the test flag stays clear (Medium-High). Which code sets flags 220 and 248 is open.
 
-Each hook item is stock of its own pack: item 113 is a flag-1 placement in pack 856, 130 in pack 859, 116 in pack 1140 and 109 in pack 1429 (High).
+Each hook item is stock of its own pack: item 113 is a flag-1 placement in pack 856, 130 in pack 859, 116 in pack 1140 and 109 in pack 1433 (High).
 
-The pack 1429 registration never takes effect in play: pack 1429 is an Interior-family module that the game reaches only by streaming it into the exterior buffer from pack 1427, where its Init does not run (SPEC-0030, Interior modules in the exterior buffer; SPEC-0006). Its hook is never registered, so the level line 20 never shows; the shop still sells item 109 through the built-in Buy prompt (High for the module rule; Medium-High for the reach).
+The hook of pack 1433 takes effect in play. 1433 is the Vorsh shop, entered from 1300 as an interior, so its Init runs. Packs 1429, 1430 and 1431 hold the same shop and the same module, but they are only resident in the exterior buffer beside 1427, their Init does not run there, and the hero cannot stand in them (SPEC-0006, Edge cases, Interior-kind packs in E). They are not shops in play (High for the module rule and the placement of the data; Medium for never in play).
 
 ### 5. Price multiplier
 
@@ -233,7 +233,7 @@ Confidence: High for which line shows what, the colours and the coin-gain total.
 
 Confidence: High for the counts and the rule. Medium-Low for the act and hero of each group: the act is inferred from the stage ids of the story flags each module tests, from act-tagged movies in nearby packs and from the buy-hook flags. The hero follows the act-start swap mode (SPEC-0053): Tor only in act 1, Roberta only in act 2, both heroes from act 3.
 
-The disc holds 201 flag-1 item placements in 43 world packs. All 43 packs are in the new-game reach of SPEC-0006 (174 of the 191 game packs). 33 of them (154 placements) are grouped by act below. The other 10 (47 placements) are reached through the doors of packs 722 and 758 (packs 745, 749, 750, 776, 783, 786, 787 and 789) and through pack 1427 (packs 1430 and 1431); their act is not inferred. The scripts of packs 1430 and 1431 never run (they sit in the exterior buffer, SPEC-0030), so those two shops have the placements and the built-in Buy prompt but no script hooks. Each pack's stock is read from its flag-1 placements by the rule of section 8; no per-shop list is needed.
+The disc holds 201 flag-1 item placements in 43 world packs. All 43 packs are in the new-game reach of SPEC-0006 (174 of the 191 game packs), which counts packs that can load, not places the hero can stand. 32 of them are grouped by act below. Eight are reached through the doors of packs 722 and 758 (packs 745, 749, 750, 776, 783, 786, 787 and 789); their act is not inferred. Packs 1429, 1430 and 1431 hold the same stock as 1433 but are only resident beside 1427: the hero cannot stand in them, so nothing can be bought from them. Each pack's stock is read from its flag-1 placements by the rule of section 8; no per-shop list is needed.
 
 | Group | Hero | Packs | Placements | Price range (NP) | Sum of prices, one of each record (NP) |
 | --- | --- | --- | --- | --- | --- |
@@ -243,7 +243,7 @@ The disc holds 201 flag-1 item placements in 43 world packs. All 43 packs are in
 | Act 4: the city districts | both | 10 | 46 | 20 to 6,000 | about 34,200 |
 | Door-reached (act not inferred) | not inferred | 10 | 47 | 20 to 8,000 | |
 
-Pack numbers by group: act 1: 855 to 859, 984, 1131, 1133, 1136, 1140, 1143 and 1172; act 2: 1300, 1429 and 1433; act 3: 880, 1005, 1008, 1011, 1014, 1020, 1230 and 1251; act 4: 1350, 1353, 1405, 1407, 1409, 1417, 1419, 1421, 1423 and 1425; door-reached, act not inferred: 745, 749, 750, 776, 783, 786, 787, 789, 1430 and 1431.
+Pack numbers by group: act 1: 855 to 859, 984, 1131, 1133, 1136, 1140, 1143 and 1172; act 2: 1300 and 1433; act 3: 880, 1005, 1008, 1011, 1014, 1020, 1230 and 1251; act 4: 1350, 1353, 1405, 1407, 1409, 1417, 1419, 1421, 1423 and 1425; door-reached, act not inferred: 745, 749, 750, 776, 783, 786, 787 and 789; never visited: 1429, 1430 and 1431.
 
 What the groups sell (summary): every group sells potions and food, and the act 1, act 3 and act 4 groups also sell Motes. Equipment rises in step with the acts (SPEC-0021, Equipment families): act 1 shops sell the first sword, shield, armour, wand and dress upgrades; act 2 sells the Golden Shield, the Sorcerer's Wand and the Faerie Dress; act 3 sells the middle ladder steps (some at x4); act 4 sells the top swords, wands, armour, dresses and shield. Golden Negg is sold in act 1, act 2 and act 4 shops; Starry Negg in act 1 and act 3 shops; Red Negg in one act 3 shop. 21 placements sell treasure maps (section 8).
 
@@ -341,9 +341,9 @@ Buy path (balance 500 unless stated):
 
 Buy hooks:
 
-- Pack 856 loaded. Hero buys item 113 with flag 220 clear: line 19 shown. With flag 220 set: nothing shown.
+- Pack 856 loaded. Hero buys item 113 with flag 220 clear: line 19 shown and no purchase. With flag 220 set: nothing shown.
 - Pack 1140 loaded with flag 10 clear: no callback registered. Buying item 116 shows nothing.
-- Pack 1429: buying item 109 with flag 248 set: nothing shown.
+- Pack 1433: buying item 109 with flag 248 clear: line 20 shown and no purchase. With flag 248 set: nothing shown and the purchase runs.
 
 Price multiplier (factor 4.0; flag 298 clear):
 
@@ -415,6 +415,6 @@ Numbers of removed questions are not reused.
 23. Resolved: yes. Market Town and its shops open when flag 296 is set at the Crossroads, before the Black Knight quest starts (flag 297) and before the fight sets flag 298, so a playthrough from a new game sees the x4 prices. They are first entered in act 3, with both heroes. A start-point chooser start at Act 3 Start or later sets flag 298 and skips them (section 5; High).
 24. Resolved: the Buy prompt does not set it. The 323-bit set is written only on an ask-about-item branch of the world prompt that the game never takes, and nothing reads it; it is not an ownership record (SPEC-0021, Inventory; High).
 26. Resolved: a dig pays the flag-4 placement that the dig site names (SPEC-0051) through the ordinary drop action. Of the 44 real treasures, 25 pay items and 19 pay Neopoints as coins (fixed counts 653 to 4,118 NP, 33,499 NP in all; three with a group-3 money roll, a 30 % chance of 400 to 1,000 NP). A treasure row's first word is its name text, not a world-pack number.
-27. (Partly) The exact act of each shop pack (section 10). Market Town's packs 1005, 1008, 1011, 1014 and 1020 are act 3 (High; section 5). The other groups are inferred from flag stage ids and movies, not from an area graph; play does not read the act of a shop, so the labels are a presentation aid and need no further check (class D, open close-out). Resolved in part (Medium-High): the door-reached packs behind pack 722 (Bogshot Village) and pack 758 (Brightvale Castle) are first used on the main path in act 3, with both heroes: the story enters pack 758 at step 29 and pack 722 at step 31 of SPEC-0058, after the act 3 start at step 27, and its apothecary and bridge builder interiors at steps 32 and 34. No door gate of their own is known. Packs 1430 and 1431 stay unplaced, and their scripts never run.
+27. (Partly) The exact act of each shop pack (section 10). Market Town's packs 1005, 1008, 1011, 1014 and 1020 are act 3 (High; section 5). The other groups are inferred from flag stage ids and movies, not from an area graph; play does not read the act of a shop, so the labels are a presentation aid and need no further check (class D, open close-out). Resolved in part (Medium-High): the door-reached packs behind pack 722 (Bogshot Village) and pack 758 (Brightvale Castle) are first used on the main path in act 3, with both heroes: the story enters pack 758 at step 29 and pack 722 at step 31 of SPEC-0058, after the act 3 start at step 27, and its apothecary and bridge builder interiors at steps 32 and 34. No door gate of their own is known. Packs 1429, 1430 and 1431 are not visited in play, and their scripts never run there.
 28. Resolved (SPEC-0059, section 2; High): the numbering is self-consistent. The cell scored at a stop, 7 - floor(a / 45), is the cell whose lit art shows, and the player can time the stop.
 29. Resolved. (1) The need-more text is the prefix, the amount, then one suffix string of two characters: character code 36 (the dollar sign in the text table, which the font draws as the currency mark; Medium for the drawn form) and "!". (2) The buy path writes no equipment word (High: the buy and add calls reach no equipment-word setter). A bought equipment item of types 1 to 6 is added to the hero's category list, which is where the weapon, shield and body entries live (SPEC-0021, Equipment slots), so it is in use as soon as it is added (Medium-High). A bought charm or Mote is not equipped by buying; it is equipped only from the Mote picker (High).

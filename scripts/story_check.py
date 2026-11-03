@@ -113,6 +113,8 @@ def nums(s):
 # Goal 532 presses its first button twice: the first can land before the warp in, and a button works once per load.
 PRESSES = {532: [(1, 2), (3, 1), (6, 1)], 533: [(18, 3), (19, 2), (20, 1), (21, 1)], 537: [(0, 2)], 538: [(1, 6)], 539: [(2, 7), (3, 1)]}
 SWINGS = {54: [4], 122: [0], 123: [0], 127: [0]}
+# Points to stand on in turn: goal 77's slot B changes only when hall trigger 14 is entered again (SPEC-0045 1098).
+SPOTS = {77: '-70,-62,-128.1;0,0,-128.1'}
 lines = []
 for g in goals:
     if not first <= g['n'] <= last:
@@ -145,6 +147,9 @@ for g in goals:
         name = re.split(r'[ (,.]', g['target'])[0]
         two = re.match(r'([A-Z][a-z]+ [A-Z][a-z]+)', g['target'])
         name = two.group(1) if two else name
+        # Two talkers in one row: whichever of them is still there.
+        if g['n'] == 359:
+            name, ids = '', '6,7'
     # Fights that need a real attack of a given kind, not a defeat: the checker cannot perform them yet.
     # A chain of doors named in one row: the checker goes straight to its last pack.
     if g['kind'] == 'DOOR' and g['target'].count(' to ') >= 2 and len(g['packs']) >= 2:
@@ -177,6 +182,7 @@ for g in goals:
         done = [f'f{x}' for x in sorted(d['on'])] + [f'!f{x}' for x in sorted(d['off'])] + [f'i{x}' for x in sorted(d['held'])] + [f'!i{x}' for x in sorted(d['gone'])] + ([f"p{d['pack']}"] if d['pack'] else [])
     z = d or dict(on=set(), off=set(), held=set(), gone=set())
     place = ';'.join(f'{a},{c}' + (f',{b}' if b is not None else '') for a, b, c in spots(g))
+    place = SPOTS.get(g['n'], place)
     lines.append('\t'.join([str(g['n']), g['kind'], str(pack), place, name, ids, nums(n['on']), nums(n['off']), nums(n['held']), ','.join(done), nums(set(z['on']) | set(g['raised'])), nums(z['off']), nums(z['held']), nums(z['gone']), str(TICKS.get(g['kind'], 1500)), trigger, others, visits]))
 path = os.path.join(private, 'goals.tsv')
 open(path, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines) + '\n')

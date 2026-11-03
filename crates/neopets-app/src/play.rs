@@ -3474,6 +3474,19 @@ impl Play {
                         wk.facing = c.facing;
                     }
                 }
+                Action::MoveEntityRandom { entity, first, count } => {
+                    let locator = first + self.rng.range(0, count - 1).max(0) as usize;
+                    return self.execute(Action::MoveEntity { entity, locator, face: true }, pack);
+                }
+                Action::MoveEntityToEntity { entity, to } => {
+                    let at = self.characters.iter().find(|c| c.pack == pack && c.entity == Some(to))?.position;
+                    let c = self.entity_mut(pack, entity)?;
+                    c.position = at;
+                    c.script_walk = None;
+                    if let Some(wk) = c.walker.as_mut() {
+                        wk.body.position = at;
+                    }
+                }
                 Action::MoveEntityAir { entity, locator } => {
                     let (l, g) = self.locator(pack, locator)?;
                     let c = self.entity_mut(pack, entity)?;
@@ -4093,6 +4106,11 @@ impl Play {
                     }
                 }
                 Action::SetAdventure { level } => self.intensity.adventure(level),
+                Action::RequestRegion { slot, region } => {
+                    if self.slot_regions.get(&(pack, slot)).copied() != region {
+                        return self.execute(Action::LoadRegion { slot, region }, pack);
+                    }
+                }
                 Action::LoadRegion { slot, region } => {
                     if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
                         println!("      LoadRegion slot {slot} region {region:?} from script {pack} in world {} on tick {}", self.world.pack, self.ticks);
@@ -6224,7 +6242,7 @@ impl Play {
                 continue;
             }
             let toward = e.face[0] * f[0] + e.face[2] * f[2] > 0.0;
-            if toward && (3..=4).contains(&state) && !matches!(e.kind, 1 | 6) {
+            if toward && (3..=4).contains(&state) && !self.loco.slow_patch && !matches!(e.kind, 1 | 6) {
                 self.loco.edge_jump();
                 self.trace_edge("edge jump", state as usize, 0);
                 return false;
@@ -10442,6 +10460,9 @@ impl Play {
             }
         };
         let air_before = self.loco.air_sub;
+        // SPEC-0033 Behavior 4A.1: the kind word of the patch under the feet, not its surface code.
+        let feet = self.loco.position();
+        self.loco.slow_patch = matches!(self.world.probe(feet[0], feet[2], feet[1] + 2.5).kind, Some(1 | 6));
         self.loco.update(&input, forward, left, self.hero.clip_state());
         // An air attack's start: the hit list cleared and the weapon drawn.
         if air_before == 0 && self.loco.air_sub != 0 {

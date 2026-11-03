@@ -10,10 +10,7 @@
 //! Not covered: sub-mode 10 (the approach's branch with the hero's back to the panel, which the grab's
 //! facing test refuses). Interpretations (the spec gives these as Medium or leaves them open): the
 //! approach holds the hero on the panel and plays 121 to its end; a corner ends with the hero's position
-//! along the new panel clamped into [r, LU - r]. In sub-mode 4 (R-0207) a hand-off is taken at the edge of
-//! the grab's window that the heading crosses, a neighbour in the same plane becomes the target, an edge
-//! with no way on keeps the hero inside the window, the heading steers at rate 0.5, and sub-mode 6 ends
-//! with Q as the target.
+//! along the new panel clamped into [r, LU - r].
 
 use crate::hero::Vec3;
 
@@ -152,6 +149,24 @@ impl Climb {
         q
     }
 
+    /// Sub-mode 4's near edges of a panel, by link number: within r of each of its own four edges.
+    fn near_edges(t: &Panel, p: Vec3) -> [bool; 4] {
+        let (u, h) = (plane(t.u, p), plane(t.v, p));
+        [h <= RADIUS, u >= t.lu - RADIUS, h > t.lv - RADIUS, u <= RADIUS]
+    }
+
+    /// Sub-mode 4's edge probe: no near edge without a link, or with a link out of the panel's plane.
+    fn edge_clear(t: &Panel, panels: &[Panel], p: Vec3) -> bool {
+        let near = Self::near_edges(t, p);
+        (0..4).all(|k| !near[k] || t.links[k].filter(|&i| i < panels.len()).is_some_and(|i| dot3(panels[i].n(), t.n()) >= 0.99))
+    }
+
+    /// Sub-mode 4's Q: the first near edge with a link, in the order 0, 2, 3, 1.
+    fn edge_pick(t: &Panel, panels: &[Panel], p: Vec3) -> Option<usize> {
+        let near = Self::near_edges(t, p);
+        [0, 2, 3, 1].into_iter().filter(|&k| near[k]).find_map(|k| t.links[k].filter(|&i| i < panels.len()))
+    }
+
     fn enter(&mut self, sub: u8) {
         self.sub = sub;
         self.first = true;
@@ -271,53 +286,56 @@ impl Climb {
                 self.enter(4);
             }
             4 => {
-                // The stick-steered move under the panel: clip 46 moves the hero along his forward row.
+                // The panel walk: the top held at the plane, the stick steering at weight 1.0.
+                let d = plane(t.normal, p);
+                let held = [p[0], p[1] + d - HEIGHT, p[2]];
+                step.place = Some(held);
                 if v.speed <= 0.0 {
                     step.request = Some(48);
                     return step;
                 }
-                step.facing = Some((v.heading, 0.5));
-                step.request = Some(46);
-                step.rate = v.speed.max(0.3);
-                let b = v.facing;
-                let (bu, bv) = (dot3(b, v3(t.u)), dot3(b, v3(t.v)));
-                // The grab's window is the room under the panel: 1.0 inside each end along U, -1.0 to LV - 1.0 along V.
-                let (low_u, top_u, low_h, top_h) = (1.0, t.lu - 1.0, -1.0, t.lv - 1.0);
-                let edge = if ut < low_u && bu < 0.0 {
-                    Some((3, t.u, low_u - ut))
-                } else if ut > top_u && bu > 0.0 {
-                    Some((1, t.u, top_u - ut))
-                } else if ht < low_h && bv < 0.0 {
-                    Some((0, t.v, low_h - ht))
-                } else if ht > top_h && bv > 0.0 {
-                    Some((2, t.v, top_h - ht))
-                } else {
-                    None
+                step.facing = Some((v.heading, 1.0));
+                let walk = |step: &mut Step| {
+                    step.request = Some(46);
+                    step.rate = v.speed.max(0.3);
                 };
-                if let Some((k, axis, back)) = edge {
-                    // No way on: the hero slides along the edge.
-                    let clamped = Some(std::array::from_fn(|j| p[j] + back * axis[j]));
-                    let Some(q) = link(&t, k) else {
-                        step.place = clamped;
-                        return step;
-                    };
-                    let along = dot3(b, panels[q].n());
-                    if along > 0.75 {
-                        self.queued = Some(q);
-                        self.enter(5);
-                        step.request = Some(57);
-                    } else if along < -0.75 {
+                if Self::edge_clear(&t, panels, held) {
+                    walk(&mut step);
+                    // A link in the same plane: the seam is crossed at once, with no cooldown test.
+                    let q = Self::edge_pick(&t, panels, held);
+                    self.queued = q;
+                    if let Some(q) = q.filter(|&q| Self::near_edges(&panels[q], held) != [true; 4]) {
                         self.target = q;
                         self.queued = None;
-                        Self::hold(&panels[q], p, &mut step);
+                    }
+                    return step;
+                }
+                let b = v.facing;
+                let ahead = std::array::from_fn(|k| held[k] + 1.5 * b[k]);
+                if Self::edge_clear(&t, panels, ahead) {
+                    walk(&mut step);
+                    return step;
+                }
+                let q = Self::edge_pick(&t, panels, held);
+                self.queued = q;
+                step.request = Some(48);
+                let Some(q) = q.filter(|_| v.cooldown == 0) else { return step };
+                let r = panels[q];
+                let (hq, along) = (plane(r.v, held), dot3(b, r.n()));
+                if hq > 0.5 * r.lv {
+                    if along < -0.75 {
+                        let n = r.n();
+                        step.place = Some(std::array::from_fn(|k| held[k] - 0.05 * n[k]));
+                        step.facing = Some((n.map(|c| -c), 1.0));
                         step.request = Some(49);
                         step.cooldown = Some(120);
-                        self.enter(2);
-                    } else if ndot(q, self.target) > 0.99 {
                         self.target = q;
-                    } else {
-                        step.place = clamped;
+                        self.enter(2);
                     }
+                } else if hq > -4.0 && along > 0.75 {
+                    step.facing = Some((r.n(), 1.0));
+                    step.request = None;
+                    self.enter(5);
                 }
             }
             5 => {
@@ -604,6 +622,47 @@ mod tests {
 
     /// A wall facing +Z (the face at z = 0), U along -X from x = 0 (so u = -x), V up from
     /// y = 0, 4 wide and 10 high, with a top face linked above it.
+    /// SPEC-0033 test vectors 194 and 195: two ceiling panels in a plane, and a wall at the first's link 0.
+    fn panel_walk_set() -> Vec<Panel> {
+        let a = Panel { normal: [0.0, -1.0, 0.0, 7.883], u: [1.0, 0.0, 0.0, 83.066], v: [0.0, 0.0, 1.0, -366.381], lu: 8.934, lv: 7.216, kind: 0, links: [Some(2), Some(1), None, None] };
+        let b = Panel { u: [1.0, 0.0, 0.0, 74.131], links: [None; 4], ..a };
+        let wall = Panel { normal: [0.0, 0.0, 1.0, -367.556], u: [1.0, 0.0, 0.0, 83.066], v: [0.0, 1.0, 0.0, 1.051], lu: 8.934, lv: 8.934, kind: -2, links: [None; 4] };
+        vec![a, b, wall]
+    }
+
+    fn panel_view(hero: Vec3, facing: Vec3, cooldown: u32) -> View {
+        View { hero, f: 0.0, s: 0.0, gap: 1.0, clip: (0, 0.0), cooldown, facing, heading: facing, speed: 1.0 }
+    }
+
+    #[test]
+    fn panel_walk_crosses_a_seam_in_the_plane() {
+        let set = panel_walk_set();
+        let mut c = Climb { sub: 4, target: 0, queued: None, partner: None, ret: 0, first: false };
+        let s = c.tick(&set, panel_view([-75.30, 4.383, 370.0], [-1.0, 0.0, 0.0], 80));
+        assert_eq!((s.request, c.target, c.queued), (Some(46), 1, None));
+        // Clear of every edge: no Q.
+        let mut c = Climb { sub: 4, target: 0, queued: None, partner: None, ret: 0, first: false };
+        let s = c.tick(&set, panel_view([-75.40, 4.383, 370.0], [-1.0, 0.0, 0.0], 0));
+        assert_eq!((s.request, c.target, c.queued), (Some(46), 0, None));
+    }
+
+    #[test]
+    fn panel_walk_backs_onto_a_wall() {
+        let set = panel_walk_set();
+        let hero = [-79.0, 4.383, 367.40];
+        let mut c = Climb { sub: 4, target: 0, queued: None, partner: None, ret: 0, first: false };
+        let s = c.tick(&set, panel_view(hero, [0.0, 0.0, -1.0], 0));
+        assert_eq!((s.request, c.sub, c.target, s.cooldown), (Some(49), 2, 2, Some(120)));
+        assert!((s.place.unwrap()[2] - 367.35).abs() < 1e-3);
+        // The cooldown holds him; facing away he walks.
+        let mut c = Climb { sub: 4, target: 0, queued: None, partner: None, ret: 0, first: false };
+        assert_eq!(c.tick(&set, panel_view(hero, [0.0, 0.0, -1.0], 80)).request, Some(48));
+        assert_eq!((c.sub, c.target), (4, 0));
+        let mut c = Climb { sub: 4, target: 0, queued: None, partner: None, ret: 0, first: false };
+        assert_eq!(c.tick(&set, panel_view(hero, [0.0, 0.0, 1.0], 0)).request, Some(46));
+        assert_eq!((c.sub, c.target), (4, 0));
+    }
+
     fn wall() -> Vec<Panel> {
         vec![
             Panel { normal: [0.0, 0.0, 1.0, 0.0], u: [-1.0, 0.0, 0.0, 0.0], v: [0.0, 1.0, 0.0, 0.0], lu: 4.0, lv: 10.0, kind: -2, links: [None, None, Some(1), None] },
@@ -635,13 +694,13 @@ mod tests {
         go.hero = [49.5, 16.5, 2.0];
         let step = c.tick(&panels, go);
         assert_eq!((c.sub, c.target, step.request, step.cooldown), (2, 1, Some(49), Some(120)));
-        // No way on: the hero stays inside the window, still moving.
+        // No way on: the hero holds where he is; nothing clamps him.
         let mut c = Climb::ceiling(0);
         c.sub = 4;
         go.facing = [-1.0, 0.0, 0.0];
         go.hero = [0.5, 16.5, 2.0];
         let step = c.tick(&panels, go);
-        assert_eq!((step.request, step.place), (Some(46), Some([1.0, 16.5, 2.0])));
+        assert_eq!((step.request, step.place), (Some(48), Some([0.5, 16.5, 2.0])));
     }
 
     fn view(hero: Vec3, f: f32, s: f32, clip: (u32, f32)) -> View {

@@ -7,29 +7,23 @@ The run reached the end of the list (exit 0).
 | Result | Goals | Meaning |
 | --- | --- | --- |
 | notrun | 0 | Not reached |
-| fail | 50 | The Done condition never held |
+| fail | 43 | The Done condition never held |
 | gameover | 3 | The hero died and the world was torn down |
 | manual | 38 | Kind not automated (minigames, pushes, climbs, shots) |
 | nocheck | 95 | Ran, but its Done condition is not machine-readable |
-| already | 26 | Done already held from earlier goals |
-| pass | 183 | Done condition reached |
+| already | 29 | Done already held from earlier goals |
+| pass | 187 | Done condition reached |
 
 ## Failed goals
 
-- Act 1 goal 1 WAIT (909): New Game opening: movies 88 and 1, act start 1 (about 95 s). The hero stands at entry 0, (-1852.802, y, 1137.4 Done: 1 on, 706 on.
 - Act 1 goal 19 SQUARE (951): The chest (lock chest 0, key item 15): Square inside the sphere. Done: item 15 gone, item 98 held. Needed and not met: item15.
 - Act 1 goal 49 TALK (951 to 1148): Leave 951 (goal 21), walk the legs of goal 26 to town, then talk to Officer Kendrick (1148, town door 5). Done: 150 and 142 on, 3 and 8 on, item 0 gone, item 120 held.
 - Act 1 goal 63 SQUARE (1173 to 1171): Script trigger 0: cylinder base (28.9, -148.6, -12.1), radius 7.5, height 7.8; press Square at the prompt. Done: pack 1171 current (arrival locator 2 (-345.4, 2.1, -71.4)).
 - Act 1 goal 65 WALK (1171 to 1056):  Done: 1056 current; flag 24 on (set at 1056's start from 167).
 - Act 1 goal 69 WALK (1056): Mote talk zone again. script trigger 12 Done: 634 on.
-- Act 1 goal 70 TALK (1098): Entity 49 (reach 1098 as goals 49 and 50 show, or by 1056 door 0). Done: 174 on.
-- Act 1 goal 72 TALK (1098): Entity 49. Done: 180 and 185 on.
-- Act 1 goal 88 TALK (1098): Entity 39. Done: 206 on.
 - Act 1 goal 95 WALK (956): Leave the top sphere (script trigger 16, centre (-702.1, 68.2, -824.9), radius 11.1) by more than 11.1 units,  Done: 212 on.
-- Act 2 goal 114 TALK (1300): Painter Howell (entity 18). Done: 399 on, item 61 held.
 - Act 2 goal 123 SWING (1327): Lesson 2: after the scene, shoot the target so that it reacts to a hit. Done: 231 on.
 - Act 2 goal 127 SWING (1327): Destroy the respawned target (entity 0). Roberta's health is refilled every tick during the lesson. Done: 234, 235 on; movie 19; pack 1300 current at locator 9 (0.0, 1538.2, -2.
-- Act 3 goal 300 WAIT (886): Brightvale arrival after movie 30 (return world 64). The module's Init sets 249 because 248 is on and movie 30 Done: control back; 249 on.
 - Act 3 goal 306 DOOR (758 to 777): Pack 758 teleport 1, centre (2085.3, 81.3, 510.2), 21.4 wide (the library road). Done: pack 777 current (hero placed at start position 8).
 - Act 3 goal 317 WALK (753): Walk out of the sphere (more than 30 from its centre). Done: movie 37 plays on the next tick; 258 on.
 - Act 3 goal 328 FIGHT (735): The Plague Serpent (boss instance 10, AI 73; SPEC-0016). Its only damage route is one strike on the head while Done: 263, 75, 50 and 70 on (set by the victory scene).
@@ -38,7 +32,6 @@ The run reached the end of the list (exit 0).
 - Act 3 goal 336 FIGHT (880): Brightvale road guards AI 21, 22 and 23. Walk to the plaza (the treasure seller stands at (1815.6, 166.2, -933 Done: 296 on.
 - Act 3 goal 340 DOOR (1017 to 991): Pack 1017 door 0, centre (31.6, 13.5, -0.2), 10.7 wide (or door 1, centre (-33.3, -0.4, -0.2), 10.2 wide). Done: pack 991 current at locator 8 (door 0) or 7 (door 1).
 - Act 3 goal 347 TALK (1017): Guildmaster Marl, entity 0 (entity 4 is the second placement and works too). On arrival with 298 on and 300 of Done: 299 on; item 23 (Golden Trove of Riches) held.
-- Act 3 goal 359 TALK (874): Otto the Old Miner (entity 6) and Elspeth (entity 7). Enter 874 from 864 by the cell exit. Each talk is a shor Done: 291 and 290 on.
 - Act 3 goal 363 FIGHT (864): The Ixi Chieftain (boss instance 8, 300 HP; SPEC-0014). Hero: either (Tor's sword or Roberta's wand); a fronta Done: death sets level state 0; 293 on.
 - Act 3 goal 370 TALK (1251): The witch (the room's only talker). Done: 460 on.
 - Act 3 goal 375 PICK (1247): The fang necklace, item 29 (a drop placed at the altar; the necklace holder is AI 10). Walk to the altar volum Done: item 29 held.
@@ -61,7 +54,7 @@ The run reached the end of the list (exit 0).
 - Act 4 goal 500 WAIT (1122 to 1300): Movie 54 ends and pack 1300 (Fyora's Palace Gardens, world 151) loads. Resolved: the boss end posts value 50 f Done: pack 1300 current; hero at record 1; control back. Needed and not met: 322.
 - Act 4 goal 528 WALK (1371): Wave gate 3, script trigger 3: rectangle corner (-1.1, 5.8, -1.2), extents 0.8 by 2.2. Hero moved to record 24 Done: 344 on.
 - Act 4 goal 529 WALK (1371 to 1350): Finish cylinder, script trigger 1: base (0.2, -15.6, -144.7), radius 21.3, length 10.9. Walk in: movie 61 play Done: 345, 100 on; back in pack 1350 at record 6 (0.0, 0.5, -338.1).
-- Act 4 goal 556 WALK (1398): Stage 4: walk onto the arm trigger 35: box corner (-43.6, -8.5, 1079.8), extents 56.9 by 72.0 (height 88.4); t Done: 723 on (count 6); region 1399 loads.
+- Act 4 goal 556 WALK (1398): Stage 4: walk onto the arm trigger 35: box corner (-43.6, -8.5, 1079.8), 88.4 along x, 72.0 along -z (to z 100 Done: 723 on (count 6); region 1401 (the Whinnies) loads.
 - Act 4 goal 574 WALK (1382 to 1411): Trigger 28 (ring centre): cylinder base (-4.8, -438.2, 298.6), radius 2.8, length 7.0. Walk in: pack 1411 load Done: pack 1411 current. Needed and not met: 337.
 - Act 4 goal 583 WAIT (1432 to 1300): Finale: the clock is hidden, object 1 (north barrier) is removed, swap mode 2, entities 0 and 5 to 7 are deact Done: pack 1300 current; 94, 365 on.
 - Act 4 goal 584 WALK (1300): Epilogue: the activation sets 366, places the hero at landing 2 (0.05, 1537.66, -124.13) facing -z and gives c Done: movie 79 plays; 367 on. Needed and not met: 366.

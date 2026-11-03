@@ -278,6 +278,8 @@ pub struct Locomotion {
     pub phase: i8,
     /// The weapon-out flag P1 (the host sets it each pass).
     pub p1: bool,
+    /// The ground patch under the hero has kind word 1 or 6 (SPEC-0033 Behavior 4A.1): the slow walk.
+    pub slow_patch: bool,
     /// The host's Tor with no Tattered Cloak: air attacks may start.
     pub air_ok: bool,
     /// The stick step of state 13 this tick.
@@ -410,6 +412,7 @@ impl Locomotion {
             run_counter: RUN_RESTART,
             shield: false,
             status_scale: 1.0,
+            slow_patch: false,
             carry: 0,
             one_shot_control: true,
             loop_ticks: 0,
@@ -765,13 +768,16 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             // Ids 7, 8 and 9 with the weapon out (P1; SPEC-0033 5.1).
+            SLOW_WALK | WALK | RUN if self.slow_patch => 106,
             SLOW_WALK | WALK | RUN => self.state as u32 + if self.p1 { 5 } else { 0 },
             STRAFE => self.strafe_id,
             43..=46 => self.request,
             JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | HERO_LOOP | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE | ROPE => self.request,
             ARRIVAL => 175,
             HELD => 143,
+            SNEAK if self.slow_patch => 0,
             SNEAK => 87,
+            SNEAK_WALK if self.slow_patch => 106,
             SNEAK_WALK => 85,
             SNEAK_REVERSE => 82,
             RESPAWN => ANIM_LONG_LAND,

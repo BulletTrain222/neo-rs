@@ -56,6 +56,8 @@ pub enum Action {
     /// SlotLoad into one of the level's slots: the region resource to load, or None to empty
     /// the slot (its characters leave).
     LoadRegion { slot: u8, region: Option<u32> },
+    /// A slot request: changes the slot only when it holds something else; None empties it.
+    RequestRegion { slot: u8, region: Option<u32> },
     /// The sound host calls (SPEC-0031 Script sound calls): PlaySound (a one-shot), LoopSound (a
     /// keep-alive start), VisitLoopSound (a refresh, starting nothing) and KillSound (stop the
     /// first matching voice) on the area slot, at an entry record (locator) or with no position.
@@ -96,6 +98,10 @@ pub enum Action {
     /// MoveEntity(entity, locator, probe, CTL, face) (row 112), probe on, CTL 0: the entity is
     /// left under script control (base state 33).
     MoveEntity { entity: usize, locator: usize, face: bool },
+    /// MoveEntity to `first` + Random(0, count - 1), the host's draw.
+    MoveEntityRandom { entity: usize, first: usize, count: i32 },
+    /// MoveEntity to another entity's position (kept while that entity is deactivated).
+    MoveEntityToEntity { entity: usize, to: usize },
     /// The same with CTL 1: the entity is left free (base state 1).
     MoveEntityFree { entity: usize, locator: usize, face: bool },
     /// The same with probe off and face on: the entity stays at the locator's own height.
@@ -1963,9 +1969,19 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0039 793 Init: thread 3 loads slot 0 with set 0 (region 794) under 417, else set 1
         // (795).
         793 => vec![Action::LoadRegion { slot: 0, region: Some(if state.flag(417) { 794 } else { 795 }) }],
-        // SPEC-0039 874 Init: thread 3 (Medium in the spec) is taken as set 1 (region 876) under
-        // flag 58, else set 0 (875); the further loads by 291 and 290 are not reproduced.
-        874 => vec![Action::LoadRegion { slot: 0, region: Some(if state.flag(58) { 876 } else { 875 }) }],
+        // SPEC-0039 874 Init, thread 3: three independent tests into three stores. Store A (0): set
+        // 1 with flag 58, else set 0; store B (1): set 2 (Otto) with 291 clear; store C (2): set 3
+        // (Elspeth) with 290 clear. Region 875 + set.
+        874 => {
+            let mut v = vec![Action::LoadRegion { slot: 0, region: Some(if state.flag(58) { 876 } else { 875 }) }];
+            if !state.flag(291) {
+                v.push(Action::LoadRegion { slot: 1, region: Some(877) });
+            }
+            if !state.flag(290) {
+                v.push(Action::LoadRegion { slot: 2, region: Some(878) });
+            }
+            v
+        }
         // SPEC-0041 742 Init: thread A loads slot 0 with set 0 (region 743), and with 76, 561 set
         // and 562 clear slot 1 with set 1 (744); thread B's watch of entity 6 is in Update; P7 is
         // a fixed rule.
@@ -2782,6 +2798,12 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                     Action::WalkEntity { entity: 10, locator: 41, wait: true, orient: false, stop: 1.1 },
                     Action::ReturnCamera { preset: -1, release: true },
                 ]);
+                // The same tail: Painter Howell (set 14) stands from here on, in the visit where
+                // the council scene later sets 222.
+                if !f(397) {
+                    v.push(load(6, 0));
+                }
+                v.extend([load(5, 2), load(0, 14)]);
             }
             v
         }
@@ -3244,13 +3266,12 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 Action::LoadRegion { slot: 0, region: Some(if state.flag(86) { 995 } else { 1000 }) },
             ]
         }
-        // SPEC-0039 886 Init: handler 1 on trigger 5 and 2 on 2. Only with 250 clear: object 3, 249
-        // set when 248 is set, 249 clear and movie 30 not played, the slots and thread 3 (it loads
+        // SPEC-0039 886 Init: handler 1 on trigger 5 and 2 on 2. Object 3 only with 250 clear; 249
+        // set when 248 is set, 249 clear and movie 30 not played. On every path thread 3 (it loads
         // the first slot with set 3, 2, 1 or 0 by the first set flag of 52, 51, 50 and 251, flag
-        // 49 not read; with all four clear set 5 into the second slot, DisableInvisibility for
-        // entities 16 to 18 and agro on 16 and 17), trigger 0 (handler 4) and, with 252 clear,
-        // collision mask 1. With 250 set no slot or thread is made (the set-4 branch is not
-        // reached). Region 887 + set.
+        // 49 not read; with all four clear, set 4 into the third slot with 250 set, else set 5
+        // into the second slot, DisableInvisibility for entities 16 to 18 and agro on 16 and 17),
+        // trigger 0 (handler 4) and, with 252 clear, collision mask 1. Region 887 + set.
         // SPEC-0044 1393 Init (R-0105): seven objects per room initialized with the end flag
         // clear (the odd gate members, the levers, the open mechanism and the closed form, and
         // the statue's +0x14), invisibility off for entities 0 to 7, triggers 0 to 5, 7 to 19 and
@@ -3270,20 +3291,22 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             let mut v = vec![reg(5, 1), reg(2, 2)];
             if !state.flag(250) {
                 v.push(Action::InitObjOn { obj: 3, end: false });
-                if state.flag(248) && !state.flag(249) && !state.movies.contains(&30) {
-                    state.set(249, true);
-                }
-                if let Some(set) = [(52, 3), (51, 2), (50, 1), (251, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| j) {
-                    v.push(Action::LoadRegion { slot: 0, region: Some(887 + set) });
-                } else {
-                    v.push(Action::LoadRegion { slot: 1, region: Some(892) });
-                    v.extend((16..=18).map(|entity| Action::DisableInvisibility { entity }));
-                    v.extend([Action::Agro { entity: 16 }, Action::Agro { entity: 17 }]);
-                }
-                v.push(reg(0, 4));
-                if !state.flag(252) {
-                    v.push(Action::CollisMask { mask: 1 });
-                }
+            }
+            if state.flag(248) && !state.flag(249) && !state.movies.contains(&30) {
+                state.set(249, true);
+            }
+            if let Some(set) = [(52, 3), (51, 2), (50, 1), (251, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| j) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(887 + set) });
+            } else if state.flag(250) {
+                v.push(Action::LoadRegion { slot: 2, region: Some(891) });
+            } else {
+                v.push(Action::LoadRegion { slot: 1, region: Some(892) });
+                v.extend((16..=18).map(|entity| Action::DisableInvisibility { entity }));
+                v.extend([Action::Agro { entity: 16 }, Action::Agro { entity: 17 }]);
+            }
+            v.push(reg(0, 4));
+            if !state.flag(252) {
+                v.push(Action::CollisMask { mask: 1 });
             }
             v
         }
@@ -3975,9 +3998,10 @@ pub fn collide_entities(pack: u32) -> &'static [usize] {
 /// (word 36) goes up, a 0.2 s fade, the firer deactivated, camera 7, the fade in, camera 9 for
 /// counts 1 to 3 and 8 for 4 to 7, 5 s, a fade out and in and the normal camera; at a count of 6
 /// the stage ends (word 24): camera 11, object 8 off, objects 7 and 9 played, 723, thread 6
-/// with argument 2. The six entities take SetAI_Behavior 0 at the start and 5 at the end, and entity 22 moves to point 46 +
-/// count and walks to 52 + count. Not built: their moves to random points of group instance 1, the one-entry slot's
-/// activation, entity 23 at the firer's position and the effects along group instance 2's points (R-0100).
+/// with argument 2. The six entities take SetAI_Behavior 0 and a move to one of locators 35 to 46
+/// at the start and 5 at the end. Entities 23 and 22 of the one-entry slot appear at the firer;
+/// 22 walks to locator 46 + count for 3.5 s, moves to 52 + count and walks to 46 + count again.
+/// Not built: effect 17 runs at its placed point, not moved to the firer.
 fn pass_1398(firer: usize, s: &mut GameState) -> Vec<Action> {
     let p = 1398;
     let count = s.word(p, 36) + 1;
@@ -3985,17 +4009,29 @@ fn pass_1398(firer: usize, s: &mut GameState) -> Vec<Action> {
     s.set_word(p, 35, 1);
     let harrises = |code: i16| (16..=21).map(move |entity| Action::AiBehavior { entity, code });
     let mut v = vec![Action::FadeOut { seconds: 0.2, wait: true }];
-    v.extend(harrises(0));
+    for entity in 16..=21 {
+        v.extend([Action::AiBehavior { entity, code: 0 }, Action::MoveEntityRandom { entity, first: 35, count: 12 }]);
+    }
+    let to = 46 + count as usize;
     v.extend([
         Action::DeactivateEntity { entity: firer },
+        Action::ActivateEntity { entity: 23 },
+        Action::MoveEntityToEntity { entity: 23, to: firer },
         Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 },
         Action::FadeIn { seconds: 0.2, wait: true },
-        wait(1.0),
-        Action::MoveEntity { entity: 22, locator: 46 + count as usize, face: true },
-        Action::WalkEntity { entity: 22, locator: 52 + count as usize, wait: false, orient: false, stop: 1.1 },
+        wait(0.5),
+        Action::StartEffect { slot: 17, camera: false },
+        Action::DeactivateEntity { entity: 23 },
+        Action::ActivateEntity { entity: 22 },
+        Action::MoveEntityToEntity { entity: 22, to: firer },
+        Action::WalkEntity { entity: 22, locator: to, wait: false, orient: false, stop: 1.1 },
+        wait(3.5),
+        Action::MoveEntity { entity: 22, locator: 52 + count as usize, face: true },
+        Action::WalkEntity { entity: 22, locator: to, wait: false, orient: false, stop: 1.1 },
         Action::PlayCamera { track: if count <= 3 { 9 } else { 8 }, wait: false, end: 1, speed: 1.0 },
         wait(5.0),
         Action::FadeOut { seconds: 0.2, wait: true },
+        Action::DeactivateEntity { entity: 22 },
     ]);
     v.extend(harrises(5));
     v.extend([
@@ -7606,7 +7642,7 @@ fn town_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
                 Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 },
                 Action::FadeOut { seconds: 1.0, wait: true },
                 Action::SetFlag { flag, on: true },
-                Action::LoadRegion { slot: 0, region: None },
+                Action::LoadRegion { slot: routine, region: None },
                 Action::ReturnCamera { preset: -1, release: true },
                 Action::FadeIn { seconds: 0.7, wait: false },
             ]);
@@ -11849,26 +11885,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 }
             }
         }
-        // Triggers 11 and 12 (30 and 31 clear): slot A 1101 and slot B 1112; slot A 1102.
-        (1098, 11) if first && !state.flag(30) && !state.flag(31) => {
-            out.actions.extend([Action::LoadRegion { slot: 0, region: Some(1101) }, Action::LoadRegion { slot: 1, region: Some(1112) }]);
-        }
-        (1098, 12) if first && !state.flag(30) && !state.flag(31) => out.actions.push(Action::LoadRegion { slot: 0, region: Some(1102) }),
-        // Trigger 14: slot A 1105 or 1107 and slot B one of 1110, 1111, 1114 or 1115 by flags
-        // 194 to 196 and 204 to 206; the table is not given (R-0037): 1105 with 1110 (entity
-        // 35) before 194, 1111 (entity 36) after it, 1114 from 204, and 1115 from 205 here.
-        (1098, 14) if first && !state.flag(30) && !state.flag(31) => {
-            let b = if state.flag(205) || state.flag(206) {
-                1115
-            } else if state.flag(204) {
-                1114
-            } else if state.flag(194) || state.flag(195) || state.flag(196) || state.word(1098, 1) != 0 {
-                1111
-            } else {
-                1110
-            };
-            out.actions.extend([Action::LoadRegion { slot: 0, region: Some(1105) }, Action::LoadRegion { slot: 1, region: Some(b) }]);
-        }
+        // Triggers 11 to 15 (30 and 31 clear): the slot thread's requests by stage.
+        (1098, 11..=15) if first && !state.flag(30) && !state.flag(31) => out.actions.extend(castle_hall(call.index, state)),
         // SPEC-0045 1217 script trigger 0 (Act 1): the start bit.
         (1217, 1) if first => {
             let w = state.word(1217, 0);
@@ -13069,7 +13087,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 ]);
             }
             if state.word(pack, 30) != 0 && state.word(pack, 24) == 0 {
-                out.extend((16..=18).map(|entity| Action::HitPointsPercent { entity, percent: 100.0 }));
+                out.extend((16..=21).map(|entity| Action::HitPointsPercent { entity, percent: 100.0 }));
             }
             // Step 3b, stage 5: when four listed entities stand on navmesh 7, 8, 9 or 10 (the pen
             // inner areas): 724, movie 67 counted, object 0 off, effect 15, 356 and 106. The list
@@ -13497,6 +13515,9 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set(1, true);
                 state.set(706, false);
                 out.extend([Action::FadeOut { seconds: 0.0, wait: false }, Action::PlayFmv { movie: 88 }, Action::PlayFmv { movie: 1 }, Action::ActStart { stage: 1 }, Action::MoveEntity { entity: 31, locator: 69, face: true }]);
+                // The activation thread's arrival step comes after this first update, past its slot
+                // loads: 706 on again, then the fade-in (SPEC-0045 909 Arrival step).
+                out.extend([Action::SetFlag { flag: 706, on: true }, Action::WaitLoads, Action::FadeIn { seconds: 1.0, wait: false }]);
             }
             // The talk thread (while 117 and 123 are clear): each round-up flag, the first time
             // it is seen set in this visit (words 10 to 13, cleared at each activation), plays a
@@ -14641,7 +14662,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             // The thread's arrival step: with 706 clear, set it, wait until no load is active
             // and fade in over 1 s.
-            if !state.flag(706) {
+            if !state.flag(706) && !(state.flag(707) && !state.flag(1)) {
                 state.set(706, true);
                 actions.extend([Action::WaitLoads, Action::FadeIn { seconds: 1.0, wait: false }]);
             }
@@ -15820,6 +15841,37 @@ fn castle_stage(s: &GameState) -> u16 {
     (21..=31).rev().find(|&f| s.flag(f)).unwrap_or(0)
 }
 
+/// SPEC-0045 1098 triggers 11 to 15: slot A (0), slot B (1) and slot C (2, always 1118) by the
+/// trigger and the stage. Slot A with no request is left alone; slot B with none is emptied.
+fn castle_hall(index: u16, s: &GameState) -> Vec<Action> {
+    let stage = castle_stage(s);
+    let a = match index {
+        11 => Some(1101),
+        12 => Some(1102),
+        13 if matches!(stage, 21 | 27 | 28 | 29) => Some(1103),
+        14 if stage == 28 && !s.flag(204) => Some(1107),
+        14 => Some(1105),
+        _ => None,
+    };
+    let b = match index {
+        11 => Some(1112),
+        14 if s.flag(205) && !s.flag(206) => Some(1114),
+        14 if stage == 27 && s.flag(195) && !s.flag(196) => Some(1114),
+        14 if stage == 28 => Some(1111),
+        14 if stage == 21 || (stage == 27 && !s.flag(194)) => Some(1110),
+        14 if stage == 25 => None,
+        14 => Some(1115),
+        _ => None,
+    };
+    let b = if s.word(1098, 1) != 0 { Some(1110) } else { b };
+    let mut v = Vec::new();
+    if a.is_some() {
+        v.push(Action::RequestRegion { slot: 0, region: a });
+    }
+    v.extend([Action::RequestRegion { slot: 1, region: b }, Action::RequestRegion { slot: 2, region: Some(1118) }]);
+    v
+}
+
 /// SPEC-0045 1098 Init: the flag steps (21; 25 with 182; 202 and 28 with 201; 151), the rest
 /// prompt (trigger 0), trigger 1 with 30 and 31 clear, the slot triggers 11, 12 and 14, the
 /// slot thread's loads (31: j 1; 30: j 9 and j 0; 501 with item 72 not held and 503 and 504
@@ -15846,7 +15898,7 @@ fn castle_init(state: &mut GameState) -> Vec<Action> {
     let mut out = vec![reg(0, 1), reg(7, 7), reg(8, 8), reg(4, 4), reg(5, 5), reg(6, 6), reg(9, 9), reg(10, 10), reg(17, 17), reg(18, 18), reg(19, 19), reg(20, 20)];
     let (f30, f31) = (state.flag(30), state.flag(31));
     if !f30 && !f31 {
-        out.extend([reg(1, 2), reg(11, 11), reg(12, 12), reg(14, 14)]);
+        out.extend([reg(1, 2), reg(11, 11), reg(12, 12), reg(13, 13), reg(14, 14), reg(15, 15)]);
     }
     if f31 {
         out.push(Action::LoadRegion { slot: 4, region: Some(1098 + 1 + 1) });
@@ -21625,13 +21677,15 @@ mod tests {
 
     #[test]
     fn act_1_start() {
-        // SPEC-0058 test vector 8: 909 Update with 707 on and 1 off: flag 1 on, 706 off.
+        // SPEC-0058 test vector 8: 909 Update with 707 on and 1 off: flag 1 on, 706 off until the
+        // arrival step that follows it in the action list sets it again.
         let mut s = GameState::default();
         s.set(707, true);
         on_activate(909, &mut s);
-        assert!(s.flag(706));
-        on_update(909, &mut s, false);
+        assert!(!s.flag(706));
+        let opening = on_update(909, &mut s, false);
         assert!(s.flag(1) && !s.flag(706));
+        assert!(opening.contains(&Action::SetFlag { flag: 706, on: true }));
         assert_eq!(s.stage(), Some(1));
         // Back from the house with the parcel (entry value 10): the flag-122 scene sets 123.
         for f in [119, 121, 122] {

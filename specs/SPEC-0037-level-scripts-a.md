@@ -1,6 +1,6 @@
 # SPEC-0037: Level scripts (set A)
 
-- Answers: R-0061, proactive (level script behavior; extends SPEC-0030 and SPEC-0032), R-0192 (1251 thread A item activation)
+- Answers: R-0061, proactive (level script behavior; extends SPEC-0030 and SPEC-0032), R-0192 (1251 thread A item activation), R-0225 (1427 requests and the resident packs 1429 to 1431)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per module (see the Confidence line in each section and the table below). Host call names, argument values and the order of calls: High unless marked. Slot ids: High for the stored-slot rule (the slot a load uses is the SlotCreate result that the module stores); the call path does not remap -1 (High); a load through a slot word that no code stores does nothing (High for 837; the slot word of 906 is stored by Init, so its load uses the stored slot). Branch conditions: Medium. Values not established: marked unknown and listed under Open questions.
@@ -102,6 +102,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Triggers do not test the trigger state or the object pointer; the callbacks run for any engine call of the trigger.
 - Update: clears the once-flag (so the first trigger callback in each tick sets the override). Exit: empty.
 - Edge cases: the first callback in a tick wins; later callbacks in the same tick do nothing. The override ids 187 to 191 are area slots 187 to 191, packs 1428 to 1432 (Open question 4).
+- What a request does: the pending slot makes the pending step stream the named pack into the exterior buffer. 1427 stays current in T, nothing swaps, and the hero stays in 1427. 1427 has no door, no entry record and no character block. Its cells hold only the values 1 and 2, which name 1428 and 1429 through its neighbour list, so when no trigger fires the cell under the hero asks for 1428 or 1429 (SPEC-0006, Area numbering). Packs 1428 and 1432 lie in the stairwell's coordinate frame; 1429, 1430 and 1431 are copies of a shop interior around the world origin, far from the stairwell, and the hero can never stand in them. They are resident beside 1427 and run no module (1429's section; SPEC-0006, Edge cases, Interior-kind packs in E).
 - Confidence: High (confirmed against the module code).
 
 ### 908: Transition, world-swap with a camera and a hero walk
@@ -503,6 +504,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Buy-item callback B: if the item id (first word of the record) is 109 and flag 248 is clear, it writes 1 into the record's flag word and shows LevelMsg(line 20, W, true, WAIT 1). The nonzero flag word cancels the buy (SPEC-0030 row 260), so item 109 (Golden Shield) cannot be bought here while flag 248 is clear. Any other buy keeps the flag word 0 (the registration passes false) and goes through.
 - Update: empty. Exit: empty.
 - Edge cases: the second entity-proximity registration (from the helper) passes a null world and is refused (SPEC-0030 null-world rule), so only the first registration takes effect.
+- Resident in E: the module of 1429 is the same module as in 1430, 1431 and 1433, and 1427 streams 1429, 1430 and 1431 into the exterior buffer. A module is started by the family of the buffer it is loaded into, so none of the routines above runs for 1429, 1430 or 1431 in E: no proximity talk, no teleport callback (door 0 has no callback and takes the default door rule, which has no destination for these packs), no buy-item hook, no threads, no Update or Exit. The module runs only in 1433, which is entered from 1300 as an interior (SPEC-0006, Edge cases, Interior-kind packs in E). The hero cannot stand in 1429, 1430 or 1431 in play.
 - Confidence: High.
 
 ### 856: Interior, an item-ask line set, a buy-item line and a proximity selector
@@ -557,7 +559,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - 1251, flag 585 clear, flag 460 set, flags 273 and 270 clear, three talks -> lines 31, 32, 31. On a new visit with flag 460 clear, flag 457 set and item 49 not held, four talks -> lines 35, 36, 37, 35.
 - 1251 item activation: entering with flag 460 clear puts the 10000-Neopoint Witch's Wand at (-21.669, 2.918, -0.756). Talking with flag 457 set and item 49 held then sets flag 460, removes the 10000 wand and places the 3000-Neopoint wand at the same point. Entering with flag 460 set places the 3000 wand at once.
 - 1152, only flag 23 and flag 633 set, flags 167 and 162 clear -> SetGameState(162, true), line 14; the next talk (flag 162 now set) -> line 11 (first talk of set 4 since the pack was loaded).
-- 1429, a buy of item 109 with flag 248 clear -> line 20 and no purchase; with flag 248 set -> the purchase runs and no line.
+- The 1429 module running in 1433, a buy of item 109 with flag 248 clear -> line 20 and no purchase; with flag 248 set -> the purchase runs and no line.
 
 ## Open questions
 
