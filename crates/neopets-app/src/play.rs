@@ -1550,6 +1550,8 @@ pub struct Play {
     placed_fx: HashMap<(u32, usize), usize>,
     /// The developer menu's cut group on its way in, and the tick it was asked for.
     dev_group: Option<u64>,
+    /// Hero Haste's way back: the world and place the hero last stood on a real floor.
+    haste_safe: Option<(u32, [f32; 3])>,
     dev_item: Option<[f32; 3]>,
     /// The walkers' look-ahead obstacles, rebuilt once a tick.
     avoid: std::sync::Arc<Vec<neopets_sim::walker::Obstacle>>,
@@ -2197,6 +2199,7 @@ impl Play {
             mote_objects: Vec::new(),
             break_family: None,
             dev_group: None,
+            haste_safe: None,
             dev_item: None,
             avoid: Default::default(),
             leap_point: [0.0; 3],
@@ -11046,6 +11049,7 @@ impl Play {
         self.boss_step();
         self.avoid_step();
         self.dev_group_step();
+        self.haste_rescue_step();
         self.gnarfas_step();
         self.king_step();
         self.knight_step();
@@ -17328,14 +17332,19 @@ impl Play {
         let Some(asked) = self.dev_group else { return };
         let pack = self.world.pack;
         let first = self.characters.iter().find(|c| c.pack == pack && c.slot == DEV_GROUP_SLOT).map(|c| c.position);
-        let item = self.dev_item.take();
-        if let Some(p) = first.or(item) {
+        if let Some(p) = first.or(self.dev_item) {
+            // The floor may be the neighbouring world's, which can still be on its way in: two seconds for it.
+            let ground = self.floor_near(p);
+            if ground.is_none() && self.ticks < asked + 120 {
+                return;
+            }
             self.dev_group = None;
+            self.dev_item = None;
             // A point with no real ground under it (SPEC-0066: the Fang's lies outside its pack's terrain, and a miss
             // reads as height 0): the hero stays at the entry, and an item comes to him.
-            let ground = self.world.ground_at(p[0] + 6.0, p[2], p[1] + 8.0).filter(|g| (g - p[1]).abs() < 30.0);
-            if ground.is_some() {
-                self.place_at(p[0] + 6.0, p[2], p[1] + 8.0);
+            if let Some(at) = ground {
+                let f = self.loco.facing;
+                self.arrive((at, f));
             } else if first.is_none() {
                 let (h, f) = (self.loco.position(), self.loco.facing);
                 let near = [h[0] + 3.0 * f[0], h[1], h[2] + 3.0 * f[2]];
@@ -17345,6 +17354,54 @@ impl Play {
             }
         } else if self.ticks > asked + 600 {
             self.dev_group = None;
+        }
+    }
+
+    /// The nearest safe floor to a cut group's point, 6 units out and then in growing rings to 200, at about its
+    /// height: some of these groups stand where the world has no floor, or only deadly ground (SPEC-0055 kind 2).
+    fn floor_near(&self, p: [f32; 3]) -> Option<[f32; 3]> {
+        (0..33).find_map(|ring| {
+            let r = 6.0 + ring as f32 * 6.0;
+            (0..16).find_map(|k| {
+                let a = k as f32 * std::f32::consts::TAU / 16.0;
+                let (x, z) = (p[0] + r * a.cos(), p[2] + r * a.sin());
+                let y = self.safe_floor(x, z, p[1] + 8.0).filter(|g| (g - p[1]).abs() < 30.0)?;
+                Some([x, y, z])
+            })
+        })
+    }
+
+    /// The floor at a point in the current world, or in the other world when the hero's own probe may swap to it;
+    /// none when it is deadly ground.
+    fn safe_floor(&self, x: f32, z: f32, c: f32) -> Option<f32> {
+        let world = &self.world;
+        let swaps = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
+        let hit = Some(world.probe(x, z, c)).filter(|h| h.found).or_else(|| self.other.as_ref().filter(|_| swaps).map(|o| o.probe(x, z, c)).filter(|h| h.found))?;
+        (hit.kind != Some(2)).then_some(hit.height)
+    }
+
+    /// Hero Haste can carry the hero past the edge of the walkable ground: he comes back to where he last stood on
+    /// a real floor. A test tool of this build, not part of the game; off with the slider and with no clip.
+    fn haste_rescue_step(&mut self) {
+        if self.cheats.haste == 0 || self.cheats.noclip {
+            self.haste_safe = None;
+            return;
+        }
+        let p = self.loco.position();
+        let gap = self.loco.body.gap;
+        let floor = self.world.probe(p[0], p[2], p[1] + 8.0).found || self.other.as_ref().is_some_and(|o| o.probe(p[0], p[2], p[1] + 8.0).found);
+        let safe_here = self.safe_floor(p[0], p[2], p[1] + 8.0).is_some();
+        let (pack, other) = (self.world.pack, self.other.as_ref().map(|o| o.pack));
+        let safe = self.haste_safe.filter(|s| s.0 == pack || Some(s.0) == other);
+        if safe_here && gap < 1.0 && !self.loco.airborne() {
+            self.haste_safe = Some((pack, p));
+        } else if let Some((_, at)) = safe {
+            if neopets_sim::hero::haste_left_world(floor, gap, at[1] - p[1]) {
+                let f = self.loco.facing;
+                self.arrive((at, f));
+            }
+        } else {
+            self.haste_safe = None;
         }
     }
 

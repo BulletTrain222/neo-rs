@@ -1260,9 +1260,23 @@ impl Locomotion {
     }
 }
 
+/// Hero Haste's way back: with no real floor under him, the hero has left the world once he stands on the off-grid
+/// height (`gap` near 0) or has dropped this far below where he last stood. A jump across a gap does neither.
+pub fn haste_left_world(floor: bool, gap: f32, dropped: f32) -> bool {
+    !floor && (gap < 1.0 || dropped > 20.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hero_haste_left_world() {
+        assert!(!haste_left_world(true, 500.0, 500.0), "a long fall to a real floor");
+        assert!(!haste_left_world(false, 1.0e9, 5.0), "a jump across a gap");
+        assert!(haste_left_world(false, 1.0e9, 21.0), "falling with nothing below");
+        assert!(haste_left_world(false, 0.0, 0.0), "standing on the off-grid height");
+    }
 
     /// Hero Haste: the clip rate times the root step's factor is the setting; other states and off are unchanged.
     #[test]
