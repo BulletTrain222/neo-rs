@@ -11,7 +11,7 @@ Written by `scripts/missing.py` from the specs, the code and docs/STATUS.md, wit
 | Specs no game code cites | 4 of 66 |
 | Walkthrough steps with no status note saying they were traced | 14 of 45 |
 | Automated-player goals in the spec, none run end to end | 395 (Act 1: 99, Act 2: 56, Act 3: 153, Act 4: 87) |
-| Requests waiting for an answer | 23 |
+| Requests waiting for an answer | 24 |
 
 ## Requests waiting for an answer
 
@@ -38,6 +38,7 @@ Written by `scripts/missing.py` from the specs, the code and docs/STATUS.md, wit
 - R-0219: Flag 249 at the Act 3 start (SPEC-0058 Act 3 goal 300; SPEC-0039 886 Init)
 - R-0220: Reaching 1098's hall characters (SPEC-0045 1098 triggers 11 to 15; SPEC-0058 Act 1 goals 70, 72 and 88)
 - R-0221: The Endless Staircase's pads and door node (SPEC-0028 Pack 1299 looping-door puzzle; SPEC-0006 Teleport plane list; SPEC-0046)
+- R-0222: Painter Howell after the council scene (SPEC-0045 1300 routine 36 and routine 35; SPEC-0058 Act 2 goals 113 and 114)
 
 ## Walkthrough steps with no status note (SPEC-0058)
 

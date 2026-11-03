@@ -2,7 +2,7 @@
 
 Everything the specs describe, written by `scripts/spec_list.py`. **An automatic tick means a rule found evidence, not that anyone played it.** The tag on each ticked line names the rule. An unticked line may still be built: the rules are strict and only see plain text, so most built behaviour has no automatic tick. To confirm something yourself, change `[ ]` to `[x]`; a rerun keeps it while the line's text is unchanged.
 
-**42405 items: 2349 ticked by a rule, 0 ticked by hand, 40056 open.**
+**42406 items: 2349 ticked by a rule, 0 ticked by hand, 40057 open.**
 
 | Rule | Ticks | What it found |
 | --- | --- | --- |
@@ -90,7 +90,7 @@ Everything the specs describe, written by `scripts/spec_list.py`. **An automatic
 | Goals, Act 2 | 56 | 23 | 0 |
 | Goals, Act 3 | 153 | 87 | 0 |
 | Goals, Act 4 | 87 | 33 | 0 |
-| Requests | 222 | 198 | 0 |
+| Requests | 223 | 198 | 0 |
 | Stated gaps in the code | 94 | 0 | 0 |
 
 ## 1. Every spec, in full
@@ -42758,6 +42758,7 @@ Cited 4 times in the game code.
 - [ ] R-0219: Flag 249 at the Act 3 start (SPEC-0058 Act 3 goal 300; SPEC-0039 886 Init)
 - [ ] R-0220: Reaching 1098's hall characters (SPEC-0045 1098 triggers 11 to 15; SPEC-0058 Act 1 goals 70, 72 and 88)
 - [ ] R-0221: The Endless Staircase's pads and door node (SPEC-0028 Pack 1299 looping-door puzzle; SPEC-0006 Teleport plane list; SPEC-0046)
+- [ ] R-0222: Painter Howell after the council scene (SPEC-0045 1300 routine 36 and routine 35; SPEC-0058 Act 2 goals 113 and 114)
 
 ## 6. Things the code says are not built
 
