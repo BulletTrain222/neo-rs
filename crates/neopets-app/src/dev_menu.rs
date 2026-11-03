@@ -51,6 +51,9 @@ pub struct DevMenu {
     /// The cut group row's cursor, and the region to load after its warp.
     group_at: usize,
     pub group: Option<u32>,
+    /// The Spawn row asks for the character list, and the list has the keys while it is up (`dev_spawn`).
+    pub want_picker: bool,
+    pub picking: bool,
     /// The Hero Haste slider under the mouse button: its position, 0 at the left to 1.
     haste_drag: Option<f32>,
     /// A mouse click this frame: apply the cursor's entry, or step its value.
@@ -72,7 +75,7 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { group_at: 0, group: None, extra_at: 0, warp_point: None, haste_drag: None, open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
+        Self { want_picker: false, picking: false, group_at: 0, group: None, extra_at: 0, warp_point: None, haste_drag: None, open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
     }
 }
 
@@ -156,6 +159,7 @@ enum Entry {
     Haste,
     Extra,
     Group,
+    Spawn,
     CloudBeast,
     BossFight,
 }
@@ -165,12 +169,12 @@ const SECTIONS: [(&str, &[Entry]); 6] = [
     ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Haste, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
     ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group]),
-    ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::BossFight, Entry::CloudBeast]),
+    ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::Spawn, Entry::BossFight, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints]),
     ("STORY", &[Entry::Flag]),
 ];
 
-const ENTRIES: [Entry; 24] = [
+const ENTRIES: [Entry; 25] = [
     Entry::God,
     Entry::Noclip,
     Entry::Haste,
@@ -186,6 +190,7 @@ const ENTRIES: [Entry; 24] = [
     Entry::Heal,
     Entry::Hero,
     Entry::Kill,
+    Entry::Spawn,
     Entry::BossFight,
     Entry::CloudBeast,
     Entry::Weapon,
@@ -444,7 +449,7 @@ Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), LT/RT o
 /// click on < or > steps its value. Runs before `dev_input`, which acts on the click.
 pub fn dev_mouse(sliders: Query<(&Interaction, &bevy::ui::RelativeCursorPosition, &DevSlider)>, mut dev: ResMut<DevMenu>, rows: Query<(&Interaction, &DevRow), Changed<Interaction>>, steps: Query<(&Interaction, &DevStep), Changed<Interaction>>) {
     let _span = crate::perf::span("dev_mouse");
-    if !dev.open {
+    if !dev.open || dev.picking {
         return;
     }
     for (i, r) in &rows {
@@ -477,6 +482,9 @@ pub fn dev_mouse(sliders: Query<(&Interaction, &bevy::ui::RelativeCursorPosition
 pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bindings: Res<crate::bindings::Bindings>, page: Res<crate::controls_page::ControlsPage>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, mut frames: Local<u32>) {
     let _span = crate::perf::span("dev_input");
     let Some(mut play) = play else { return };
+    if dev.picking {
+        return;
+    }
     if dev.open && dev.quests.is_none() {
         dev.quests = Some(play.play.map_tables().0);
         // NEOPETS_DEV containing "quests": list each quest's start and done flags (diagnostic).
@@ -882,6 +890,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             "Hero Haste off".into()
         }
         Entry::Kill => format!("Defeated {} enemies here", p.dev_kill_enemies()),
+        Entry::Spawn => {
+            dev.want_picker = true;
+            String::new()
+        }
         Entry::CloudBeast => p.dev_cloud_beast(),
         Entry::BossFight => {
             let b = crate::play::BOSSES[dev.boss_at % crate::play::BOSSES.len()];
@@ -976,6 +988,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::FreeCam => ("Free camera (F2)".into(), on(dev.free.is_some())),
         Entry::Speed => ("Game speed (apply: 1x)".into(), speed_label(dev.speed)),
         Entry::ToCamera => ("Hero to the free camera".into(), String::new()),
+        Entry::Spawn => ("Spawn a character".into(), "List".to_string()),
         Entry::Group => (format!("Cut group: {}", crate::play::DEV_GROUPS[dev.group_at].0), format!("{} of {}", dev.group_at + 1, crate::play::DEV_GROUPS.len())),
         Entry::Extra => (format!("Teleport: {}", EXTRAS[dev.extra_at].1), format!("{} of {}", dev.extra_at + 1, EXTRAS.len())),
         Entry::Warp => {
@@ -1093,7 +1106,7 @@ pub fn show_panel(
 ) {
     let _span = crate::perf::span("show_panel");
     for mut n in &mut windows {
-        n.display = if dev.open { Display::Flex } else { Display::None };
+        n.display = if dev.open && !dev.picking { Display::Flex } else { Display::None };
     }
     let status = !dev.open && (dev.free.is_some() || dev.speed != NORMAL);
     for mut n in &mut boxes {

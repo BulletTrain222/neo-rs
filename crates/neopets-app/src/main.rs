@@ -5,6 +5,7 @@ mod controls_page;
 mod character;
 mod controls;
 mod dev_menu;
+mod dev_spawn;
 mod stage_view;
 mod ui_fit;
 mod display;
@@ -915,6 +916,7 @@ fn main() {
             ..default()
         }))
         .init_resource::<dev_menu::DevMenu>()
+        .init_resource::<dev_spawn::SpawnPicker>()
         .insert_resource(bindings::Bindings::load())
         .init_resource::<bindings::Pad>()
         .init_resource::<bindings::PadMute>()
@@ -927,13 +929,13 @@ fn main() {
         .add_plugins(pass1::Pass1Plugin)
         .add_plugins(shadow_view::ShadowPlugin)
         .init_resource::<display::SceneTarget>()
-        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup, display::spawn_window))
+        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, dev_spawn::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup, display::spawn_window))
         .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
         .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
         .add_systems(
             Update,
             (
-                (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
+                (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot),
                 (show_sim, show_browser),
                 (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
@@ -949,6 +951,7 @@ fn main() {
     app.add_systems(Update, (movie_view::collect, movie_view::sync_screen, movie_view::sync_skip, movie_view::sync_sound, movie_view::hush).chain().after(step_sim));
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
+    app.add_systems(Update, dev_spawn::picker_show);
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
     app.add_systems(Update, button_style::apply);
     app.add_systems(Last, display::limit_frame);
@@ -4482,6 +4485,16 @@ fn play_trace(
             println!("      ceiling {k}: middle {mid:?} U {:?} LU {} LV {} links {:?}", r.u, r.lu, r.lv, r.links);
         }
     }
+    // NEOPETS_TRACE_CATALOG=1: the developer menu's character list, one line each (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_CATALOG").is_some() {
+        if let Ok(mut second) = disc.reopen() {
+            dev_spawn::scan(&mut second, index, |list| {
+                for e in list {
+                    println!("CATALOG {:?} {} {} {:?}", e.group, e.region, e.ordinal, e.name);
+                }
+            });
+        }
+    }
     // NEOPETS_TRACE_GROUP=region: the developer menu's cut group loaded in the trace's world (diagnostic).
     if let Some(r) = std::env::var("NEOPETS_TRACE_GROUP").ok().and_then(|v| v.parse::<u32>().ok()) {
         play.dev_load_group(r);
@@ -4763,6 +4776,15 @@ fn play_trace(
         // NEOPETS_TRACE_NPCWALK="n": the townsfolk walking audit's report on tick n.
         if std::env::var("NEOPETS_TRACE_NPCWALK").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
             play.npc_audit_report();
+        }
+        // NEOPETS_TRACE_SPAWN="tick:region:ordinal;...": the developer menu's character spawn on those ticks.
+        for e in std::env::var("NEOPETS_TRACE_SPAWN").unwrap_or_default().split(';') {
+            let mut it = e.split(':').filter_map(|v| v.trim().parse::<u64>().ok());
+            if let (Some(t), Some(r), Some(o)) = (it.next(), it.next(), it.next()) {
+                if t == play.ticks {
+                    play.dev_spawn(r as u32, o as usize);
+                }
+            }
         }
         // NEOPETS_TRACE_KILL="n[,n...]": the developer menu's enemy defeat on those ticks.
         if std::env::var("NEOPETS_TRACE_KILL").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {

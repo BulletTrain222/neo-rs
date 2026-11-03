@@ -31,6 +31,8 @@ const PET_SLOT: u8 = 254;
 const REBIND_SLOT: u8 = 253;
 /// The developer menu's cut group: a slot of its own.
 const DEV_GROUP_SLOT: u8 = 252;
+/// The developer menu's spawned characters: a slot of their own, never replaced by a load.
+const DEV_SPAWN_SLOT: u8 = 251;
 
 /// The cut character groups the developer menu can load (SPEC-0066; no level script loads these regions): the
 /// name, the owner pack and the region. A test tool of this build, not part of the game.
@@ -1550,6 +1552,8 @@ pub struct Play {
     placed_fx: HashMap<(u32, usize), usize>,
     /// The developer menu's cut group on its way in, and the tick it was asked for.
     dev_group: Option<u64>,
+    /// The developer menu's character spawns on their way in: region and record.
+    dev_spawns: Vec<(u32, usize)>,
     /// Hero Haste's way back: the world and place the hero last stood on a real floor.
     haste_safe: Option<(u32, [f32; 3])>,
     dev_item: Option<[f32; 3]>,
@@ -2199,6 +2203,7 @@ impl Play {
             mote_objects: Vec::new(),
             break_family: None,
             dev_group: None,
+            dev_spawns: Vec::new(),
             haste_safe: None,
             dev_item: None,
             avoid: Default::default(),
@@ -8335,6 +8340,10 @@ impl Play {
         loaded: Vec<(neopets_data::region::Placement, ModelData, HeroAnim, Option<neopets_data::monster::Row>, Option<neopets_data::monster::Tuning>)>,
         items: Vec<neopets_data::region::ItemPoint>,
     ) {
+        if slot == DEV_SPAWN_SLOT {
+            self.dev_spawn_loaded(region, loaded);
+            return;
+        }
         if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
             println!("      add {region} to ({pack}, {slot}): wanted {:?}, petpet type {:?}, keys {:?}", self.slot_regions.get(&(pack, slot)), self.petpet.as_ref().map(|p| p.type_id), loaded.iter().map(|l| (l.0.key, l.0.summon)).collect::<Vec<_>>());
         }
@@ -17355,6 +17364,34 @@ impl Play {
         } else if self.ticks > asked + 600 {
             self.dev_group = None;
         }
+    }
+
+    /// The developer menu: bring one character record from anywhere on the disc to the place in front of the hero.
+    pub fn dev_spawn(&mut self, region: u32, ordinal: usize) {
+        self.dev_spawns.push((region, ordinal));
+        self.region_wanted.push((self.world.pack, DEV_SPAWN_SLOT, region));
+    }
+
+    /// A spawned record arrives: 8 units in front of the hero, facing him, on the ground there when there is one, and
+    /// without the record's own home world: no entity id, kill memory, patrol, hiding, alarm group or drop.
+    #[allow(clippy::type_complexity)]
+    fn dev_spawn_loaded(&mut self, region: u32, loaded: Vec<(neopets_data::region::Placement, ModelData, HeroAnim, Option<neopets_data::monster::Row>, Option<neopets_data::monster::Tuning>)>) {
+        let Some(k) = self.dev_spawns.iter().position(|s| s.0 == region) else { return };
+        let (_, ordinal) = self.dev_spawns.remove(k);
+        let Some((mut pl, model, anim, row, tuning)) = loaded.into_iter().find(|l| l.0.ordinal == ordinal) else { return };
+        let (hero, f) = (self.loco.position(), self.loco.facing);
+        let (x, z) = (hero[0] + 8.0 * f[0], hero[2] + 8.0 * f[2]);
+        let y = self.safe_floor(x, z, hero[1] + 8.0).unwrap_or(hero[1]);
+        pl.position = [x, y, z];
+        pl.facing = [-f[0], 0.0, -f[2]];
+        pl.summon = false;
+        pl.ai_code = 0;
+        pl.emerge_distance = 0.0;
+        pl.words = [u32::MAX, 0, 0, 0, 0, 0, 0, 0];
+        pl.alarm = 0xFF;
+        pl.drop = -1;
+        // No region number: nothing in this world may take the character for one of its own entities.
+        self.bind_character(self.world.pack, DEV_SPAWN_SLOT, u32::MAX, pl, (model, anim, row, tuning), None);
     }
 
     /// The nearest safe floor to a cut group's point, 6 units out and then in growing rings to 200, at about its
