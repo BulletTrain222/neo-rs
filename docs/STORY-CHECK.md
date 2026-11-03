@@ -7,12 +7,12 @@ The run reached the end of the list (exit 0).
 | Result | Goals | Meaning |
 | --- | --- | --- |
 | notrun | 0 | Not reached |
-| fail | 84 | The Done condition never held |
+| fail | 66 | The Done condition never held |
 | gameover | 3 | The hero died and the world was torn down |
 | manual | 41 | Kind not automated (minigames, pushes, climbs, shots) |
 | nocheck | 95 | Ran, but its Done condition is not machine-readable |
-| already | 19 | Done already held from earlier goals |
-| pass | 142 | Done condition reached |
+| already | 21 | Done already held from earlier goals |
+| pass | 158 | Done condition reached |
 
 ## Failed goals
 
@@ -31,44 +31,32 @@ The run reached the end of the list (exit 0).
 - Act 1 goal 77 TALK (1098): Entity 35 or 36 (the cutscene routine). Done: 194 on.
 - Act 1 goal 87 SQUARE (1098): Rest prompt (goal 52). Done: 29, 205, 63 on (movie 10).
 - Act 1 goal 88 TALK (1098): Entity 39. Done: 206 on.
-- Act 2 goal 100 WALK (956 to 1023): Leave 956 and walk the legs of goal 89 in reverse: 706, 1230, 696, 1023. Aim at town door 0, centre (65.5, 23. Done: pack 1023 current, hero near door 0.
 - Act 2 goal 114 TALK (1300): Painter Howell (entity 18). Done: 399 on, item 61 held. Needed and not met: 222.
 - Act 3 goal 300 WAIT (886): Brightvale arrival after movie 30 (return world 64). The module's Init sets 249 because 248 is on and movie 30 Done: control back; 249 on.
-- Act 3 goal 303 WALK (886 to 753): Legs 886, 704, 880, 702, 753; aim point in 753 is the castle teleport 0 (goal 304). In 880 do not stop at the  Done: pack 753 current.
 - Act 3 goal 305 WAIT (758): Movie 33; arrival in Brightvale Castle. Init sets 68 and 251; the hero stands at locator 13. Done: 68 and 251 on.
 - Act 3 goal 317 WALK (753): Walk out of the sphere (more than 30 from its centre). Done: movie 37 plays on the next tick; 258 on.
-- Act 3 goal 319 WALK (699 to 722): Legs 699, 886, 704, 880, 702, 1238, 713, 722. Aim point: the apothecary door of 722 (goal 320). Done: pack 722 current.
+- Act 3 goal 322 DOOR (745 to 722): Exit rectangle of 745, centre (18.4, 0.0, -0.1), 4.8 wide. Done: pack 722 current at locator 107.
 - Act 3 goal 328 FIGHT (735): The Plague Serpent (boss instance 10, AI 73; SPEC-0016). Its only damage route is one strike on the head while Done: 263, 75, 50 and 70 on (set by the victory scene).
-- Act 3 goal 331 WALK (735 to 722): Legs 735, 713, 722; aim at door index 3 (goal 320). Done: pack 722 current.
 - Act 3 goal 332 DOOR (722 to 745): Door index 3 again. Done: pack 745 current.
 - Act 3 goal 335 TALK (752): The bridge builder (the pack's one entity, entity 0). Done: 265 on (line 6).
 - Act 3 goal 336 FIGHT (880): Brightvale road guards AI 21, 22 and 23. Walk to the plaza (the treasure seller stands at (1815.6, 166.2, -933 Done: 296 on.
 - Act 3 goal 340 DOOR (1017 to 991): Pack 1017 door 0, centre (31.6, 13.5, -0.2), 10.7 wide (or door 1, centre (-33.3, -0.4, -0.2), 10.2 wide). Done: pack 991 current at locator 8 (door 0) or 7 (door 1).
-- Act 3 goal 341 WALK (991 to 986): Legs 991, 705, 986. Done: pack 986 current.
-- Act 3 goal 346 WALK (986 to 1017): Legs 986, 705, 991; then goal 338 again. Done: pack 1017 current.
-- Act 3 goal 355 WALK (1184 to 864): Legs 1184, 696, 893, 851, 822, 861, 864 (Abandoned Mines). Done: pack 864 current.
 - Act 3 goal 356 TALK (864): Smithy Brennan, entity 45 (his zone is script group 2: rectangle centre (-313.6, -161.1, 1845.5), 400.6 square Done: 288 on.
 - Act 3 goal 357 TALK (864): Giovanni, entity 47 (script group 5: cylinder base (-783.2, 40.5, 1696.9), radius 261.9; locator 51 (-737.6, 5 Done: 289 on.
 - Act 3 goal 358 TALK (864): Stanley, entity 48 (script group 3: rectangle centre (-1219.4, -14.6, 2014.7), 297.6 wide, 580.4 deep; locator Done: 292 on.
 - Act 3 goal 359 TALK (874): Otto the Old Miner (entity 6) and Elspeth (entity 7). Enter 874 from 864 by the cell exit. Each talk is a shor Done: 291 and 290 on.
 - Act 3 goal 363 FIGHT (864): The Ixi Chieftain (boss instance 8, 300 HP; SPEC-0014). Hero: either (Tor's sword or Roberta's wand); a fronta Done: death sets level state 0; 293 on.
-- Act 3 goal 368 WALK (842 to 1250): Legs 842, 851, 893, 696, 1230, 699, 886, 717, 1250 (Werelupe Woods). Done: pack 1250 current.
 - Act 3 goal 370 TALK (1251): The witch (the room's only talker). Done: 460 on.
-- Act 3 goal 371 WALK (1250 to 1257): Leave 1251; legs 1250, 1256, 1257 (the burial ground). Aim point: teleport 0 of 1257 (goal 372). Done: pack 1257 current.
 - Act 3 goal 375 PICK (1247): The fang necklace, item 29 (a drop placed at the altar; the necklace holder is AI 10). Walk to the altar volum Done: item 29 held.
 - Act 3 goal 379 SQUARE (1249): Three levers (cylinders of radius 3.1, prompt shown while inside; Square at each): index 16 at (303.4, -29.8,  Done: 80 on (set by the third pull, whatever the order).
 - Act 3 goal 381 WALK (1257 to 1250): Legs 1257, 1256, 1250. Aim point: the grave volume, trigger index 0: sphere centre (1016.4, 156.0, -1998.4), r Done: pack 1250 current.
 - Act 3 goal 383 WALK (1250 to 1244): Walk into the transition volume toward 1255 (script trigger 3: footprint centre (1237.0, 103.2, -1315.7), 96.3 Done: pack 1244 current.
 - Act 3 goal 391 WAIT (1246): Death scene: movie 42 (first time), swap mode 2, entities deactivated, item 14 given, hero moved to locator 9. Done: item 14 held; swap mode 2.
 - Act 3 goal 392 WALK (1246 to 1250): Legs 1246, 1255, 1250; walk into the grave sphere of goal 382 again. Done: 275 on (camera and walk sequence, object 0 on).
-- Act 3 goal 393 WALK (1250 to 696): Legs 1250, 717, 886, 699, 1230, 696. Done: pack 696 current.
 - Act 3 goal 394 WALK (696 to 909): Legs 696, 1066, 691, 909 (the farm). The farm's story stage 6 plays a cutscene on entry when item 36 is absent Done: item 36 held; 279 on.
-- Act 3 goal 395 WALK (909 to 956): Legs 909, 691, 1066, 696, 1230, 706, 956 (Illusen's Glade). Done: pack 956 current.
-- Act 3 goal 397 WALK (956): Trigger index 11: sphere centre (-702.1, 68.2, -824.9), radius 5.6 (the top of the lift shaft). The lift does  Done: 282 on.
+- Act 3 goal 397 WALK (956): Trigger index 11: sphere centre (-702.1, 68.2, -824.9), radius 5.6 (the top of the lift shaft). The lift does  Done: 282 on. Needed and not met: 281.
 - Act 3 goal 400 WAIT (956): Movie 44 and the glade scene (Illusen). The scene takes item 14 (from the Werelupe King) away and gives item 3 Done: 67, 20, 283, 302 on; item 30 held.
-- Act 3 goal 401 WALK (956 to 696): Legs 956, 706, 1230, 696. Done: pack 696 current.
 - Act 3 goal 402 WALK (696): Cloud wall: walk toward the town road; the first of the registered cylinders fires movie 48: index 1 at base ( Done: movie 48 plays; 301 on; line 1.
-- Act 3 goal 403 WALK (696 to 1023): Legs 696 to the town (1023), west entrance as in goal 26. Stay out of sight of the minions; flag 303 is set by Done: pack 1023 current.
 - Act 3 goal 404 WAIT (1023): With the cloak worn, wait 5 s in town: the watcher plays the cloak scene (lines 20 or 21). Done: 303 on.
 - Act 3 goal 405 TALK (1023): Tattered-cloak seller Rory the Shady Guy, entity 94 at this point of the story (entities 72 and 75 run the sam Done: 13 on (line 884); 1000 Neopoints removed.
 - Act 3 goal 413 WALK (1129 to 1130): Walk to the cell exit toward 1130 (the water channels). Done: pack 1130 current.
@@ -77,15 +65,11 @@ The run reached the end of the list (exit 0).
 - Act 3 goal 420 WALK (1080 to 685): Cell exit toward 685 (the way to the Oubliette). Resolved route from the hall start (-583, 0, 156) of 1080: (- Done: pack 685 current.
 - Act 3 goal 421 PICK (685): Item 18 (the key of the Oubliette gate and of the 1079 gate). Resolved: it is dropped by one Restless Spirit,  Done: item 18 held.
 - Act 3 goal 427 WALK (1078 to 685): Leave the Oubliette by the entrance gate (goal 424, the ordinary way out: platform at z -375, then the corrido Done: pack 685 current.
-- Act 3 goal 428 WALK (685 to 1079): Legs 685, 1080, 1079. Done: pack 1079 current.
 - Act 3 goal 431 WALK (1081): Trigger index 2: rectangle footprint centre (-490.9, -46.8, -9.8), 15.5 wide, 7.0 deep (locator 2 at (-490.9,  Done: 41 on; item 103 held; 313 on.
 - Act 3 goal 443 WALK (1098 to 1121): Walk up the castle to the second floor; the cell exit toward 1121 (Meridell Castle second floor). Done: pack 1121 current.
 - Act 3 goal 444 WALK (1121 to 1122): Cross 1121 (its two floor rectangles at (-43.6, -91.9, -67.2) and (-43.6, -107.3, -7.1) lead down) and take th Done: pack 1122 current (a walk, so no arrival locator; locator 23 (-27.0, -.
 - Act 3 goal 447 WAIT (1122): Wave end: 320 set; hero moved to locator 24 (0.7, -46.7, -162.7); gate objects swap; cameras 4 and 5. Done: 320 on; control back.
 - Act 4 goal 500 WAIT (1122 to 1300): Movie 54 ends and pack 1300 (Fyora's Palace Gardens, world 151) loads. Resolved: the boss end posts value 50 f Done: pack 1300 current; hero at record 1; control back. Needed and not met: 322.
-- Act 4 goal 501 WALK (1300 to 1344): Resolved: from record 1 walk north (toward -z) along x about 0 over the garden (floor heights 1513.7 rising to Done: pack 1344 current.
-- Act 4 goal 502 WALK (1344 to 1428): Resolved: keep walking north along x 0 on the flat floor of pack 1344 (height 7.4). Pack 1344's cells for x -6 Done: pack 1428 current; hero in the corridor north of z -277.
-- Act 4 goal 521 WALK (1363 to 1370): Resolved: all Altador districts share one x-z frame. The hub 1370 sits at the origin on a plateau of height 30 Done: pack 1370 current.
 - Act 4 goal 528 WALK (1371): Wave gate 3, script trigger 3: rectangle corner (-1.1, 5.8, -1.2), extents 0.8 by 2.2. Hero moved to record 24 Done: 344 on.
 - Act 4 goal 529 WALK (1371 to 1350): Finish cylinder, script trigger 1: base (0.2, -15.6, -144.7), radius 21.3, length 10.9. Walk in: movie 61 play Done: 345, 100 on; back in pack 1350 at record 6 (0.0, 0.5, -338.1).
 - Act 4 goal 532 SQUARE (1397): Buttons (script triggers 1 to 6, cylinders radius 1.4 on the row z -140.2, y 16.9, x 113.8, 107.9, 100.9, 94.7 Done: 699 on; the grate object removed.
@@ -93,8 +77,6 @@ The run reached the end of the list (exit 0).
 - Act 4 goal 536 WALK (1358 to 1353): Back to the hub 1370 and into district 1353 (the Bazaar). Aim at the statue cylinders around (287, 1.2, -217). Done: pack 1353 current.
 - Act 4 goal 539 SQUARE (1353): Statue 2, script trigger 2: cylinder base (272.5, 1.2, -202.7), radius 7.1. Start angle 45: press 7 times. The Done: 694 on; pack 1392 current.
 - Act 4 goal 556 WALK (1398): Stage 4: walk onto the arm trigger 35: box corner (-43.6, -8.5, 1079.8), extents 56.9 by 72.0 (height 88.4); t Done: 723 on (count 6); region 1399 loads.
-- Act 4 goal 559 WALK (1398 to 1363): Teleport door 0: rectangle corner (-15.7, -15.7, 449.9), extents 31.4 by 31.4. Walking in loads pack 1363 (mes Done: pack 1363 current at record 3 (0.3, 9.3, 447.8).
-- Act 4 goal 563 WALK (1411 to 1391): Walk from the plaza into pack 1391 (a transition; neighbours 1411 and 1381). Aim at the lift cylinder of goal  Done: pack 1391 current.
 - Act 4 goal 565 WALK (1391 to 1382): Script trigger 1: box corner (-40.8, -229.6, 180.6), extents 160.0 by 80.0 (height 80.0); touching it sets the Done: pack 1382 current; arrival record 0 (0.3, -204.7, 57.7).
 - Act 4 goal 574 WALK (1382 to 1411): Trigger 28 (ring centre): cylinder base (-4.8, -438.2, 298.6), radius 2.8, length 7.0. Walk in: pack 1411 load Done: pack 1411 current. Needed and not met: 337.
 - Act 4 goal 583 WAIT (1432 to 1300): Finale: the clock is hidden, object 1 (north barrier) is removed, swap mode 2, entities 0 and 5 to 7 are deact Done: pack 1300 current; 94, 365 on.

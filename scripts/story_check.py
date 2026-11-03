@@ -89,7 +89,8 @@ lines = []
 for g in goals:
     if not first <= g['n'] <= last:
         continue
-    exits = g['done'] and g['done']['pack'] and not re.search(r'[Ll]egs?', g['target'])
+    # An exit trigger lies in the pack being left; other walks end in the last pack named.
+    exits = g['done'] and g['done']['pack'] and re.search(r'[Ee]xit|[Tt]rigger', g['target']) and not re.search(r'[Ll]egs?', g['target'])
     pack = (g['packs'][-1] if g['kind'] == 'WALK' and not exits else g['packs'][0]) if g['packs'] else ''
     if g['kind'] == 'WAIT':
         pack = ''
