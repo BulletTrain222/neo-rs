@@ -180,7 +180,6 @@ pub enum Draw {
     Text { font: usize, text: Vec<u8>, spacing: i32, x: f32, y: f32, colour: [u8; 4] },
     /// The open book's flat page (SPEC-0035 6.1 rule 11): the 448 x 448 paper with the body, its
     /// top-left corner at (x, y) on the canvas.
-    BookPage { x: f32, y: f32 },
     /// The map's hero marker (SPEC-0051 section 7): sprite node `node`'s whole 32 x 32 art as a
     /// quad centred on (x, y), turned by `angle` and squashed to 6/7 of its width, tinted.
     Marker { node: usize, x: f32, y: f32, angle: f32, colour: [u8; 4] },
@@ -284,6 +283,8 @@ pub struct Flow {
     pub book_words: (f32, f32),
     /// The book page layout words (SPEC-0035 6.1 rule 5), read at start-up.
     pub page_words: Option<neopets_sim::book::PageWords>,
+    /// SPEC-0035 section 6.1 rule 14: the style masks read from the boot program.
+    pub style_masks: Vec<u32>,
     /// The pause page's quit box is open (SPEC-0035 Behavior 2, states 6 and 7): its record 26
     /// shows in `card`, and the input block hides the menu words from the focus states and
     /// the generic step.
@@ -405,7 +406,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_gameplay: false, display_requests: Vec::new(), controls_request: false, display_back: false };
+        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, style_masks: Vec::new(), display_focus: 0, display_gameplay: false, display_requests: Vec::new(), controls_request: false, display_back: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -1797,13 +1798,11 @@ fn node_xy(fe: &Frontend, n: usize) -> (f32, f32) {
 
 /// The book reader's page (SPEC-0035 6.1 rules 8 to 13): the flat page (paper and body, drawn
 /// from the book's own glyphs) shown flat with its 448-wide spread centred on the canvas, and the
-/// title in front-end font 0 centred on x 256 at baseline 40 in (112, 112, 2, 128). The 3D page
-/// sheet and decoration mesh, its tilt by the page angle and its placement before the camera
-/// (rule 12, Low for the placement) are not drawn.
+/// title in front-end font 0 centred on x 256 at baseline 40 in (112, 112, 2, 128). The page sheet
+/// and its pictures are drawn by book_view.
 pub fn book_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
     let mut out = Vec::new();
     let (true, Some(b)) = (flow.current == BOOK, flow.book.as_ref()) else { return out };
-    out.push(Draw::BookPage { x: 32.0, y: 0.0 });
     let tw = fe.fonts.first().map_or(0, |f| f.measure(&b.book.title, 0));
     out.push(Draw::Text { font: 0, text: b.book.title.clone(), spacing: 0, x: (256.0 - tw as f32 / 2.0).trunc(), y: 40.0, colour: [112, 112, 2, 128] });
     out

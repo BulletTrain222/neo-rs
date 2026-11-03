@@ -129,14 +129,12 @@ pub struct MenuCache {
     pictures: HashMap<u32, Option<neopets_data::texture::Image>>,
     /// The map marker's image, redrawn each frame at the marker's angle.
     marker: Option<Handle<Image>>,
-    /// The open book's flat page image, by book index.
-    book: Option<(usize, Handle<Image>)>,
 }
 
 /// SPEC-0035 6.1 rules 10 and 11: the book's flat page, 448 x 448: the 128 x 128 paper picture
 /// over the whole page, then each laid-out line in the book's glyph sheet, colour (100, 100,
 /// 100, 128), every glyph's advance plus the line's extra and each candidate's further extra.
-fn book_page(b: &neopets_data::book::Book, words: &neopets_sim::book::PageWords) -> neopets_data::texture::Image {
+pub(crate) fn book_page(b: &neopets_data::book::Book, words: &neopets_sim::book::PageWords) -> neopets_data::texture::Image {
     const N: u32 = 448;
     let mut rgba = vec![0u8; (N * N * 4) as usize];
     if let Some(p) = &b.paper {
@@ -244,7 +242,8 @@ pub fn sync_menu(
         ));
     }
     for mut v in &mut backdrop {
-        *v = if draws.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
+        // The book reader's page stands over the frozen world (book_view), which the backdrop would hide.
+        *v = if draws.is_empty() || flow.current == menus::BOOK { Visibility::Hidden } else { Visibility::Inherited };
     }
     if *pool < draws.len() {
         for i in *pool..draws.len() + 8 {
@@ -305,16 +304,6 @@ pub fn sync_menu(
                 }
                 cache.labels.get(&node).map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32 * scale, *w as f32 * scale, *h as f32 * scale, Color::WHITE))
             }
-            Draw::BookPage { x, y } => match (menu.flow.book.as_ref(), menu.flow.page_words.as_ref()) {
-                (Some(b), Some(words)) => {
-                    if cache.book.as_ref().is_none_or(|(i, _)| *i != b.index) {
-                        let img = book_page(&b.book, words);
-                        cache.book = Some((b.index, images.add(crate::rgba_image(img.width, img.height, img.rgba))));
-                    }
-                    cache.book.as_ref().map(|(_, h0)| (h0.clone(), x, y, 448.0, 448.0, Color::WHITE))
-                }
-                _ => None,
-            },
             Draw::Marker { node, x, y, angle, colour } => {
                 // SPEC-0051 section 7: each corner offset (x, y) of the 32 x 32 quad goes to the
                 // screen offset ((6/7)(C x - S y), S x + C y); drawn into a 48 x 48 image by the

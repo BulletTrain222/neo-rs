@@ -23,6 +23,7 @@ mod orbit;
 mod pattern;
 mod audio_view;
 mod hud_view;
+mod book_view;
 mod menu_view;
 mod menus;
 mod movie_view;
@@ -957,6 +958,9 @@ fn main() {
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     app.add_systems(Update, dev_spawn::picker_show);
+    app.init_resource::<book_view::BookView>();
+    app.add_systems(Startup, book_view::spawn_camera);
+    app.add_systems(Update, book_view::sync_book.after(play_frame));
     app.insert_resource(goal_start.map_or_else(story_run::GoalWalk::default, story_run::GoalWalk::open));
     app.add_systems(Startup, story_run::spawn_goal_panel);
     app.add_systems(Update, (story_run::goal_walk_step.before(play_frame), story_run::show_goal_panel));
@@ -1504,6 +1508,13 @@ fn step_sim(
                     Some(c) => play.play.item_command(&c),
                     None => {}
                 }
+                // NEOPETS_SHOT_BOOK=value: the window opens that book at once (diagnostic, to picture it).
+                static SHOT_BOOK: std::sync::Once = std::sync::Once::new();
+                SHOT_BOOK.call_once(|| {
+                    if let Some(v) = std::env::var("NEOPETS_SHOT_BOOK").ok().and_then(|v| v.trim().parse::<i32>().ok()) {
+                        play.play.books.cursor = v;
+                    }
+                });
                 // SPEC-0024 Book index: the reader's request; a new index replaces the loaded
                 // book and starts its page timer, the loaded one is kept.
                 if m.flow.current == menus::BOOK {
@@ -5962,6 +5973,9 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                         // Rule 5: the block x, y and line-limit words and the text width.
                         if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, neopets_sim::book::PAGE_WORDS, 9) {
                             flow.page_words = neopets_sim::book::PageWords::read(&w);
+                        }
+                        if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, neopets_sim::book::STYLE_MASKS, 23) {
+                            flow.style_masks = w;
                         }
                     }
                     commands.insert_resource(menu_view::Menu::new(flow));

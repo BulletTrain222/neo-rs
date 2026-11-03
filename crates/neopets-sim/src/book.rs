@@ -87,6 +87,8 @@ impl PageWords {
 }
 
 pub const PAGE_WORDS: u32 = 0x002D_B2B4;
+/// SPEC-0035 section 6.1 rule 14: the 23 style masks, by the book's style index.
+pub const STYLE_MASKS: u32 = 0x0031_2D88;
 
 /// The 23 template rows (rule 9): for blocks A and B, which x, y and line-limit word each uses
 /// (None: the block is unused).

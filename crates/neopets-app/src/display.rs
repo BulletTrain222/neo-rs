@@ -384,7 +384,7 @@ pub struct WindowCamera;
 pub fn setup(mut commands: Commands, mut grades: ResMut<Assets<crate::graphics::SceneGrade>>) {
     commands.spawn((
         Camera2d,
-        Camera { order: 1, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() },
+        Camera { order: 2, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() },
         bevy::core_pipeline::tonemapping::Tonemapping::None,
         IsDefaultUiCamera,
         WindowCamera,

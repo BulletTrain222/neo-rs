@@ -21,6 +21,8 @@ pub struct Book {
     pub font: Option<crate::frontend::Font>,
     pub paper: Option<crate::texture::Image>,
     pub sheet: Option<crate::texture::Image>,
+    /// The record's bytes, for its page sheet and pictures (`models`).
+    pub record: Vec<u8>,
 }
 
 /// The type-2000 payload: title length (with its NUL) at +0x00, style at +0x04, the title at
@@ -42,6 +44,7 @@ pub fn read(resource_bytes: &[u8], entry: (u32, u32)) -> Option<Book> {
     let chain = resource::walk_chunks(rec, None).ok()?;
     let c = chain.chunks.iter().find(|c| c.kind == TEXT)?;
     let mut book = parse_text(rec.get(c.payload.clone())?)?;
+    book.record = rec.to_vec();
     if let Some(l) = chain.chunks.iter().find(|c| c.kind == LAYOUT) {
         book.font = rec.get(l.payload.clone()).and_then(|p| crate::frontend::parse_font(p, 0));
     }
@@ -60,6 +63,14 @@ pub fn read(resource_bytes: &[u8], entry: (u32, u32)) -> Option<Book> {
         }
     }
     Some(book)
+}
+
+/// The record's page sheet (model child 100) and decoration mesh (child 200, its switch parts by the style mask;
+/// SPEC-0024 Page data of a record; SPEC-0035 section 6.1 rule 12).
+pub fn models(record: &[u8], mask: u32) -> Option<(crate::model::ModelData, crate::model::ModelData)> {
+    let chain = resource::walk_chunks(record, None).ok()?;
+    let child = |role: u16, m: Option<u32>| crate::model::build_masked(record, &chain.chunks, None, Some(&[role]), m).ok();
+    Some((child(100, None)?, child(200, Some(mask))?))
 }
 
 #[cfg(test)]
