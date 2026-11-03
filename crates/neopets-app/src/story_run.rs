@@ -95,6 +95,8 @@ pub struct Order {
     pub warp: Option<u32>,
     pub square: bool,
     pub jump: bool,
+    /// A goal that needs a real attack: the attack button, three quick presses and a rest.
+    pub attack: bool,
     /// An exact-count goal: the trace's own prompt presses are off.
     pub quiet: bool,
     /// The stick held forward: an exit rectangle is walked through, not pressed.
@@ -149,6 +151,8 @@ impl StoryRun {
                 order.finished = true;
                 return order;
             };
+            // Around exact-count presses the trace's own prompt presses stay off, between them too.
+            order.quiet = g.kind == "PRESS" || self.at.checked_sub(1).is_some_and(|k| self.goals[k].kind == "PRESS");
             if self.phase != Phase::Begin && play.state.flags.len() + 20 < self.saved_flags.len() {
                 play.state.flags = self.saved_flags.iter().copied().collect();
                 play.state.items = self.saved_items.iter().copied().collect();
@@ -175,7 +179,7 @@ impl StoryRun {
                             play.state.give(i, 1);
                         }
                     }
-                    if !matches!(g.kind.as_str(), "WAIT" | "TALK" | "PICK" | "SQUARE" | "PRESS" | "DOOR" | "WALK" | "FIGHT") {
+                    if !matches!(g.kind.as_str(), "WAIT" | "TALK" | "PICK" | "SQUARE" | "PRESS" | "DOOR" | "WALK" | "FIGHT" | "SWING") {
                         // Forced: a scene its flags start runs out before the next goal.
                         println!("GOAL {} manual tick {} pack {}", g.n, play.ticks, play.world.pack);
                         let g = &self.goals[self.at];
@@ -283,7 +287,7 @@ impl StoryRun {
                     // Square also buys a shop's item, which a touch does not take.
                     order.square = (matches!(g.kind.as_str(), "TALK" | "SQUARE" | "DOOR" | "PICK") && t >= 30 && t % 15 == 0) || (g.kind == "PRESS" && t == 40);
                     order.jump = g.kind == "PICK" && t % 60 == 40;
-                    order.quiet = g.kind == "PRESS";
+                    order.attack = g.kind == "SWING" && t >= 30 && matches!((t - 30) % 150, 0 | 32 | 56);
                     return order;
                 }
                 Phase::Settle(status) => {

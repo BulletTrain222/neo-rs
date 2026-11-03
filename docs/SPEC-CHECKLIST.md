@@ -2,14 +2,14 @@
 
 Everything the specs describe, written by `scripts/spec_list.py`. **An automatic tick means a rule found evidence, not that anyone played it.** The tag on each ticked line names the rule. An unticked line may still be built: the rules are strict and only see plain text, so most built behaviour has no automatic tick. To confirm something yourself, change `[ ]` to `[x]`; a rerun keeps it while the line's text is unchanged.
 
-**42407 items: 2353 ticked by a rule, 0 ticked by hand, 40054 open.**
+**42407 items: 2364 ticked by a rule, 0 ticked by hand, 40043 open.**
 
 | Rule | Ticks | What it found |
 | --- | --- | --- |
 | numbers match the pack code | 830 | At least two flag, line, movie, item, locator or camera numbers on the line, all found in that pack's code |
 | address in code | 559 | Every boot-data address on the line is read by the code |
 | title named in code | 312 | A code comment naming this spec also names the section's title |
-| story check passed by teleport | 198 | The goal's Done condition held in the story check |
+| story check passed by teleport | 209 | The goal's Done condition held in the story check |
 | answered | 198 | A spec answered the request |
 | code found | 156 | The level module has code |
 | cited in code | 62 | The game code names this spec |
@@ -86,10 +86,10 @@ Everything the specs describe, written by `scripts/spec_list.py`. **An automatic
 | SPEC-0066 Unused, cut and developer worlds (the 17 world packs a new game never enters) | 162 | 3 | 0 |
 | Level modules and their lines | 3590 | 993 | 0 |
 | Walkthrough steps | 45 | 31 | 0 |
-| Goals, Act 1 | 99 | 54 | 0 |
-| Goals, Act 2 | 56 | 23 | 0 |
+| Goals, Act 1 | 99 | 61 | 0 |
+| Goals, Act 2 | 56 | 24 | 0 |
 | Goals, Act 3 | 153 | 87 | 0 |
-| Goals, Act 4 | 87 | 34 | 0 |
+| Goals, Act 4 | 87 | 37 | 0 |
 | Requests | 225 | 198 | 0 |
 | Stated gaps in the code | 93 | 0 | 0 |
 
@@ -26137,7 +26137,7 @@ Cited 111 times in the game code.
 
 ### SPEC-0045: Level scripts
 
-Cited 126 times in the game code.
+Cited 128 times in the game code.
 
 - [x] SPEC-0045 Level scripts: the code cites this spec {auto: cited in code}
 - [ ] SPEC-0045 Summary
@@ -42182,14 +42182,14 @@ Cited 4 times in the game code.
 - [x] Goal 51 TALK (1098): Entity 35 or 36 (either; the first talk of the visit). {auto: story check passed by teleport}
 - [x] Goal 52 SQUARE (1098): Rest prompt, script trigger 0: slab centre (105.7, -128.4, 105.3), 10.0 wide, 13.7 deep; the hero is moved to locator 12 (99.6, -126.2, 99.9). {auto: story check passed by teleport}
 - [x] Goal 53 DOOR, WALK (1098 to 1056): 1098 door 4 (centre (104.6, -128.5, 78.8)); arrival at locator 4 (103.2, 25.4, 426.7). Then walk into the chain talk zone, script tr... {auto: story check passed by teleport}
-- [ ] Goal 54 FIGHT (1056): Chain lesson: perform the chain attack (attack state 4) so that it hits the dummy, entity 4, while standing in the chain area (script trigger 5):... {story check: Not automated}
-- [ ] Goal 55 WALK (1056): Stand in the chain talk zone again. {story check: Failed goals}
-- [ ] Goal 56 DOOR, TALK (1056 to 1163): 1056 door 1 (centre (140.3, 22.3, 573.4)); arrival locator 15 (-43.7, -126.3, 100.4). Then talk to the Miamice keeper (entity 0 or 1... {story check: Failed goals}
+- [x] Goal 54 FIGHT (1056): Chain lesson: perform the chain attack (attack state 4) so that it hits the dummy, entity 4, while standing in the chain area (script trigger 5):... {auto: story check passed by teleport}
+- [x] Goal 55 WALK (1056): Stand in the chain talk zone again. {auto: story check passed by teleport}
+- [x] Goal 56 DOOR, TALK (1056 to 1163): 1056 door 1 (centre (140.3, 22.3, 573.4)); arrival locator 15 (-43.7, -126.3, 100.4). Then talk to the Miamice keeper (entity 0 or 1... {auto: story check passed by teleport}
 - [ ] Goal 57 GAME (1163): Catch five Miamice in the field (x -108.0 to -57.4, z 60.5 to 109.3; start points (-88.51, -125.82, 63.55), (-79.89, -125.82, 88.02), (-95.24, -12... {story check: Not automated}
 - [x] Goal 58 DOOR, WALK (1163 to 1056): 1163 door 1 (centre (-43.8, -128.5, 103.2)). Then stand in the spin talk zone, script trigger 11: slab centre (-21.6, 19.9, 370.9),... {auto: story check passed by teleport}
 - [ ] Goal 59 FIGHT (1056): Spin lesson: one spin attack (attack states 7 and 8) must hit all three dummies, entities 7, 8 and 9, inside the spin area (script trigger 6): sl... {story check: Not automated}
-- [ ] Goal 60 WALK (1056): Spin talk zone again. {story check: Failed goals}
-- [ ] Goal 61 DOOR, TALK (1056 to 1152): 1056 door 0 (centre (140.3, 22.3, 483.6)) to 1098; then 1098 door 2 (centre (78.3, -130.2, -54.6)); arrival in 1152 at locator 0 (77... {story check: Failed goals}
+- [x] Goal 60 WALK (1056): Spin talk zone again. {auto: story check passed by teleport}
+- [x] Goal 61 DOOR, TALK (1056 to 1152): 1056 door 0 (centre (140.3, 22.3, 483.6)) to 1098; then 1098 door 2 (centre (78.3, -130.2, -54.6)); arrival in 1152 at locator 0 (77... {auto: story check passed by teleport}
 - [x] Goal 62 DOOR, SQUARE (1152 to 1173): 1152 door 0 (centre (95.4, -128.3, 38.0)) to 1173. Then Square at the lever, script trigger 1: cylinder base (21.7, -148.4, 0.1),... {auto: story check passed by teleport}
 - [ ] Goal 63 SQUARE (1173 to 1171): Script trigger 0: cylinder base (28.9, -148.6, -12.1), radius 7.5, height 7.8; press Square at the prompt. {story check: Failed goals}
 - [ ] Goal 64 FIGHT (1171): Clear the five drains: for drain i break its three breakables in order (23, 24, 25; 26, 27, 28; 29, 30, 31; 32, 33, 34; 35, 36, 37). The last bre... {story check: Not automated}
@@ -42205,8 +42205,8 @@ Cited 4 times in the game code.
 - [ ] Goal 74 FIGHT (1056): Shield lesson: stand in the shield area (script trigger 9, slab centre (-29.2, 8.6, 420.5), 83.9 wide, 41.7 deep) and raise the shield aligned wi... {story check: Not automated}
 - [ ] Goal 75 WALK (1056): Shield talk zone; then stay for the next talk. {story check: Not automated}
 - [x] Goal 76 SQUARE (1098): Rest prompt (goal 52) again. {auto: story check passed by teleport}
-- [ ] Goal 77 TALK (1098): Entity 35 or 36 (the cutscene routine). {story check: Failed goals}
-- [ ] Goal 78 DOOR, TALK (1098 to 1163): 1098 door 5 (centre (-69.8, -128.6, -54.6)) to 1163; Sir Harlag, entity 15, placed at (-84.7, -126.6, -28.8). {story check: Failed goals}
+- [x] Goal 77 TALK (1098): Entity 35 or 36 (the cutscene routine). {auto: story check passed by teleport}
+- [x] Goal 78 DOOR, TALK (1098 to 1163): 1098 door 5 (centre (-69.8, -128.6, -54.6)) to 1163; Sir Harlag, entity 15, placed at (-84.7, -126.6, -28.8). {auto: story check passed by teleport}
 - [x] Goal 79 DOOR, WALK (1098 to 842): 1098 door 6 (centre (0.0, -128.2, -101.8)) to 1023; legs 696, 893, 851, 842; arrival locator 0 (177.8, 85.1, 1429.4). Entry sets 197;... {auto: story check passed by teleport}
 - [x] Goal 80 FIGHT (842): Kill the raiders, AIs 0, 1, 2, 4, 6, 8 and 9. The trigger at slab centre (79.5, 103.1, 1705.7) blocks the way on with a line until they are dead. {auto: story check passed by teleport}
 - [x] Goal 81 WALK (842): Sphere, script trigger 3: centre (45.6, 105.5, 1716.8), radius 29.8 (leader conversation, entity 19). {auto: story check passed by teleport}
@@ -42253,12 +42253,12 @@ Cited 4 times in the game code.
 - [x] Goal 119 TALK (1327): Seradar (entity 43), first talk. {auto: story check passed by teleport}
 - [x] Goal 120 TALK (1327): Seradar again with items 10, 11 and 62 held. {auto: story check passed by teleport}
 - [ ] Goal 121 USE (1327): If the wand is not shown in hand, equip item 111 from the item screen (weapon slot). {story check: Not automated}
-- [ ] Goal 122 FIGHT (1327): Lesson 1: press Circle or R2 once, facing the target (entity 0, 5 health, unnamed type 102). {story check: Not automated}
-- [ ] Goal 123 FIGHT (1327): Lesson 2: after the scene, shoot the target so that it reacts to a hit. {story check: Not automated}
+- [x] Goal 122 FIGHT (1327): Lesson 1: press Circle or R2 once, facing the target (entity 0, 5 health, unnamed type 102). {auto: story check passed by teleport}
+- [ ] Goal 123 FIGHT (1327): Lesson 2: after the scene, shoot the target so that it reacts to a hit. {story check: Failed goals}
 - [ ] Goal 124 FIGHT (1327): Lesson 3: hold Circle or R2 for at least 31 ticks (hold about 90 ticks for a full charge, limit 80) and release at the target. {story check: Not automated}
 - [ ] Goal 125 FIGHT (1327): Lesson 4: three new presses within about 30 ticks (the press counter gains 1 per press and loses 1 every 30 ticks); press at roughly 10-tick spa... {story check: Not automated}
 - [ ] Goal 126 USE (1327): Optional: equip the Fire Mote (Down opens the second quick panel; pick item 160). {story check: Not automated}
-- [ ] Goal 127 FIGHT (1327): Destroy the respawned target (entity 0). Roberta's health is refilled every tick during the lesson. {story check: Not automated}
+- [ ] Goal 127 FIGHT (1327): Destroy the respawned target (entity 0). Roberta's health is refilled every tick during the lesson. {story check: Failed goals}
 - [x] Goal 128 DOOR (1300 to 1335): Teleport 1 (west): centre (-135.2, 1535.9, -132.9), 10.3 wide; Square. {auto: story check passed by teleport}
 - [x] Goal 129 SQUARE (1335): Bed, script trigger 5: slab centre (-208.5, 15.3, -170.9), 15.1 wide, 10.4 deep, 10 tall; press Square at the rest prompt. {auto: story check passed by teleport}
 - [x] Goal 130 WALK (1335): Central hall cylinder, script trigger 6: base (0.1, -22.3, 0.1), radius 79.1, height 94.7. Lines 30 to 32 and camera 5. {auto: story check passed by teleport}
@@ -42478,14 +42478,14 @@ Cited 4 times in the game code.
 - [ ] Goal 529 WALK (1371 to 1350): Finish cylinder, script trigger 1: base (0.2, -15.6, -144.7), radius 21.3, length 10.9. Walk in: movie 61 plays and flags 345 and 100 are... {story check: Failed goals}
 - [ ] Goal 530 WALK (1350 to 1358): Back to the hub 1370 and into district 1358 (the Money district). Its teleport 2 is a vertical door plane at x -529.6 (the hero comes fro... {story check: No readable Done condition}
 - [x] Goal 531 SQUARE (1358 to 1397): Teleport 2 prompt: posts message 40 for world 173, sets 348 if clear, loads pack 1397. {auto: story check passed by teleport}
-- [ ] Goal 532 SQUARE (1397): Buttons (script triggers 1 to 6, cylinders radius 1.4 on the row z -140.2, y 16.9, x 113.8, 107.9, 100.9, 94.7, 87.8, 82.1). Press 1 (x 113.8),... {story check: Failed goals}
-- [ ] Goal 533 SQUARE (1397): Statues: turn pads at triggers 17 (440.5, -5.1, 37.0), 18 (440.5, -5.1, -37.1), 19 (589.5, -5.1, -37.1) and 20 (589.5, -5.1, 37.1), cylinders r... {story check: Failed goals}
+- [x] Goal 532 SQUARE (1397): Buttons (script triggers 1 to 6, cylinders radius 1.4 on the row z -140.2, y 16.9, x 113.8, 107.9, 100.9, 94.7, 87.8, 82.1). Press 1 (x 113.8),... {auto: story check passed by teleport}
+- [x] Goal 533 SQUARE (1397): Statues: turn pads at triggers 17 (440.5, -5.1, 37.0), 18 (440.5, -5.1, -37.1), 19 (589.5, -5.1, -37.1) and 20 (589.5, -5.1, 37.1), cylinders r... {auto: story check passed by teleport}
 - [x] Goal 534 WALK (1397): Trigger 12: box corner (377.9, -50.7, -325.0), extents 10.0 along x by 17.7 (height 10.2). Walk in: movie 63 plays, 102 and 349 are set and twelv... {auto: story check passed by teleport}
 - [x] Goal 535 WALK (1397 to 1358): Exit trigger 13: box corner (385.9, -50.7, -322.9), extents 10.0 by 1.4. Walk in: it loads pack 1358 (message 60 for world 159). {auto: story check passed by teleport}
 - [x] Goal 536 WALK (1358 to 1353): Back to the hub 1370 and into district 1353 (the Bazaar). Aim at the statue cylinders around (287, 1.2, -217). Resolved route from the hu... {auto: story check passed by teleport}
 - [ ] Goal 537 SQUARE (1353): Statue 0, script trigger 0: cylinder base (272.5, 1.2, -231.5), radius 7.1. Square at the prompt (context 4); each press turns the statue 45 de... {story check: No readable Done condition}
 - [ ] Goal 538 SQUARE (1353): Statue 1, script trigger 1: cylinder base (301.4, 1.2, -231.5), radius 7.1. Start angle 90: press 6 times. {story check: No readable Done condition}
-- [ ] Goal 539 SQUARE (1353): Statue 2, script trigger 2: cylinder base (272.5, 1.2, -202.7), radius 7.1. Start angle 45: press 7 times. Then the update runs the door scene... {story check: Failed goals}
+- [x] Goal 539 SQUARE (1353): Statue 2, script trigger 2: cylinder base (272.5, 1.2, -202.7), radius 7.1. Start angle 45: press 7 times. Then the update runs the door scene... {auto: story check passed by teleport}
 - [ ] Goal 540 WALK (1392): Arrival: the hero falls in at record 0 (6.3, 33.6, 10.9) with a long fall and camera track 10 (3 s) once per load while 696 is off. Walk the shri... {story check: No readable Done condition}
 - [ ] Goal 541 WALK (1395, 1393): Pack 1395 is a connector (neighbours 1392 and 1393). Pack 1393 has five guard rooms: each room has a plate lever (its triggers 2, 8, 14, 23... {story check: No readable Done condition}
 - [ ] Goal 542 WALK (1396, 1394): Pack 1396 leads to pack 1394 (neighbour). Walk into the intro trigger 13: box corner (-65.6, 8.4, -1203.9), extents 30.3 along x (x -65.6 t... {story check: No readable Done condition}

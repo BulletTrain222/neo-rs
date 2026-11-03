@@ -5556,6 +5556,7 @@ fn play_trace(
         }
         input.square |= story_order.square;
         input.jump |= story_order.jump;
+        input.attack |= story_order.attack;
         // In a fight below half health the trace drinks: it opens the quick panel, selects the
         // first entry it owns and presses Cross (or closes the panel with Triangle).
         let mut input = input;

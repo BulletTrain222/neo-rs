@@ -15881,13 +15881,13 @@ fn castle_rest(state: &mut GameState) -> Vec<Action> {
             state.set(f, true);
         }
         v.push(Action::PlayFmv { movie: 7 });
-        v.extend([Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 5) }, Action::LoadRegion { slot: 1, region: Some(1098 + 1 + 4) }, Action::WaitLoads]);
-        v.extend([camera(9), Action::FadeIn { seconds: 1.0, wait: false }, Action::Message { line: 50 }, Action::FadeOut { seconds: 1.0, wait: true }, release_camera()]);
+        // Both loads go into slot A, one after the other (SPEC-0045 1098 rest prompt); slot 1 keeps its character.
+        v.extend([Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 5) }, Action::WaitLoads, camera(9), Action::FadeIn { seconds: 0.5, wait: true }, Action::Message { line: 50 }, Action::FadeOut { seconds: 0.7, wait: true }, Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 4) }, Action::WaitLoads, release_camera()]);
     } else if !state.flag(27) && state.flag(191) {
         state.set(27, true);
         state.set(193, true);
-        v.extend([Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 5) }, Action::LoadRegion { slot: 1, region: Some(1098 + 1 + 4) }, Action::WaitLoads]);
-        v.extend([camera(9), Action::FadeIn { seconds: 1.0, wait: false }, Action::Message { line: 376 }, Action::FadeOut { seconds: 1.0, wait: true }, release_camera()]);
+        // Both loads go into slot A, one after the other (SPEC-0045 1098 rest prompt); slot 1 keeps its character.
+        v.extend([Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 5) }, Action::WaitLoads, camera(9), Action::FadeIn { seconds: 0.5, wait: true }, Action::Message { line: 376 }, Action::FadeOut { seconds: 0.7, wait: true }, Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 4) }, Action::WaitLoads, release_camera()]);
     } else if !state.flag(29) && state.flag(204) {
         for f in [29, 205, 63] {
             state.set(f, true);

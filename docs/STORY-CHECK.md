@@ -7,32 +7,28 @@ The run reached the end of the list (exit 0).
 | Result | Goals | Meaning |
 | --- | --- | --- |
 | notrun | 0 | Not reached |
-| fail | 57 | The Done condition never held |
+| fail | 50 | The Done condition never held |
 | gameover | 3 | The hero died and the world was torn down |
-| manual | 42 | Kind not automated (minigames, pushes, climbs, shots) |
+| manual | 38 | Kind not automated (minigames, pushes, climbs, shots) |
 | nocheck | 95 | Ran, but its Done condition is not machine-readable |
-| already | 23 | Done already held from earlier goals |
-| pass | 175 | Done condition reached |
+| already | 26 | Done already held from earlier goals |
+| pass | 183 | Done condition reached |
 
 ## Failed goals
 
 - Act 1 goal 1 WAIT (909): New Game opening: movies 88 and 1, act start 1 (about 95 s). The hero stands at entry 0, (-1852.802, y, 1137.4 Done: 1 on, 706 on.
 - Act 1 goal 19 SQUARE (951): The chest (lock chest 0, key item 15): Square inside the sphere. Done: item 15 gone, item 98 held. Needed and not met: item15.
 - Act 1 goal 49 TALK (951 to 1148): Leave 951 (goal 21), walk the legs of goal 26 to town, then talk to Officer Kendrick (1148, town door 5). Done: 150 and 142 on, 3 and 8 on, item 0 gone, item 120 held.
-- Act 1 goal 55 WALK (1056): Stand in the chain talk zone again. script trigger 10 Done: 632 on.
-- Act 1 goal 56 TALK (1056 to 1163): 1056 door 1 (centre (140.3, 22.3, 573.4)); arrival locator 15 (-43.7, -126.3, 100.4). Then talk to the Miamice Done: 156 on.
-- Act 1 goal 60 WALK (1056): Spin talk zone again. script trigger 11 Done: 633 on.
-- Act 1 goal 61 TALK (1056 to 1152): 1056 door 0 (centre (140.3, 22.3, 483.6)) to 1098; then 1098 door 2 (centre (78.3, -130.2, -54.6)); arrival in Done: 162 on.
 - Act 1 goal 63 SQUARE (1173 to 1171): Script trigger 0: cylinder base (28.9, -148.6, -12.1), radius 7.5, height 7.8; press Square at the prompt. Done: pack 1171 current (arrival locator 2 (-345.4, 2.1, -71.4)).
 - Act 1 goal 65 WALK (1171 to 1056):  Done: 1056 current; flag 24 on (set at 1056's start from 167).
 - Act 1 goal 69 WALK (1056): Mote talk zone again. script trigger 12 Done: 634 on.
 - Act 1 goal 70 TALK (1098): Entity 49 (reach 1098 as goals 49 and 50 show, or by 1056 door 0). Done: 174 on.
 - Act 1 goal 72 TALK (1098): Entity 49. Done: 180 and 185 on.
-- Act 1 goal 77 TALK (1098): Entity 35 or 36 (the cutscene routine). Done: 194 on.
-- Act 1 goal 78 TALK (1098 to 1163): 1098 door 5 (centre (-69.8, -128.6, -54.6)) to 1163; Sir Harlag, entity 15, placed at (-84.7, -126.6, -28.8). Done: 195 on.
 - Act 1 goal 88 TALK (1098): Entity 39. Done: 206 on.
 - Act 1 goal 95 WALK (956): Leave the top sphere (script trigger 16, centre (-702.1, 68.2, -824.9), radius 11.1) by more than 11.1 units,  Done: 212 on.
 - Act 2 goal 114 TALK (1300): Painter Howell (entity 18). Done: 399 on, item 61 held.
+- Act 2 goal 123 SWING (1327): Lesson 2: after the scene, shoot the target so that it reacts to a hit. Done: 231 on.
+- Act 2 goal 127 SWING (1327): Destroy the respawned target (entity 0). Roberta's health is refilled every tick during the lesson. Done: 234, 235 on; movie 19; pack 1300 current at locator 9 (0.0, 1538.2, -2.
 - Act 3 goal 300 WAIT (886): Brightvale arrival after movie 30 (return world 64). The module's Init sets 249 because 248 is on and movie 30 Done: control back; 249 on.
 - Act 3 goal 306 DOOR (758 to 777): Pack 758 teleport 1, centre (2085.3, 81.3, 510.2), 21.4 wide (the library road). Done: pack 777 current (hero placed at start position 8).
 - Act 3 goal 317 WALK (753): Walk out of the sphere (more than 30 from its centre). Done: movie 37 plays on the next tick; 258 on.
@@ -65,9 +61,6 @@ The run reached the end of the list (exit 0).
 - Act 4 goal 500 WAIT (1122 to 1300): Movie 54 ends and pack 1300 (Fyora's Palace Gardens, world 151) loads. Resolved: the boss end posts value 50 f Done: pack 1300 current; hero at record 1; control back. Needed and not met: 322.
 - Act 4 goal 528 WALK (1371): Wave gate 3, script trigger 3: rectangle corner (-1.1, 5.8, -1.2), extents 0.8 by 2.2. Hero moved to record 24 Done: 344 on.
 - Act 4 goal 529 WALK (1371 to 1350): Finish cylinder, script trigger 1: base (0.2, -15.6, -144.7), radius 21.3, length 10.9. Walk in: movie 61 play Done: 345, 100 on; back in pack 1350 at record 6 (0.0, 0.5, -338.1).
-- Act 4 goal 532 WAIT (1397): Buttons (script triggers 1 to 6, cylinders radius 1.4 on the row z -140.2, y 16.9, x 113.8, 107.9, 100.9, 94.7 Done: 699 on; the grate object removed.
-- Act 4 goal 533 WAIT (1397): Statues: turn pads at triggers 17 (440.5, -5.1, 37.0), 18 (440.5, -5.1, -37.1), 19 (589.5, -5.1, -37.1) and 20 Done: 700 on.
-- Act 4 goal 539 WAIT (1353): Statue 2, script trigger 2: cylinder base (272.5, 1.2, -202.7), radius 7.1. Start angle 45: press 7 times. The Done: 694 on; pack 1392 current.
 - Act 4 goal 556 WALK (1398): Stage 4: walk onto the arm trigger 35: box corner (-43.6, -8.5, 1079.8), extents 56.9 by 72.0 (height 88.4); t Done: 723 on (count 6); region 1399 loads.
 - Act 4 goal 574 WALK (1382 to 1411): Trigger 28 (ring centre): cylinder base (-4.8, -438.2, 298.6), radius 2.8, length 7.0. Walk in: pack 1411 load Done: pack 1411 current. Needed and not met: 337.
 - Act 4 goal 583 WAIT (1432 to 1300): Finale: the clock is hidden, object 1 (north barrier) is removed, swap mode 2, entities 0 and 5 to 7 are deact Done: pack 1300 current; 94, 365 on.
@@ -90,7 +83,6 @@ The run reached the end of the list (exit 0).
 - Act 1 goal 11 CLIMB (909): From the crate, jump with the stick toward the ladder face at x about -1934, z 1077.45 to 1079.08 (ladder base Done: hero y at least 58.5 within 6 of (-1934, 1078).
 - Act 1 goal 12 CLIMB (909): Second ladder: face origin (-1914.73, 73.44, 1059.04), spans y 55.865 to 73.441, to the roof at y about 73.4. Done: hero y at least 73.
 - Act 1 goal 28 GAME (1023): Chase Meerouladen: for k = 0 to 7 get within 30 units of locator 477 + k, in order: (-25.464, 29.043, 547.337) Done: 128 to 135 on in turn, then 136 on, item 32 held, movie 4 played.
-- Act 1 goal 54 ATTACK (1056): Chain lesson: perform the chain attack (attack state 4) so that it hits the dummy, entity 4, while standing in Done: 155 on.
 - Act 1 goal 57 GAME (1163): Catch five Miamice in the field (x -108.0 to -57.4, z 60.5 to 109.3; start points (-88.51, -125.82, 63.55), (- Done: 158 and 23 on.
 - Act 1 goal 59 ATTACK (1056): Spin lesson: one spin attack (attack states 7 and 8) must hit all three dummies, entities 7, 8 and 9, inside t Done: 161 on.
 - Act 1 goal 64 ATTACK (1171): Clear the five drains: for drain i break its three breakables in order (23, 24, 25; 26, 27, 28; 29, 30, 31; 32 Done: 637 to 641 on, 163 to 167 on, 33 on.
@@ -103,12 +95,9 @@ The run reached the end of the list (exit 0).
 - Act 1 goal 92 ATTACK (956): Record 2: zone sphere (script trigger 5) centre (-547.4, 8.7, -534.5), radius 72.2; guard AI 25; lock 4; cage  Done: 210 on.
 - Act 1 goal 93 ATTACK (956): Record 3: zone sphere (script trigger 6) centre (-676.2, 8.7, -413.1), radius 99.7; guard AI 26; lock 6; cage  Done: 623 on, then 211 on.
 - Act 2 goal 121 USE (1327): If the wand is not shown in hand, equip item 111 from the item screen (weapon slot). Done: wand drawn.
-- Act 2 goal 122 ATTACK (1327): Lesson 1: press Circle or R2 once, facing the target (entity 0, 5 health, unnamed type 102). Done: 230 on.
-- Act 2 goal 123 ATTACK (1327): Lesson 2: after the scene, shoot the target so that it reacts to a hit. Done: 231 on.
 - Act 2 goal 124 ATTACK (1327): Lesson 3: hold Circle or R2 for at least 31 ticks (hold about 90 ticks for a full charge, limit 80) and releas Done: 232 on.
 - Act 2 goal 125 ATTACK (1327): Lesson 4: three new presses within about 30 ticks (the press counter gains 1 per press and loses 1 every 30 ti Done: 233 on; item 160 x100 held.
 - Act 2 goal 126 USE (1327): Optional: equip the Fire Mote (Down opens the second quick panel; pick item 160). Done: Mote equipped.
-- Act 2 goal 127 ATTACK (1327): Destroy the respawned target (entity 0). Roberta's health is refilled every tick during the lesson. Done: 234, 235 on; movie 19; pack 1300 current at locator 9 (0.0, 1538.2, -2.
 - Act 2 goal 136 PUSH (1324): Stage-2 block 3 (start (51.02, 0.25, -45.04), size 9.22, step 4.61) north (+z) onto plate trigger 1 (centre (5 Done: the plate fires: block 3 is placed at locator 2 (51.01, 0, -30.46), ma.
 - Act 2 goal 137 PUSH (1324): Stage-2 block 4 (start (43.46, 0.25, 15.63)): three steps north (+z, to z 29.46), then two steps east (+x, to  Done: the plate fires: block 4 placed at locator 1 (51.01, 0, 30.49), mark B.
 - Act 2 goal 139 PUSH (1324): Bell block 0: push toward -z six times (step 1.652) onto plate trigger 2 (corner (-20.221, 31.162, 1.266), 5.5 Done: plate 2 pressed (object swap, camera 2).

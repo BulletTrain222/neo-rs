@@ -17448,7 +17448,7 @@ impl Play {
         let d = |p: [f32; 3]| (p[0] - hero[0]).hypot(p[2] - hero[2]);
         // A character out of its zone is inactive until the hero is near: it still counts.
         let live = || self.characters.iter().filter(|c| c.pack == pack);
-        let named = live().filter(|c| c.name == name).map(|c| c.position).min_by(|a, b| d(*a).total_cmp(&d(*b)));
+        let named = live().filter(|c| !name.is_empty() && c.name == name).map(|c| c.position).min_by(|a, b| d(*a).total_cmp(&d(*b)));
         let found = named.or_else(|| live().filter(|c| c.entity.is_some_and(|e| ids.contains(&e))).map(|c| c.position).min_by(|a, b| d(*a).total_cmp(&d(*b))));
         let Some(p) = found else { return false };
         self.place_at(p[0] + 2.5, p[2], p[1] + 8.0);

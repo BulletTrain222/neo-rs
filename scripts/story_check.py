@@ -110,7 +110,9 @@ def nums(s):
 
 
 # Rows that need an exact number of presses, from their own text: goal: (trigger, presses), in order.
-PRESSES = {532: [(1, 1), (3, 1), (6, 1)], 533: [(18, 3), (19, 2), (20, 1), (21, 1)], 537: [(0, 2)], 538: [(1, 6)], 539: [(2, 7), (3, 1)]}
+# Goal 532 presses its first button twice: the first can land before the warp in, and a button works once per load.
+PRESSES = {532: [(1, 2), (3, 1), (6, 1)], 533: [(18, 3), (19, 2), (20, 1), (21, 1)], 537: [(0, 2)], 538: [(1, 6)], 539: [(2, 7), (3, 1)]}
+SWINGS = {54: [4], 122: [0], 123: [0], 127: [0]}
 lines = []
 for g in goals:
     if not first <= g['n'] <= last:
@@ -126,10 +128,15 @@ for g in goals:
     # An exit trigger lies in the pack being left; other walks end in the last pack named.
     exits = g['done'] and g['done']['pack'] and re.search(r'[Ee]xit|[Tt]rigger', g['target']) and not re.search(r'[Ll]egs?', g['target'])
     pack = (g['packs'][-1] if g['kind'] == 'WALK' and not exits else g['packs'][0]) if g['packs'] else ''
+    if g['kind'] == 'TALK' and g['packs']:
+        pack = g['packs'][-1]
     others = nums(x for x in g['packs'] if x != pack) if g['kind'] == 'WALK' else ''
     if g['kind'] == 'WAIT':
         pack = ''
     name, ids = '', ''
+    if g['kind'] == 'SWING':
+        ids = nums(SWINGS[g['n']])
+        name = ''
     if g['kind'] == 'TALK':
         e = re.search(r'[Ee]ntit(?:y|ies) (\d+)', g['target'])
         if e:
@@ -143,6 +150,9 @@ for g in goals:
     if g['kind'] == 'DOOR' and g['target'].count(' to ') >= 2 and len(g['packs']) >= 2:
         g['kind'] = 'WALK'
         g['target'] = ''
+    # Lessons a plain combo can pass: beside the target, facing it, swinging.
+    if g['n'] in SWINGS:
+        g['kind'] = 'SWING'
     # A talk zone that waits on a deflected shot (the shield lesson).
     if g['kind'] == 'WALK' and 'stay for the next talk' in g['target']:
         g['kind'] = 'ATTACK'
