@@ -5559,6 +5559,16 @@ impl Play {
 
     /// Diagnostic: what pushes the hero where it stands: the push boxes and spheres that move a
     /// point 1.0 around it, and the frame records whose wall push does.
+    /// Diagnostic: objects in a disc state of 3 or 4, untouched by a script, that are shown at rest anyway.
+    pub fn undrawn_but_shown(&self) -> Vec<(usize, u8, bool)> {
+        let pack = self.world.pack;
+        let owners: Vec<usize> = self.world.ground.as_ref().map_or(Vec::new(), |g| g.object_sets().into_iter().map(|(_, o)| o).collect());
+        (0..self.world.object_anims.len())
+            .filter(|&i| !self.world.object_anims[i].scripted && !self.world.object_anims[i].visible() && self.object_matrix(pack, i).is_some())
+            .map(|i| (i, self.world.object_anims[i].state as u8, owners.contains(&i)))
+            .collect()
+    }
+
     pub fn blockers(&self) -> Vec<String> {
         let p = self.loco.position();
         let mut out = Vec::new();
@@ -5574,6 +5584,19 @@ impl Play {
                 let w = WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind };
                 if w.push(p, contact::HERO_RADIUS + 0.3).is_some() {
                     out.push(format!("frame gate {} entry-mask {} kind {} start {:?} face {:?} L {} H {}", f.gate, g.mask, f.kind, f.start, f.face, f.length, f.height));
+                }
+            }
+        }
+        if let Some(g) = &self.world.ground {
+            for (&o, &pose) in &self.world.owner_poses {
+                for (_, walls) in g.object_frames_at(p[0], p[2], &|k| (k == o).then_some(pose)) {
+                    let q = rest_point(&pose, p);
+                    for f in walls {
+                        let w = WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind };
+                        if w.push(q, contact::HERO_RADIUS + 0.3).is_some() {
+                            out.push(format!("object {o} wall kind {} start {:?} face {:?} L {} H {} pose {pose:?}", f.kind, f.start, f.face, f.length, f.height));
+                        }
+                    }
                 }
             }
         }
@@ -16154,7 +16177,8 @@ impl Play {
             return None;
         }
         let grouped = w.groups.iter().any(|g| g.objects.contains(&(i as i32)) && !(g.kind == 1 && g.objects.first() != Some(&(i as i32))));
-        let gated = level::objects_scripted(pack) || (pack == 1217 && neopets_sim::burrows::named(i));
+        // NEOPETS_GATE_ALL=1: SPEC-0028's draw gate in every pack (diagnostic, to measure it).
+        let gated = level::objects_scripted(pack) || (pack == 1217 && neopets_sim::burrows::named(i)) || std::env::var_os("NEOPETS_GATE_ALL").is_some();
         // The 758 wheel turns even while no script has touched it (its pack's objects are drawn
         // at rest).
         if !a.scripted && (!gated || grouped) && !(pack == 758 && i == 0) {

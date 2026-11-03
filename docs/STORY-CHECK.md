@@ -7,12 +7,12 @@ The run reached the end of the list (exit 0).
 | Result | Goals | Meaning |
 | --- | --- | --- |
 | notrun | 0 | Not reached |
-| fail | 43 | The Done condition never held |
+| fail | 42 | The Done condition never held |
 | gameover | 3 | The hero died and the world was torn down |
 | manual | 38 | Kind not automated (minigames, pushes, climbs, shots) |
 | nocheck | 95 | Ran, but its Done condition is not machine-readable |
-| already | 29 | Done already held from earlier goals |
-| pass | 187 | Done condition reached |
+| already | 28 | Done already held from earlier goals |
+| pass | 189 | Done condition reached |
 
 ## Failed goals
 
@@ -24,7 +24,6 @@ The run reached the end of the list (exit 0).
 - Act 1 goal 95 WALK (956): Leave the top sphere (script trigger 16, centre (-702.1, 68.2, -824.9), radius 11.1) by more than 11.1 units,  Done: 212 on.
 - Act 2 goal 123 SWING (1327): Lesson 2: after the scene, shoot the target so that it reacts to a hit. Done: 231 on.
 - Act 2 goal 127 SWING (1327): Destroy the respawned target (entity 0). Roberta's health is refilled every tick during the lesson. Done: 234, 235 on; movie 19; pack 1300 current at locator 9 (0.0, 1538.2, -2.
-- Act 3 goal 306 DOOR (758 to 777): Pack 758 teleport 1, centre (2085.3, 81.3, 510.2), 21.4 wide (the library road). Done: pack 777 current (hero placed at start position 8).
 - Act 3 goal 317 WALK (753): Walk out of the sphere (more than 30 from its centre). Done: movie 37 plays on the next tick; 258 on.
 - Act 3 goal 328 FIGHT (735): The Plague Serpent (boss instance 10, AI 73; SPEC-0016). Its only damage route is one strike on the head while Done: 263, 75, 50 and 70 on (set by the victory scene).
 - Act 3 goal 332 DOOR (722 to 745): Door index 3 again. Done: pack 745 current.

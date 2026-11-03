@@ -545,9 +545,13 @@ fn plain_signs(g: &Goal, p: &Play) -> String {
     format!("{}.", signs.join(", "))
 }
 
-pub fn show_goal_panel(walk: Res<GoalWalk>, play: Option<Res<crate::PlayState>>, mut text: Query<&mut Text, With<GoalPanelText>>) {
+pub fn show_goal_panel(walk: Res<GoalWalk>, play: Option<Res<crate::PlayState>>, mut text: Query<&mut Text, With<GoalPanelText>>, mut colour: Query<&mut TextColor, With<GoalPanelText>>) {
     let (Some(g), Some(play)) = (walk.goals.get(walk.at), play) else { return };
-    let state = if walk.met(&play.play) { "DONE: press F10 for the next step" } else { "not done yet" };
+    let done = walk.met(&play.play);
+    let state = if done { "DONE: press F10 for the next step" } else { "not done yet" };
+    for mut c in &mut colour {
+        c.0 = if done { Color::srgb(0.4, 1.0, 0.4) } else { Color::WHITE };
+    }
     // The row's words, without the confidence letter they end on.
     let note = g.text.trim_end_matches(|c: char| c == ' ' || c == '.').trim_end_matches([' ', 'H', 'M', 'L']).trim_end();
     let check = walk.checked.get(&g.n).map_or(String::new(), |c| format!("\nAutomatic test: {c}."));
