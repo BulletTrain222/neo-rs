@@ -74,6 +74,8 @@ pub struct World {
     pub owner_poses: std::collections::HashMap<usize, neopets_data::ground::OwnerPose>,
     /// The ladders of the type-10 groups (SPEC-0006 Type 10, records of type -3).
     pub rails: Vec<neopets_sim::ladder::Rail>,
+    /// The ladders and climb records at rest, each with the placed object it stands on (R-0226).
+    climb_rest: Option<ClimbRest>,
     /// The grab lines (SPEC-0033 Behavior 9): bit-1 cylinders of the type-11 list.
     pub grab_lines: Vec<neopets_sim::grab::Line>,
     /// Every type-10 record with its links (the climb panels are those of type -2).
@@ -224,6 +226,7 @@ impl World {
             blocks: Vec::new(),
             owner_poses: Default::default(),
             rails: Vec::new(),
+            climb_rest: None,
             grab_lines: Vec::new(),
             panels: Vec::new(),
             block_meshes: Vec::new(),
@@ -315,6 +318,7 @@ impl World {
             blocks: Vec::new(),
             owner_poses: Default::default(),
             rails: Vec::new(),
+            climb_rest: None,
             grab_lines: Vec::new(),
             panels: Vec::new(),
             block_meshes: Vec::new(),
@@ -15806,6 +15810,32 @@ impl Play {
         }
     }
 
+    /// The ladders and climb records that stand on a moving placed object follow its translation.
+    fn climb_follow_step(world: &mut World) {
+        if world.climb_rest.is_none() {
+            world.climb_rest = Some(ClimbRest::of(world));
+        }
+        let Some(rest) = world.climb_rest.take() else { return };
+        let shift = |q: [f32; 4], d: [f32; 3]| [q[0], q[1], q[2], q[3] - (q[0] * d[0] + q[1] * d[1] + q[2] * d[2])];
+        let delta = |o: usize| world.owner_poses.get(&o).map(|p| [p.current[12] - p.rest[12], p.current[13] - p.rest[13], p.current[14] - p.rest[14]]);
+        for (k, r) in rest.rails.iter().enumerate() {
+            if let Some(d) = rest.rail_owner[k].and_then(delta) {
+                world.rails[k] = neopets_sim::ladder::Rail { normal: shift(r.normal, d), u: shift(r.u, d), v: shift(r.v, d), ..*r };
+            }
+        }
+        for (k, r) in rest.panels.iter().enumerate() {
+            if let Some(d) = rest.panel_owner[k].and_then(delta) {
+                world.panels[k] = neopets_sim::climb::Panel { normal: shift(r.normal, d), u: shift(r.u, d), v: shift(r.v, d), ..*r };
+            }
+        }
+        world.climb_rest = Some(rest);
+    }
+
+    /// Diagnostic: the ladders (by rail) that stand on a placed object, with that object.
+    pub fn rail_owners(&self) -> Vec<(usize, usize)> {
+        self.world.climb_rest.as_ref().map_or(Vec::new(), |r| r.rail_owner.iter().enumerate().filter_map(|(k, o)| o.map(|o| (k, o))).collect())
+    }
+
     /// The drawn placed objects that own ground patches, with their current and rest frames,
     /// for each resident world's probe (an object that is not drawn gives no patches).
     fn owner_pose_step(&mut self) {
@@ -15822,6 +15852,7 @@ impl Play {
                 .collect();
             if let Some(w) = if other { self.other.as_mut() } else { Some(&mut self.world) } {
                 w.owner_poses = poses;
+                Self::climb_follow_step(w);
             }
         }
     }
@@ -18648,6 +18679,48 @@ struct Bolt {
     target: u64,
     damage: i32,
     arrival: i32,
+}
+
+/// The ladders and climb records of a world at rest, and the placed object each stands on: a record
+/// whose face lies along one of the object's own walls, within 1.0 of its plane and along its run.
+/// The spec says such records have an owner but not how it is named (R-0226), so this reads it from
+/// the geometry.
+struct ClimbRest {
+    rails: Vec<neopets_sim::ladder::Rail>,
+    panels: Vec<neopets_sim::climb::Panel>,
+    rail_owner: Vec<Option<usize>>,
+    panel_owner: Vec<Option<usize>>,
+}
+
+impl ClimbRest {
+    fn owner_of(world: &World, normal: [f32; 4], u: [f32; 4], v: [f32; 4], lu: f32, lv: f32) -> Option<usize> {
+        let g = world.ground.as_ref()?;
+        let at: [f32; 3] = std::array::from_fn(|k| -normal[3] * normal[k] - u[3] * u[k] - v[3] * v[k] + 0.5 * lu * u[k] + 0.5 * lv * v[k]);
+        let plane = |q: [f32; 4]| q[0] * at[0] + q[1] * at[1] + q[2] * at[2] + q[3];
+        let mut owners: Vec<usize> = world.owner_poses.keys().copied().collect();
+        owners.sort_unstable();
+        owners.into_iter().find(|&o| {
+            let pose = world.owner_poses[&o];
+            g.object_frames_at(at[0], at[2], &|k| (k == o).then_some(pose)).iter().flat_map(|(_, f)| f).any(|f| {
+                let parallel = f.face[0] * normal[0] + f.face[1] * normal[1] + f.face[2] * normal[2] > 0.99;
+                parallel && plane(f.face).abs() < 1.0 && (-1.0..=f.length + 1.0).contains(&plane(f.run))
+            })
+        })
+    }
+
+    fn of(world: &World) -> Self {
+        let rail_owner = world.rails.iter().map(|r| Self::owner_of(world, r.normal, r.u, r.v, r.lu, r.lv)).collect();
+        let mut panel_owner: Vec<Option<usize>> = world.panels.iter().map(|r| Self::owner_of(world, r.normal, r.u, r.v, r.lu, r.lv)).collect();
+        // A ladder face's top record goes with it (its link above).
+        for (k, r) in world.panels.iter().enumerate() {
+            if let (Some(o), -3, Some(top)) = (panel_owner[k], r.kind, r.links[2]) {
+                if let Some(t) = panel_owner.get_mut(top) {
+                    *t = Some(o);
+                }
+            }
+        }
+        Self { rails: world.rails.clone(), panels: world.panels.clone(), rail_owner, panel_owner }
+    }
 }
 
 /// A Mote object's volume (a segment of radius r) against a breakable's volume record: the pair tests of SPEC-0036

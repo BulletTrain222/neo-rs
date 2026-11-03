@@ -4496,6 +4496,7 @@ fn play_trace(
     // NEOPETS_TRACE_OBJAUDIT=1: objects still in their disc state 3 or 4 that this build treats as drawn, with their wall counts (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_OBJAUDIT").is_some() {
         println!("OBJAUDIT {} {:?}", play.world.pack, play.undrawn_but_shown());
+        println!("RAILOWNERS {} {:?}", play.world.pack, play.rail_owners());
     }
     // NEOPETS_TRACE_DOORS=1: this world's doors with their script context, or none where a scripted door has no rule (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_DOORS").is_some() {

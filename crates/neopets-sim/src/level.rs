@@ -9483,7 +9483,13 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 state.set(252, true);
                 state.set(69, true);
             }
-            out.actions.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::MoveHero { locator: if first { 2 } else { 3 } }, Action::FadeIn { seconds: 0.5, wait: false }]);
+            out.actions.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::MoveHero { locator: if first { 2 } else { 3 } }]);
+            // The doors stand open from here on, as Init poses them on any load with 252 set: the
+            // spec names the helpers but not this call's place in the routine (R-0226).
+            if !first {
+                out.actions.extend([4, 3, 5, 6, 1, 2].map(|obj| Action::InitObjOn { obj, end: true }));
+            }
+            out.actions.push(Action::FadeIn { seconds: 0.5, wait: false });
         }
         // The library (routine 11, triggers 4 to 8; nothing once 256 is set): the entry plate (4,
         // on contact, once per load while 253 is clear) and the four books (5 to 8: the flag clear
