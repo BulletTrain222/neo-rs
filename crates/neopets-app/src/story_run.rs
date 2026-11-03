@@ -330,6 +330,8 @@ pub struct GoalWalk {
     /// Frames since the hero was last put at this goal, while there is still somewhere to put him.
     placing: Option<u32>,
     started: u64,
+    /// What the story checker's last run said of each goal.
+    checked: std::collections::HashMap<u32, String>,
 }
 
 const GOAL_FILE: &str = "private/story/goals.tsv";
@@ -343,7 +345,24 @@ impl GoalWalk {
             eprintln!("--goal: no goals in {GOAL_FILE}; run python scripts/story_check.py . first");
         }
         let at = goals.iter().position(|g| g.n >= first).unwrap_or(0);
-        Self { goals, at, ..Self::default() }
+        let log = std::fs::read_to_string("private/story/run.log").unwrap_or_default();
+        let checked = log
+            .lines()
+            .filter_map(|l| {
+                let mut w = l.strip_prefix("GOAL ")?.split(' ');
+                let n = w.next()?.parse().ok()?;
+                let said = match w.next()? {
+                    "pass" => "it passed",
+                    "already" => "it was already done when the test reached it",
+                    "fail" => "it failed, so this is one to look at",
+                    "gameover" => "the hero died, so this is one to look at",
+                    "manual" => "not tested, it was skipped",
+                    _ => "the test could not tell",
+                };
+                Some((n, said.to_string()))
+            })
+            .collect();
+        Self { goals, at, checked, ..Self::default() }
     }
 
     fn met(&self, p: &Play) -> bool {
@@ -489,11 +508,55 @@ pub fn spawn_goal_panel(mut commands: Commands, walk: Res<GoalWalk>) {
         });
 }
 
+/// What the person at the keys is asked to do, by the goal's kind.
+fn plain_task(kind: &str) -> &'static str {
+    match kind {
+        "DOOR" => "Go through the door here: stand at it and press the button the screen shows.",
+        "TALK" => "Talk to the character here: walk up to them and press the button the screen shows.",
+        "PICK" => "Get the item here: walk over it, or press the button the screen shows to buy it.",
+        "SQUARE" | "USE" | "SWITCH" => "Use what is here: press the button the screen shows.",
+        "PRESS" => "Press the floor button or switch here.",
+        "PUSH" => "Push the block here.",
+        "WALK" | "CLIMB" => "Walk through this spot and on to where the note says. Walk around if nothing happens.",
+        "FIGHT" | "STRIKE" => "Beat the enemy here.",
+        "SWING" | "ATTACK" | "SHOOT" => "Hit the target here.",
+        "WAIT" => "Do nothing: watch the scene or movie.",
+        _ => "Do what the note says.",
+    }
+}
+
+/// How to tell it worked: the Done tokens in words. Flags have no names here, so they only say that the box changes.
+fn plain_signs(g: &Goal, p: &Play) -> String {
+    let mut signs: Vec<String> = g.done.iter().filter_map(|t| {
+        let (want, t) = t.strip_prefix('!').map_or((true, t.as_str()), |r| (false, r));
+        let (kind, n) = t.split_at(1);
+        let n: u16 = n.parse().ok()?;
+        match (kind, want) {
+            ("i", true) => Some(format!("you get {}", p.item_label(n))),
+            ("i", false) => Some(format!("{} is taken from you", p.item_label(n))),
+            ("p", _) => Some(format!("you end up in the next area (world {n})")),
+            _ => None,
+        }
+    }).collect();
+    if g.done.is_empty() {
+        return "the game cannot tell for this one, so judge by eye.".to_string();
+    }
+    signs.push("this box says DONE".to_string());
+    format!("{}.", signs.join(", "))
+}
+
 pub fn show_goal_panel(walk: Res<GoalWalk>, play: Option<Res<crate::PlayState>>, mut text: Query<&mut Text, With<GoalPanelText>>) {
     let (Some(g), Some(play)) = (walk.goals.get(walk.at), play) else { return };
-    let state = if walk.met(&play.play) { "DONE: press F10" } else if g.done.is_empty() { "the game cannot tell when this is done" } else { "not done yet" };
-    let pack = g.pack.map_or(String::from("any world"), |k| format!("world {k}"));
-    let s = format!("Goal {} ({}, {pack}): {state}\n{}\nF10 next   F9 back   F11 restart", g.n, g.kind, g.text);
+    let state = if walk.met(&play.play) { "DONE: press F10 for the next step" } else { "not done yet" };
+    // The row's words, without the confidence letter they end on.
+    let note = g.text.trim_end_matches(|c: char| c == ' ' || c == '.').trim_end_matches([' ', 'H', 'M', 'L']).trim_end();
+    let check = walk.checked.get(&g.n).map_or(String::new(), |c| format!("\nAutomatic test: {c}."));
+    let s = format!(
+        "Story step {}: {state}\nDo this: {}\nIt worked if: {}{check}\nNote from the spec: {note}\nF10 next step   F9 back   F11 restart",
+        g.n,
+        plain_task(&g.kind),
+        plain_signs(g, &play.play),
+    );
     for mut t in &mut text {
         if t.0 != s {
             t.0 = s.clone();
