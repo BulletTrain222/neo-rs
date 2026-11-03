@@ -1189,7 +1189,7 @@ pub fn show_panel(
         }
         if let Some(fc) = dev.free {
             s.push_str(&format!(
-                "FREE CAMERA (F2 or B ends; T or Y moves Tor here) at ({:.1}, {:.1}, {:.1}): WASD or left stick move, E/Q or RT/LT up/down, J/L I/K, right stick or right-drag look, Shift or A fast; F12 names what the + is on",
+                "FREE CAMERA (F2 or B ends; T or Y moves Tor here) at ({:.1}, {:.1}, {:.1}): WASD or left stick move, E/Q or RT/LT up/down, J/L I/K, right stick or right-drag look, Shift or A fast; F12 names what the screen centre is on",
                 fc.pos.x, fc.pos.y, fc.pos.z
             ));
         }

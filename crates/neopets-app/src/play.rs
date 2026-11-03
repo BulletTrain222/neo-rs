@@ -11209,10 +11209,12 @@ impl Play {
             let (hp, max) = target.map_or((0, 1), |c| (c.hp, c.row.map_or(1, |r| r.hit_points as i32)));
             self.monster_bar.tick(hp, max, &self.monster_words);
         }
-        let world = &self.world;
+        let (current, other) = (&self.world, self.other.as_ref());
         let rng = &mut self.rng;
         let scene_held = self.held;
         for c in &mut self.characters {
+            // A character walks its own world's meshes: its walker's mesh and triangle numbers mean nothing in the other's.
+            let world = if c.pack == current.pack { current } else { other.filter(|o| o.pack == c.pack).unwrap_or(current) };
             // SPEC-0056 Walk-to-point (classes 23 to 26): over the navigation mesh by the walk
             // clip's root step; arrival within the stop distance, then the turn to the final
             // facing at 0.1 until the dot is 0.99, then idle (0). A townsfolk gets its mesh once:

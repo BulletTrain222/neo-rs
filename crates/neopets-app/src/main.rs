@@ -963,7 +963,7 @@ fn main() {
     app.add_systems(Update, dev_spawn::picker_show);
     app.init_resource::<book_view::BookView>();
     app.add_systems(Update, book_view::sync_book.after(play_frame));
-    app.add_systems(Update, (pick_view::pick.after(play_frame), pick_view::show_cross));
+    app.add_systems(Update, pick_view::pick.after(play_frame));
     app.insert_resource(goal_start.map_or_else(story_run::GoalWalk::default, story_run::GoalWalk::open));
     app.add_systems(Startup, story_run::spawn_goal_panel);
     app.add_systems(Update, (story_run::goal_walk_step.before(play_frame), story_run::show_goal_panel));

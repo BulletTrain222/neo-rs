@@ -216,7 +216,8 @@ impl Walker {
     /// SPEC-0056 Wander step 3: the walker is settled (its goal in its own triangle) within 2.5 of the
     /// plane of one of that triangle's boundary edges, or the goal latch has cleared.
     pub fn wander_edge(&self, meshes: &[NavMesh]) -> bool {
-        let (Some(m), Some(c)) = (self.mesh.and_then(|i| meshes.get(i)), self.current) else { return false };
+        let m = self.mesh.and_then(|i| meshes.get(i));
+        let (Some(m), Some(c)) = (m, self.current.filter(|&c| m.is_some_and(|m| c < m.len()))) else { return false };
         if !self.latch {
             return true;
         }
@@ -348,7 +349,8 @@ impl Walker {
                 self.blocked = false;
             }
         }
-        let (Some(m), Some(c)) = (self.mesh.and_then(|i| meshes.get(i)), self.current) else { return };
+        let m = self.mesh.and_then(|i| meshes.get(i));
+        let (Some(m), Some(c)) = (m, self.current.filter(|&c| m.is_some_and(|m| c < m.len()))) else { return };
         let r = self.radius;
         let tri = m.triangles[c];
         for k in 0..3 {
@@ -420,6 +422,19 @@ impl Walker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A triangle number from another world's mesh is ignored, not read past this mesh's end.
+    #[test]
+    fn a_stale_triangle_is_ignored() {
+        let m = NavMesh { neighbours: vec![[-1, -1, -1]], triangles: vec![[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 0.0, 10.0]]], ..Default::default() };
+        let meshes = [m];
+        let mut w = Walker::new([1.0, 0.0, 1.0], [0.0, 0.0, 1.0], 1.0, 1.0, 0);
+        w.mesh = Some(0);
+        w.current = Some(18);
+        w.latch = true;
+        assert!(!w.wander_edge(&meshes));
+        w.confine(&meshes, [0.0; 3]);
+    }
 
     /// TV-0056-R194e: a reach needs the next edge too.
     #[test]

@@ -1,4 +1,4 @@
-//! A test tool of this build: F12 names what the view's centre is on (the + in the free camera), nearest first, on the
+//! A test tool of this build: F12 names what the view's centre is on, nearest first, on the
 //! toast and in private/picks.txt, so a report can give the piece's identity and not only where it was seen.
 //! NEOPETS_PICK="u,v;u,v" does the same once, seven seconds in, at those fractions of the screen (diagnostic).
 
@@ -136,25 +136,4 @@ pub fn pick(world: &mut World, mut fired: Local<bool>) {
         error!("F12: could not write private/picks.txt: {e}");
     }
     world.resource_mut::<DevMenu>().toast = Some((format!("F12 saved to private/picks.txt: {}", first.unwrap_or_else(|| "nothing here".into())), 300));
-}
-
-/// The + at the view's centre, while the free camera is on.
-#[derive(Component)]
-pub struct PickCross;
-
-pub fn show_cross(mut commands: Commands, dev: Res<DevMenu>, crosses: Query<Entity, With<PickCross>>) {
-    match (dev.free.is_some(), crosses.iter().next()) {
-        (true, None) => {
-            commands.spawn((
-                Text::new("+"),
-                TextFont { font_size: bevy::text::FontSize::Px(32.0), ..default() },
-                TextColor(Color::srgb(1.0, 0.2, 0.2)),
-                Node { position_type: PositionType::Absolute, left: percent(50), top: percent(50), margin: UiRect { left: px(-10), top: px(-20), ..default() }, ..default() },
-                GlobalZIndex(1000),
-                PickCross,
-            ));
-        }
-        (false, Some(e)) => commands.entity(e).despawn(),
-        _ => {}
-    }
 }
