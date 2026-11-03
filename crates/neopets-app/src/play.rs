@@ -15702,8 +15702,9 @@ impl Play {
         let z0 = self.hero.bones().attach.first().and_then(|&(bone, angles, offset)| Some(unit(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)).cols[2]))).unwrap_or(self.loco.facing);
         let eye = self.camera.eye;
         let toward = |p: [f32; 3]| add(p, scale(unit(sub_v(eye, p)), 0.2));
-        // The base point and axis of the held weapon: attach point 0 (SPEC-0036 Attack-id spawn dispatch), or its stowed
-        // frame on Tor's back while sheathed, which the driver's words leave open (R-0227).
+        // The base point and axis of the held weapon: attach point 0 (SPEC-0036 Attack-id spawn dispatch). A sheathed
+        // sword has no line or tip light: the user's report of the game; the driver's words leave it open (R-0227).
+        let drawn = self.weapon_drawn;
         let (base, z0) = self.weapon_line().unwrap_or((pos, z0));
         let n = toward(add(base, scale(z0, 0.48)));
         let t = toward(add(base, scale(z0, self.weapon_reach())));
@@ -15714,8 +15715,8 @@ impl Play {
         let tb = fx.tables;
         let mut keep = |slot: &mut Option<(i32, usize)>, want: Option<i32>, at: [f32; 3], target: Option<[f32; 3]>| keep_fx(effects, &table, rng, frame, slot, want, at, target);
         if h == 0 {
-            keep(&mut fx.line, idx.map(|k| tb.line[k]), n, Some(t));
-            keep(&mut fx.light, idx.map(|k| tb.light[k]), t, None);
+            keep(&mut fx.line, idx.filter(|_| drawn).map(|k| tb.line[k]), n, Some(t));
+            keep(&mut fx.light, idx.filter(|_| drawn).map(|k| tb.light[k]), t, None);
             keep(&mut fx.aura, None, pos, None);
             keep(&mut fx.charge, None, pos, None);
         } else {
