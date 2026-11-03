@@ -13456,6 +13456,10 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // while it is set; with 642 set, effect 3 is started while 632 is clear and stopped
         // while it is set (the start's camera flag is not given; none is passed).
         1098 => {
+            // SPEC-0045 1098 Update: the hero with the charm (item 72) after Lady Prunella's talk (501).
+            if state.flag(501) && state.has_item(72) && !state.flag(502) {
+                state.set(502, true);
+            }
             let start = |slot| Action::StartEffect { slot, camera: false };
             if !state.flag(642) {
                 out.extend((0..3).map(start));
@@ -19284,9 +19288,15 @@ mod tests {
         for line in [152, 153, 154, 152] {
             assert_eq!(on_talk(1056, 43, &mut s), vec![Action::Talk { line }]);
         }
-        // With 502 a knight asks; yes takes the charm and shuts the other out.
-        s.set(502, true);
+        // The charm in 1098 sets 502, once 501 is on (and not before).
+        let mut early = GameState::default();
+        early.give(72, 1);
+        on_update(1098, &mut early, false);
+        assert!(!early.flag(502));
         s.give(72, 1);
+        on_update(1098, &mut s, false);
+        assert!(s.flag(502));
+        // With 502 a knight asks; yes takes the charm and shuts the other out.
         assert_eq!(on_talk(1056, proximity_routine(1056, 41).unwrap(), &mut s), vec![Action::Prompt { line: 110, routine: 38 }]);
         assert_eq!(on_answer(1056, 38, true, &mut s), vec![Action::Talk { line: 113 }]);
         assert!(s.flag(503) && s.flag(505) && !s.has_item(72));
