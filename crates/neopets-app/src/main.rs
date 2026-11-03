@@ -1718,7 +1718,11 @@ fn step_sim(
                     }
                     info!("Warped to world pack {pack}");
                 }
-                Err(e) => error!("Warp to {pack} failed: {e}"),
+                Err(e) => {
+                    dev.warp_point = None;
+                    dev.group = None;
+                    error!("Warp to {pack} failed: {e}");
+                }
             }
         }
         // NEOPETS_SHOT_BOSS=n (diagnostic): the window starts as the developer menu's boss fight n,
