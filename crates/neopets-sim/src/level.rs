@@ -929,7 +929,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) || (pack, door) == (1398, 0) || (pack, door) == (777, 0) || (pack, door) == (956, 0) || (pack == 842 && door <= 3) || (pack == 1335 && door <= 2) || (pack == 1300 && door <= 2) || (pack == 1327 && door <= 1) || (pack, door) == (1324, 0) {
         return Some(13);
     }
-    if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
+    if (pack, door) == (880, 0) || (pack, door) == (1433, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
         return Some(13);
     }
     match (pack, door) {
@@ -1233,8 +1233,10 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             state.blackboard.insert((2, w), 90);
             vec![Action::ReplaceExterior { slot: w, plane: -1 }]
         }
-        // SPEC-0037 1429 teleport 0 (kind 13): value 60 for eW 151 and the leave to eW 156.
-        (1429, 0) => {
+        // SPEC-0037 1429 teleport 0 (kind 13): value 60 for eW 151 and the leave to eW 156. The
+        // module is shared (SPEC-0006 Shared level scripts): only its copy in 1433 ever runs, since
+        // 1429, 1430 and 1431 load into E, where an Interior-family module gets no calls.
+        (1433, 0) => {
             state.blackboard.insert((2, 151), 60);
             vec![Action::LeaveInterior { slot: 156 }]
         }
@@ -3166,10 +3168,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             Action::WaitLoads,
             Action::ItemActivate { slot: 0, ordinal: if state.flag(460) { 0 } else { 1 }, snap: false, placed: true },
         ],
-        // SPEC-0037 855, 856, 857, 858 and 1429 Init: the entry thread's line (argument 0: in
+        // SPEC-0037 855, 856, 857, 858 and 1433 Init: the entry thread's line (argument 0: in
         // entity 0's conversation frame; 857's argument -1: none) and the normal camera. 856's
         // item-ask callbacks never fire (SPEC-0030 row 257); the buy callbacks are on_buy.
-        855 | 856 | 857 | 858 | 1429 => {
+        855 | 856 | 857 | 858 | 1433 => {
             let f = |n| state.flag(n);
             let line = match pack {
                 855 if f(463) => 0,
@@ -3178,9 +3180,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 855 if f(59) => 5,
                 855 if f(56) => 6,
                 855 => 8,
-                1429 if f(93) => 0,
-                1429 if f(92) => 3,
-                1429 => 6,
+                1433 if f(93) => 0,
+                1433 if f(92) => 3,
+                1433 => 6,
                 _ if f(59) => 0,
                 _ if f(56) => 2,
                 _ => 4,
@@ -7751,7 +7753,7 @@ fn eastside_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
     }
 }
 
-/// SPEC-0037 855 to 858 and 1429 proximity routines on entity 0.
+/// SPEC-0037 855 to 858 and 1433 proximity routines on entity 0.
 fn outskirts_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
     let talk = |line| vec![Action::Talk { line }];
     let f = |s: &GameState, n| s.flag(n);
@@ -7799,9 +7801,9 @@ fn outskirts_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
             s.set_word(pack, 1, next);
             talk(first + k)
         }
-        // 1429: one counter for the three sets, never reset on a change of set: 11 to 13 (322),
+        // 1433: one counter for the three sets, never reset on a change of set: 11 to 13 (322),
         // 14 to 16 (236), 17 to 19.
-        1429 => {
+        1433 => {
             let first = if f(s, 322) { 11 } else if f(s, 236) { 14 } else { 17 };
             let c = s.word(pack, 0).rem_euclid(3);
             s.set_word(pack, 0, (c + 1) % 3);
@@ -16435,7 +16437,7 @@ pub fn on_buy(pack: u32, item: u16, s: &GameState) -> Vec<Action> {
         (856, 113) if !s.flag(220) => 19,
         (859, 130) if !s.flag(220) => 34,
         (1140, 116) if !s.flag(220) && s.word(1140, 0) == 1 => 0,
-        (1429, 109) if !s.flag(248) => 20,
+        (1433, 109) if !s.flag(248) => 20,
         _ => return Vec::new(),
     };
     vec![Action::Message { line }]
@@ -16884,9 +16886,9 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (1148, 0 | 1) => Some(entity as u8),
         (1148, 3) => Some(2),
         (1148, 2) => Some(3),
-        // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
+        // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1433, 1152, 1251 and 784: P on
         // entity 0.
-        (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
+        (783 | 786 | 787 | 788 | 789 | 855..=858 | 1433 | 1152 | 1251 | 784, 0) => Some(0),
         // SPEC-0039 1344: handler 1 on entity 27 (line 0).
         (1344, 27) => Some(1),
         // SPEC-0039 706: handler 5 on entity 0; 753: handlers 4 and 5 on entities 5 and 6.
@@ -17466,7 +17468,7 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     if eastside_interior(pack).is_some() && routine == 0 {
         return eastside_talk(pack, state);
     }
-    if matches!(pack, 855..=858 | 1429 | 1152 | 1251 | 784) && routine == 0 {
+    if matches!(pack, 855..=858 | 1433 | 1152 | 1251 | 784) && routine == 0 {
         return outskirts_talk(pack, state);
     }
     // SPEC-0039 984 entity 0 (handler 1): with 67 line 12 in the conversation frame; else line
@@ -20407,11 +20409,19 @@ mod tests {
         s.give(22, 1);
         assert_eq!(on_talk(855, 0, &mut s), vec![Action::Talk { line: 13 }]);
         assert!(s.has_item(122) && !s.has_item(22) && s.flag(463));
-        // 1429: one counter across the sets.
-        assert_eq!(on_talk(1429, 0, &mut s), vec![Action::Talk { line: 17 }]);
+        // 1433: one counter across the sets.
+        assert_eq!(on_talk(1433, 0, &mut s), vec![Action::Talk { line: 17 }]);
         s.set(236, true);
-        assert_eq!(on_talk(1429, 0, &mut s), vec![Action::Talk { line: 15 }]);
-        assert_eq!(on_buy(1429, 109, &s), vec![Action::Message { line: 20 }]);
+        assert_eq!(on_talk(1433, 0, &mut s), vec![Action::Talk { line: 15 }]);
+        assert_eq!(on_buy(1433, 109, &s), vec![Action::Message { line: 20 }]);
+        // The module's other copies, streamed into E, run nothing (SPEC-0006).
+        for pack in 1429..=1431 {
+            assert!(on_init(pack, &mut s).is_empty() && on_talk(pack, 0, &mut s).is_empty() && on_buy(pack, 109, &s).is_empty());
+            assert_eq!(teleport_context(pack, 0), None);
+        }
+        assert_eq!(teleport_context(1433, 0), Some(13));
+        assert_eq!(on_teleport(1433, 0, &mut s), vec![Action::LeaveInterior { slot: 156 }]);
+        assert_eq!(s.blackboard.get(&(2, 151)), Some(&60));
     }
 
     #[test]

@@ -4486,6 +4486,11 @@ fn play_trace(
             println!("      ceiling {k}: middle {mid:?} U {:?} LU {} LV {} links {:?}", r.u, r.lu, r.lv, r.links);
         }
     }
+    // NEOPETS_TRACE_DOORS=1: this world's doors with their script context, or none where a scripted door has no rule (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_DOORS").is_some() {
+        let doors: Vec<Option<u16>> = (0..play.world.planes.len()).map(|n| neopets_sim::level::teleport_context(play.world.pack, n)).collect();
+        println!("DOORS {} scripted {} {:?}", play.world.pack, play.world.scripted_doors, doors);
+    }
     // NEOPETS_TRACE_CATALOG=1: the developer menu's character list, one line each (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_CATALOG").is_some() {
         if let Ok(mut second) = disc.reopen() {

@@ -285,7 +285,11 @@ impl World {
     pub fn load(disc: &mut Disc, index: &ArchiveIndex, boot: &BootTravel, pack: u32) -> Result<(Self, Vec<u8>), String> {
         let bytes = index.read(disc, pack)?;
         let chain = resource::walk_chunks(&bytes, None)?;
-        let kind = boot.kind(pack, &bytes, &chain.chunks);
+        // SPEC-0006 World buffers: 1429, 1430 and 1431 export Interior entry points but only ever
+        // load into E, from 1427. Their modules get no calls there and their doors keep the default
+        // rule, so the hero can walk back into 1427.
+        let in_e = matches!(pack, 1429..=1431);
+        let kind = if in_e { Kind::Exterior } else { boot.kind(pack, &bytes, &chain.chunks) };
         let buffer = match kind {
             Kind::Transition => Buffer::Transition,
             Kind::Exterior => Buffer::Exterior,
@@ -338,7 +342,7 @@ impl World {
             entries: (0..4096).map_while(|i| ground::entry_record(&bytes, &chain.chunks, i)).collect(),
             paths: neopets_data::travel::path_list(&bytes, &chain.chunks),
             tags: (0..4096).map_while(|i| ground::entry_tag(&bytes, &chain.chunks, i)).collect(),
-            scripted_doors: boot.imports(&bytes, &chain.chunks, "RegisterTeleportCallback"),
+            scripted_doors: !in_e && boot.imports(&bytes, &chain.chunks, "RegisterTeleportCallback"),
             lines: neopets_data::dialogue::LineTable::of(&bytes, &chain.chunks),
             entities: neopets_data::travel::entity_table(&bytes, &chain.chunks),
             navmeshes: neopets_data::navmesh::navmeshes(&bytes, &chain.chunks)
