@@ -56,6 +56,9 @@ pub struct Leaf {
     /// subtree draws only while the zone query passes for it (SPEC-0004 Drawing a node tree,
     /// item 3).
     pub zone: Option<u8>,
+    /// The pass byte of the most recently entered type-4 node (+0x62): the sub-list of its material bucket the leaf
+    /// joins (SPEC-0004 Drawing a node tree, 3b).
+    pub pass: u8,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,6 +97,7 @@ pub fn walk_tree_layers(payload: &[u8], layer_mask: Option<u32>) -> Result<NodeT
     let mut seen = HashSet::new();
     // Each entry carries the zone column of its nearest enclosing type-3 node.
     let mut stack: Vec<(usize, Option<u8>)> = vec![(0, None)];
+    let mut pass = 0;
     while let Some((at, zone)) = stack.pop() {
         if !seen.insert(at) {
             continue;
@@ -121,6 +125,9 @@ pub fn walk_tree_layers(payload: &[u8], layer_mask: Option<u32>) -> Result<NodeT
                 let flags = u32_at(payload, at + 0x5C).unwrap();
                 flags != 0 && flags & m == 0
             });
+        if kind == NODE_LOD && !hidden {
+            pass = u8_at(payload, at + 0x62).unwrap();
+        }
         // The sibling keeps the enclosing column; a type-3 node's own subtree takes its column.
         let inner = if kind == NODE_VISIBILITY { Some(u8_at(payload, at + 0x50).unwrap()) } else { zone };
         let mut links = vec![(u32_at(payload, at + 0x44).unwrap(), zone)];
@@ -153,6 +160,7 @@ pub fn walk_tree_layers(payload: &[u8], layer_mask: Option<u32>) -> Result<NodeT
                 batch_count: u32_at(payload, at + 0x68).unwrap(),
                 packet,
                 zone,
+                pass,
             });
         }
     }

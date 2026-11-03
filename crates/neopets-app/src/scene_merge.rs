@@ -153,6 +153,8 @@ pub fn spawn(
     // NEOPETS_FLAT_NOCAST: flat ground parts cast no sun shadow (diagnostic, to measure).
     let flat_ground = std::env::var_os("NEOPETS_FLAT_NOCAST").is_some();
     let mut count = 0;
+    let ranks = crate::draw_order::ranks(m);
+    let rank = |i: usize, second: u32| crate::draw_order::DrawRank { pack: Some(pack), rank: ranks[i] + second };
     for (i, p) in m.parts.iter().enumerate() {
         let env = p.texture.filter(|_| p.env_map && !no_pass1);
         let scrolling = p.scroll.is_some() && p.texture.is_some();
@@ -178,7 +180,7 @@ pub fn spawn(
         // A soft part's blended layer over its cut core.
         if let (true, Some(t)) = (soft, p.texture) {
             if let Some(m) = b.blend.get(&t) {
-                let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m.clone()), Transform::IDENTITY, part, b.sigs[i]));
+                let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m.clone()), Transform::IDENTITY, part, b.sigs[i], rank(i, 0)));
                 count += 1;
                 if let Some(z) = p.zone {
                     e.insert(ZoneGate(pack, z));
@@ -205,7 +207,7 @@ pub fn spawn(
         if let Some(z) = p.zone {
             e.insert(ZoneGate(pack, z));
         }
-        e.insert(b.sigs[i]);
+        e.insert((b.sigs[i], rank(i, 0)));
         if let Some((at, d1, _)) = p.cull {
             e.insert(DrawCull(Vec3::from(at), d1));
         }
@@ -233,7 +235,7 @@ pub fn spawn(
     // Render pass 1 of the two-pass parts (pass1.rs), gated like their pass 0; its signature is
     // kept apart so the duplicate test never hides it as pass 0's twin.
     for (i, mesh, material, scroll) in pass1_assets(m, meshes, pass1_materials, images) {
-        let mut e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, part));
+        let mut e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, part, rank(i, 1)));
         count += 1;
         if let Some(z) = m.parts[i].zone {
             e.insert(ZoneGate(pack, z));

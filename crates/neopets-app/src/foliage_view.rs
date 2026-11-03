@@ -79,6 +79,10 @@ pub fn spawn<C: Component + Copy>(
     let mut tinted: HashMap<(AssetId<StandardMaterial>, [u8; 4]), Handle<StandardMaterial>> = HashMap::new();
     let mut count = 0;
     for (pi, p) in patches.iter().enumerate() {
+        // NEOPETS_HIDE_MODEL=id: patches of that near model are not built (diagnostic).
+        if std::env::var("NEOPETS_HIDE_MODEL").ok().and_then(|v| v.parse::<u16>().ok()) == Some(p.model) {
+            continue;
+        }
         let bush = !p.bushes.is_empty() || !p.reeds.is_empty();
         let mut drawn: Vec<(u16, bool)> = vec![(p.model, false)];
         if let Some(c) = neopets_sim::foliage::cut_model(p.model).filter(|_| !p.bushes.is_empty()) {

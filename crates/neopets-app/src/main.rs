@@ -10,6 +10,7 @@ mod stage_view;
 mod story_run;
 mod ui_fit;
 mod display;
+mod draw_order;
 mod perf;
 mod scene_merge;
 mod debris_view;
@@ -25,6 +26,7 @@ mod audio_view;
 mod hud_view;
 mod book_view;
 mod menu_view;
+mod pick_view;
 mod menus;
 mod movie_view;
 mod placeholder;
@@ -933,6 +935,7 @@ fn main() {
         .add_plugins(graphics::GraphicsPlugin)
         .add_plugins(fast_lit::FastLitPlugin)
         .add_plugins(pass1::Pass1Plugin)
+        .add_plugins(draw_order::DrawOrderPlugin)
         .add_plugins(shadow_view::ShadowPlugin)
         .init_resource::<display::SceneTarget>()
         .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, dev_spawn::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup, display::spawn_window))
@@ -960,6 +963,7 @@ fn main() {
     app.add_systems(Update, dev_spawn::picker_show);
     app.init_resource::<book_view::BookView>();
     app.add_systems(Update, book_view::sync_book.after(play_frame));
+    app.add_systems(Update, (pick_view::pick.after(play_frame), pick_view::show_cross));
     app.insert_resource(goal_start.map_or_else(story_run::GoalWalk::default, story_run::GoalWalk::open));
     app.add_systems(Startup, story_run::spawn_goal_panel);
     app.add_systems(Update, (story_run::goal_walk_step.before(play_frame), story_run::show_goal_panel));
@@ -2672,6 +2676,7 @@ fn sync_worlds(
                 // An environment-mapped pass 0 is drawn by the pass-1 shader with view-generated
                 // UVs (pass1.rs), its texture shared per model texture.
                 let mut env_textures: std::collections::HashMap<usize, Handle<Image>> = std::collections::HashMap::new();
+                let ranks = draw_order::ranks(&m);
                 for (i, mesh, material) in part_assets(&m, &mut meshes, &mut materials, &mut images) {
                     let env = m.parts[i].texture.filter(|_| m.parts[i].env_map && std::env::var_os("NEOPETS_NO_PASS1").is_none());
                     let mut e = match env {
@@ -2689,7 +2694,7 @@ fn sync_worlds(
                     };
                     // The sky dome neither casts nor takes the world shadows.
                     if matches!(*part, WorldPart::Dome(_)) {
-                        e.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+                        e.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver, draw_order::DrawRank { pack: None, rank: ranks[i] }));
                     }
                     // A part under a type-3 node, or of an instance or placed object, draws only
                     // while its zone column passes.
@@ -2730,6 +2735,9 @@ fn sync_worlds(
                     }
                     if let WorldPart::Scene(pack, _) = *part {
                         e.insert(part_signature(pack, &m.parts[i], true));
+                    }
+                    if matches!(*part, WorldPart::Dome(_)) {
+                        e.insert(draw_order::DrawRank { pack: None, rank: ranks[i] + 1 });
                     }
                     if let Some(speed) = scroll {
                         e.insert(pass1::Pass1Scroll(speed));
@@ -4643,6 +4651,39 @@ fn play_trace(
     println!("Entity table of {} (entity: region j or 255 embedded, ordinal): {:?}", play.world.pack, play.world.entity_table());
     let placed: Vec<String> = play.world.placed_effects.iter().take(40).enumerate().map(|(k, p)| format!("{k}: id {} at {:.1},{:.1},{:.1}", p.id, p.position[0], p.position[1], p.position[2])).collect();
     println!("Placed effects of {} ({} records): {}", play.world.pack, play.world.placed_effects.len(), placed.join("; "));
+    if std::env::var_os("NEOPETS_TRACE_PATCHES").is_some() {
+        for p in &play.world.patches {
+            println!("      PATCH key {} area {:?} height {} ground {:?}", p.key, p.area, p.height, play.world.ground_at((p.area[0] + p.area[1]) / 2.0, (p.area[2] + p.area[3]) / 2.0, 1.0e4));
+        }
+    }
+    // NEOPETS_TRACE_INSTANCES=1: the type-20 instances of this world: tree, translation, axis lengths, zone, D1, the ground under it (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_INSTANCES").is_some() {
+        if let Ok(bytes) = archive.index.read(&mut archive.disc, play.world.pack) {
+            if let Ok(chain) = neopets_data::resource::walk_chunks(&bytes, None) {
+                for t in neopets_data::world::scene(&bytes, &chain.chunks).trees.iter().filter(|t| t.source == neopets_data::world::INSTANCES) {
+                    let Some(m) = t.matrix else { continue };
+                    let len = |k: usize| (m[k] * m[k] + m[k + 1] * m[k + 1] + m[k + 2] * m[k + 2]).sqrt();
+                    println!("      INSTANCE tree {:#x} at {:.1},{:.1},{:.1} axes {:.2},{:.2},{:.2} zone {:?} cull {:?} ground {:?}", t.payload.start, m[12], m[13], m[14], len(0), len(4), len(8), t.zone, t.cull, play.world.ground_at(m[12], m[14], 1.0e4));
+                }
+            }
+        }
+    }
+    // NEOPETS_TRACE_PARTS="x0,z0,x1,z1": the scene parts of this world inside that box (diagnostic).
+    if let Some(v) = std::env::var("NEOPETS_TRACE_PARTS").ok().map(|v| v.split(',').filter_map(|t| t.trim().parse::<f32>().ok()).collect::<Vec<f32>>()).filter(|v| v.len() == 4) {
+        if let Ok(bytes) = archive.index.read(&mut archive.disc, play.world.pack) {
+            if let Ok(chain) = neopets_data::resource::walk_chunks(&bytes, None) {
+                if let Ok(m) = neopets_data::model::build_world(&bytes, &chain.chunks, u32::MAX) {
+                    for (i, q) in m.parts.iter().enumerate() {
+                        let (lo, hi) = q.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| (std::array::from_fn(|k| lo[k].min(p[k])), std::array::from_fn(|k| hi[k].max(p[k]))));
+                        if hi[0] >= v[0] && lo[0] <= v[2] && hi[2] >= v[1] && lo[2] <= v[3] && hi[0] - lo[0] < 150.0 && hi[2] - lo[2] < 150.0 {
+                            let g = play.world.ground_at(0.5 * (lo[0] + hi[0]), 0.5 * (lo[2] + hi[2]), hi[1] + 8.0);
+                            println!("      PART {i} tree {} verts {} lo {lo:?} hi {hi:?} zone {:?} group {:?} tex {:?} lit {} pass {} bucket {:?} ground {g:?}", q.tree, q.positions.len(), q.zone, q.group, q.texture, q.lit, q.pass, q.bucket);
+                        }
+                    }
+                }
+            }
+        }
+    }
     let trees: Vec<String> = play.world.patches.iter().filter(|p| p.key == 4).take(3).map(|p| format!("({:.1},{:.1})", (p.area[0] + p.area[1]) / 2.0, (p.area[2] + p.area[3]) / 2.0)).collect();
     println!("Foliage of {}: {} patches; key-4 tree patches at {}", play.world.pack, play.world.patches.len(), trees.join(" "));
     let kinds: Vec<String> = play.world.groups.iter().enumerate().map(|(i, g)| format!("{i}:k{} t{:?} o{:?}", g.kind, g.triggers.first(), g.objects.iter().take(2).collect::<Vec<_>>())).collect();

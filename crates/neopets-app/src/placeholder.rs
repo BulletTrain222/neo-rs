@@ -24,6 +24,8 @@ fn part() -> MeshPart {
         program: None,
         colour_slot: 0,
         zone: None,
+        pass: 0,
+        bucket: (0, 0),
         scroll: None,
         env_map: false,
         flipbook: None,

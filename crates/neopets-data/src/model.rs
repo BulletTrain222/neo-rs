@@ -116,6 +116,9 @@ pub struct MeshPart {
     /// The zone column that gates this part: its leaf's enclosing type-3 node, else the
     /// instance's or placed object's column (None draws always).
     pub zone: Option<u8>,
+    /// The leaf's sub-list and material bucket (its shader list and texture chunk; SPEC-0004 Drawing a node tree, 3b).
+    pub pass: u8,
+    pub bucket: (usize, u8),
     /// Pass 0's UV scroll speeds (UV mode 2), when it scrolls.
     pub scroll: Option<[f32; 2]>,
     /// Pass 0's UV mode is 1, the environment map (SPEC-0003 UV modes): its UVs are generated
@@ -396,6 +399,8 @@ impl Builder {
                 program: group.map(|g| g.program),
                 colour_slot: group.map_or(0, |g| g.colour_slot),
                 zone: leaf.zone.or(zone),
+                pass: leaf.pass,
+                bucket: (key, group.map_or(0, |g| g.texture_chunk)),
                 scroll: group.filter(|g| g.uv_mode == 2 && g.uv_speed() != [0.0; 2]).map(|g| g.uv_speed()),
                 env_map: group.is_some_and(|g| g.uv_mode == 1),
                 flipbook: group.filter(|g| g.animator == 1 && g.grid()[0] as i32 > 0).and_then(|g| {
@@ -547,6 +552,10 @@ pub fn build_world_parts(bytes: &[u8], top: &[Chunk], layer_mask: u32, objects: 
     let mut scene = crate::world::scene(bytes, top);
     if !objects {
         scene.trees.retain(|t| t.source != crate::world::PLACED_OBJECTS);
+    }
+    // NEOPETS_NO_INSTANCES: the type-20 instances are left out (diagnostic).
+    if std::env::var_os("NEOPETS_NO_INSTANCES").is_some() {
+        scene.trees.retain(|t| t.source != crate::world::INSTANCES);
     }
     let materials = vec![ChainMaterials::of(bytes, top)?];
     let mut b = Builder::new(materials, None);
