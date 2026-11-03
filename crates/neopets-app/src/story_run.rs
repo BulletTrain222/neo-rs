@@ -22,6 +22,10 @@ pub struct Goal {
     force_held: Vec<u16>,
     force_gone: Vec<u16>,
     limit: u64,
+    /// Other packs the row names, tried when the goal's point has no floor in this one.
+    others: Vec<u32>,
+    /// Script triggers to walk through first, which load the characters of a talk (the 1098 hall's).
+    visits: Vec<u16>,
     /// The script trigger the row names: the hero stands on a point of its volume read from the world, because a row's
     /// centre may lie outside a turned volume.
     trigger: Option<u16>,
@@ -61,6 +65,8 @@ pub fn parse_goal(line: &str) -> Option<Goal> {
         force_gone: list(c[13]),
         limit: c[14].trim().parse().ok()?,
         trigger: c.get(15).and_then(|t| t.trim().parse().ok()),
+        others: c.get(16).map_or(Vec::new(), |t| list(t)),
+        visits: c.get(17).map_or(Vec::new(), |t| list(t)),
     })
 }
 
@@ -89,6 +95,8 @@ pub struct Order {
     pub warp: Option<u32>,
     pub square: bool,
     pub jump: bool,
+    /// The stick held forward: an exit rectangle is walked through, not pressed.
+    pub walk: bool,
     pub finished: bool,
 }
 
@@ -217,6 +225,25 @@ impl StoryRun {
                         self.finish_goal(play, "fail");
                         continue;
                     }
+                    // No floor at the goal's point here: it lies in the next pack the row names.
+                    if t == 5 {
+                        if let Some(&(x, z, y)) = g.spots.first() {
+                            if play.world.ground_at(x, z, y.map_or(1.0e4, |y| y + 8.0)).is_none() {
+                                if let Some(next) = self.goals[self.at].others.first().copied() {
+                                    self.goals[self.at].others.remove(0);
+                                    order.warp = Some(next);
+                                    self.started = 0;
+                                    return order;
+                                }
+                            }
+                        }
+                    }
+                    if !g.visits.is_empty() && t >= 10 && t < 10 + 30 * g.visits.len() as u64 && (t - 10) % 30 == 0 {
+                        let i = g.visits[((t - 10) / 30) as usize];
+                        if let Some(v) = play.world.volume_points().into_iter().find(|v| v.0 == i) {
+                            play.place_at(v.1[0] as f32, v.1[2] as f32, v.1[1] as f32 + 8.0);
+                        }
+                    }
                     if g.kind != "WAIT" && t >= 10 && (t - 10) % 150 == 0 {
                         let k = ((t - 10) / 150) as usize;
                         let inside = g.trigger.and_then(|i| play.world.volume_points().into_iter().find(|v| v.0 == i)).map(|v| v.1);
@@ -232,8 +259,21 @@ impl StoryRun {
                             }
                         }
                     }
-                    if !g.name.is_empty() && matches!(t, 20 | 200 | 500) {
+                    if !(g.name.is_empty() && g.ids.is_empty()) && t >= 20 && (t - 20) % 150 == 0 {
                         play.dev_go_near(&g.name, &g.ids);
+                    }
+                    // A door: each visit also walks a little in each of four directions from its point.
+                    if g.kind == "DOOR" && !g.spots.is_empty() && t >= 40 {
+                        let phase = (t - 40) % 150;
+                        if phase % 25 == 0 && phase < 100 {
+                            let p = play.loco.position();
+                            let (x, z) = [(4.0, 0.0), (-4.0, 0.0), (0.0, 4.0), (0.0, -4.0)][(phase / 25) as usize];
+                            let (sx, sz, sy) = g.spots[0];
+                            play.place_at(sx, sz, sy.map_or(1.0e4, |y| y + 8.0));
+                            let _ = p;
+                            play.face_point(sx + x, sz + z);
+                        }
+                        order.walk = phase < 100;
                     }
                     if g.kind == "FIGHT" && t % 600 == 200 {
                         play.dev_kill_enemies();

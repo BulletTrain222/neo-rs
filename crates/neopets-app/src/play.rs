@@ -17371,7 +17371,8 @@ impl Play {
     pub fn dev_go_near(&mut self, name: &str, ids: &[usize]) -> bool {
         let (pack, hero) = (self.world.pack, self.loco.position());
         let d = |p: [f32; 3]| (p[0] - hero[0]).hypot(p[2] - hero[2]);
-        let live = || self.characters.iter().filter(|c| c.pack == pack && !c.inactive);
+        // A character out of its zone is inactive until the hero is near: it still counts.
+        let live = || self.characters.iter().filter(|c| c.pack == pack);
         let named = live().filter(|c| c.name == name).map(|c| c.position).min_by(|a, b| d(*a).total_cmp(&d(*b)));
         let found = named.or_else(|| live().filter(|c| c.entity.is_some_and(|e| ids.contains(&e))).map(|c| c.position).min_by(|a, b| d(*a).total_cmp(&d(*b))));
         let Some(p) = found else { return false };

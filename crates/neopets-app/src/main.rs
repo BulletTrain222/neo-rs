@@ -4948,7 +4948,7 @@ fn play_trace(
         }
         // `--trace-to x,z` steers the stick toward a point through the camera's rows; without
         // one the stick is held forward at 0.7, or left centred with NEOPETS_TRACE_STAND.
-        let (mut forward, mut side) = (if std::env::var_os("NEOPETS_TRACE_STAND").is_some() { 0.0 } else { 0.7 }, 0.0);
+        let (mut forward, mut side) = (if std::env::var_os("NEOPETS_TRACE_STAND").is_some() && !story_order.walk { 0.0 } else { 0.7 }, 0.0);
         // After a swap along a `swap` route, go on to a cell that names a new neighbour.
         if play.swaps > 0 && to.is_some_and(|t| t[1].is_nan()) && route.len() <= 1 && !rerouted {
             rerouted = true;

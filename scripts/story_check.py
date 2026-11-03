@@ -56,29 +56,53 @@ for act in ('Act 1', 'Act 2', 'Act 3', 'Act 4'):
         m = re.match(r'\| *(\d+) *\| *([A-Z]+) *\|(.*)\|\s*$', l)
         if m:
             c = [x.strip() for x in m.group(3).split('|')]
-            goals.append(dict(act=act, n=int(m.group(1)), kind=m.group(2), packs=[int(x) for x in re.findall(r'\b\d{3,4}\b', c[0])], where=c[0], target=c[1], needs=conditions(c[2]), done=conditions(c[3]), raised=[int(x) for s in re.findall(r'\(([\d, ]+) turn on', c[3]) for x in re.findall(r'\d+', s)], done_text=c[3]))
+            goals.append(dict(act=act, n=int(m.group(1)), kind=m.group(2), packs=[int(x) for x in re.findall(r'\b\d{3,4}\b', c[0])], where=c[0], target=c[1], needs=conditions(c[2]), done=conditions(c[3]), notes=c[4], raised=[int(x) for s in re.findall(r'\(([\d, ]+) turn on', c[3]) for x in re.findall(r'\d+', s)], done_text=c[3]))
 
 
-def spots(g):
+def spots(g, depth=0):
     """Where the hero stands for this goal: a town door's centre, or each point the row names."""
     d = re.search(r'[Tt]own door (\d+)', g['target'])
     if g['kind'] == 'DOOR' and d and int(d.group(1)) in doors:
         return [doors[int(d.group(1))]]
     if g['kind'] == 'TALK':
-        return []
+        # A talker that loads only near its place: its zone and "placed at" points.
+        near = re.findall(r'(?:placed at|first load at|script group \d+: \w+ (?:base |centre )?|locator \d+ )\((-?[\d.]+), (-?[\d.]+), (-?[\d.]+)\)', g['target'] + ' ' + g['notes'])
+        return [(float(a), float(b), float(c)) for a, b, c in near]
     ts = [(float(x), None if y in ('.', 'y') else float(y), float(z)) for x, y, z in TUPLE.findall(g['target'])]
-    if g['kind'] == 'WALK':
+    if g['kind'] == 'WALK' and ts:
         return ts[-1:]
-    if g['kind'] == 'PICK':
+    if g['kind'] == 'PICK' and ts:
+        return ts
+    if g['kind'] == 'SQUARE' and re.search(r'levers|Three|[Ee]ach once', g['target']):
         return ts
     if ts:
         return ts[:1]
     # "(as goal 16)", "(goal 52)": the point of the goal it names.
-    back = re.search(r'goal (\d+)', g['target'])
-    for o in goals:
-        if back and o['n'] == int(back.group(1)) and o is not g:
-            return spots(o)
+    o = named_goal(g)
+    if o and depth < 3:
+        return spots(o, depth + 1)
+    # "Chain talk zone again": the last goal of that pack naming that talk zone with a point.
+    zone = re.search(r'(\w+) talk zone', g['target'])
+    if zone:
+        word = zone.group(1).lower()
+        for o in reversed([x for x in goals if x['n'] < g['n'] and x['packs'] == g['packs']]):
+            if word in o['target'].lower() and 'talk' in (o['target'] + o['notes']).lower() and TUPLE.search(o['target']):
+                return spots(o, depth + 1) if depth < 3 else []
     return []
+
+
+def named_goal(g):
+    back = re.search(r'goal (\d+)', g['target'] + ' ' + g['notes'])
+    if back:
+        for o in goals:
+            if o['n'] == int(back.group(1)) and o is not g:
+                return o
+    return None
+
+
+def text_with_back(g):
+    o = named_goal(g)
+    return g['target'] + ' ' + g['notes'] + (' ' + o['target'] + ' ' + o['notes'] if o else '')
 
 
 def nums(s):
@@ -92,6 +116,7 @@ for g in goals:
     # An exit trigger lies in the pack being left; other walks end in the last pack named.
     exits = g['done'] and g['done']['pack'] and re.search(r'[Ee]xit|[Tt]rigger', g['target']) and not re.search(r'[Ll]egs?', g['target'])
     pack = (g['packs'][-1] if g['kind'] == 'WALK' and not exits else g['packs'][0]) if g['packs'] else ''
+    others = nums(x for x in g['packs'] if x != pack) if g['kind'] == 'WALK' else ''
     if g['kind'] == 'WAIT':
         pack = ''
     name, ids = '', ''
@@ -104,9 +129,27 @@ for g in goals:
         two = re.match(r'([A-Z][a-z]+ [A-Z][a-z]+)', g['target'])
         name = two.group(1) if two else name
     # Fights that need a real attack of a given kind, not a defeat: the checker cannot perform them yet.
+    # A chain of doors named in one row: the checker goes straight to its last pack.
+    if g['kind'] == 'DOOR' and g['target'].count(' to ') >= 2 and len(g['packs']) >= 2:
+        g['kind'] = 'WALK'
+        g['target'] = ''
+    # A talk zone that waits on a deflected shot (the shield lesson).
+    if g['kind'] == 'WALK' and 'stay for the next talk' in g['target']:
+        g['kind'] = 'ATTACK'
     if g['kind'] == 'FIGHT' and re.search(r'[Ll]esson|Clear the five drains|Mote tasks|Knight record|^Record \d|lever|hit all', g['target']):
         g['kind'] = 'ATTACK'
-    tr = re.search(r'[Tt]rigger(?: index)? (\d+)', g['target'])
+    zone = re.search(r'(\w+) talk zone', g['target'])
+    if zone:
+        for o in reversed([x for x in goals if x['n'] < g['n'] and x['packs'] and g['packs'] and x['packs'][-1] == g['packs'][-1]]):
+            found = re.search(zone.group(1) + r' talk zone, script trigger (\d+)', o['target'], re.I)
+            if found:
+                g['target'] += f' script trigger {found.group(1)}'
+                break
+    tr = re.search(r'[Tt]rigger(?: index)? (\d+)', text_with_back(g))
+    visits = ''
+    hall = re.search(r'hall triggers? (\d+)(?: to (\d+))?', text_with_back(g))
+    if g['kind'] == 'TALK' and hall:
+        visits = nums(range(int(hall.group(1)), int(hall.group(2) or hall.group(1)) + 1))
     trigger = tr.group(1) if tr and g['kind'] in ('SQUARE', 'WALK', 'DOOR') else ''
     n, d = g['needs'] or dict(on=set(), off=set(), held=set()), g['done']
     done = []
@@ -114,7 +157,7 @@ for g in goals:
         done = [f'f{x}' for x in sorted(d['on'])] + [f'!f{x}' for x in sorted(d['off'])] + [f'i{x}' for x in sorted(d['held'])] + [f'!i{x}' for x in sorted(d['gone'])] + ([f"p{d['pack']}"] if d['pack'] else [])
     z = d or dict(on=set(), off=set(), held=set(), gone=set())
     place = ';'.join(f'{a},{c}' + (f',{b}' if b is not None else '') for a, b, c in spots(g))
-    lines.append('\t'.join([str(g['n']), g['kind'], str(pack), place, name, ids, nums(n['on']), nums(n['off']), nums(n['held']), ','.join(done), nums(set(z['on']) | set(g['raised'])), nums(z['off']), nums(z['held']), nums(z['gone']), str(TICKS.get(g['kind'], 1500)), trigger]))
+    lines.append('\t'.join([str(g['n']), g['kind'], str(pack), place, name, ids, nums(n['on']), nums(n['off']), nums(n['held']), ','.join(done), nums(set(z['on']) | set(g['raised'])), nums(z['off']), nums(z['held']), nums(z['gone']), str(TICKS.get(g['kind'], 1500)), trigger, others, visits]))
 path = os.path.join(private, 'goals.tsv')
 open(path, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines) + '\n')
 env = {k: v for k, v in os.environ.items() if not k.startswith('NEOPETS_')}
