@@ -56,7 +56,7 @@ for act in ('Act 1', 'Act 2', 'Act 3', 'Act 4'):
         m = re.match(r'\| *(\d+) *\| *([A-Z, ]+?) *\|(.*)\|\s*$', l)
         if m:
             c = [x.strip() for x in m.group(3).split('|')]
-            goals.append(dict(act=act, n=int(m.group(1)), kind=m.group(2).split(', ')[-1], packs=[int(x) for x in re.findall(r'\b\d{3,4}\b', c[0])], where=c[0], target=c[1], needs=conditions(c[2]), done=conditions(c[3]), notes=c[4], raised=[int(x) for s in re.findall(r'\(([\d, ]+) turn on', c[3]) for x in re.findall(r'\d+', s)], done_text=c[3]))
+            goals.append(dict(act=act, n=int(m.group(1)), kind=([k for k in m.group(2).split(', ') if k != 'WAIT'] or ['WAIT'])[-1], packs=[int(x) for x in re.findall(r'\b\d{3,4}\b', c[0])], where=c[0], target=c[1], needs=conditions(c[2]), done=conditions(c[3]), notes=c[4], raised=[int(x) for s in re.findall(r'\(([\d, ]+) turn on', c[3]) for x in re.findall(r'\d+', s)], done_text=c[3]))
 
 
 def spots(g, depth=0):

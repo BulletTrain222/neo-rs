@@ -654,6 +654,27 @@ pub fn teleport_planes(bytes: &[u8], top: &[Chunk]) -> Vec<TeleportPlane> {
         .collect()
 }
 
+/// The same-world pads of a pack (SPEC-0006 Teleport plane list; SPEC-0028 section 6): (class 500, class 501), the planes
+/// the door list leaves out. Only pack 1299 has a pair on disc.
+pub fn same_world_pads(bytes: &[u8], top: &[Chunk]) -> Option<(TeleportPlane, TeleportPlane)> {
+    let c = top.iter().find(|c| c.kind == OBJECT_HEADER)?;
+    let p = &bytes[c.payload.clone()];
+    let n = i32_at(p, 0x14)?.clamp(0, 1 << 14) as usize;
+    let list = u32_at(p, 0x3C)? as usize;
+    let u16_at = |at: usize| p.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+    let pad = |class: u16| {
+        (0..n).find_map(|i| {
+            let r = list + i * 0x70;
+            if u16_at(r + 0x12)? & 0x0002 == 0 || u16_at(r + 0x1E)? != class {
+                return None;
+            }
+            let v = |at: usize| Some([f32_at(p, r + at)?, f32_at(p, r + at + 4)?, f32_at(p, r + at + 8)?]);
+            Some(TeleportPlane { p: v(0x30)?, f: v(0x40)?, d: v(0x50)?, q: v(0x60)?, w: f32_at(p, r + 0x28)?, h: f32_at(p, r + 0x24)? })
+        })
+    };
+    Some((pad(500)?, pad(501)?))
+}
+
 /// Entry record i of the type-11 chunk (SPEC-0006): position and facing, or None past the end.
 pub fn entry_record(bytes: &[u8], top: &[Chunk], i: usize) -> Option<([f32; 3], [f32; 3])> {
     let p = &bytes[top.iter().find(|c| c.kind == OBJECT_HEADER)?.payload.clone()];

@@ -114,6 +114,8 @@ pub struct World {
     neighbours: Neighbours,
     /// Teleport planes (doors), the arrival-door list (tag 0x0E) and the entry records.
     pub planes: Vec<TeleportPlane>,
+    /// The same-world pads, class 500 and 501 (SPEC-0028 Pack 1299 looping-door puzzle).
+    pub pads: Option<(TeleportPlane, TeleportPlane)>,
     arrivals: Neighbours,
     pub entries: Vec<([f32; 3], [f32; 3])>,
     /// The area's path list (type-15 tag 0x0A): each path's first and last entry record.
@@ -244,6 +246,7 @@ impl World {
             collis_mask: 0,
             neighbours: Neighbours::default(),
             planes: Vec::new(),
+            pads: None,
             arrivals: Neighbours::default(),
             entries: vec![([0.0; 3], [0.0, 0.0, 1.0])],
             paths: Vec::new(),
@@ -330,6 +333,7 @@ impl World {
             collis_mask: 0,
             neighbours: Neighbours::of(&bytes, &chain.chunks),
             planes: ground::teleport_planes(&bytes, &chain.chunks),
+            pads: ground::same_world_pads(&bytes, &chain.chunks),
             arrivals: Neighbours::arrivals(&bytes, &chain.chunks),
             entries: (0..4096).map_while(|i| ground::entry_record(&bytes, &chain.chunks, i)).collect(),
             paths: neopets_data::travel::path_list(&bytes, &chain.chunks),
@@ -503,12 +507,7 @@ impl World {
     }
 
     fn door_within(&self, p: [f32; 3], reach: f32) -> Option<usize> {
-        self.planes.iter().position(|pl| {
-            let d = [p[0] - pl.p[0], p[1] + 1.75 - pl.p[1], p[2] - pl.p[2]];
-            let dot = |v: [f32; 3]| v[0] * d[0] + v[1] * d[1] + v[2] * d[2];
-            let (a, s, u) = (dot(pl.f), dot(pl.d), dot(pl.q));
-            a.abs() <= reach && (0.0..=pl.w).contains(&s) && u + 1.75 >= 0.0 && u - 1.75 <= pl.h
-        })
+        self.planes.iter().position(|pl| plane_touched(pl, p, reach))
     }
 
     /// Diagnostic: the probed ground height at (x, z) under ceiling c, when found.
@@ -574,6 +573,14 @@ impl World {
         }
         self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None, patch: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()))
     }
+}
+
+/// The door touch test of a plane: within `reach` of it, inside its width and height.
+fn plane_touched(pl: &TeleportPlane, p: [f32; 3], reach: f32) -> bool {
+    let d = [p[0] - pl.p[0], p[1] + 1.75 - pl.p[1], p[2] - pl.p[2]];
+    let dot = |v: [f32; 3]| v[0] * d[0] + v[1] * d[1] + v[2] * d[2];
+    let (a, s, u) = (dot(pl.f), dot(pl.d), dot(pl.q));
+    a.abs() <= reach && (0.0..=pl.w).contains(&s) && u + 1.75 >= 0.0 && u - 1.75 <= pl.h
 }
 
 /// One tick of an NPC's walk (SPEC-0056 Navigation step, Travel by root motion, Wall confinement):
@@ -1554,6 +1561,10 @@ pub struct Play {
     dev_group: Option<u64>,
     /// The developer menu's character spawns on their way in: region and record.
     dev_spawns: Vec<(u32, usize)>,
+    /// The looping-door puzzle of the current world: the puzzle, whether the hero is still touching a pad (a warp lands
+    /// him on the other pad's plane, which is not a new touch until he has left it) and his height last tick.
+    stairs: Option<(u32, neopets_sim::stairs::Puzzle, bool, f32)>,
+    stair_types: Vec<u32>,
     /// Hero Haste's way back: the world and place the hero last stood on a real floor.
     haste_safe: Option<(u32, [f32; 3])>,
     dev_item: Option<[f32; 3]>,
@@ -1825,6 +1836,7 @@ impl Play {
         let bw = words(neopets_sim::petpet::BONUS_AT, 4)?;
         let pet_bonus = neopets_sim::petpet::Bonus { damage: f32::from_bits(bw[0]), intake: f32::from_bits(bw[1]), hp: f32::from_bits(bw[2]), mp: f32::from_bits(bw[3]) };
         let pet_low = (float(neopets_sim::petpet::LOW_TIME_WORD)? * 3600.0) as i32;
+        let stair_types = words(neopets_sim::stairs::TYPE_TABLE, neopets_sim::stairs::TYPE_WORDS).unwrap_or_default();
         let knight_words = words(neopets_sim::knight::BASE, neopets_sim::knight::WORDS).ok().and_then(|w| neopets_sim::knight::Words::read(&w));
         let gelert_words = words(neopets_sim::gelert::BASE, neopets_sim::gelert::WORDS).ok().and_then(|w| neopets_sim::gelert::Words::read(&w, &|at| words(at, 1).ok().map(|v| v[0])));
         let class20_waits = {
@@ -2204,6 +2216,8 @@ impl Play {
             break_family: None,
             dev_group: None,
             dev_spawns: Vec::new(),
+            stairs: None,
+            stair_types,
             haste_safe: None,
             dev_item: None,
             avoid: Default::default(),
@@ -11059,6 +11073,7 @@ impl Play {
         self.avoid_step();
         self.dev_group_step();
         self.haste_rescue_step();
+        self.stairs_step();
         self.gnarfas_step();
         self.king_step();
         self.knight_step();
@@ -17363,6 +17378,66 @@ impl Play {
             }
         } else if self.ticks > asked + 600 {
             self.dev_group = None;
+        }
+    }
+
+    /// SPEC-0028 Pack 1299 looping-door puzzle, per tick: the hero's vertical travel joins the accumulator, placed objects
+    /// 0 to 5 spin, and every placed object takes the offset. A touch of a pad is a crossing to the other pad. Where he
+    /// lands is this build's default (R-0221): he moves by the difference of the pads' centres, and it takes leaving the
+    /// pads to touch one again. The camera follows by `arrive`. Node 401's mask is kept but not drawn: no draw
+    /// path filters on a node's own mask word yet.
+    fn stairs_step(&mut self) {
+        let Some((a, b)) = self.world.pads else {
+            self.stairs = None;
+            return;
+        };
+        use neopets_sim::stairs::{Pad, Puzzle, SPIN};
+        let pack = self.world.pack;
+        let p = self.loco.position();
+        if self.stairs.as_ref().is_none_or(|s| s.0 != pack) {
+            self.stairs = Some((pack, Puzzle::new(self.stair_types.clone()), false, p[1]));
+        }
+        let reach = contact::HERO_RADIUS + 1.5;
+        let touched = if plane_touched(&a, p, reach) {
+            Some((a, b, Pad::B))
+        } else if plane_touched(&b, p, reach) {
+            Some((b, a, Pad::A))
+        } else {
+            None
+        };
+        let ticks = self.ticks;
+        let Some(state) = self.stairs.as_mut() else { return };
+        state.1.accumulator += p[1] - state.3;
+        state.3 = p[1];
+        let mut warp = None;
+        match touched {
+            None => state.2 = false,
+            Some((from, to, dest)) if !state.2 => {
+                state.2 = true;
+                if state.1.teleports(dest) {
+                    // The pads' stored corners differ: the difference is taken between their centres.
+                    let centre = |t: &TeleportPlane| std::array::from_fn::<f32, 3, _>(|k| t.p[k] + 0.5 * t.w * t.d[k] + 0.5 * t.h * t.q[k]);
+                    let (c0, c1) = (centre(&from), centre(&to));
+                    let d = [c1[0] - c0[0], c1[1] - c0[1], c1[2] - c0[2]];
+                    state.1.cross(dest, d[1]);
+                    state.3 = p[1] + d[1];
+                    warp = Some([p[0] + d[0], p[1] + d[1], p[2] + d[2]]);
+                    println!("      stair pad to {dest:?}: state {} mask {:#x} on tick {ticks}", state.1.state, state.1.mask);
+                }
+            }
+            Some(_) => {}
+        }
+        let offset = state.1.accumulator;
+        if let Some(at) = warp {
+            let f = self.loco.facing;
+            self.arrive((at, f));
+        }
+        let dt = 1.0 / 60.0;
+        for (k, rate) in SPIN.iter().enumerate() {
+            *self.obj_yaw.entry((pack, k)).or_insert(0.0) += rate * dt;
+        }
+        for k in 0..self.world.objects.len() {
+            self.obj_offset.insert((pack, k), offset);
         }
     }
 

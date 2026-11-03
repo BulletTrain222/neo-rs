@@ -47,6 +47,7 @@ pub mod juppie;
 pub mod gelert;
 pub mod knight;
 pub mod sisters;
+pub mod stairs;
 pub mod summon;
 pub mod werelupe;
 pub mod miamouse;

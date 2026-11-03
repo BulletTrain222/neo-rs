@@ -2,13 +2,13 @@
 
 Everything the specs describe, written by `scripts/spec_list.py`. **An automatic tick means a rule found evidence, not that anyone played it.** The tag on each ticked line names the rule. An unticked line may still be built: the rules are strict and only see plain text, so most built behaviour has no automatic tick. To confirm something yourself, change `[ ]` to `[x]`; a rerun keeps it while the line's text is unchanged.
 
-**42404 items: 2347 ticked by a rule, 0 ticked by hand, 40057 open.**
+**42405 items: 2349 ticked by a rule, 0 ticked by hand, 40056 open.**
 
 | Rule | Ticks | What it found |
 | --- | --- | --- |
 | numbers match the pack code | 827 | At least two flag, line, movie, item, locator or camera numbers on the line, all found in that pack's code |
-| address in code | 558 | Every boot-data address on the line is read by the code |
-| title named in code | 311 | A code comment naming this spec also names the section's title |
+| address in code | 559 | Every boot-data address on the line is read by the code |
+| title named in code | 312 | A code comment naming this spec also names the section's title |
 | answered | 198 | A spec answered the request |
 | story check passed by teleport | 197 | The goal's Done condition held in the story check |
 | code found | 156 | The level module has code |
@@ -45,7 +45,7 @@ Everything the specs describe, written by `scripts/spec_list.py`. **An automatic
 | SPEC-0025 Save game | 703 | 16 | 0 |
 | SPEC-0026 Game flow, attract mode and movies | 681 | 7 | 0 |
 | SPEC-0027 Camera and projection | 544 | 19 | 0 |
-| SPEC-0028 World lights, effect spawns, object records and collision primitives | 617 | 3 | 0 |
+| SPEC-0028 World lights, effect spawns, object records and collision primitives | 617 | 5 | 0 |
 | SPEC-0029 Enemy and creature behavior framework | 1613 | 66 | 0 |
 | SPEC-0030 Level script modules and host API | 1075 | 3 | 0 |
 | SPEC-0031 Sound banks and sound blocks | 579 | 11 | 0 |
@@ -87,10 +87,10 @@ Everything the specs describe, written by `scripts/spec_list.py`. **An automatic
 | Level modules and their lines | 3590 | 990 | 0 |
 | Walkthrough steps | 45 | 31 | 0 |
 | Goals, Act 1 | 99 | 54 | 0 |
-| Goals, Act 2 | 56 | 22 | 0 |
-| Goals, Act 3 | 153 | 88 | 0 |
+| Goals, Act 2 | 56 | 23 | 0 |
+| Goals, Act 3 | 153 | 87 | 0 |
 | Goals, Act 4 | 87 | 33 | 0 |
-| Requests | 221 | 198 | 0 |
+| Requests | 222 | 198 | 0 |
 | Stated gaps in the code | 94 | 0 | 0 |
 
 ## 1. Every spec, in full
@@ -13792,7 +13792,7 @@ Cited 36 times in the game code.
 
 ### SPEC-0028: World lights, effect spawns, object records and collision primitives
 
-Cited 64 times in the game code.
+Cited 67 times in the game code.
 
 - [x] SPEC-0028 World lights, effect spawns, object records and collision primitives: the code cites this spec {auto: cited in code}
   - [ ] SPEC-0028, : Related specs: SPEC-0025 (save game; owner of the save-point rule), SPEC-0027 (camera; its eye position selects the type 41 atmosphere zones), SPEC-0046 (...
@@ -14222,8 +14222,8 @@ Cited 64 times in the game code.
     - [ ] SPEC-0028, Riding, carrying and collision with moving placed objects...: Ground attach of a character (SPEC-0018). The ground probe maps the character into the object'...
     - [ ] SPEC-0028, Riding, carrying and collision with moving placed objects...: Character versus moving placed objects (SPEC-0018, Who walks what, item 4). For each object of...
     - [ ] SPEC-0028, Riding, carrying and collision with moving placed objects...: Projectile versus placed objects (SPEC-0018). The same mapping with a fixed gate of 150 units...
-  - [ ] SPEC-0028 Pack 1299 looping-door puzzle (High for the rules)
-    - [ ] SPEC-0028, Pack 1299 looping-door puzzle (High for the rules): State move. The type of state s is the 32-bit word at ELF data address 0x2EB410 + 4s. On disc the words...
+  - [x] SPEC-0028 Pack 1299 looping-door puzzle (High for the rules) {auto: title named in code}
+    - [x] SPEC-0028, Pack 1299 looping-door puzzle (High for the rules): State move. The type of state s is the 32-bit word at ELF data address 0x2EB410 + 4s. On disc the words... {auto: address in code}
     - [ ] SPEC-0028, Pack 1299 looping-door puzzle (High for the rules): Display mask. The mask word of display node 401 becomes 1 << (i − 1), with i = s + 2 when the type of th...
     - [ ] SPEC-0028, Pack 1299 looping-door puzzle (High for the rules): Offset. accumulator += dy, and every placed object gets the position offset (0, accumulator, 0).
     - [ ] SPEC-0028, Pack 1299 looping-door puzzle (High for the rules): Characters. On a pad crossing, the step walks the current world's active character list from entry 0 to...
@@ -42244,7 +42244,7 @@ Cited 4 times in the game code.
 - [x] Goal 110 WAIT (1174): Fade out (0.3 s); flags 219 and 220 set; movie 16; boss instance 3 to stage 1. {auto: story check passed by teleport}
 - [x] Goal 111 WAIT (1174 to 1300): Act start 2 (Roberta selected, mode 1, Roberta healed, inventory swapped as above), movie 89, flag 221, movie 18; pack 1300 loads (return... {auto: story check passed by teleport}
 - [ ] Goal 112 WAIT (1300): First-arrival scene (flags 92, 93, 94 and 222 all clear): entity 9 walks to locator 42 (0.0, 1515.5, 112.3), entity 10 to locator 41 (0.0, 1538.3... {story check: No readable Done condition}
-- [ ] Goal 113 WALK, WAIT (1300): Council sphere, script trigger 1: centre (0.0, 1536.8, -212.9), radius 10.2 (the gardens' north end, locator 35 (0.6, 1536.7, -212.7)). The... {story check: Failed goals}
+- [x] Goal 113 WALK, WAIT (1300): Council sphere, script trigger 1: centre (0.0, 1536.8, -212.9), radius 10.2 (the gardens' north end, locator 35 (0.6, 1536.7, -212.7)). The... {auto: story check passed by teleport}
 - [ ] Goal 114 TALK (1300): Painter Howell (entity 18). {story check: Failed goals}
 - [x] Goal 115 WALK (1300): Script trigger 0, sphere centre (86.2, 1534.5, -122.8), radius 1.5 (beside the faerie pool post at (85.5, 1531.2, -124.3)). {auto: story check passed by teleport}
 - [x] Goal 116 PICK (1300): Stone of Illumination, item 10, at (39.931, 1513.659, -15.688), on the lower garden terrace (y 1514, the entry level). {auto: story check passed by teleport}
@@ -42296,7 +42296,7 @@ Cited 4 times in the game code.
 - [x] Goal 303 WALK (886 to 753): Legs 886, 704, 880, 702, 753; aim point in 753 is the castle teleport 0 (goal 304). In 880 do not stop at the plaza; the three boss-entry p... {auto: story check passed by teleport}
 - [ ] Goal 304 DOOR (753 to 758): Pack 753 teleport 0, centre (1780.5, 80.2, -16.1), 23.6 wide. {story check: No readable Done condition}
 - [x] Goal 305 WAIT (758): Movie 33; arrival in Brightvale Castle. Init sets 68 and 251; the hero stands at locator 13. {auto: story check passed by teleport}
-- [x] Goal 306 DOOR (758 to 777): Pack 758 teleport 1, centre (2085.3, 81.3, 510.2), 21.4 wide (the library road). {auto: story check passed by teleport}
+- [ ] Goal 306 DOOR (758 to 777): Pack 758 teleport 1, centre (2085.3, 81.3, 510.2), 21.4 wide (the library road). {story check: Failed goals}
 - [ ] Goal 307 WALK (777): Trigger index 0: rectangle footprint centre (1.5, 35.6, -159.9), 16.3 wide, 14.6 deep. Walk in. {story check: No readable Done condition}
 - [x] Goal 308 WALK (777): Leave trigger 0 and walk in again (same volume). {auto: story check passed by teleport}
 - [ ] Goal 309 WALK (777): Library entry plate, trigger index 4: footprint centre (-60.5, 30.5, -85.6), about 4 by 4 (fires on contact, no button). {story check: No readable Done condition}
@@ -42757,6 +42757,7 @@ Cited 4 times in the game code.
 - [ ] R-0218: Flag 706 after the opening (SPEC-0058 Act 1 goal 1; SPEC-0045 909 Update and arrival step)
 - [ ] R-0219: Flag 249 at the Act 3 start (SPEC-0058 Act 3 goal 300; SPEC-0039 886 Init)
 - [ ] R-0220: Reaching 1098's hall characters (SPEC-0045 1098 triggers 11 to 15; SPEC-0058 Act 1 goals 70, 72 and 88)
+- [ ] R-0221: The Endless Staircase's pads and door node (SPEC-0028 Pack 1299 looping-door puzzle; SPEC-0006 Teleport plane list; SPEC-0046)
 
 ## 6. Things the code says are not built
 

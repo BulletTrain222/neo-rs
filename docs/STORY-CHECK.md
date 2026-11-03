@@ -11,8 +11,8 @@ The run reached the end of the list (exit 0).
 | gameover | 3 | The hero died and the world was torn down |
 | manual | 42 | Kind not automated (minigames, pushes, climbs, shots) |
 | nocheck | 95 | Ran, but its Done condition is not machine-readable |
-| already | 22 | Done already held from earlier goals |
-| pass | 175 | Done condition reached |
+| already | 23 | Done already held from earlier goals |
+| pass | 174 | Done condition reached |
 
 ## Failed goals
 
@@ -32,9 +32,9 @@ The run reached the end of the list (exit 0).
 - Act 1 goal 78 TALK (1098 to 1163): 1098 door 5 (centre (-69.8, -128.6, -54.6)) to 1163; Sir Harlag, entity 15, placed at (-84.7, -126.6, -28.8). Done: 195 on.
 - Act 1 goal 88 TALK (1098): Entity 39. Done: 206 on.
 - Act 1 goal 95 WALK (956): Leave the top sphere (script trigger 16, centre (-702.1, 68.2, -824.9), radius 11.1) by more than 11.1 units,  Done: 212 on.
-- Act 2 goal 113 WAIT (1300): Council sphere, script trigger 1: centre (0.0, 1536.8, -212.9), radius 10.2 (the gardens' north end, locator 3 Done: 222 on, 396 on.
 - Act 2 goal 114 TALK (1300): Painter Howell (entity 18). Done: 399 on, item 61 held.
 - Act 3 goal 300 WAIT (886): Brightvale arrival after movie 30 (return world 64). The module's Init sets 249 because 248 is on and movie 30 Done: control back; 249 on.
+- Act 3 goal 306 DOOR (758 to 777): Pack 758 teleport 1, centre (2085.3, 81.3, 510.2), 21.4 wide (the library road). Done: pack 777 current (hero placed at start position 8).
 - Act 3 goal 317 WALK (753): Walk out of the sphere (more than 30 from its centre). Done: movie 37 plays on the next tick; 258 on.
 - Act 3 goal 328 FIGHT (735): The Plague Serpent (boss instance 10, AI 73; SPEC-0016). Its only damage route is one strike on the head while Done: 263, 75, 50 and 70 on (set by the victory scene).
 - Act 3 goal 332 DOOR (722 to 745): Door index 3 again. Done: pack 745 current.

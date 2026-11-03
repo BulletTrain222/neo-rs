@@ -11,7 +11,7 @@ Written by `scripts/missing.py` from the specs, the code and docs/STATUS.md, wit
 | Specs no game code cites | 4 of 66 |
 | Walkthrough steps with no status note saying they were traced | 14 of 45 |
 | Automated-player goals in the spec, none run end to end | 395 (Act 1: 99, Act 2: 56, Act 3: 153, Act 4: 87) |
-| Requests waiting for an answer | 22 |
+| Requests waiting for an answer | 23 |
 
 ## Requests waiting for an answer
 
@@ -37,6 +37,7 @@ Written by `scripts/missing.py` from the specs, the code and docs/STATUS.md, wit
 - R-0218: Flag 706 after the opening (SPEC-0058 Act 1 goal 1; SPEC-0045 909 Update and arrival step)
 - R-0219: Flag 249 at the Act 3 start (SPEC-0058 Act 3 goal 300; SPEC-0039 886 Init)
 - R-0220: Reaching 1098's hall characters (SPEC-0045 1098 triggers 11 to 15; SPEC-0058 Act 1 goals 70, 72 and 88)
+- R-0221: The Endless Staircase's pads and door node (SPEC-0028 Pack 1299 looping-door puzzle; SPEC-0006 Teleport plane list; SPEC-0046)
 
 ## Walkthrough steps with no status note (SPEC-0058)
 
@@ -108,31 +109,31 @@ Weak leads. Many handlers are built as fixed rules or tables with no arm of that
 ## Comments in the code naming something not built
 
 - hud_view.rs:894: Mote, and nothing for "No Mote" (the name beside it is not built: its format in the
-- play.rs:124: level-script runtime (not implemented), so they do nothing here.
-- play.rs:3029: immediate). The borrowed-slot case (cycle word 0, the 1023 chase) is not built.
-- play.rs:3607: (+0x2C). Not built: the shared model's draw and move (the chunk-29
-- play.rs:3726: PlayHeroAnim and the equipment display are not reproduced.
-- play.rs:4763: and the Act 3 dazed loop are not built. Nor the Darkest Faerie, whose absorb test
-- play.rs:4934: the positional sound, shake and rumble are not reproduced.
-- play.rs:6227: the hero within about 2.0 of an object's locator, then 0.3 s. Not built: their camera shake
-- play.rs:6862: hero is not busy, the full showcase (mode 4) and its pose task begin. Not built: the
-- play.rs:7642: of the world that is neither hidden nor dead. Not built: the grid entries of type 1 or 3 (the spec names no
-- play.rs:9752: not built), the reward, a 1 s wait, camera 1, a 1.5 s wait, the normal camera).
-- play.rs:10464: callback (a common enemy's attack mode 2) are not built.
-- play.rs:10486: object's header and the double turn of a rotated object are not built.
-- play.rs:10507: each with the hero radius. Not implemented: cell lists A and B as such, the
-- play.rs:11261: breakable; her forced aim point (aim mode) is not built here.
-- play.rs:11355: the current world. The class-9 controller is not built: the boss stays where it spawned.
-- play.rs:11819: reset targets are not built; Medium); the controller steps the yaw and pitch and the
-- play.rs:11977: companion-row branch is not built).
-- play.rs:12724: equipped slot routine, which is not implemented: their use is refused.
-- play.rs:14256: not built).
-- play.rs:14369: from the grip) reaches one counts a strike, and the third removes it. Not built: any
-- play.rs:14887: flash 222 at the hero; the hero's reaction state 0x36 is not built (the neck look is).
-- play.rs:15504: None while it is hidden. In a pack whose object calls are not reproduced yet, an object no
-- play.rs:15759: piece spawns and the timed effect are not built.
-- play.rs:16078: An object a type-40 group names (the group kinds whose setup is not built) is also
-- play.rs:16159: (SPEC-0034 5.4; R-0045); fire's two more instances at points 0 and 1 are not built.
+- play.rs:126: level-script runtime (not implemented), so they do nothing here.
+- play.rs:3043: immediate). The borrowed-slot case (cycle word 0, the 1023 chase) is not built.
+- play.rs:3621: (+0x2C). Not built: the shared model's draw and move (the chunk-29
+- play.rs:3740: PlayHeroAnim and the equipment display are not reproduced.
+- play.rs:4777: and the Act 3 dazed loop are not built. Nor the Darkest Faerie, whose absorb test
+- play.rs:4948: the positional sound, shake and rumble are not reproduced.
+- play.rs:6241: the hero within about 2.0 of an object's locator, then 0.3 s. Not built: their camera shake
+- play.rs:6876: hero is not busy, the full showcase (mode 4) and its pose task begin. Not built: the
+- play.rs:7656: of the world that is neither hidden nor dead. Not built: the grid entries of type 1 or 3 (the spec names no
+- play.rs:9766: not built), the reward, a 1 s wait, camera 1, a 1.5 s wait, the normal camera).
+- play.rs:10478: callback (a common enemy's attack mode 2) are not built.
+- play.rs:10500: object's header and the double turn of a rotated object are not built.
+- play.rs:10521: each with the hero radius. Not implemented: cell lists A and B as such, the
+- play.rs:11276: breakable; her forced aim point (aim mode) is not built here.
+- play.rs:11370: the current world. The class-9 controller is not built: the boss stays where it spawned.
+- play.rs:11834: reset targets are not built; Medium); the controller steps the yaw and pitch and the
+- play.rs:11992: companion-row branch is not built).
+- play.rs:12739: equipped slot routine, which is not implemented: their use is refused.
+- play.rs:14271: not built).
+- play.rs:14384: from the grip) reaches one counts a strike, and the third removes it. Not built: any
+- play.rs:14902: flash 222 at the hero; the hero's reaction state 0x36 is not built (the neck look is).
+- play.rs:15519: None while it is hidden. In a pack whose object calls are not reproduced yet, an object no
+- play.rs:15774: piece spawns and the timed effect are not built.
+- play.rs:16093: An object a type-40 group names (the group kinds whose setup is not built) is also
+- play.rs:16174: (SPEC-0034 5.4; R-0045); fire's two more instances at points 0 and 1 are not built.
 - charm.rs:243: have their own spawns above. Not built: the Bubble beam 162 (R-0206).
 - contact.rs:4: the preferred-face rule (Medium-Low in the spec) are not implemented.
 - enemy.rs:1393: word, +0xC4, +0xC8, state 14) are not built.
