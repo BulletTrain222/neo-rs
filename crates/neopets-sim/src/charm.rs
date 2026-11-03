@@ -180,6 +180,9 @@ pub fn weapon_effect(id: u16) -> Option<i32> {
 }
 const BEAM_LENGTH: f32 = 20.0;
 const BEAM_HALF: f32 = 1.0;
+/// Roberta's Bubble beam 162: 5.0 s, 5.0 long and centred on the query point (SPEC-0036 Bubble beam 162).
+const BUBBLE_TICKS: u32 = 300;
+const BUBBLE_LENGTH: f32 = 5.0;
 /// A Leaf entry never expires.
 const FOREVER: u32 = u32::MAX;
 
@@ -240,7 +243,7 @@ pub fn spawn_tor(id: u16, w: &Words, at: Vec3, hero: Vec3, angle: f32, scale: f3
 
 /// Roberta's full-release objects (SPEC-0036 Object pairing): Lava 161 (family A), the Leaf ring 164, the
 /// Shadow and Sun beams 169 and 171 (family C) and the Supernova orbit 173. The Rock shots and the Fog cloud
-/// have their own spawns above. Not built: the Bubble beam 162 (R-0206).
+/// have their own spawns above. The Bubble beam 162 has no visual here: its definitions are not named.
 pub fn spawn_roberta(id: u16, w: &Words, at: Vec3, hero: Vec3, angle: f32, scale: f32) -> Vec<Object> {
     let ticks = |s: f32| (mul(s, 60.0) as i64).max(0) as u32;
     let (shape, centre, life) = match id {
@@ -249,6 +252,7 @@ pub fn spawn_roberta(id: u16, w: &Words, at: Vec3, hero: Vec3, angle: f32, scale
             let [start, top, rate, life, height] = w.leaf;
             (Shape::Ring { start, top, rate, height }, at, ticks(life))
         }
+        162 => (Shape::Beam { half: BEAM_HALF, end: at }, hero, BUBBLE_TICKS),
         169 | 171 => (Shape::Beam { half: BEAM_HALF, end: at }, hero, ticks(w.beam_seconds)),
         173 => (Shape::Orbit { radius: w.r_orbit_radius, sphere: ORBIT_SPHERE }, hero, ticks(w.r_orbit_seconds)),
         _ => return Vec::new(),
@@ -345,6 +349,13 @@ impl Object {
         true
     }
 
+    /// A rock that has hit a character ends on the next landing test (no hit list; SPEC-0036 Rock, Hit).
+    pub fn rock_end(&mut self) {
+        if let Shape::Rock(r) = &mut self.shape {
+            r.distance = ROCK_RANGE + 1.0;
+        }
+    }
+
     /// The object's effects have started once it is past its delay.
     pub fn waiting(&self) -> bool {
         self.delay > 0
@@ -352,9 +363,12 @@ impl Object {
 
     /// The beam rebuilt each live tick: from the hero's query point along the normalized aim.
     pub fn aim(&mut self, from: Vec3, direction: Vec3) {
+        let bubble = self.id == 162;
         if let Shape::Beam { end, .. } = &mut self.shape {
-            *end = [from[0] + BEAM_LENGTH * direction[0], from[1], from[2] + BEAM_LENGTH * direction[2]];
-            self.centre = from;
+            let along = |k: f32| [from[0] + k * direction[0], from[1], from[2] + k * direction[2]];
+            let (start, stop) = if bubble { (-0.5 * BUBBLE_LENGTH, 0.5 * BUBBLE_LENGTH) } else { (0.0, BEAM_LENGTH) };
+            *end = along(stop);
+            self.centre = along(start);
         }
     }
 
@@ -455,11 +469,13 @@ impl Object {
 /// The horizontal beam against a body cylinder: the body axis within half + radius of the segment across, and
 /// the beam's height over the body's span by the same half (R-0206 for the vertical extent).
 pub fn beam_meets_body(a: Vec3, b: Vec3, half: f32, feet: Vec3, radius: f32, height: f32) -> bool {
+    // A round beam with flat ends against the body cylinder (SPEC-0036 Family C).
     let (dx, dz) = (b[0] - a[0], b[2] - a[2]);
-    let l = (dx * dx + dz * dz).max(1e-6);
-    let t = (((feet[0] - a[0]) * dx + (feet[2] - a[2]) * dz) / l).clamp(0.0, 1.0);
-    let (ex, ez) = (feet[0] - a[0] - t * dx, feet[2] - a[2] - t * dz);
-    (ex * ex + ez * ez).sqrt() <= half + radius && a[1] + half >= feet[1] && a[1] - half <= feet[1] + height
+    let l = (dx * dx + dz * dz).sqrt().max(1e-3);
+    let (ux, uz) = (dx / l, dz / l);
+    let (fx, fz) = (feet[0] - a[0], feet[2] - a[2]);
+    let (along, side) = (fx * ux + fz * uz, (fx * uz - fz * ux).abs());
+    (-radius..=l + radius).contains(&along) && side <= half + radius && a[1] + half >= feet[1] && a[1] - half <= feet[1] + height
 }
 
 /// A sphere against a vertical body cylinder (feet up to feet + height); contact counts.
@@ -495,6 +511,18 @@ pub fn damage(scale: f32, c: f32, defence: f32, p: f32) -> (i32, bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn beams_are_round_with_flat_ends() {
+        // SPEC-0036 family C and Bubble beam 162 test vectors: Q = (0, 1.5, 1.7), facing +Z.
+        let (q, up) = ([0.0, 1.5, 1.7], 2.0);
+        let end = [0.0, 1.5, 21.7];
+        assert!(beam_meets_body(q, end, 1.0, [0.0, 0.0, 15.0], 0.5, up));
+        assert!(!beam_meets_body(q, end, 1.0, [0.0, 2.6, 15.0], 0.5, up));
+        let (from, to) = ([0.0, 1.5, -0.8], [0.0, 1.5, 4.2]);
+        assert!(!beam_meets_body(from, to, 1.0, [0.0, 0.0, 5.0], 0.5, up));
+        assert!(beam_meets_body(from, to, 1.0, [0.0, 0.0, 4.0], 0.5, up));
+    }
+
     use super::*;
 
     const W: Words = Words {

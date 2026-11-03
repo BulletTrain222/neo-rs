@@ -1412,8 +1412,8 @@ pub struct Play {
     landing_dir: [f32; 3],
     /// Tor's plain weapon effect in sub-state 10.
     power_fx: Option<usize>,
-    /// The ended Fog cloud's point, in its pack, with the pulse countdown.
-    fog_after: Option<(u32, [f32; 3], u32)>,
+    /// The live Fog cloud's point, in its pack, with the pulse countdown and its stored scale.
+    fog_after: Option<(u32, [f32; 3], u32, f32)>,
     /// The Supernova's bolts in flight.
     bolts: Vec<Bolt>,
     /// Roberta's orbit angle, kept from one Supernova to the next.
@@ -7557,10 +7557,16 @@ impl Play {
         // Wind's centre: the ground probed from 8 above the hero.
         let ground = self.world.ground_at(hero[0], hero[2], hero[1] + 8.0);
         let facing = self.loco.facing;
+        // The beams' query point: attach point 0 of the posed body, advanced along its Z axis by the weapon reach.
+        let reach = self.weapon_reach();
+        let query = self.hero_attach(0).map_or_else(
+            || add(neopets_sim::roberta::anchor(hero, facing), scale(facing, reach)),
+            |a| add(a.t, scale(unit(a.cols[2]), reach)),
+        );
         let table = self.effect_table.clone();
         objects.retain_mut(|o| {
             let mut live = o.tick(hero, ground);
-            o.aim(neopets_sim::roberta::anchor(hero, facing), facing);
+            o.aim(query, facing);
             // The Rock shots' flight, and the Fog cloud's height toward trunc(ground + 3.5).
             if matches!(o.shape, neopets_sim::charm::Shape::Rock(_)) {
                 o.rock_move();
@@ -7577,10 +7583,10 @@ impl Play {
                 if let Some(g) = self.world.ground_at(o.centre[0], o.centre[2], o.centre[1] + 8.0) {
                     o.centre[1] += 0.1 * ((g + 3.5).trunc() - o.centre[1]);
                 }
-                if !live {
-                    let n = neopets_sim::charm::fog_countdown(&mut self.rng);
-                    self.fog_after = Some((pack, o.centre, n));
-                }
+                self.fog_after = live.then(|| {
+                    let n = self.fog_after.map_or_else(|| neopets_sim::charm::fog_countdown(&mut self.rng), |f| f.2);
+                    (pack, o.centre, n, o.scale)
+                });
             }
             if o.id == 161 && o.hero == 0 {
                 self.orbit_angle = o.angle;
@@ -7631,7 +7637,8 @@ impl Play {
                     o.timer -= 1;
                 } else if let Some(id) = self.shot_target_within(neopets_sim::charm::BOLT_REACH) {
                     o.timer = neopets_sim::charm::BOLT_GAP;
-                    self.post_bolt(o.centre, id);
+                    self.post_bolt(o.centre, id, 173, o.scale, &[1113, 1510], 983);
+                    self.sound.play(neopets_sim::sound::POWER, 1, neopets_sim::sound::Play { emitter: Some(o.centre), ..Default::default() });
                 }
             }
             let rock = matches!(o.shape, neopets_sim::charm::Shape::Rock(_));
@@ -7645,8 +7652,9 @@ impl Play {
                 let cf = if neopets_sim::mote::matches(neopets_sim::mote::element(Some(o.id)), t) { neopets_sim::mote::one_plus_percent(g) } else { 1.0 };
                 let (damage, _) = neopets_sim::charm::damage(o.scale, cf, r.defence, p);
                 hits.push((i, damage));
-                // A rock's first hit ends its walk.
+                // A rock's first hit ends its walk, and the rock.
                 if rock {
+                    o.rock_end();
                     break;
                 }
             }
@@ -7702,76 +7710,96 @@ impl Play {
         self.avoid = list;
     }
 
-    /// SPEC-0036 Aimed timed object, step 3: once the cycle has ended, a countdown; below 1, every eligible actor
-    /// within 10 units gets a Fog effect (definition 982, three copies) at its aim point, and with any the
-    /// countdown is drawn again. It deals no damage: the spec finds no damage step in that effect.
+    /// SPEC-0036 Aimed timed object, tick step 3: during the cloud's 6 s, with the countdown run out, every actor
+    /// within 10 units is sent a damaging bolt, and with any the countdown is drawn again; with none the scan
+    /// runs again next tick.
     fn fog_pulse_step(&mut self) {
-        let Some((pack, at, n)) = self.fog_after else { return };
+        let Some((pack, at, n, stored)) = self.fog_after else { return };
         if pack != self.world.pack {
             self.fog_after = None;
             return;
         }
         if n >= 1 {
-            self.fog_after = Some((pack, at, n - 1));
+            self.fog_after = Some((pack, at, n - 1, stored));
             return;
         }
         let reach = neopets_sim::charm::FOG_REACH;
-        let points: Vec<[f32; 3]> = self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0).filter(|c| {
+        let targets: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0).filter(|c| {
             let d = sub_v(c.position, at);
             d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < reach * reach
-        }).map(|c| c.stand_in_body().map(|b| b.center).or_else(|| Self::attach_point(c, 7)).unwrap_or(c.position)).collect();
-        if points.is_empty() {
+        }).map(|c| c.id).collect();
+        if targets.is_empty() {
             return;
         }
-        let table = self.effect_table.clone();
-        for p in points {
-            for _ in 0..3 {
-                let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, 982, p, neopets_sim::effect::IDENTITY));
-                self.effects.update(&table, h, None, &mut self.rng);
-                self.effects.release(h);
-            }
+        for id in targets {
+            self.post_bolt(at, id, 166, stored, &[982, 982, 982], 982);
         }
         let n = neopets_sim::charm::fog_countdown(&mut self.rng);
-        self.fog_after = Some((pack, at, n));
+        self.fog_after = Some((pack, at, n, stored));
     }
 
-    /// The bolt's post: from the orbit point toward the target's aim point, for trunc(d / 2 + 10) ticks, with
-    /// its definitions along the path and the bank's cue at the orbit point. Its damage on arrival is R-0208.
-    fn post_bolt(&mut self, from: [f32; 3], target: u64) {
+    /// The bolt's post (SPEC-0036 Attack spawn): from `from` toward the target's aim point at 2.0 a tick for
+    /// trunc(d / 2 + 10) ticks. The damage is fixed now, from the defence at this moment: the charm rule for the
+    /// object's stored scale times the power of Mote `id`.
+    fn post_bolt(&mut self, from: [f32; 3], target: u64, id: u16, stored: f32, flight: &[i32], arrival: i32) {
         let Some(c) = self.characters.iter().find(|c| c.id == target) else { return };
         let to = c.stand_in_body().map(|b| b.center).or_else(|| Self::attach_point(c, 7)).unwrap_or(c.position);
-        let d = sub_v(to, from);
-        let d = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        let left = (d / 2.0 + 10.0) as i32;
-        let table = self.effect_table.clone();
-        let fx = [1113, 1510, 983, 983, 983].map(|id| {
-            let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, id, from, neopets_sim::effect::IDENTITY));
-            self.effects.update(&table, h, None, &mut self.rng);
-            h
+        let damage = c.row.map_or(0, |r| {
+            let p = neopets_sim::mote::power_index(1, id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0);
+            let g = self.items.get(id).map_or(0.0, |i| i.stats[6] as f32);
+            let cf = if neopets_sim::mote::matches(neopets_sim::mote::element(Some(id)), r.target_type as i32) { neopets_sim::mote::one_plus_percent(g) } else { 1.0 };
+            neopets_sim::charm::damage(stored, cf, r.defence, p).0
         });
-        self.bolts.push(Bolt { fx, from, to, left, total: left.max(1) });
-        self.sound.play(neopets_sim::sound::POWER, 1, neopets_sim::sound::Play { emitter: Some(from), ..Default::default() });
+        let d = sub_v(to, from);
+        let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let vel = scale(d, 2.0 / length.max(1e-3));
+        let table = self.effect_table.clone();
+        let fx = flight
+            .iter()
+            .map(|&def| {
+                let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, def, from, neopets_sim::effect::IDENTITY));
+                self.effects.update(&table, h, None, &mut self.rng);
+                h
+            })
+            .collect();
+        self.bolts.push(Bolt { fx, at: from, from, vel, left: (length / 2.0 + 10.0) as i32, target, damage, arrival });
     }
 
-    /// A pooled bolt: D + 1 updates along its path.
+    /// A pooled bolt, one update: it moves, is released when its target has gone, tests its sphere of radius 1.0
+    /// against its one target's body (a hit: the damage and the arrival definition), ends on ground contact once
+    /// more than 2.0 from its start, and lives D + 1 updates.
     fn bolts_step(&mut self) {
         let table = self.effect_table.clone();
         let mut bolts = std::mem::take(&mut self.bolts);
         bolts.retain_mut(|b| {
-            if b.left < 0 {
+            b.at = add(b.at, b.vel);
+            for &h in &b.fx {
+                self.effects.set_position(h, b.at);
+            }
+            let found = self.characters.iter().position(|c| c.id == b.target);
+            let hit = found.is_some_and(|i| {
+                let c = &self.characters[i];
+                let base = c.stand_in_body().map_or(c.position, |s| [s.center[0], s.center[1] - 0.5 * s.length, s.center[2]]);
+                c.row.is_some_and(|r| neopets_sim::charm::sphere_meets_body(b.at, 1.0, base, r.radius, r.height))
+            });
+            if let (true, Some(i)) = (hit, found) {
+                self.character_take_hit(i, b.damage, b.at, "a bolt ");
+                let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, b.arrival, b.at, neopets_sim::effect::IDENTITY));
+                self.effects.update(&table, h, None, &mut self.rng);
+                self.effects.release(h);
+            }
+            let moved = sub_v(b.at, b.from);
+            let far = moved[0] * moved[0] + moved[1] * moved[1] + moved[2] * moved[2] > 4.0;
+            let grounded = far && self.world.ground_at(b.at[0], b.at[2], b.at[1] + 8.0).is_some_and(|g| b.at[1] < g - 1.0);
+            b.left -= 1;
+            let live = found.is_some() && !hit && !grounded && b.left >= 0;
+            if !live {
                 for &h in &b.fx {
                     self.effects.stop(&table, h);
                     self.effects.release(h);
                 }
-                return false;
             }
-            let t = 1.0 - b.left as f32 / b.total as f32;
-            let p = add(b.from, scale(sub_v(b.to, b.from), t));
-            for &h in &b.fx {
-                self.effects.set_position(h, p);
-            }
-            b.left -= 1;
-            true
+            live
         });
         self.bolts = bolts;
     }
@@ -17422,40 +17450,54 @@ impl Play {
         if self.stairs.as_ref().is_none_or(|s| s.0 != pack) {
             self.stairs = Some((pack, Puzzle::new(self.stair_types.clone()), false, p[1]));
         }
-        let reach = contact::HERO_RADIUS + 1.5;
-        let touched = if plane_touched(&a, p, reach) {
+        // SPEC-0028 Pad trigger: on the back side within 10, in the height band, along the width.
+        let coords = |t: &TeleportPlane, q: [f32; 3]| {
+            let e = sub_v(q, t.p);
+            (e[0] * t.f[0] + e[1] * t.f[1] + e[2] * t.f[2], e[0] * t.d[0] + e[1] * t.d[1] + e[2] * t.d[2])
+        };
+        let fires = |t: &TeleportPlane| {
+            let (f, d) = coords(t, p);
+            let (r, q) = (contact::HERO_RADIUS, p[1] - t.p[1]);
+            -10.0 < f && f <= 0.0 && -HERO_HEIGHT <= q && q < t.h && -r < d && d < t.w + r
+        };
+        let touched = if fires(&a) {
             Some((a, b, Pad::B))
-        } else if plane_touched(&b, p, reach) {
+        } else if fires(&b) {
             Some((b, a, Pad::A))
         } else {
             None
         };
+        // The landing: the mirrored point of the other pad's plane, with the height above the ground kept.
+        let landing = touched.map(|(from, to, _)| {
+            let (f, d) = coords(&from, p);
+            let x = to.p[0] + to.d[0] * (to.w - d) - to.f[0] * f;
+            let z = to.p[2] + to.d[2] * (to.w - d) - to.f[2] * f;
+            let above = p[1] - self.world.ground_at(p[0], p[2], p[1] + 8.0).unwrap_or(p[1]);
+            let y = self.world.ground_at(x, z, to.p[1] + 8.0).unwrap_or(to.p[1]) + above;
+            let h = self.loco.facing;
+            let along = h[0] * from.f[0] + h[1] * from.f[1] + h[2] * from.f[2];
+            let side = h[0] * from.d[0] + h[1] * from.d[1] + h[2] * from.d[2];
+            ([x, y, z], unit(std::array::from_fn(|k| -along * to.f[k] - side * to.d[k])))
+        });
         let ticks = self.ticks;
         let Some(state) = self.stairs.as_mut() else { return };
         state.1.accumulator += p[1] - state.3;
         state.3 = p[1];
         let mut warp = None;
-        match touched {
-            None => state.2 = false,
-            Some((from, to, dest)) if !state.2 => {
-                state.2 = true;
-                if state.1.teleports(dest) {
-                    // The pads' stored corners differ: the difference is taken between their centres.
-                    let centre = |t: &TeleportPlane| std::array::from_fn::<f32, 3, _>(|k| t.p[k] + 0.5 * t.w * t.d[k] + 0.5 * t.h * t.q[k]);
-                    let (c0, c1) = (centre(&from), centre(&to));
-                    let d = [c1[0] - c0[0], c1[1] - c0[1], c1[2] - c0[2]];
-                    state.1.cross(dest, d[1]);
-                    state.3 = p[1] + d[1];
-                    warp = Some([p[0] + d[0], p[1] + d[1], p[2] + d[2]]);
-                    println!("      stair pad to {dest:?}: state {} mask {:#x} on tick {ticks}", state.1.state, state.1.mask);
-                }
+        if let (Some((_, _, dest)), Some((at, f))) = (touched, landing) {
+            if state.1.teleports(dest) {
+                let dy = at[1] - p[1];
+                state.1.cross(dest, dy);
+                state.3 = at[1];
+                warp = Some((at, f, dy));
+                println!("      stair pad to {dest:?}: state {} mask {:#x} on tick {ticks}", state.1.state, state.1.mask);
             }
-            Some(_) => {}
         }
         let offset = state.1.accumulator;
-        if let Some(at) = warp {
-            let f = self.loco.facing;
-            self.arrive((at, f));
+        if let Some((at, f, dy)) = warp {
+            self.loco.teleport(at, f);
+            self.camera.eye[1] += dy;
+            self.camera.focus[1] += dy;
         }
         let dt = 1.0 / 60.0;
         for (k, rate) in SPIN.iter().enumerate() {
@@ -18574,11 +18616,14 @@ fn align_z_to(m: [f32; 16], point: [f32; 3], t: f32) -> [f32; 16] {
 /// A Supernova bolt in flight (SPEC-0036 Attack spawn).
 #[derive(Clone, Debug)]
 struct Bolt {
-    fx: [usize; 5],
+    fx: Vec<usize>,
+    at: [f32; 3],
     from: [f32; 3],
-    to: [f32; 3],
+    vel: [f32; 3],
     left: i32,
-    total: i32,
+    target: u64,
+    damage: i32,
+    arrival: i32,
 }
 
 /// A Mote object's volume (a segment of radius r) against a breakable's volume record: the pair tests of SPEC-0036
