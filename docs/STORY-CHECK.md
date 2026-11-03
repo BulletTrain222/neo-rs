@@ -16,7 +16,6 @@ The run reached the end of the list (exit 0).
 
 ## Failed goals
 
-- Act 1 goal 19 SQUARE (951): The chest (lock chest 0, key item 15): Square inside the sphere. Done: item 15 gone, item 98 held. Needed and not met: item15.
 - Act 1 goal 49 TALK (951 to 1148): Leave 951 (goal 21), walk the legs of goal 26 to town, then talk to Officer Kendrick (1148, town door 5). Done: 150 and 142 on, 3 and 8 on, item 0 gone, item 120 held.
 - Act 1 goal 63 SQUARE (1173 to 1171): Script trigger 0: cylinder base (28.9, -148.6, -12.1), radius 7.5, height 7.8; press Square at the prompt. Done: pack 1171 current (arrival locator 2 (-345.4, 2.1, -71.4)).
 - Act 1 goal 65 WALK (1171 to 1056):  Done: 1056 current; flag 24 on (set at 1056's start from 167).
@@ -24,6 +23,7 @@ The run reached the end of the list (exit 0).
 - Act 1 goal 95 WALK (956): Leave the top sphere (script trigger 16, centre (-702.1, 68.2, -824.9), radius 11.1) by more than 11.1 units,  Done: 212 on.
 - Act 2 goal 123 SWING (1327): Lesson 2: after the scene, shoot the target so that it reacts to a hit. Done: 231 on.
 - Act 2 goal 127 SWING (1327): Destroy the respawned target (entity 0). Roberta's health is refilled every tick during the lesson. Done: 234, 235 on; movie 19; pack 1300 current at locator 9 (0.0, 1538.2, -2.
+- Act 3 goal 306 DOOR (758 to 777): Pack 758 teleport 1, centre (2085.3, 81.3, 510.2), 21.4 wide (the library road). Done: pack 777 current (hero placed at start position 8).
 - Act 3 goal 317 WALK (753): Walk out of the sphere (more than 30 from its centre). Done: movie 37 plays on the next tick; 258 on.
 - Act 3 goal 328 FIGHT (735): The Plague Serpent (boss instance 10, AI 73; SPEC-0016). Its only damage route is one strike on the head while Done: 263, 75, 50 and 70 on (set by the victory scene).
 - Act 3 goal 332 DOOR (722 to 745): Door index 3 again. Done: pack 745 current.

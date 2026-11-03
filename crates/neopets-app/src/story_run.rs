@@ -116,12 +116,15 @@ pub struct StoryRun {
     phase: Phase,
     saved_flags: Vec<u16>,
     saved_items: Vec<(u16, u32)>,
+    /// Items the hero has held in this run: a goal's needed item that has been used up is not given back (a key
+    /// spent early on its chest).
+    ever: std::collections::HashSet<u16>,
 }
 
 impl StoryRun {
     pub fn from_file(path: &str) -> Option<Self> {
         let goals: Vec<Goal> = std::fs::read_to_string(path).ok()?.lines().filter_map(parse_goal).collect();
-        Some(Self { goals, at: 0, started: 0, phase: Phase::Begin, saved_flags: Vec::new(), saved_items: Vec::new() })
+        Some(Self { goals, at: 0, started: 0, phase: Phase::Begin, saved_flags: Vec::new(), saved_items: Vec::new(), ever: Default::default() })
     }
 
     fn finish_goal(&mut self, play: &mut Play, status: &str) {
@@ -151,6 +154,7 @@ impl StoryRun {
     /// warps to its own pack.
     pub fn step(&mut self, play: &mut Play) -> Order {
         let mut order = Order::default();
+        self.ever.extend(play.state.items.keys().copied());
         loop {
             let Some(g) = self.goals.get(self.at) else {
                 order.finished = true;
@@ -180,7 +184,7 @@ impl StoryRun {
                         play.state.set(f, false);
                     }
                     for i in its {
-                        if !play.state.has_item(i) {
+                        if !play.state.has_item(i) && !self.ever.contains(&i) {
                             play.state.give(i, 1);
                         }
                     }
@@ -330,6 +334,10 @@ pub struct GoalWalk {
     /// Frames since the hero was last put at this goal, while there is still somewhere to put him.
     placing: Option<u32>,
     started: u64,
+    /// The new game's flags and items (the starting kit), which every jump starts from.
+    base: Option<(std::collections::BTreeSet<u16>, std::collections::HashMap<u16, u32>)>,
+    /// Items the hero has held since the last jump: a needed item that has been used up is not given back.
+    ever: std::collections::HashSet<u16>,
     /// What the story checker's last run said of each goal.
     checked: std::collections::HashMap<u32, String>,
 }
@@ -340,7 +348,9 @@ const HAND_FILE: &str = "private/story/hand.tsv";
 impl GoalWalk {
     /// The walk from goal `first`, or the first goal after it in the file.
     pub fn open(first: u32) -> Self {
-        let goals: Vec<Goal> = std::fs::read_to_string(GOAL_FILE).unwrap_or_default().lines().filter_map(parse_goal).collect();
+        // NEOPETS_GOAL_FILE: another goal file (diagnostic, to picture a spot).
+        let file = std::env::var("NEOPETS_GOAL_FILE").unwrap_or_else(|_| GOAL_FILE.to_string());
+        let goals: Vec<Goal> = std::fs::read_to_string(file).unwrap_or_default().lines().filter_map(parse_goal).collect();
         if goals.is_empty() {
             eprintln!("--goal: no goals in {GOAL_FILE}; run python scripts/story_check.py . first");
         }
@@ -369,7 +379,7 @@ impl GoalWalk {
         self.goals.get(self.at).is_some_and(|g| !g.done.is_empty() && g.done.iter().all(|t| token_holds(t, &|f| p.state.flag(f), &|i| p.state.has_item(i), p.world.pack)))
     }
 
-    fn apply_needs(g: &Goal, p: &mut Play) {
+    fn apply_needs(g: &Goal, p: &mut Play, ever: &std::collections::HashSet<u16>) {
         for &f in &g.needs_on {
             p.state.set(f, true);
         }
@@ -377,7 +387,7 @@ impl GoalWalk {
             p.state.set(f, false);
         }
         for &i in &g.needs_items {
-            if !p.state.has_item(i) {
+            if !p.state.has_item(i) && !ever.contains(&i) {
                 p.state.give(i, 1);
             }
         }
@@ -402,19 +412,22 @@ impl GoalWalk {
 
     /// The story state of every goal before this one, from nothing, and a load of this goal's world.
     fn jump(&mut self, p: &mut Play, dev: &mut DevMenu) {
-        p.state.flags.clear();
-        p.state.items.clear();
+        let (flags, items) = self.base.get_or_insert_with(|| (p.state.flags.clone(), p.state.items.clone())).clone();
+        p.state.flags = flags;
+        p.state.items = items;
         p.state.set(707, true);
+        self.ever.clear();
         for g in &self.goals[..self.at] {
-            Self::apply_needs(g, p);
+            Self::apply_needs(g, p, &self.ever);
             Self::apply_done(g, p);
+            self.ever.extend(p.state.items.keys().copied());
         }
         self.enter(p, dev, true);
     }
 
     fn enter(&mut self, p: &mut Play, dev: &mut DevMenu, reload: bool) {
         let g = &self.goals[self.at];
-        Self::apply_needs(g, p);
+        Self::apply_needs(g, p, &self.ever);
         // Shop goals are about the buying, not the saving up.
         p.state.neopoints = p.state.neopoints.max(5000);
         if let Some(pack) = g.pack.filter(|&k| reload || k != p.world.pack) {
@@ -438,6 +451,10 @@ impl GoalWalk {
             let inside = g.trigger.and_then(|i| p.world.volume_points().into_iter().find(|v| v.0 == i)).map(|v| v.1);
             if let Some(&(x, z, y)) = g.spots.first() {
                 p.place_at(x, z, y.map_or(1.0e4, |y| y + 8.0));
+                // NEOPETS_SHOT_LOOK="x,z": the hero turned toward that point (diagnostic).
+                if let Some((a, b)) = std::env::var("NEOPETS_SHOT_LOOK").ok().as_deref().and_then(|v| v.split_once(',')).and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))) {
+                    p.face_point(a, b);
+                }
             } else if let Some(v) = inside {
                 p.place_at(v[0] as f32, v[2] as f32, v[1] as f32 + 8.0);
             }
@@ -483,6 +500,7 @@ pub fn goal_walk_step(keys: Res<ButtonInput<KeyCode>>, mut walk: ResMut<GoalWalk
     } else if keys.just_pressed(KeyCode::F11) {
         walk.jump(p, &mut dev);
     }
+    walk.ever.extend(p.state.items.keys().copied());
     walk.place(p, &dev);
 }
 

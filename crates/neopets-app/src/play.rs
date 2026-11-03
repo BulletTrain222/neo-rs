@@ -5563,6 +5563,11 @@ impl Play {
 
     /// Diagnostic: what pushes the hero where it stands: the push boxes and spheres that move a
     /// point 1.0 around it, and the frame records whose wall push does.
+    /// Diagnostic: the characters on a scripted walk: name, the clip playing, and whether the walk's clip was found.
+    pub fn walkers(&self) -> Vec<(String, u32, f32, bool)> {
+        self.characters.iter().filter(|c| c.script_walk.is_some()).map(|c| (c.name.clone(), c.anim.clip_state().action, c.anim.clip_state().progress, c.townsfolk.is_some())).collect()
+    }
+
     /// Diagnostic: objects in a disc state of 3 or 4, untouched by a script, that are shown at rest anyway.
     pub fn undrawn_but_shown(&self) -> Vec<(usize, u8, bool)> {
         let pack = self.world.pack;
@@ -6657,6 +6662,13 @@ impl Play {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The drawn weapon's base point and long axis: its frame's third axis, in the hand or stowed.
+    fn weapon_line(&self) -> Option<([f32; 3], [f32; 3])> {
+        let held = self.hero_items().into_iter().find(|(res, _, _)| matches!(res, 544..=559)).map(|(_, a, _)| a);
+        let a = held.or_else(|| self.hero_attach(0))?;
+        Some((a.t, unit(a.cols[2])))
     }
 
     pub fn hero_items(&self) -> Vec<(u32, neopets_data::anim::Affine, HeroItemScale)> {
@@ -11242,13 +11254,19 @@ impl Play {
                     if c.townsfolk.is_some() {
                         walk_toward(c, t, speed, hero, world);
                     } else {
+                        // SPEC-0056 Walk speed and movement type: its speed is the root of its own walk clip
+                        // (a clip with none moves at the walk speed, so a walk always ends).
+                        let root = c.root_step[0].hypot(c.root_step[2]);
                         c.facing = neopets_sim::hero::steer(c.facing, [dx, 0.0, dz], 0.3);
-                        let s = speed / d;
+                        let s = (if root > 1e-4 { root } else { speed }).min(d) / d;
                         let (x, z) = (c.position[0] + dx * s, c.position[2] + dz * s);
                         let y = if c.pack == world.pack { world.ground_at(x, z, c.position[1] + 2.5) } else { None };
                         c.position = [x, y.unwrap_or(c.position[1]), z];
                     }
-                    if c.anim.clip_state().action != clip {
+                    // Townsfolk by movement class; any other character plays id 2 (the enemy-style walk) in
+                    // class 0, and in the other classes keeps the clip it already plays.
+                    let clip = if c.townsfolk.is_some() { Some(clip) } else { (c.move_type == 0).then_some(2) };
+                    if let Some(clip) = clip.filter(|&k| c.anim.clip_state().action != k) {
                         c.anim.play(clip);
                     }
                 } else if let Some(g) = face.filter(|g| c.facing[0] * g[0] + c.facing[2] * g[2] < 0.99) {
@@ -15684,8 +15702,11 @@ impl Play {
         let z0 = self.hero.bones().attach.first().and_then(|&(bone, angles, offset)| Some(unit(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)).cols[2]))).unwrap_or(self.loco.facing);
         let eye = self.camera.eye;
         let toward = |p: [f32; 3]| add(p, scale(unit(sub_v(eye, p)), 0.2));
-        let n = toward(add(pos, scale(z0, 0.48)));
-        let t = toward(add(pos, scale(z0, self.weapon_reach())));
+        // The base point and axis of the held weapon: attach point 0 (SPEC-0036 Attack-id spawn dispatch), or its stowed
+        // frame on Tor's back while sheathed, which the driver's words leave open (R-0227).
+        let (base, z0) = self.weapon_line().unwrap_or((pos, z0));
+        let n = toward(add(base, scale(z0, 0.48)));
+        let t = toward(add(base, scale(z0, self.weapon_reach())));
         let fw = unit([self.loco.facing[0], 0.0, self.loco.facing[2]]);
         let frame = [[fw[2], 0.0, -fw[0]], [0.0, 1.0, 0.0], fw];
         let fx = &mut self.attack_fx;

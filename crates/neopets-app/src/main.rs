@@ -3155,6 +3155,18 @@ fn item_model(
     pack: u32,
 ) -> Result<Option<neopets_data::model::ModelData>, String> {
     let m = match id {
+        // SPEC-0021 Item model registry: on disc each of resources 544 to 564 registers under its own item id.
+        98..=105 | 111..=118 | 106..=110 => {
+            let resource = match id {
+                98..=105 => 544 + id - 98,
+                111..=118 => 552 + id - 111,
+                _ => 560 + id - 106,
+            };
+            match archive_view::model(disc, index, resource)? {
+                Some(m) => m,
+                None => return Ok(None),
+            }
+        }
         98..=190 => {
             if boot.is_none() {
                 let b = index.read(disc, 7)?;
@@ -5378,6 +5390,24 @@ fn play_trace(
             let f: Vec<&str> = v.split(':').collect();
             if f.len() == 3 && f[0].parse::<u64>().ok() == Some(play.ticks) {
                 play.diag_ladder(f[1].parse().unwrap_or(0), f[2].parse().unwrap_or(0.0));
+            }
+        }
+        // NEOPETS_TRACE_WALKERS=1: the characters on a scripted walk with their clips, every 15 ticks (diagnostic).
+        if std::env::var_os("NEOPETS_TRACE_WALKERS").is_some() && play.ticks % 15 == 0 && !play.walkers().is_empty() {
+            println!("      WALKERS tick {}: {:?}", play.ticks, play.walkers());
+        }
+        // NEOPETS_TRACE_SPRITES=tick: the live sprite particles of the effects on that tick (diagnostic).
+        if std::env::var("NEOPETS_TRACE_SPRITES").ok().and_then(|v| v.parse::<u64>().ok()) == Some(play.ticks) {
+            for (p, group) in play.effects.sprites(&play.effect_table).take(24) {
+                println!("      SPRITE group {group} at {:?} spin {:.3} half {:?} node {}", p.position, p.spin, p.half, p.node);
+            }
+        }
+        // NEOPETS_TRACE_HELD=id: each change in how many of that item the hero holds (diagnostic).
+        if let Some(id) = std::env::var("NEOPETS_TRACE_HELD").ok().and_then(|v| v.trim().parse::<u16>().ok()) {
+            static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let now = play.state.items.get(&id).copied().unwrap_or(0);
+            if LAST.swap(now, std::sync::atomic::Ordering::Relaxed) != now {
+                println!("      HELD {id}: {now} on tick {} in {}", play.ticks, play.world.pack);
             }
         }
         // NEOPETS_TRACE_PLACE="tick:x,z[,probe];...": the hero placed there on that tick
