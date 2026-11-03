@@ -34,6 +34,10 @@ sources = {f.replace('\\', '/'): read(f).split('#[cfg(test)]')[0] for f in glob.
 code = '\n'.join(sources.values())
 status = read('docs/STATUS.md')
 code_lower = code.lower()
+cite_lines = {}
+for l in code_lower.splitlines():
+    for n in re.findall(r'spec-(\d{4})', l):
+        cite_lines.setdefault(n, []).append(l)
 addresses = {int(h.replace('_', ''), 16) for h in re.findall(r'0x([0-9A-Fa-f_]{5,10})', code)}
 tally_rules = Counter()
 counts = []
@@ -60,14 +64,14 @@ class Tally:
 STOP = {'Summary', 'Layout', 'Behavior', 'Behaviour', 'Open questions', 'Edge cases and error handling', 'Test vectors', 'Where it lives on the disc'}
 
 
-def named_in_code(h):
-    """The section's own title, without its numbering and confidence note, appears in the game code."""
+def named_in_code(h, name):
+    """A comment naming this spec also names the section's title, without its numbering and confidence note."""
     key = re.sub(r'\s*\(.*$', '', h).lower()
     key = re.sub(r'^[a-z]?\d+[a-z]?(\.\d+)*\.?\s*', '', key)
     beh = re.match(r'(behaviou?r \d+[a-z]?)', key)
     if beh:
         key = beh.group(1)
-    return len(key) >= 8 and key in code_lower
+    return len(key) >= 8 and any(key in l for l in cite_lines.get(name, ()))
 
 
 def address_rule(text):
@@ -101,7 +105,7 @@ for f in sorted(glob.glob('specs/SPEC-*.md')):
             skipping = is_level and bool(re.match(r'\d{3,4}\b', section))
             if skipping:
                 continue
-            tally.add(f'SPEC-{name} {clean(h.group(2), 120)}', 'title named in code' if section not in STOP and named_in_code(section) else '', indent=depth)
+            tally.add(f'SPEC-{name} {clean(h.group(2), 120)}', 'title named in code' if section not in STOP and named_in_code(section, name) else '', indent=depth)
             continue
         if skipping or line.startswith('- Answers:') or line.startswith('- Status:') or line.startswith('- Disc build:') or line.startswith('- Confidence:'):
             continue
@@ -244,7 +248,7 @@ total = sum(c.total for c in counts)
 auto = sum(c.auto for c in counts)
 by_hand = sum(c.hand for c in counts)
 head = ['# Spec checklist', '', 'Everything the specs describe, written by `scripts/spec_list.py`. **An automatic tick means a rule found evidence, not that anyone played it.** The tag on each ticked line names the rule. An unticked line may still be built: the rules are strict and only see plain text, so most built behaviour has no automatic tick. To confirm something yourself, change `[ ]` to `[x]`; a rerun keeps it while the line\'s text is unchanged.', '', f'**{total} items: {auto} ticked by a rule, {by_hand} ticked by hand, {total - auto - by_hand} open.**', '', '| Rule | Ticks | What it found |', '| --- | --- | --- |']
-why = {'cited in code': 'The game code names this spec', 'title named in code': 'The section\'s title appears in the game code', 'address in code': 'Every boot-data address on the line is read by the code', 'module does nothing': 'The spec says the module does nothing, and it has no code', 'code found': 'The level module has code', 'numbers match the pack code': 'At least two flag, line, movie, item, locator or camera numbers on the line, all found in that pack\'s code', 'a status note traces it': 'A status note says the step was traced', 'story check passed by teleport': 'The goal\'s Done condition held in the story check', 'answered': 'A spec answered the request'}
+why = {'cited in code': 'The game code names this spec', 'title named in code': 'A code comment naming this spec also names the section\'s title', 'address in code': 'Every boot-data address on the line is read by the code', 'module does nothing': 'The spec says the module does nothing, and it has no code', 'code found': 'The level module has code', 'numbers match the pack code': 'At least two flag, line, movie, item, locator or camera numbers on the line, all found in that pack\'s code', 'a status note traces it': 'A status note says the step was traced', 'story check passed by teleport': 'The goal\'s Done condition held in the story check', 'answered': 'A spec answered the request'}
 for r, n in tally_rules.most_common():
     head.append(f'| {r} | {n} | {why[r]} |')
 head += ['', '| Part | Items | By a rule | By hand |', '| --- | --- | --- | --- |']

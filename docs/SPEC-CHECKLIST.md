@@ -2,13 +2,13 @@
 
 Everything the specs describe, written by `scripts/spec_list.py`. **An automatic tick means a rule found evidence, not that anyone played it.** The tag on each ticked line names the rule. An unticked line may still be built: the rules are strict and only see plain text, so most built behaviour has no automatic tick. To confirm something yourself, change `[ ]` to `[x]`; a rerun keeps it while the line's text is unchanged.
 
-**42404 items: 2745 ticked by a rule, 0 ticked by hand, 39659 open.**
+**42404 items: 2347 ticked by a rule, 0 ticked by hand, 40057 open.**
 
 | Rule | Ticks | What it found |
 | --- | --- | --- |
 | numbers match the pack code | 827 | At least two flag, line, movie, item, locator or camera numbers on the line, all found in that pack's code |
-| title named in code | 709 | The section's title appears in the game code |
 | address in code | 558 | Every boot-data address on the line is read by the code |
+| title named in code | 311 | A code comment naming this spec also names the section's title |
 | answered | 198 | A spec answered the request |
 | story check passed by teleport | 197 | The goal's Done condition held in the story check |
 | code found | 156 | The level module has code |
@@ -19,70 +19,70 @@ Everything the specs describe, written by `scripts/spec_list.py`. **An automatic
 | Part | Items | By a rule | By hand |
 | --- | --- | --- | --- |
 | SPEC-0001 GAMEFILE.DAT archive index | 53 | 2 | 0 |
-| SPEC-0002 Identifying resource types in GAMEFILE.DAT | 174 | 3 | 0 |
-| SPEC-0003 Texture chunks, palettes, and material texture state | 350 | 9 | 0 |
-| SPEC-0004 Static models and meshes | 294 | 9 | 0 |
-| SPEC-0005 Skeletons, animation and skinning | 674 | 16 | 0 |
+| SPEC-0002 Identifying resource types in GAMEFILE.DAT | 174 | 1 | 0 |
+| SPEC-0003 Texture chunks, palettes, and material texture state | 350 | 5 | 0 |
+| SPEC-0004 Static models and meshes | 294 | 6 | 0 |
+| SPEC-0005 Skeletons, animation and skinning | 674 | 13 | 0 |
 | SPEC-0006 Areas, world packs and what they place | 667 | 14 | 0 |
 | SPEC-0007 Game-logic timing | 167 | 1 | 0 |
-| SPEC-0008 Platform services, movie files and library behavior | 606 | 28 | 0 |
-| SPEC-0009 Audio clips, music streams and music selection | 415 | 15 | 0 |
-| SPEC-0010 Boss behavior: Cloud Beast | 403 | 49 | 0 |
-| SPEC-0011 Boss behavior: the Faerie Sisters | 372 | 25 | 0 |
-| SPEC-0012 Boss behavior: Black Knight | 664 | 54 | 0 |
-| SPEC-0013 Boss behavior: Gelert Assassin | 628 | 50 | 0 |
-| SPEC-0014 Boss behavior: Ixi Chief | 496 | 42 | 0 |
-| SPEC-0015 Boss behavior: Juppie boss | 447 | 30 | 0 |
-| SPEC-0016 Boss behavior: Plague Serpent | 485 | 27 | 0 |
-| SPEC-0017 Encounter behavior: Spyder Nest | 265 | 2 | 0 |
-| SPEC-0018 Ground height, navigation meshes and object collision queries | 448 | 19 | 0 |
-| SPEC-0019 Boss behavior: Werelupe King | 653 | 34 | 0 |
-| SPEC-0020 Boss behavior: Gnarfas | 477 | 50 | 0 |
-| SPEC-0021 Items, pickups, drops and money | 1092 | 46 | 0 |
-| SPEC-0022 Dialogue, text and progress flags | 801 | 33 | 0 |
-| SPEC-0023 In-game HUD | 662 | 48 | 0 |
-| SPEC-0024 Game design tables (resource 533) | 339 | 7 | 0 |
-| SPEC-0025 Save game | 703 | 22 | 0 |
-| SPEC-0026 Game flow, attract mode and movies | 681 | 11 | 0 |
-| SPEC-0027 Camera and projection | 544 | 27 | 0 |
-| SPEC-0028 World lights, effect spawns, object records and collision primitives | 617 | 4 | 0 |
-| SPEC-0029 Enemy and creature behavior framework | 1613 | 69 | 0 |
-| SPEC-0030 Level script modules and host API | 1075 | 4 | 0 |
-| SPEC-0031 Sound banks and sound blocks | 579 | 18 | 0 |
+| SPEC-0008 Platform services, movie files and library behavior | 606 | 21 | 0 |
+| SPEC-0009 Audio clips, music streams and music selection | 415 | 11 | 0 |
+| SPEC-0010 Boss behavior: Cloud Beast | 403 | 38 | 0 |
+| SPEC-0011 Boss behavior: the Faerie Sisters | 372 | 23 | 0 |
+| SPEC-0012 Boss behavior: Black Knight | 664 | 43 | 0 |
+| SPEC-0013 Boss behavior: Gelert Assassin | 628 | 41 | 0 |
+| SPEC-0014 Boss behavior: Ixi Chief | 496 | 37 | 0 |
+| SPEC-0015 Boss behavior: Juppie boss | 447 | 23 | 0 |
+| SPEC-0016 Boss behavior: Plague Serpent | 485 | 23 | 0 |
+| SPEC-0017 Encounter behavior: Spyder Nest | 265 | 0 | 0 |
+| SPEC-0018 Ground height, navigation meshes and object collision queries | 448 | 17 | 0 |
+| SPEC-0019 Boss behavior: Werelupe King | 653 | 22 | 0 |
+| SPEC-0020 Boss behavior: Gnarfas | 477 | 33 | 0 |
+| SPEC-0021 Items, pickups, drops and money | 1092 | 41 | 0 |
+| SPEC-0022 Dialogue, text and progress flags | 801 | 29 | 0 |
+| SPEC-0023 In-game HUD | 662 | 41 | 0 |
+| SPEC-0024 Game design tables (resource 533) | 339 | 5 | 0 |
+| SPEC-0025 Save game | 703 | 16 | 0 |
+| SPEC-0026 Game flow, attract mode and movies | 681 | 7 | 0 |
+| SPEC-0027 Camera and projection | 544 | 19 | 0 |
+| SPEC-0028 World lights, effect spawns, object records and collision primitives | 617 | 3 | 0 |
+| SPEC-0029 Enemy and creature behavior framework | 1613 | 66 | 0 |
+| SPEC-0030 Level script modules and host API | 1075 | 3 | 0 |
+| SPEC-0031 Sound banks and sound blocks | 579 | 11 | 0 |
 | SPEC-0032 Level scripts (pilot set) | 55 | 1 | 0 |
-| SPEC-0033 Controller input, hero locomotion and hero height follow | 1615 | 52 | 0 |
-| SPEC-0034 Visual effects and particles | 998 | 35 | 0 |
-| SPEC-0035 Front-end menus and UI database | 1358 | 14 | 0 |
-| SPEC-0036 Hero combat, health, magic and status effects | 1433 | 69 | 0 |
+| SPEC-0033 Controller input, hero locomotion and hero height follow | 1615 | 47 | 0 |
+| SPEC-0034 Visual effects and particles | 998 | 29 | 0 |
+| SPEC-0035 Front-end menus and UI database | 1358 | 9 | 0 |
+| SPEC-0036 Hero combat, health, magic and status effects | 1433 | 63 | 0 |
 | SPEC-0037 Level scripts (set A) | 101 | 1 | 0 |
-| SPEC-0038 Common enemy behavior (behavior class 17) | 1000 | 12 | 0 |
+| SPEC-0038 Common enemy behavior (behavior class 17) | 1000 | 4 | 0 |
 | SPEC-0039 Level scripts B | 98 | 1 | 0 |
-| SPEC-0040 Character runtime (shared by heroes, NPCs and enemies) | 1272 | 24 | 0 |
+| SPEC-0040 Character runtime (shared by heroes, NPCs and enemies) | 1272 | 20 | 0 |
 | SPEC-0041 Level scripts (25 modules) | 78 | 1 | 0 |
 | SPEC-0042 Level scripts D | 89 | 1 | 0 |
 | SPEC-0043 Level scripts E | 165 | 2 | 0 |
 | SPEC-0044 Level scripts (12 modules) | 114 | 1 | 0 |
 | SPEC-0045 Level scripts | 134 | 1 | 0 |
-| SPEC-0046 Rendering and draw order | 749 | 28 | 0 |
-| SPEC-0047 Petpets (companion creatures) | 447 | 18 | 0 |
-| SPEC-0048 World interactables: breakables, lock chests, switch groups and movable-block control | 516 | 21 | 0 |
-| SPEC-0049 Story progression and game-state flags | 314 | 5 | 0 |
-| SPEC-0050 Shops and economy | 253 | 7 | 0 |
-| SPEC-0051 Map page (area pictures, area selection, icons, cursor, pulses, hero marker, return to... | 301 | 8 | 0 |
-| SPEC-0052 In-engine cutscenes | 274 | 6 | 0 |
-| SPEC-0053 Hero switching and the party state | 268 | 6 | 0 |
-| SPEC-0054 Boss behavior: the Darkest Faerie | 598 | 30 | 0 |
-| SPEC-0055 Hero death, revive, respawn and falls | 386 | 4 | 0 |
-| SPEC-0056 NPC AI modes, walk-to-point routines and proximity items | 690 | 16 | 0 |
-| SPEC-0057 Environmental hazards and damage zones | 177 | 3 | 0 |
-| SPEC-0058 Main story progression | 640 | 4 | 0 |
-| SPEC-0059 Minigames and side activities | 213 | 5 | 0 |
-| SPEC-0060 Foliage patches (type 16) | 300 | 6 | 0 |
-| SPEC-0061 What the rewrite does not need (code and data with no effect in shipped play) | 176 | 1 | 0 |
+| SPEC-0046 Rendering and draw order | 749 | 25 | 0 |
+| SPEC-0047 Petpets (companion creatures) | 447 | 14 | 0 |
+| SPEC-0048 World interactables: breakables, lock chests, switch groups and movable-block control | 516 | 20 | 0 |
+| SPEC-0049 Story progression and game-state flags | 314 | 3 | 0 |
+| SPEC-0050 Shops and economy | 253 | 5 | 0 |
+| SPEC-0051 Map page (area pictures, area selection, icons, cursor, pulses, hero marker, return to... | 301 | 7 | 0 |
+| SPEC-0052 In-engine cutscenes | 274 | 5 | 0 |
+| SPEC-0053 Hero switching and the party state | 268 | 3 | 0 |
+| SPEC-0054 Boss behavior: the Darkest Faerie | 598 | 20 | 0 |
+| SPEC-0055 Hero death, revive, respawn and falls | 386 | 3 | 0 |
+| SPEC-0056 NPC AI modes, walk-to-point routines and proximity items | 690 | 14 | 0 |
+| SPEC-0057 Environmental hazards and damage zones | 177 | 1 | 0 |
+| SPEC-0058 Main story progression | 640 | 2 | 0 |
+| SPEC-0059 Minigames and side activities | 213 | 4 | 0 |
+| SPEC-0060 Foliage patches (type 16) | 300 | 2 | 0 |
+| SPEC-0061 What the rewrite does not need (code and data with no effect in shipped play) | 176 | 0 | 0 |
 | SPEC-0062 Boss encounter progression atlas | 142 | 0 | 0 |
-| SPEC-0063 Arena fighters | 729 | 10 | 0 |
-| SPEC-0064 Common enemy build guides | 2405 | 88 | 0 |
-| SPEC-0065 Common enemy build guides, part 2 | 2365 | 77 | 0 |
+| SPEC-0063 Arena fighters | 729 | 1 | 0 |
+| SPEC-0064 Common enemy build guides | 2405 | 3 | 0 |
+| SPEC-0065 Common enemy build guides, part 2 | 2365 | 0 | 0 |
 | SPEC-0066 Unused, cut and developer worlds (the 17 world packs a new game never enters) | 162 | 3 | 0 |
 | Level modules and their lines | 3590 | 990 | 0 |
 | Walkthrough steps | 45 | 31 | 0 |
@@ -177,7 +177,7 @@ Cited 5 times in the game code.
   - [ ] SPEC-0002, Where it lives on the disc: Headerless species/monster table little-endian row-type count 112 at +0x00, followed by 112 first-row indexes 1 530 (row schema:...
   - [ ] SPEC-0002, Where it lives on the disc: Headerless villager/companion table same count-and-index header; 0x60-byte rows 1 531 (row schema: SPEC-0024)
 - [ ] SPEC-0002 Layout
-  - [x] SPEC-0002 Chunk file ("IDM" container), Confidence: High {auto: title named in code}
+  - [ ] SPEC-0002 Chunk file ("IDM" container), Confidence: High
     - [ ] SPEC-0002, Chunk file ("IDM" container), Confidence: High: 0 4 bytes — Tag. In the first chunk, bytes 0–2 are always IDM and byte 3 is a format byte (1, 4, or 0xCD; se...
     - [ ] SPEC-0002, Chunk file ("IDM" container), Confidence: High: 4 2 u16 little Chunk type (see below). 0 marks the end of the chain.
     - [ ] SPEC-0002, Chunk file ("IDM" container), Confidence: High: 6 2 s16 little Extra header bytes E , a multiple of 4, seen 0…124
@@ -235,7 +235,7 @@ Cited 5 times in the game code.
     - [ ] SPEC-0002, VAG ( VAGp ), Confidence: High for numbers 256–274: +0x0C ADPCM data size in bytes
     - [ ] SPEC-0002, VAG ( VAGp ), Confidence: High for numbers 256–274: +0x10 sample rate (22,050 Hz in all 21)
     - [ ] SPEC-0002, VAG ( VAGp ), Confidence: High for numbers 256–274: +0x20 a 16-byte NUL-terminated name
-  - [x] SPEC-0002 Stereo stream ( KPV ), Confidence: Medium {auto: title named in code}
+  - [ ] SPEC-0002 Stereo stream ( KPV ), Confidence: Medium
     - [ ] SPEC-0002, Stereo stream ( KPV ), Confidence: Medium: +0x04 a size S (bytes per channel, probably)
     - [ ] SPEC-0002, Stereo stream ( KPV ), Confidence: Medium: +0x08 2048 (interleave, probably)
     - [ ] SPEC-0002, Stereo stream ( KPV ), Confidence: Medium: +0x0C 0xA000
@@ -345,23 +345,23 @@ Cited 31 times in the game code.
   - [ ] SPEC-0003 Texture chunk header bytes
     - [ ] SPEC-0003, Texture chunk header bytes: Chunk header bytes 12–15 are 01 01 00 00 in all 686 texture chunks. Nothing reads them; ignore them.
     - [ ] SPEC-0003, Texture chunk header bytes: The extra-header area (E bytes) is all zero except in the texture packs (577–677), where E = 112 and the bytes hold leftover bui...
-  - [x] SPEC-0003 Texture payload header (16 bytes) {auto: title named in code}
+  - [ ] SPEC-0003 Texture payload header (16 bytes)
     - [ ] SPEC-0003, Texture payload header (16 bytes): 0 4 u32 Offset of the texture table, from payload start
     - [ ] SPEC-0003, Texture payload header (16 bytes): 4 4 u32 Offset of the pixel block, from payload start
     - [ ] SPEC-0003, Texture payload header (16 bytes): 8 4 u32 Offset of upload packet A, from payload start
     - [ ] SPEC-0003, Texture payload header (16 bytes): 12 4 u32 Offset of upload packet B (always A + 0x100)
-  - [x] SPEC-0003 Texture table {auto: title named in code}
+  - [ ] SPEC-0003 Texture table
     - [ ] SPEC-0003, Texture table: 0x00 4 u32 Upload segment count n 1 in all 686
     - [ ] SPEC-0003, Texture table: 0x04 4 u32 Additional 48-byte record count included before the pixel data in the packet-builder descriptor; value 1 on all 686 tables 1 in al...
     - [ ] SPEC-0003, Texture table: 0x08 4 u32 Sub-texture entry count m 2 … 291
     - [ ] SPEC-0003, Texture table: 0x0C 4 — Unused
     - [ ] SPEC-0003, Texture table: 0x10 0x30 × n Upload segments, 48 bytes each
     - [ ] SPEC-0003, Texture table: 0x40 0x30 × m Sub-texture entries, 48 bytes each
-  - [x] SPEC-0003 Upload segment (48 bytes) {auto: title named in code}
+  - [ ] SPEC-0003 Upload segment (48 bytes)
     - [ ] SPEC-0003, Upload segment (48 bytes): 0 4 Bits 0–13: destination base block address (the segment TBP). Bits 16–21: buffer width in units of 64 pixels (= segment width...
     - [ ] SPEC-0003, Upload segment (48 bytes): 4 4 Bits 0–11: width in pixels. Bits 12–23: height in pixels. Bits 24–31: GS pixel format (PSM) of the upload.
     - [ ] SPEC-0003, Upload segment (48 bytes): 8 40 Unused (0)
-  - [x] SPEC-0003 Sub-texture entry (48 bytes) {auto: title named in code}
+  - [ ] SPEC-0003 Sub-texture entry (48 bytes)
     - [ ] SPEC-0003, Sub-texture entry (48 bytes): 0x00 2 u16 Bits 0–13: base block address (TBP) in GS memory, in the same address space as the segment TBP (relative to the chu...
     - [ ] SPEC-0003, Sub-texture entry (48 bytes): 0x02 2 u16 Buffer width (TBW) in units of 64 pixels
     - [ ] SPEC-0003, Sub-texture entry (48 bytes): 0x04 2 u16 Bits 0–11: real width in pixels. Bits 12–15: real height modulo 16.
@@ -700,7 +700,7 @@ Cited 32 times in the game code.
   - [ ] SPEC-0004, Where it lives on the disc: Instanced meshes (world packs) type 20, each record holds an inline node tree object space + per-instance matrix 23 packs, 1,265...
   - [ ] SPEC-0004, Where it lives on the disc: Standalone type-13 chunks (resources 544–575, the held-item display models, and resource 7) type 13, one node tree per chunk (se...
 - [ ] SPEC-0004 Layout
-  - [x] SPEC-0004 Mesh container (chunk type 8) {auto: title named in code}
+  - [ ] SPEC-0004 Mesh container (chunk type 8)
     - [ ] SPEC-0004, Mesh container (chunk type 8): The payload starts with 0, 8 or 12 zero bytes (the chunk's extra-header length E), then a chain of child chunks of type 13 (o...
     - [ ] SPEC-0004, Mesh container (chunk type 8): Each child's header bytes 14–15 hold a u16 role id . The child payload is one node tree with its root at payload offset 0.
     - [ ] SPEC-0004, Mesh container (chunk type 8): 64 type-8 chunks on the disc have no children (just the end marker). They are empty slots in world-pack chains; skip them.
@@ -783,7 +783,7 @@ Cited 32 times in the game code.
     - [ ] SPEC-0004, Batches inside the VIF stream: One UNPACK (commands 0x60–0x7F) per vertex attribute. Every UNPACK of a batch has num = N, the batch's vertex count (N is 2 …...
     - [ ] SPEC-0004, Batches inside the VIF stream: MSCNT (command 0x17), which runs the vertex program on this batch. The last batch of a packet has no MSCNT; the engine starts...
     - [ ] SPEC-0004, Batches inside the VIF stream: Between batches: an UNPACK V4-32 to address 0 with num = the tag count (byte 0x0D). It holds the next batch's GIF tag(s), in...
-  - [x] SPEC-0004 Two-pass batches (High) {auto: title named in code}
+  - [ ] SPEC-0004 Two-pass batches (High)
     - [ ] SPEC-0004, Two-pass batches (High): It has two GIF tags (byte 0x0D = 2). The first has the "more passes" bit and data offset 2. The second has PRIM 0x05C and data offs...
     - [ ] SPEC-0004, Two-pass batches (High): Its arrays start at vector-unit address 2 + k·N.
     - [ ] SPEC-0004, Two-pass batches (High): Its UV array holds 2N entries: entries 0 to N − 1 are the pass-0 UVs and entries N to 2N − 1 are the pass-1 UVs. Every other array...
@@ -808,7 +808,7 @@ Cited 32 times in the game code.
     - [ ] SPEC-0004, Vertex program (High): Skin weights : three f32 weights that sum to 1, sorted largest first in 99.8 % of vertices.
     - [ ] SPEC-0004, Vertex program (High): Bone slots : bytes 0–2 are matrix-palette addresses, always multiples of 3 (three rows per bone matrix). Bone index = byte / 3. Byte...
     - [ ] SPEC-0004, Vertex program (High): UV : u, v as f32 in texture space. 0..1 spans the material's power-of-two sampling size (TW × TH, SPEC-0003). v = 0 is the texture's...
-  - [x] SPEC-0004 Placed objects (chunk type 29) {auto: title named in code}
+  - [ ] SPEC-0004 Placed objects (chunk type 29)
     - [ ] SPEC-0004, Placed objects (chunk type 29): 0x00 4 s32 object count N (1 … 241)
     - [ ] SPEC-0004, Placed objects (chunk type 29): 0x04 4 u32 offset of the object offset table (0x10 in nearly all packs)
     - [ ] SPEC-0004, Placed objects (chunk type 29): 0x08 4 s32 count of the second table (u32 payload-relative model handles in the type-40 kind-3 selection path)
@@ -1026,7 +1026,7 @@ Cited 39 times in the game code.
     - [ ] SPEC-0005, Skeleton definitions (chunk types 22, 23, 24): 0x18 4 u32 offset of the records = 0x30
     - [ ] SPEC-0005, Skeleton definitions (chunk types 22, 23, 24): 0x2C 4 u32 end of the records = 0x30 + 12N
     - [ ] SPEC-0005, Skeleton definitions (chunk types 22, 23, 24): 0x30 12 × N Records: u32 parent (0xFF = root), u32 mirror partner, u32 offset into the extra block (type 22)...
-  - [x] SPEC-0005 Animation set (chunk types 25, 26, 27) {auto: title named in code}
+  - [ ] SPEC-0005 Animation set (chunk types 25, 26, 27)
     - [ ] SPEC-0005, Animation set (chunk types 25, 26, 27): 0x0C 4 u32 entry count E
     - [ ] SPEC-0005, Animation set (chunk types 25, 26, 27): 0x24 4 u32 offset of the first entry = 0x30
     - [ ] SPEC-0005, Animation set (chunk types 25, 26, 27): 0x28 4 u32 expansion buffer size : 0 when no entry of the set is compressed; otherwise the largest expanded size U a...
@@ -1346,7 +1346,7 @@ Cited 39 times in the game code.
     - [ ] SPEC-0005, Secondary-motion chains (Confidence: Medium for the integ...: The new point is pulled back to rest length from its anchor: new = anchor + normalize(new − an...
     - [ ] SPEC-0005, Secondary-motion chains (Confidence: Medium for the integ...: Previous takes the old current, and current takes the new point.
     - [ ] SPEC-0005, Secondary-motion chains (Confidence: Medium for the integ...: The joint transform of the link's bone is then rebuilt from the new points with a blend weight...
-  - [x] SPEC-0005 Skinning {auto: title named in code}
+  - [ ] SPEC-0005 Skinning
   - [ ] SPEC-0005 Skinning upload
     - [ ] SPEC-0005, Skinning upload: Blocks are processed in table order. The bone matrices are taken from the running matrix pointer, which starts at +0x18 and advances by 48...
     - [ ] SPEC-0005, Skinning upload: For a block, the 48 n bytes of matrices are sent to the vertex program. Then the program's two result arrays, of n vectors each, are copied...
@@ -1364,7 +1364,7 @@ Cited 39 times in the game code.
   - [ ] SPEC-0005 Per-bone bounds (Low)
     - [ ] SPEC-0005, Per-bone bounds (Low): For each bone, a bounding radius is computed from the bone's extents: the radius is 0.25 times the largest of the bone's extent value...
     - [ ] SPEC-0005, Per-bone bounds (Low): The consumer of the radius is not identified (Open questions).
-  - [x] SPEC-0005 Turn toward a direction (High) {auto: title named in code}
+  - [ ] SPEC-0005 Turn toward a direction (High)
     - [ ] SPEC-0005, Turn toward a direction (High): Input: the character's stored facing c (a unit vector), a unit direction d and the weight w.
     - [ ] SPEC-0005, Turn toward a direction (High): v = w × d + (1 − w) × c.
     - [ ] SPEC-0005, Turn toward a direction (High): If dot(c, d) < −0.99, 0.1 times the side vector of the character's motion record is added to v, so a turn to the exact oppos...
@@ -2543,7 +2543,7 @@ Cited 17 times in the game code.
     - [ ] SPEC-0008, Random-generator state: 0x0000 624 × 8 State words: each slot holds one 32-bit word in its low half, upper half zero
     - [ ] SPEC-0008, Random-generator state: 0x1380 4 Index of the next word, 0 to 624; 625 means "not seeded"
     - [ ] SPEC-0008, Random-generator state: 0x1388 4 Copy of the seed
-- [x] SPEC-0008 Behavior (what the replaced plumbing did, as players see it) {auto: title named in code}
+- [ ] SPEC-0008 Behavior (what the replaced plumbing did, as players see it)
   - [ ] SPEC-0008, Behavior (what the replaced plumbing did, as players see it): Video timing NTSC only: 60 fields per second and a 512 x 448 display. The PAL branch (50 Hz, 5...
   - [ ] SPEC-0008, Behavior (what the replaced plumbing did, as players see it): Graphics hardware (GS, vector units, DMA) Texture decoding (SPEC-0003), meshes and strips (SPE...
   - [ ] SPEC-0008, Behavior (what the replaced plumbing did, as players see it): Disc driver Reads by resource number (SPEC-0001); streams audio and movies; disc-read waits (P...
@@ -2789,7 +2789,7 @@ Cited 17 times in the game code.
     - [ ] SPEC-0008, Colour conversion (Medium-High for the main path; the edg...: Packing: the channel order of the 16-bit modes is moot for disc playback. The disc movie prese...
     - [ ] SPEC-0008, Colour conversion (Medium-High for the main path; the edg...: Clean side: use the standard limited-range BT.601 matrix with the 1.164 luma factor for the mo...
     - [ ] SPEC-0008, Colour conversion (Medium-High for the main path; the edg...: Checking values (not a reimplementation rule): limited-range luma 16 with neutral chroma (128,...
-  - [x] SPEC-0008 8x8 inverse transform (Medium) {auto: title named in code}
+  - [ ] SPEC-0008 8x8 inverse transform (Medium)
     - [x] SPEC-0008, 8x8 inverse transform (Medium): Each 8x8 residual block is decoded from coefficients as follows. Each signed coefficient is multiplied by a per-block dequan... {auto: address in code}
     - [ ] SPEC-0008, 8x8 inverse transform (Medium): Dequantisation checks: matrix 0, coefficient position 0 has weight 65,536; input coefficient 2 yields 64 after multiplicatio...
     - [ ] SPEC-0008, 8x8 inverse transform (Medium): Correction: a column pass runs first, then a row pass (High). The multipliers are fixed-point constants in units of 1/2048:...
@@ -2808,7 +2808,7 @@ Cited 17 times in the game code.
     - [ ] SPEC-0008, 32-point transform pass (Low-Medium): One pass over 32 float values in place, in three stages: sums and differences of the two halves; the same on each quar...
     - [ ] SPEC-0008, 32-point transform pass (Low-Medium): Caller: on the movie audio chain (reachability only). The mixer once listed in SPEC-0031 is movie-library code (Movie...
     - [ ] SPEC-0008, 32-point transform pass (Low-Medium): Clean side: the movie audio transform is the inverse DCT defined in the build guide (Audio transform); any correct imp...
-  - [x] SPEC-0008 Stream step (Medium-Low) {auto: title named in code}
+  - [ ] SPEC-0008 Stream step (Medium-Low)
     - [ ] SPEC-0008, Stream step (Medium-Low): Once per game tick, for an open movie stream: keeps a ring of frame timing records (each 0x17C bytes). For the 30 fps and 29.97 fp...
     - [ ] SPEC-0008, Stream step (Medium-Low): Clean side: the decoder and video path own the timing. Frames show at the header's frame rate (about 30 fps; 29.97 for the act int...
   - [ ] SPEC-0008 Sample accumulator (Medium)
@@ -2868,13 +2868,13 @@ Cited 17 times in the game code.
     - [ ] SPEC-0008, Blocks: 8, pattern: two colours A then B, then 8 pattern bytes, one per pixel row from the top; bit k (least-significant first) gives pixel column k: 0 = A,...
     - [ ] SPEC-0008, Blocks: 9, raw: 64 colours in row order.
     - [ ] SPEC-0008, Blocks: 10 to 15: write nothing, advance one block. Never on disc.
-  - [x] SPEC-0008 Coefficients (types 5 and 7, nested 5) {auto: title named in code}
+  - [ ] SPEC-0008 Coefficients (types 5 and 7, nested 5)
     - [ ] SPEC-0008, Coefficients (types 5 and 7, nested 5): A at index i: the entry becomes (i + 4, B) and stays current; then the four indices i to i + 3 are coded (below). Th...
     - [ ] SPEC-0008, Coefficients (types 5 and 7, nested 5): B at index i: the entry becomes (i, C) and stays current; append (i + 4, C), (i + 8, C), (i + 12, C) at the back. Th...
     - [ ] SPEC-0008, Coefficients (types 5 and 7, nested 5): C at index i: the entry becomes empty, the walk moves on, and indices i to i + 3 are coded.
     - [ ] SPEC-0008, Coefficients (types 5 and 7, nested 5): S at index i: a value is read for i; the entry becomes empty; move on.
-  - [x] SPEC-0008 Residue blocks (type 4) {auto: title named in code}
-  - [x] SPEC-0008 Inverse transform (types 5, 7 and nested 5) {auto: title named in code}
+  - [ ] SPEC-0008 Residue blocks (type 4)
+  - [ ] SPEC-0008 Inverse transform (types 5, 7 and nested 5)
     - [ ] SPEC-0008, Inverse transform (types 5, 7 and nested 5): Column pass: if s1 to s7 of a column are all zero, all eight outputs equal s0; otherwise use the formulas.
     - [ ] SPEC-0008, Inverse transform (types 5, 7 and nested 5): Row pass: always the formulas; each output is ⌊(o + 127) / 256⌋ and only its low 8 bits are kept. Type 5 stores...
   - [ ] SPEC-0008 Colour conversion
@@ -2918,7 +2918,7 @@ Cited 17 times in the game code.
     - [ ] SPEC-0008, What the screen shows (Medium for drawing details): The window has one line per registered variable, up to 42 lines at a time. Each line has the label on th...
     - [ ] SPEC-0008, What the screen shows (Medium for drawing details): Value text: an 8-bit signed value is shown as its number followed by its character in parentheses; an 8-...
     - [ ] SPEC-0008, What the screen shows (Medium for drawing details): With no variables, the window has no lines and only the frame is drawn.
-  - [x] SPEC-0008 Controls (High) {auto: title named in code}
+  - [ ] SPEC-0008 Controls (High)
     - [ ] SPEC-0008, Controls (High): Up and Down, held: select the previous or next variable, wrapping at the ends. Because they are held rather than newly pressed, the selecti...
     - [ ] SPEC-0008, Controls (High): Left and Right, held: move the window by 42 entries. Left works only when the window is not at the start; Right only when it is not at the...
     - [ ] SPEC-0008, Controls (High): Triangle, held: add to the selected value. Cross, held: subtract from it.
@@ -3143,7 +3143,7 @@ Cited 26 times in the game code.
     - [ ] SPEC-0009, VAG (resources 256–274): 0x10 4 Sample rate: 22,050 in all 19
     - [ ] SPEC-0009, VAG (resources 256–274): 0x20 16 Name, ASCII, NUL-terminated (a short label such as "Revive")
     - [ ] SPEC-0009, VAG (resources 256–274): 0x30 ADPCM frames
-  - [x] SPEC-0009 Stereo stream (" KPV", resources 146–255) {auto: title named in code}
+  - [ ] SPEC-0009 Stereo stream (" KPV", resources 146–255)
     - [ ] SPEC-0009, Stereo stream (" KPV", resources 146–255): 0x00 4 ASCII KPV (a space, then K, P, V)
     - [ ] SPEC-0009, Stereo stream (" KPV", resources 146–255): 0x04 4 S : ADPCM bytes per channel
     - [ ] SPEC-0009, Stereo stream (" KPV", resources 146–255): 0x08 4 Interleave block size: 2,048
@@ -3248,7 +3248,7 @@ Cited 26 times in the game code.
     - [ ] SPEC-0009, Run-time flag: 7 from Roberta's night in Fyora's palace in Act 2 (bit 92) until the final fight is won (bit 94)
     - [ ] SPEC-0009, Run-time flag: 8 from the start of Act 3 (bit 248) to the end of the game
     - [ ] SPEC-0009, Run-time flag: 9, 10, 11 from the start of Act 4 (bit 332) until the legend flag 100, 102 or 104 is set (the Altador shrine legends)
-  - [x] SPEC-0009 Volume and ramps {auto: title named in code}
+  - [ ] SPEC-0009 Volume and ramps
     - [ ] SPEC-0009, Volume and ramps: Gains: the Music gain is the Music option x 0.01, the Sound-effects gain the Sound effects option x 0.01 and the Voice gain the Voice opti...
     - [ ] SPEC-0009, Volume and ramps: Gain changes: sounds already playing keep the volume they started with; only sounds started afterwards use a new Sound-effects or Voice ga...
     - [ ] SPEC-0009, Volume and ramps: Target: the bank's target volume is V = row Level x Music gain, or the one-shot level override's value when one is set this tick. V is in...
@@ -3284,7 +3284,7 @@ Cited 26 times in the game code.
     - [ ] SPEC-0009, Intensity inputs (excite and adventure levels): So while the camera is still inside a zone but the hero has stepped past its outer radius, the adventure lev...
     - [ ] SPEC-0009, Intensity inputs (excite and adventure levels): Outer radii on disc are 25 to 250 units, inner radii 10 to 80. Records with +0x4E = 0 are positional ambient...
     - [ ] SPEC-0009, Intensity inputs (excite and adventure levels): Example: no enemies, inside a zone's inner radius: C = 100, G = 100, so child 3's layer sounds. After leavin...
-  - [x] SPEC-0009 Overrides (level scripts) {auto: title named in code}
+  - [ ] SPEC-0009 Overrides (level scripts)
     - [ ] SPEC-0009, Overrides (level scripts): Bank override : OverRideMidiSettings' first argument. It persists: it replaces the table bank offset every tick until it is clear...
     - [ ] SPEC-0009, Overrides (level scripts): Level, reverb type and reverb volume overrides (second to fourth arguments): each applies to the tick it is set on and is cleared...
     - [ ] SPEC-0009, Overrides (level scripts): Pause level and stream gate. Front-end table B states 5 and 7 (Resume Game focus and the pause page) write all four overrides eac...
@@ -3296,7 +3296,7 @@ Cited 26 times in the game code.
     - [ ] SPEC-0009, Streams: If a channel already plays the target stream, it fades in and the other channel fades out. If neither plays it and a channel is free, the target st...
     - [ ] SPEC-0009, Streams: Fade in: +1/1024 per tick up to trunc(Cap x Sound-effects gain), where Cap is row +0x0C (300 to 900). When the ceiling is lowered (a lower gain), t...
     - [ ] SPEC-0009, Streams: A channel that has a volume but is not playing is restarted at its volume.
-  - [x] SPEC-0009 Transitions {auto: title named in code}
+  - [ ] SPEC-0009 Transitions
     - [ ] SPEC-0009, Transitions: Area change with the same bank and no synchronous world load: the music continues uninterrupted; the segment, layers and combat state carry ove...
     - [ ] SPEC-0009, Transitions: Area changes that are synchronous world loads (the world-load audio reset below): a door from the exterior or a transition into an exterior tha...
     - [ ] SPEC-0009, Transitions: Test vectors: walking from pack 909 into the resident transition 691: no audio reset; when both rows name the same bank the music, layers and c...
@@ -3557,8 +3557,8 @@ Cited 22 times in the game code.
     - [ ] SPEC-0010, Test setup (recommended): Stand-in companion rig: a small separate skinned body with a pose point (attachment) at index 1 and a main action table of 24 entr...
     - [ ] SPEC-0010, Test setup (recommended): Stand-in boss model (rewrite choice): no model exists. Recommended look, from the clues (kind-340 cloud emitters on 12 attachment...
     - [ ] SPEC-0010, Test setup (recommended): Default if unresolved (rewrite choice): clip lengths are not on the disc. Use these lengths in ticks at play rate 1.0 for the time...
-  - [x] SPEC-0010 Initial values (tick 0, High) {auto: title named in code}
-  - [x] SPEC-0010 Per-tick order (High) {auto: title named in code}
+  - [ ] SPEC-0010 Initial values (tick 0, High)
+  - [ ] SPEC-0010 Per-tick order (High)
     - [ ] SPEC-0010, Per-tick order (High): Timers: hesitation, the three cooldowns and the sub-timer each drop by 1 while above 0.
     - [ ] SPEC-0010, Per-tick order (High): The boss's hold word is cleared, its body-push flag is cleared (the boss neither pushes nor is pushed by other bodies), its time scal...
     - [ ] SPEC-0010, Per-tick order (High): Stage from HP (Each tick, in order).
@@ -3567,7 +3567,7 @@ Cited 22 times in the game code.
     - [ ] SPEC-0010, Per-tick order (High): Run the state handler (States).
     - [ ] SPEC-0010, Per-tick order (High): Arena movement, gust-stream draw, ball update, companion step (Companion).
     - [ ] SPEC-0010, Per-tick order (High): Tail: when the state is 8, the boss and the companion are set to base state 20 (guard stance) and nothing else is written; in every o...
-  - [x] SPEC-0010 State table (durations use the defaults above) {auto: title named in code}
+  - [ ] SPEC-0010 State table (durations use the defaults above)
     - [ ] SPEC-0010, State table (durations use the defaults above): 0 Idle 4 Hover. Decide when hesitation is 0, then the shock check. Decision, shock, reaction
     - [ ] SPEC-0010, State table (durations use the defaults above): 1 Shock 11, 12, 13 Entry tick S clears the hit latch. Sub 0: request 11; on the first tick it is current and...
     - [ ] SPEC-0010, State table (durations use the defaults above): 2 Fidget 5 Request 5. No damage, no cooldown. Clip 5 done: idle (about 91 ticks)
@@ -3577,8 +3577,8 @@ Cited 22 times in the game code.
     - [ ] SPEC-0010, State table (durations use the defaults above): 6 Bouncing bolt 14 Request 14; on the first tick the release bit 0x20 (event 32) is seen while clip 14 is cu...
     - [ ] SPEC-0010, State table (durations use the defaults above): 7 Special reply 15 or 16 Beams stopped on entry. Until the coin-chosen clip is current: request it, show the...
     - [ ] SPEC-0010, State table (durations use the defaults above): 8 Reaction 23 See Reaction state. Guard stance (base state 20) each tick. Hold over: reply roll
-  - [x] SPEC-0010 Attack chooser (High) {auto: title named in code}
-  - [x] SPEC-0010 Movement (High) {auto: title named in code}
+  - [ ] SPEC-0010 Attack chooser (High)
+  - [ ] SPEC-0010 Movement (High)
   - [ ] SPEC-0010 Attack windows and hit rules, boss to hero (High)
     - [ ] SPEC-0010, Attack windows and hit rules, boss to hero (High): Shock Sub 1: 59 ticks (S + 2 to S + 60) Horizontal distance to the hero at most 8: 10 damage (kind 2, not...
     - [ ] SPEC-0010, Attack windows and hit rules, boss to hero (High): Gust Sub-steps 1, 2 and 3 Hero body cylinder against the gust cylinder (radius 6, length c): 20 damage an...
@@ -3590,7 +3590,7 @@ Cited 22 times in the game code.
     - [ ] SPEC-0010, Hurt rules, hero to boss (High): The boss loses HP only in the special reply (20 per reply through the shared HP subtraction, no doubling, no hit reaction)....
     - [ ] SPEC-0010, Hurt rules, hero to boss (High): No block, dodge, counter or hit-stun exists on the boss side, and nothing resets on a stage change: each parameter is read...
   - [ ] SPEC-0010 Companion role in each attack (High)
-  - [x] SPEC-0010 Phases and death {auto: title named in code}
+  - [ ] SPEC-0010 Phases and death
   - [ ] SPEC-0010 Hero actions against this boss
     - [ ] SPEC-0010, Hero actions against this boss: Tor swing (not a power step) Ignored outside the reaction state. In the reaction state: blocked (block effect, no damage) wh...
     - [ ] SPEC-0010, Hero actions against this boss: Tor power step with a Mote No damage in any state (the target is not hittable).
@@ -3724,7 +3724,7 @@ Cited 22 times in the game code.
     - [ ] SPEC-0010, Placement and reachability (High): Arena. The six arena points are the level locators with user ids 101 to 106. Only two levels on the disc hold all six, an...
     - [ ] SPEC-0010, Placement and reachability (High): Rendering residue. The boss sets its character fade level to 129. This sends an active character through the composite re...
     - [ ] SPEC-0010, Placement and reachability (High): Story. No story slot exists for the fight; each Act 3 area has its own boss (SPEC-0049).
-  - [x] SPEC-0010 Distances {auto: title named in code}
+  - [ ] SPEC-0010 Distances
   - [x] SPEC-0010 Each tick, in order {auto: title named in code}
     - [ ] SPEC-0010, Each tick, in order: Count down each active timer by one tick (a value above 0 drops by 1): hesitation, the three attack cooldowns, and the current attack's...
     - [ ] SPEC-0010, Each tick, in order: Clear the gust fade flag and reset the animation speed to 1.0. Also clear the boss's hold word and its body-push flag (so the boss is n...
@@ -3745,11 +3745,11 @@ Cited 22 times in the game code.
     - [ ] SPEC-0010, Deciding (idle only): Air-flow cooling, lightning ready: rolls 10 to 79 choose lightning; rolls 80 to 99 choose bouncing. Rolls 0 to 9 fidget.
     - [ ] SPEC-0010, Deciding (idle only): Lightning cooling, air-flow ready: rolls 0 to 9 fidget, 10 to 39 air-flow, 40 to 44 rapid air-flow, 45 to 64 bouncing, 65 to 79 idle,...
     - [ ] SPEC-0010, Deciding (idle only): Both air-flow and lightning cooling: rolls 0 to 9 fidget, 10 to 34 bouncing, 35 to 39 idle, 40 to 64 bouncing, 65 to 79 idle, 80 to 99...
-  - [x] SPEC-0010 Reaction trigger {auto: title named in code}
+  - [ ] SPEC-0010 Reaction trigger
     - [ ] SPEC-0010, Reaction trigger: Tor (variant 0). The trigger is true when Tor's in-attack test passes, the horizontal distance from the boss to the hero is less than 10 u...
     - [ ] SPEC-0010, Reaction trigger: Roberta (variant 1). For each of her six shot slots that is armed (SPEC-0036 Hero shot slots), take the segment from the shot's position S...
     - [ ] SPEC-0010, Reaction trigger: Any other variant value. The trigger is false.
-  - [x] SPEC-0010 Arena movement {auto: title named in code}
+  - [ ] SPEC-0010 Arena movement
     - [ ] SPEC-0010, Arena movement: Position. The boss's position becomes the current point's position (locator position, SPEC-0006), and its height is then replaced by the gro...
     - [ ] SPEC-0010, Arena movement: Facing. The boss's steer method is called with a weight w and a horizontal unit direction (the facing moves toward the direction by the blen...
     - [ ] SPEC-0010, Arena movement: Air-flow state only (state 3; the rapid air-flow state uses the default): the direction is the horizontal unit direction from the boss to a...
@@ -3807,7 +3807,7 @@ Cited 22 times in the game code.
     - [ ] SPEC-0010, Special-reply state (state 7): Until the chosen animation (15 or 16) is current, the boss requests it every tick (the companion gets the same request), make...
     - [ ] SPEC-0010, Special-reply state (state 7): The same subtraction is used by the shared NPC take-hit and by the hero's take-hit, so a reply hit counts like any other HP l...
     - [ ] SPEC-0010, Special-reply state (state 7): The reaction trigger is still evaluated in this state, so a reaction can replace the reply before the damage lands (High).
-  - [x] SPEC-0010 Bouncing balls {auto: title named in code}
+  - [ ] SPEC-0010 Bouncing balls
     - [ ] SPEC-0010, Bouncing balls: Spawn. Each ball takes a free slot of the 5-slot pool; with no free slot it is not spawned. Its slot requests particle definition 450, which...
     - [ ] SPEC-0010, Bouncing balls: Each tick, in order: position += direction × horizontal speed; position.y += the current vertical velocity; vertical velocity −= 0.1 (gravit...
     - [x] SPEC-0010, Bouncing balls: Falling ticks only (vertical velocity now below 0): g = the ground probe at the ball with ceiling 8 (SPEC-0018). If position.y ≤ g − 1.0, th... {auto: address in code}
@@ -3833,7 +3833,7 @@ Cited 22 times in the game code.
     - [ ] SPEC-0010, Companion (monster row 2, class 10): If the companion is removed or dies. Nothing in the original reacts: the stored reference is never cleared or searched...
     - [ ] SPEC-0010, Companion (monster row 2, class 10): Other references. No other code, script, table entry or string refers to class 10 or to row 2 apart from the class tabl...
     - [ ] SPEC-0010, Companion (monster row 2, class 10): What it was probably meant to be (interpretation, clearly not original data). Clues, weighed: (1) it is pinned by posit...
-  - [x] SPEC-0010 Test spawn walkthrough {auto: title named in code}
+  - [ ] SPEC-0010 Test spawn walkthrough
     - [ ] SPEC-0010, Test spawn walkthrough: Tick 0, start-up. The record starts in idle, stage 1, with the hesitation timer at a random 60 to 120 ticks, the air-flow cooldown a...
     - [ ] SPEC-0010, Test spawn walkthrough: Every tick from then on: timers count down; the stage stays 1 (HP 240 of 240); the reaction trigger is checked; the boss is placed o...
     - [ ] SPEC-0010, Test spawn walkthrough: Companion. With type 1 alone the lookup never succeeds, so nothing rides on the boss. Spawn type 2, variant 0 too: from the first ti...
@@ -4044,7 +4044,7 @@ Cited 22 times in the game code.
   - [ ] SPEC-0011, Fight AI build guide: Flinch 57 or 108 ticks at f = 1 (variant 23 or 24); every further hit is absorbed until it ends
   - [ ] SPEC-0011, Fight AI build guide: Death 196 ticks at f = 1 (98 at f = 0)
   - [ ] SPEC-0011, Fight AI build guide: Ball flight 0.5 units per tick at three alive; a hero 20 units away is reached about 40 ticks after release
-- [x] SPEC-0011 Arena build guide (pack 1122; High for the data and the script, Medium where marked) {auto: title named in code}
+- [ ] SPEC-0011 Arena build guide (pack 1122; High for the data and the script, Medium where marked)
   - [ ] SPEC-0011, Arena build guide (pack 1122; High for the data and the s...: Entry line (High). A vertical sheet at x = −10.89 in the hall, z −123.2 to −103.4, y −27.5 to...
   - [ ] SPEC-0011, Arena build guide (pack 1122; High for the data and the s...: Doorway (High). The arena's front wall is 2.3 to 3.8 thick. The only opening is x 0.6 to 14.3...
   - [ ] SPEC-0011, Arena build guide (pack 1122; High for the data and the s...: Room (walls, High for the numbers; Medium for how the hero is stopped at every point). Interio...
@@ -4169,7 +4169,7 @@ Cited 22 times in the game code.
     - [ ] SPEC-0011, Main-loop launches, element, status values and starting c...: 8 picks from the twelve Mote ids 160 to 171, each a uniform whole number from 0 to 11 that ste...
     - [ ] SPEC-0011, Main-loop launches, element, status values and starting c...: The drain runs 1801 steps (30 s at one step per tick). It reveals one slot every 1801 / slots...
     - [ ] SPEC-0011, Main-loop launches, element, status values and starting c...: Who steps it. Each sister's control loop advances the drain once after its state handler, incl...
-  - [x] SPEC-0011 Taking damage (Confidence: High) {auto: title named in code}
+  - [ ] SPEC-0011 Taking damage (Confidence: High)
     - [ ] SPEC-0011, Taking damage (Confidence: High): A sister is hit by the hero's melee swing or by a hero shot. Both tests run after the dodge part of the hit and dodge test...
     - [ ] SPEC-0011, Taking damage (Confidence: High): Melee: the melee-hit latch must be clear, the hero must be in an attack state and the hero's attack-active word must be se...
     - [ ] SPEC-0011, Taking damage (Confidence: High): Shots: each of the hero's six shot slots that is armed is tested as a sphere (its point and radius) against an upright cyl...
@@ -4335,7 +4335,7 @@ Cited 19 times in the game code.
   - [ ] SPEC-0012 G1. Scope of the shipped fight
     - [ ] SPEC-0012, G1. Scope of the shipped fight: States 0 to 19 all occur. The parry (state 6) happens only when the hero is Tor, and the deflect stance (state 7) only when...
     - [ ] SPEC-0012, G1. Scope of the shipped fight: Not part of the fight: the three unused tunables, the speed multiplier written by en garde, state values 20 and above, actio...
-  - [x] SPEC-0012 G2. Initial values (first controller tick) {auto: title named in code}
+  - [ ] SPEC-0012 G2. Initial values (first controller tick)
     - [ ] SPEC-0012, G2. Initial values (first controller tick): State 0 (idle), phase 0, speed multiplier 1.0, counter flag 1, laugh, angry-start, enraged-start, loosen-neck an...
     - [ ] SPEC-0012, G2. Initial values (first controller tick): Weak-point HP: left knee 50, right knee 50, left under-arm 50, right under-arm 50, back 50, neck 100. Charge ref...
     - [ ] SPEC-0012, G2. Initial values (first controller tick): Actor HP: replaced on the first tick by 350 / 350 (health display, G3 step 8). Row-0 monster data supplies model...
@@ -4404,7 +4404,7 @@ Cited 19 times in the game code.
     - [ ] SPEC-0012, G6. Attack choice in priority order (ready states only, o...: Phase 2 only: charge (a knee above 0 and the direction test), then high swing (hero distance b...
     - [ ] SPEC-0012, G6. Attack choice in priority order (ready states only, o...: Balcony (any phase): every ready tick a roll 0 to 100 below 30, with the hero not located on t...
     - [ ] SPEC-0012, G6. Attack choice in priority order (ready states only, o...: Nothing chosen: idle movement (item G7).
-  - [x] SPEC-0012 G7. Movement {auto: title named in code}
+  - [ ] SPEC-0012 G7. Movement
     - [ ] SPEC-0012, G7. Movement: Turn: in state 0, when the angle between the facing and the direction to the hero is more than 90 degrees, state 15 (hero on the right axis si...
     - [ ] SPEC-0012, G7. Movement: Approach (state 17): chosen when the hero is on the knight's mesh and the horizontal distance is above 10; the knight walks by clip 40's root...
     - [ ] SPEC-0012, G7. Movement: Orbit (state 18): chosen only when the distance is 10 or less and no selector matched (late fight, when the phase-2 attacks are used up, or ex...
@@ -4429,7 +4429,7 @@ Cited 19 times in the game code.
     - [ ] SPEC-0012, G9. Weak-point loop and stun windows: Charge row: after the run-in (T + 33) the run clip starts at T + 34 and its contact flags are read from T + 35. Let c...
     - [ ] SPEC-0012, G9. Weak-point loop and stun windows: High swing row: windup 33 requested on T; if the weapon touches on tick T + 32 the hit lands and follow-through 34 is...
     - [ ] SPEC-0012, G9. Weak-point loop and stun windows: Floor strike row: windup 20 requested on T; a hit on tick h in T + 28 to T + 36 leads to follow-through 21 (requested...
-  - [x] SPEC-0012 G10. Parry and deflect {auto: title named in code}
+  - [ ] SPEC-0012 G10. Parry and deflect
     - [ ] SPEC-0012, G10. Parry and deflect: Both checks run only in a ready state, every tick, and are skipped entirely (the latch is not cleared either) while the knight is busy.
     - [ ] SPEC-0012, G10. Parry and deflect: Tor: when the attack-state predicate is false the shared latch clears. When it is true and the latch is clear, the latch is set and...
     - [ ] SPEC-0012, G10. Parry and deflect: Roberta: the six hero shot slots are scanned; on the first armed slot with the latch clear the latch is set and, if that slot overla...
@@ -4514,7 +4514,7 @@ Cited 19 times in the game code.
     - [ ] SPEC-0012, G17. Timing table (timing pass): Laugh, angry start, enraged start, loosen neck, en garde T none T + 140, T + 116, T + 116, T + 120, T + 116
     - [ ] SPEC-0012, G17. Timing table (timing pass): Part reaction during a stun hit tick none 42 (floor strike), 34 (charge), 62 (high swing), 66 (spin) ticks from the hit tick
     - [ ] SPEC-0012, G17. Timing table (timing pass): Turn (15, 16) T none 52 to 82 ticks (blend 0.05 per tick)
-- [x] SPEC-0012 Arena build guide {auto: title named in code}
+- [ ] SPEC-0012 Arena build guide
   - [ ] SPEC-0012 A1. How the arena is entered and left
     - [ ] SPEC-0012, A1. How the arena is entered and left: Entry: the Black Keep grounds pack (986, slot 78) loads slot 79 from its door handler on a Square press while story f...
     - [ ] SPEC-0012, A1. How the arena is entered and left: Exit: only the victory path (A8). The arena also has one door record (door 0, a rectangle on the plane z = -58.35 fac...
@@ -4536,7 +4536,7 @@ Cited 19 times in the game code.
     - [ ] SPEC-0012, A4. Objects, hazards and breakables: Objects 0 and 1: small props at (-86.8, 25.2, 51.4), outside the hall, left in their start pose (visual only).
     - [ ] SPEC-0012, A4. Objects, hazards and breakables: 103 breakable railing posts (intact at load, material 0, script indices 0 to 102): along the ramp edges (x +-21.2 and +...
     - [ ] SPEC-0012, A4. Objects, hazards and breakables: Locator 1 of the arena (0.0, 13.55, 3.83) and the 66-key camera track 5 exist but no live code uses them; the dormant c...
-  - [x] SPEC-0012 A5. Script timeline (one thread per row group) {auto: title named in code}
+  - [ ] SPEC-0012 A5. Script timeline (one thread per row group)
     - [ ] SPEC-0012, A5. Script timeline (one thread per row group): Activation: level state 2 set. Thread B, next pass: movie 46, boss-fight tweak (7, 0), level states 3 and 4.
     - [ ] SPEC-0012, A5. Script timeline (one thread per row group): Next pass: level states 5 and 1. Thread B then polls every tick.
     - [ ] SPEC-0012, A5. Script timeline (one thread per row group): Defeat tick h (last required part reaches 0): the defeat test of tick h + 1 sets state 19 and level state 0....
@@ -4598,7 +4598,7 @@ Cited 19 times in the game code.
   - [ ] SPEC-0012, Where it lives on the disc: The clean side must not invent these values; it reads them from the disc, or from a documented default table if the read fails v...
   - [ ] SPEC-0012, Where it lives on the disc: The generic spawn lookup reads type and variant from the character data block and points into a shared monster-table row; it doe...
 - [ ] SPEC-0012 Layout
-  - [x] SPEC-0012 Tuning values {auto: title named in code}
+  - [ ] SPEC-0012 Tuning values
     - [x] SPEC-0012, Tuning values: LaughChance int % 0x2DA3E8 25 Chance of a laugh after a landed slow swing {auto: address in code}
     - [x] SPEC-0012, Tuning values: LoosenNeckChance int % 0x2DA3EC 25 Chance of a neck-loosening move after a parry {auto: address in code}
     - [x] SPEC-0012, Tuning values: EnGardeIncrease int % 0x2DA3F0 25 Speed multiplier increase when the en garde stance starts (the multiplier is never read, so this has no eff... {auto: address in code}
@@ -4655,7 +4655,7 @@ Cited 19 times in the game code.
     - [ ] SPEC-0012, Constants used but not on the disc: Charge run-in steering: 0.25 per tick toward the hero while the run-in animation plays (hard-coded, Medium).
     - [ ] SPEC-0012, Constants used but not on the disc: High-swing second measure limit: 10.0 units, applied to the horizontal distance between the knight and its start point (...
     - [ ] SPEC-0012, Constants used but not on the disc: Random numbers: uniform integers in an inclusive range. The original uses the shared Mersenne Twister of SPEC-0014 (stat...
-  - [x] SPEC-0012 Weak points {auto: title named in code}
+  - [ ] SPEC-0012 Weak points
     - [ ] SPEC-0012, Weak points: Left knee 50 Enraged charge stun
     - [ ] SPEC-0012, Weak points: Right knee 50 Enraged charge stun
     - [ ] SPEC-0012, Weak points: Left under-arm 50 Enraged high-swing stun
@@ -4732,14 +4732,14 @@ Cited 19 times in the game code.
     - [ ] SPEC-0012, Deflect: The deflect stance strike (animation 10 or 11, a two-way random pick) deals no damage to the hero (High).
     - [ ] SPEC-0012, Deflect: Stance tick by tick (High). The check at the top of the state handler is: if the stance timer is below 1 and strike 10 is not the current animation...
     - [ ] SPEC-0012, Deflect: The sticky defended word (+0xE5C) is also set on every tick of the parry (state 6). Nothing clears it during the fight, so once the knight has parr...
-  - [x] SPEC-0012 Attack selection {auto: title named in code}
+  - [ ] SPEC-0012 Attack selection
     - [ ] SPEC-0012, Attack selection: Counter (opening kick): if the counter flag is set, clear it. Roll an integer 0 to 100; if it is strictly less than CounterAttackChance (4...
     - [ ] SPEC-0012, Attack selection: Kick: if the hero passes the guard predicate (SPEC-0036, Guard timer and per-attacker block), the horizontal distance from the boss to the...
     - [ ] SPEC-0012, Attack selection: Slow swing: in phase 0, if the horizontal distance from the boss to the hero is less than SlowSwingRange, go to state 9. No roll.
     - [ ] SPEC-0012, Attack selection: Angry swing: in phase 1, if the horizontal distance from the boss to the hero is less than AngrySwingRange, go to state 10. No roll.
     - [ ] SPEC-0012, Attack selection: Phase 2 group, checked in this order:
     - [ ] SPEC-0012, Attack selection: Balcony: in any phase, if a roll from 0 to 100 inclusive is strictly less than BalconyAttackChance (30 of 101) and the hero's position is...
-  - [x] SPEC-0012 Enraged attacks {auto: title named in code}
+  - [ ] SPEC-0012 Enraged attacks
     - [ ] SPEC-0012, Enraged attacks: Run-in 26 Steers toward the hero at 0.25 per tick while the animation plays Finished: Run
     - [ ] SPEC-0012, Enraged attacks: Run 27 Repeats each tick while both the body contact flag and the edge-contact flag are clear. The run sets no velocity: the knight moves b...
     - [ ] SPEC-0012, Enraged attacks: Impact 28 While any of the event bits 0x1 to 0x10 is on (frames 3 to 5 of the 11-frame clip) and the hero is not yet hit, deal EnragedCharg...
@@ -4767,7 +4767,7 @@ Cited 19 times in the game code.
     - [ ] SPEC-0012, Enraged attacks: Spin 41 Plays once. If any of the other five weak points (both knees, both under-arms, back) is above 0, the attack ends now: idle, phase 0...
     - [ ] SPEC-0012, Enraged attacks: Neck stun 42 (47 as the hit reaction) Neck exposed for the 600-tick countdown. Each tick the weak-point loop of the build guide (G9) runs:...
     - [ ] SPEC-0012, Enraged attacks: Neck recovery 43 Plays once. Sets phase to 0. No en-garde flag Finished: idle
-  - [x] SPEC-0012 Idle movement {auto: title named in code}
+  - [ ] SPEC-0012 Idle movement
     - [ ] SPEC-0012, Idle movement: If the angle between the boss's forward direction and the direction to the hero is greater than the turn threshold (90 degrees): if the hero...
     - [ ] SPEC-0012, Idle movement: Otherwise, if the hero's position is not found on the knight's own ground mesh on this tick, do nothing. This test uses the batched form of t...
     - [ ] SPEC-0012, Idle movement: Otherwise, if the horizontal distance from the boss to the hero is more than CloseDistance, go to state 17 (approach). Else if it is at most...
@@ -4820,7 +4820,7 @@ Cited 19 times in the game code.
     - [ ] SPEC-0012, Weak-point test in the enraged attacks (Confidence: High...: The part's health value becomes 0 if it is less than d, otherwise it becomes health minus d. A...
     - [ ] SPEC-0012, Weak-point test in the enraged attacks (Confidence: High...: The attack's hit-landed latch is set to 1. The latch is cleared when the attack is selected.
     - [ ] SPEC-0012, Weak-point test in the enraged attacks (Confidence: High...: Effect 305 starts once at the world position of the hit part's frame (frame kind 0x25 or 0x22 f...
-  - [x] SPEC-0012 Weak points {auto: title named in code}
+  - [ ] SPEC-0012 Weak points
     - [ ] SPEC-0012, Weak points: A weak point loses HP only during the stun window of the matching attack: knees (charge), under-arms (high swing), back (floor strike), neck (s...
     - [ ] SPEC-0012, Weak points: Each hit subtracts an amount from the part's HP. The amount is the value returned by the hero's damage query for the boss (query argument 1.0),...
     - [ ] SPEC-0012, Weak points: A part at or below zero is skipped by its window test and no longer takes damage. It also no longer gates its attack in step 5 of attack select...
@@ -5020,7 +5020,7 @@ Cited 13 times in the game code.
     - [ ] SPEC-0013, G3. Tick order and the animation convention: Animation convention: "request tick R" is the tick on which a handler asks for a clip. The clip starts in that...
     - [ ] SPEC-0013, G3. Tick order and the animation convention: All animation ids the boss ever requests have a clip in its action table (ids 0 to 7, 12 to 45; the table holds...
     - [ ] SPEC-0013, G3. Tick order and the animation convention: Root travel applies in every state, not only in the locomotion states. The boss moves by the root records of wh...
-  - [x] SPEC-0013 G4. State table (state number in hex; action id -> clip, frames; D = ticks from the request tick to the leaving tick) {auto: title named in code}
+  - [ ] SPEC-0013 G4. State table (state number in hex; action id -> clip, frames; D = ticks from the request tick to the leaving tick)
     - [ ] SPEC-0013, G4. State table (state number in hex; action id -> clip,...: 0 idle 0 (clip 3, 25, loops) none Requested every tick; choosers replace it.
     - [ ] SPEC-0013, G4. State table (state number in hex; action id -> clip,...: 1 flinch 16 (clip 10, 19) or 17 (clip 11, 15), coin 73 or 57 To 0. Damage is taken on entry (G7...
     - [ ] SPEC-0013, G4. State table (state number in hex; action id -> clip,...: 2 evil laugh 23 (clip 9, 35) 136 To 0.
@@ -5056,7 +5056,7 @@ Cited 13 times in the game code.
     - [ ] SPEC-0013, G5. Decision order each tick (decision-ready states only:...: Strafe chooser and the slip gate (4.4): the slip starts first when the slip timer is 0, the bo...
     - [ ] SPEC-0013, G5. Decision order each tick (decision-ready states only:...: Hit test and hit reaction (4.13), then the current state's handler.
     - [ ] SPEC-0013, G5. Decision order each tick (decision-ready states only:...: Same-tick rules. A later step sees the state an earlier step just wrote, and a later write rep...
-  - [x] SPEC-0013 G6. Movement {auto: title named in code}
+  - [ ] SPEC-0013 G6. Movement
     - [ ] SPEC-0013, G6. Movement: Boss speed comes only from the root travel of the clip (4.4 Locomotion clips). The row's turn speed is 0 and is not used; steering uses the sh...
     - [ ] SPEC-0013, G6. Movement: Strafe target: a point 3 units to the side of the boss. If that point is not on the boss's mesh, the strafe tick uses mode 0 toward the hero's...
     - [ ] SPEC-0013, G6. Movement: Back-up has no steering: it plays clip 33 and the root moves the boss backward along its facing; it does not stop at a wall except through mes...
@@ -5276,7 +5276,7 @@ Cited 13 times in the game code.
     - [x] SPEC-0013, Other constants read from data: Dagger speed 0x2DAD70 float 1.5 Dagger speed in units per tick; also the divisor of the dagger's lifetime (4.4b) (High) {auto: address in code}
     - [x] SPEC-0013, Other constants read from data: Dagger damage 0x2DAD78 int 10 The dagger's damage (10.0) given to the projectile; also the 10 added to the distance in the d... {auto: address in code}
 - [ ] SPEC-0013 Behavior
-  - [x] SPEC-0013 4.1 Tick order {auto: title named in code}
+  - [ ] SPEC-0013 4.1 Tick order
     - [ ] SPEC-0013, 4.1 Tick order: Count down each of four timers by one tick (stopping at 0): the shadow-slip timer, the attack timer, the back-up cooldown, and one further c...
     - [ ] SPEC-0013, 4.1 Tick order: Reset the boss's animation speed to 1.0.
     - [ ] SPEC-0013, 4.1 Tick order: Script gate (4.3). Then the HP-band check (4.2), which can change the band and can start the death state.
@@ -5286,7 +5286,7 @@ Cited 13 times in the game code.
     - [ ] SPEC-0013, 4.1 Tick order: Hit detection against the boss's six hit slots, and reactions to hits (4.13).
     - [ ] SPEC-0013, 4.1 Tick order: Run the handler for the boss's current state (4.4b, 4.7 to 4.12).
     - [ ] SPEC-0013, 4.1 Tick order: Advance the elapsed-time counter (4.6).
-  - [x] SPEC-0013 4.2 HP bands (patterns) {auto: title named in code}
+  - [ ] SPEC-0013 4.2 HP bands (patterns)
     - [ ] SPEC-0013, 4.2 HP bands (patterns): 1 f ≥ 0.75 (starting value) none none
     - [ ] SPEC-0013, 4.2 HP bands (patterns): 2 0.50 ≤ f < 0.75 superior-sneer stance (4.3) 1 Only from pattern 1
     - [ ] SPEC-0013, 4.2 HP bands (patterns): 3 0.25 ≤ f < 0.50 angry stance (4.3) 3 Only from pattern 1 or 2
@@ -5297,7 +5297,7 @@ Cited 13 times in the game code.
     - [ ] SPEC-0013, 4.2 HP bands (patterns): The band check runs only when the boss is decision-ready (4.1). A boss that drops into a lower band during a swing enters the new s...
     - [ ] SPEC-0013, 4.2 HP bands (patterns): Each band change resets the elapsed-time counter (4.6) to 0, which also returns the boss damage factor to 1.0.
     - [ ] SPEC-0013, 4.2 HP bands (patterns): Death: the check at HP 0 runs only on a decision-ready tick. The killing hit is taken in a flinch (4.13), and the shared death hook...
-  - [x] SPEC-0013 4.3 Script control {auto: title named in code}
+  - [ ] SPEC-0013 4.3 Script control
     - [ ] SPEC-0013, 4.3 Script control: The boss has a script-control flag and a hit counter. The script-control flag is set once, when the boss is created, from one bit of the...
     - [ ] SPEC-0013, 4.3 Script control: When the flag is 0, the hit-count event rule below applies and the scripted wait never starts. When the flag is 1, the scripted wait rul...
     - [ ] SPEC-0013, 4.3 Script control: While the script-control flag is clear (not the shipped regime), the boss raises script event 0 whenever the hit counter is above 2, or...
@@ -5343,12 +5343,12 @@ Cited 13 times in the game code.
     - [ ] SPEC-0013, 4.4b Melee and dagger attacks: Hits on the hero follow the pool rule of SPEC-0029 Behavior 9 (shield, armour, a block gives max(1, 0.25 D), reflection of ki...
     - [ ] SPEC-0013, 4.4b Melee and dagger attacks: Ends idle, and T_a is reset.
     - [ ] SPEC-0013, 4.4b Melee and dagger attacks: Back-stab (animation 30, played at speed 2.0): entered only as the shadow back-stab (4.8); there is no normal back-stab. It h...
-  - [x] SPEC-0013 4.5 States that allow reactions {auto: title named in code}
+  - [ ] SPEC-0013 4.5 States that allow reactions
     - [ ] SPEC-0013, 4.5 States that allow reactions: idle, and the three strafe states (approach, left, right), and back-up;
     - [ ] SPEC-0013, 4.5 States that allow reactions: flinch;
     - [ ] SPEC-0013, 4.5 States that allow reactions: the three stances (superior sneer, angry, injured);
     - [ ] SPEC-0013, 4.5 States that allow reactions: the dagger-throw state.
-  - [x] SPEC-0013 4.6 Elapsed-time counter {auto: title named in code}
+  - [ ] SPEC-0013 4.6 Elapsed-time counter
     - [ ] SPEC-0013, 4.6 Elapsed-time counter: An elapsed-time counter rises by 2 each tick while it is below 7200, and by 1 each tick after that. It is not advanced in the scri...
     - [ ] SPEC-0013, 4.6 Elapsed-time counter: It is set to 0 on each HP-band change and when a stance ends.
     - [ ] SPEC-0013, 4.6 Elapsed-time counter: The boss damage-taken factor is the float 1 + 4 × counter / 7200 (not truncated), recomputed every tick the counter advances, star...
@@ -5356,7 +5356,7 @@ Cited 13 times in the game code.
     - [ ] SPEC-0013, 4.7 Shadow slip: Vanish (phase 0): play animation 24. Its clip effect list shows effect 427 at the boss (4.15); the reappear animation 25 shows the same eff...
     - [ ] SPEC-0013, 4.7 Shadow slip: Choose (phase 1): pick the shadow attack with the chooser (4.8), choose the landing point (below), show an effect, go to phase 2.
     - [ ] SPEC-0013, 4.7 Shadow slip: Reappear (phase 2): on the phase-1 handler pass, copy the selected landing point into the boss position and advance to phase 2. Then play a...
-  - [x] SPEC-0013 4.8 Shadow-attack chooser {auto: title named in code}
+  - [ ] SPEC-0013 4.8 Shadow-attack chooser
     - [ ] SPEC-0013, 4.8 Shadow-attack chooser: M = backstab bucket: pattern 1 gives 0. Otherwise the 4.3 table row above, with 0, 33, 25, 4 for patterns 1..4.
     - [ ] SPEC-0013, 4.8 Shadow-attack chooser: D = dagger bucket: 0, 33, 25, 4 for patterns 1..4. A mirror image uses 25.
     - [ ] SPEC-0013, 4.8 Shadow-attack chooser: H = light-arc-or-heal bucket: 30, 33, 25, 32 for patterns 1..4.
@@ -5427,7 +5427,7 @@ Cited 13 times in the game code.
     - [ ] SPEC-0013, 4.12 Damage: No attack of this boss applies a status to the hero.
     - [ ] SPEC-0013, 4.12 Damage: Light-ball damage (25) is stored, but no reader is known; no described behavior uses it for damage.
     - [ ] SPEC-0013, 4.12 Damage: Healing adds HP (4.9); it deals no damage.
-  - [x] SPEC-0013 4.13 Reactions {auto: title named in code}
+  - [ ] SPEC-0013 4.13 Reactions
     - [ ] SPEC-0013, 4.13 Reactions: a roll r1 in [0, 100]: if r1 < dodge chance (40 for patterns 1..4; 25 for a mirror image), the boss dodges: state 6, animation 18, or animat...
     - [ ] SPEC-0013, 4.13 Reactions: otherwise a fresh roll r2 in [0, 100]: if r2 < deflect chance (80), the boss deflects: state 7, animation 21 while the missile is within 10...
     - [ ] SPEC-0013, 4.13 Reactions: otherwise nothing.
@@ -5729,7 +5729,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0014, Minion AI: Ixi Henchmen (pack 800; none in pack 864): Dodge (2, 3) s + 69 reaction cooldown int[30, 60]
     - [ ] SPEC-0014, Minion AI: Ixi Henchmen (pack 800; none in pack 864): Get hit (18) s + 49
     - [ ] SPEC-0014, Minion AI: Ixi Henchmen (pack 800; none in pack 864): Lava (19) level flag 2 posted on s + 80 to s + 83 s + 129
-- [x] SPEC-0014 Arena build guide (pack 800 Cogham Steppes and pack 864 Abandoned Mines) {auto: title named in code}
+- [ ] SPEC-0014 Arena build guide (pack 800 Cogham Steppes and pack 864 Abandoned Mines)
   - [ ] SPEC-0014 Pack 800: the Cogham Steppes basin (mode 0)
     - [ ] SPEC-0014, Pack 800: the Cogham Steppes basin (mode 0): Shape (High). A walking floor ("basin") about 59 by 63 units: navigation mesh 9, a 24-corner blob spanning x 45...
     - [ ] SPEC-0014, Pack 800: the Cogham Steppes basin (mode 0): Walls and edges (Medium-High). Vertical wall panels line the rim edges and the basin patches (type 0 and type 3...
@@ -5824,7 +5824,7 @@ Cited 16 times in the game code.
   - [ ] SPEC-0014, Cross-boss facts (apply to SPEC-0014, 0015, 0016, 0019, 0...: The random generator is one shared Mersenne Twister (the standard 624-entry generator with sta...
   - [ ] SPEC-0014, Cross-boss facts (apply to SPEC-0014, 0015, 0016, 0019, 0...: Boss sounds come from animation tables only. No boss controller plays its own voice or attack...
 - [ ] SPEC-0014 Layout
-  - [x] SPEC-0014 Tuning values {auto: title named in code}
+  - [ ] SPEC-0014 Tuning values
     - [x] SPEC-0014, Tuning values: Lava trigger 1 f32 0x2DAE90 0.66 HP fraction for the first lava event (fight mode 1) {auto: address in code}
     - [x] SPEC-0014, Tuning values: Lava trigger 2 f32 0x2DAE94 0.33 HP fraction for the second lava event (fight mode 1; never fires, see Behavior) {auto: address in code}
     - [x] SPEC-0014, Tuning values: Missile-defense cooldown min f32 0x2DAE98 0.5 s {auto: address in code}
@@ -5881,7 +5881,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0014, Per-fight state (not on disc): Charge target a point in world space
     - [ ] SPEC-0014, Per-fight state (not on disc): Damage scale 0.25 or 1.0 (see Damage)
 - [ ] SPEC-0014 Behavior
-  - [x] SPEC-0014 Random numbers {auto: title named in code}
+  - [ ] SPEC-0014 Random numbers
     - [ ] SPEC-0014, Random numbers: A percent roll is an integer drawn uniformly from 0 to 100 inclusive (101 values). The event with chance P happens when the roll is less tha...
     - [ ] SPEC-0014, Random numbers: A tick cooldown with range (min, max) in seconds is an integer drawn uniformly, inclusive, from trunc(min x 60) to trunc(max x 60).
     - [ ] SPEC-0014, Random numbers: A real-valued range (min, max) is drawn uniformly from the closed interval.
@@ -5940,7 +5940,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0014, Incoming hits (contact): Invulnerable word +0x7F0: cleared at the start of each pass and set again by the handlers of idle, hold and stage-transition. So in...
     - [ ] SPEC-0014, Incoming hits (contact): Guard: the handlers of idle, hold, stage-transition, block missile and block melee write base state 20 (the guarding state), and ev...
     - [ ] SPEC-0014, Incoming hits (contact): In every state where the shared path accepts the hit, the shared take-hit subtracts the damage from the same HP word and the boss's...
-  - [x] SPEC-0014 Attack chooser (runs while free) {auto: title named in code}
+  - [ ] SPEC-0014 Attack chooser (runs while free)
     - [ ] SPEC-0014, Attack chooser (runs while free): Counter attack : if the hero is guarding (the hero's guard query: the hero is in its guard action state 20, or Roberta is...
     - [ ] SPEC-0014, Attack chooser (runs while free): Charge : if the charge cooldown is 0, enter the charge state, set the retreat distance to a uniform real from 10.0 to 20.0...
     - [ ] SPEC-0014, Attack chooser (runs while free): Forward swipe : if the forward-swipe cooldown is 0 and D < 7.0: roll the forward swipe chance. If the roll is below it, en...
@@ -5948,7 +5948,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0014, Attack chooser (runs while free): Buck kick : if the hero is behind the boss (the dot product of the boss's forward direction with the direction to the hero...
     - [ ] SPEC-0014, Attack chooser (runs while free): Whirl (fight mode 1 only): if the whirl cooldown is 0: roll the whirl chance (40). If the roll is 40 or more, set the whir...
     - [ ] SPEC-0014, Attack chooser (runs while free): Otherwise stay idle.
-  - [x] SPEC-0014 Movement band (runs while free; only changes the state when the boss is in a movement-capable state or idle) {auto: title named in code}
+  - [ ] SPEC-0014 Movement band (runs while free; only changes the state when the boss is in a movement-capable state or idle)
     - [ ] SPEC-0014, Movement band (runs while free; only changes the state wh...: D > 15.0: rush forward (locomotion mode 1).
     - [ ] SPEC-0014, Movement band (runs while free; only changes the state wh...: 10.0 < D <= 15.0: strafe close (locomotion mode 0) if D < 13.0. For 13.0 <= D <= 15.0 the curr...
     - [ ] SPEC-0014, Movement band (runs while free; only changes the state wh...: D < 5.0: strafe back (locomotion mode 3).
@@ -6245,7 +6245,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0015, Minion AI: Tentacles (pack 1217): Spit action 19 on E; cycle i: shoot requested E + 121 + 50i, projectile E + 137 + 50i, done E + 170 + 50i; after n cycles...
     - [ ] SPEC-0015, Minion AI: Tentacles (pack 1217): Hub entry on X action 6 on X, action 7 on X + 132
     - [ ] SPEC-0015, Minion AI: Tentacles (pack 1217): Stage start on X action 5 on X, state 1 on X + 156, first chooser tick X + 157
-- [x] SPEC-0015 Arena build guide {auto: title named in code}
+- [ ] SPEC-0015 Arena build guide
   - [ ] SPEC-0015, Arena build guide: The hero's floor is one ground height patch (SPEC-0018) bounded by a closed outline of 25 invisible vertical wall panels, each 120 units...
   - [ ] SPEC-0015, Arena build guide: Bowl: x from -25.5 to 24.9, z from about -37 to 38. At z = 0 the floor runs from x = -25.4 to 24.9, at z = -20 from -20.3 to 20.9, at z =...
   - [ ] SPEC-0015, Arena build guide: North corridor (the way to the Farm): from z = 38 to z = 65, 16 wide at z = 40 (x -3.4 to 12.8), 6 wide at z = 60 (5.9 to 11.9). It narro...
@@ -6365,7 +6365,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0015, Tuning values: Slam and spit turn rates f32 (fixed in the behavior) 1.0 for the slam approach, 0.25 for the spit wait Per tick
     - [ ] SPEC-0015, Tuning values: Spit effect ids i32 (fixed in the behavior) 1400 (0x578), 1400, 1399 (0x577), -1, 1399, 1399 The six effect ids given to the spit projectile,...
 - [ ] SPEC-0015 Behavior
-  - [x] SPEC-0015 Random numbers {auto: title named in code}
+  - [ ] SPEC-0015 Random numbers
     - [ ] SPEC-0015, Random numbers: A percent roll is an integer drawn uniformly from 0 to 100 inclusive (101 values). The event with chance P happens when the roll is less tha...
     - [ ] SPEC-0015, Random numbers: A tick cooldown with range (min, max) in seconds is an integer drawn uniformly, inclusive, from trunc(min x 60) to trunc(max x 60).
     - [ ] SPEC-0015, Random numbers: A count range (3 to 5) is an integer drawn uniformly, inclusive.
@@ -6378,18 +6378,18 @@ Cited 16 times in the game code.
     - [ ] SPEC-0015, Stages: Stage 1 : if f <= 5/6, set level flag 3 and return to the hub. Otherwise (the locator was used but the HP threshold was not reached): the marker and...
     - [ ] SPEC-0015, Stages: Stage 2 : if f <= 0.5, set level flag 8 and return to the hub. Otherwise (both locators were used but the HP threshold was not reached): the marker...
     - [ ] SPEC-0015, Stages: Stage 3 : if f <= 0, run the death sequence (below). Otherwise (all three locators were used but the boss is still alive): the marker goes to 0 and...
-  - [x] SPEC-0015 Death sequence {auto: title named in code}
+  - [ ] SPEC-0015 Death sequence
     - [ ] SPEC-0015, Death sequence: Set level flag 0xE.
     - [ ] SPEC-0015, Death sequence: Every other living character in the world's character table whose townsfolk flag is clear takes 10000 damage. Townsfolk (characters whose de...
     - [ ] SPEC-0015, Death sequence: Set the boss's HP to 1.
     - [ ] SPEC-0015, Death sequence: Set the boss's top-level state to 6 (finale). Nothing of the controller runs after this: the damage that took the HP to 0 already put the bo...
-  - [x] SPEC-0015 Stage events (locators) {auto: title named in code}
+  - [ ] SPEC-0015 Stage events (locators)
     - [ ] SPEC-0015, Stage events (locators): The stage events are called from the strike of the head slam (sub-step 1), on every window tick, until a locator has been used in t...
     - [ ] SPEC-0015, Stage events (locators): the horizontal unit direction from the boss to the locator, dotted with the boss's forward direction, is above 0.9;
     - [ ] SPEC-0015, Stage events (locators): the horizontal distance (the vertical difference is ignored) from the boss's head point (skeleton bone 15) to the locator is below...
     - [ ] SPEC-0015, Stage events (locators): A usable locator is used once: its flag is set, its script event is posted there (the level's scripts decide what spawns at that lo...
   - [ ] SPEC-0015 Arena and Tentacle staging
-  - [x] SPEC-0015 Attack decision (cadence) {auto: title named in code}
+  - [ ] SPEC-0015 Attack decision (cadence)
     - [ ] SPEC-0015, Attack decision (cadence): The chooser runs once on every pass of the boss's loop, whatever the top-level state is, and every pass on which the decision coo...
     - [ ] SPEC-0015, Attack decision (cadence): On a free pass with an active stage and the cooldown at 0, draw a new cooldown from the stage's range: stage 1 (or stage 0) 1.5 t...
     - [ ] SPEC-0015, Attack decision (cadence): In the same tick, check the head slam:
@@ -6432,7 +6432,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0015, Durations and timing (Confidence: High for the rule and t...: Stage start on tick X (gate): action 5 is requested on X, the state becomes 1 on X + 156, and...
     - [ ] SPEC-0015, Durations and timing (Confidence: High for the rule and t...: Spit: action 19 is requested on E and the shoot sub-step starts on E + 121. With cycle i count...
     - [ ] SPEC-0015, Durations and timing (Confidence: High for the rule and t...: Reach 14.0 19.4 24.0 27.3 30.5 32.9 34.6 34.8 34.9 35.0 35.0 34.6 to 35.0
-  - [x] SPEC-0015 Head slam (sub-steps) {auto: title named in code}
+  - [ ] SPEC-0015 Head slam (sub-steps)
     - [ ] SPEC-0015, Head slam (sub-steps): On the request tick (the first tick on which the current action is not 0x15) request animation 0x15 and turn toward the hero at rate...
     - [ ] SPEC-0015, Head slam (sub-steps): When it ends: clear the slam latch, the once-per-slam latch, and the counted-hit counter of the stun loop (so each slam starts with z...
     - [ ] SPEC-0015, Head slam (sub-steps): Play animation 0x12. While it runs (not yet ended), and only while the slam latch is clear and the boss's can-act query is true (even...
@@ -6477,7 +6477,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0015, Spit (sub-steps): Id 5, played at an unblocked hero hit: 1399.
     - [ ] SPEC-0015, Spit (sub-steps): Visual-kind replacements of the pool: visual kinds 5 and 7 to 14 replace ids 0 and 4 with 410 and 412, and visual kind 6 replaces them wit...
     - [ ] SPEC-0015, Spit (sub-steps): The world impact also sends cue 190 to the hero's weapon sound slot, which plays nothing (SPEC-0031). With the spit cues that never play (...
-  - [x] SPEC-0015 Knockback {auto: title named in code}
+  - [ ] SPEC-0015 Knockback
     - [x] SPEC-0015, Knockback: Head slam: the hero is pushed with K = 5.0 (0x2DAF5C) opposite the HERO'S forward direction: the push vector is K x normalize(−9 x f + (0, 12, 0)... {auto: address in code}
   - [ ] SPEC-0015 Damage
     - [ ] SPEC-0015, Damage: Head slam: 25 raw, not scaled and unblockable. It goes straight to the hero's take-hit and is not reduced by the hero's shield, armour, armour Mote...
@@ -6667,7 +6667,7 @@ Cited 25 times in the game code.
   - [ ] SPEC-0016, Fight AI build guide: Control and sound: busy, so the button chain acts on nothing and the stick is not read; no voice or effect is started by the state its...
   - [ ] SPEC-0016, Fight AI build guide: Targeting: a hero in state 54 is not a hittable target for the hero-side swing and shot tests of enemies, and common enemies start no...
   - [ ] SPEC-0016, Fight AI build guide: Test vector: lunge lands on tick 5000 with the hero at 80 HP, state 1: 60 HP after, state 54 on tick 5000, animation 137 requested on...
-- [x] SPEC-0016 Arena build guide {auto: title named in code}
+- [ ] SPEC-0016 Arena build guide
   - [ ] SPEC-0016, Arena build guide: One ring over a deadly swamp. The ring is the only non-deadly patch of the arena (ground kind 5; it also selects the camera's wide floor...
   - [ ] SPEC-0016, Arena build guide: Small raised footing on and around the ring before any break scene: pad N (x 3748 to 3752, z -618.5 to -616, top 112.06), pad S (x 3758 t...
   - [ ] SPEC-0016, Arena build guide: Approach. The hero arrives from the west at (3660.2, 115.7, -679.2) facing (0.81, 0, 0.58) beside a save point (3628.95, 116.21, -687.66)...
@@ -6814,7 +6814,7 @@ Cited 25 times in the game code.
     - [ ] SPEC-0016, 0. Conventions: Percent rolls are integers from 0 to 100 inclusive; a roll is a success when it is less than the chance (SPEC-0014).
     - [ ] SPEC-0016, 0. Conventions: The random generator is the shared one, seeded once from the console clock (SPEC-0014).
     - [ ] SPEC-0016, 0. Conventions: A tick is 1/60 s. Level flags are set and cleared through the level's flag array (SPEC-0014).
-  - [x] SPEC-0016 1. Tick order {auto: title named in code}
+  - [ ] SPEC-0016 1. Tick order
     - [ ] SPEC-0016, 1. Tick order: Play rate set to 1.0, and the invulnerable word of the serpent set to 1 (it is set on every tick and never cleared; see Hurt side, section 8A).
     - [ ] SPEC-0016, 1. Tick order: If the belch cooldown is above 0, subtract 1.
     - [ ] SPEC-0016, 1. Tick order: Health band check (section 2), under the state gate of section 2.
@@ -6863,7 +6863,7 @@ Cited 25 times in the game code.
     - [ ] SPEC-0016, 6A. Neck look (Medium-High): Step: each of the six angles steps by 0.01 per tick. Within 0.01 of τ it takes τ. Otherwise it may only increase when s > 0, an...
     - [ ] SPEC-0016, 6A. Neck look (Medium-High): Each joint is then turned about the up axis by its angle, on top of the animated pose.
     - [ ] SPEC-0016, 6A. Neck look (Medium-High): On a tick with no request (any state other than 0) the six angles are set to 0.
-  - [x] SPEC-0016 7. Poison belch (state 4) {auto: title named in code}
+  - [ ] SPEC-0016 7. Poison belch (state 4)
     - [ ] SPEC-0016, 7. Poison belch (state 4): Plays animation 10 (clip 5, 91 keys). The handler requests it on the first tick of the state (the request tick s) and from then o...
     - [ ] SPEC-0016, 7. Poison belch (state 4): Origin: the serpent's mouth point (the head joint, joint 18 of the serpent's skeleton). Its height above the serpent's origin is...
     - [ ] SPEC-0016, 7. Poison belch (state 4): Projectile slots: a pool of about 10. If the pool is full on a window tick, nothing is fired on that tick and the handler tries a...
@@ -6887,7 +6887,7 @@ Cited 25 times in the game code.
     - [ ] SPEC-0016, 8A. Hurt side: what can damage the serpent (High for the...: There is no dodge, block, parry, counter, hit-stun or damage scaling on the serpent's side. It...
     - [ ] SPEC-0016, 8A. Hurt side: what can damage the serpent (High for the...: Health 100: the number of strikes needed is 100 divided by the hero damage value (rounded up);...
   - [ ] SPEC-0016 Shape tests that are not the serpent's
-  - [x] SPEC-0016 9. Tail slap (state 3): not entered {auto: title named in code}
+  - [ ] SPEC-0016 9. Tail slap (state 3): not entered
     - [ ] SPEC-0016, 9. Tail slap (state 3): not entered: Entry: the strike counter starts at 0. The strike limit is set from the stage: 3 at stage 0, 4 at stage 1, 6 at stage 2.
     - [ ] SPEC-0016, 9. Tail slap (state 3): not entered: Phase A: the routine plays animation 7 once.
     - [ ] SPEC-0016, 9. Tail slap (state 3): not entered: Phase B (strikes): the serpent plays animation 8, or animation 9 when the variant flag is 1. A swing would deal 20 dama...
@@ -7183,7 +7183,7 @@ Cited 0 times in the game code.
     - [ ] SPEC-0017, 5. Hit window and hit rules: Not attacking. Each of the hero's six shot slots that is armed and whose point lies within 3.0 plus the slot's radius of the va...
     - [ ] SPEC-0017, 5. Hit window and hit rules: Attacking. The valve's cylinder (radius 2.0, length 4.0; fixed values, not disc words) is the second shape of the static finite...
     - [ ] SPEC-0017, 5. Hit window and hit rules: On any hit: the window closes and the valve's state becomes 5. The HP reduction depends on the branch, as above.
-  - [x] SPEC-0017 6. Animation speed {auto: title named in code}
+  - [ ] SPEC-0017 6. Animation speed
     - [ ] SPEC-0017, 6. Animation speed: Each tick, after the sweep, the nest's animation playback rate is 1.2 to the power d, where d is the number of destroyed valves: 1.0 at...
     - [ ] SPEC-0017, 6. Animation speed: When d = 3 the nest goes to defeat and the rate stays at the value set on the previous tick (1.44, since that tick had d = 2).
     - [ ] SPEC-0017, 6. Animation speed: The "pulsation animation speed increase" tunable (0x2DB0B4) is unused in the original (High).
@@ -7203,7 +7203,7 @@ Cited 0 times in the game code.
     - [ ] SPEC-0017, 9. Spider death: A spider in state 16 whose death animation (58) is playing and has finished gets its despawn flag set (High).
     - [ ] SPEC-0017, 9. Spider death: The state-16 behavior and the spider's chooser are in SPEC-0038 (Behavior 12).
     - [ ] SPEC-0017, 9. Spider death: Spider behavior otherwise is not covered.
-  - [x] SPEC-0017 9a. Damage to the hero (High) {auto: title named in code}
+  - [ ] SPEC-0017 9a. Damage to the hero (High)
     - [ ] SPEC-0017, 9a. Damage to the hero (High): The nest and its valves never attack the hero. Neither has a hit routine of its own; their only effects on characters are the...
     - [ ] SPEC-0017, 9a. Damage to the hero (High): All damage to the hero comes from the spiders. They are class-17 common enemies (SPEC-0038), so their hits use the shared ene...
     - [ ] SPEC-0017, 9a. Damage to the hero (High): Attack damage words of the spider monster rows, by slot number 0, 1 and 2 ("none" = slot unused): Spyder (row 234) 3, none, 7...
@@ -7369,7 +7369,7 @@ Cited 49 times in the game code.
     - [ ] SPEC-0018, Navigation meshes (chunk type 21): Every non-degenerate triangle has the same winding in the (x, z) plane: (x1 − x0)(z2 − z0) − (z1 − z0)(x2 − x0) > 0. 60 t...
     - [ ] SPEC-0018, Navigation meshes (chunk type 21): 111,310 of 111,378 interior edges link back. The few that don't are mostly zero-length edges. Treat one-way links as boun...
     - [ ] SPEC-0018, Navigation meshes (chunk type 21): y is constant across the whole mesh in 885 of 998 meshes. The other 113 slope or have several levels.
-  - [x] SPEC-0018 Height patches (type-5 entries) {auto: title named in code}
+  - [ ] SPEC-0018 Height patches (type-5 entries)
     - [ ] SPEC-0018, Height patches (type-5 entries): 0x00 4 Owner word (runtime). When nonzero, the first word of a placed object's entry names that object's record (the object...
     - [ ] SPEC-0018, Height patches (type-5 entries): 0x10 4 f32 cell size (world units)
     - [ ] SPEC-0018, Height patches (type-5 entries): 0x14 4 f32 sample spacing = cell size / per
@@ -7539,7 +7539,7 @@ Cited 49 times in the game code.
       - [ ] SPEC-0018, Character sweep with push: Ball test. The ray from the character's start point along its displacement is tested against a ball around the primitive's refere...
       - [ ] SPEC-0018, Character sweep with push: Faces. The segment from the start point S to the character's current position P is tested against five faces of the primitive, as...
       - [ ] SPEC-0018, Character sweep with push: Push. On a hit, the contact point is X = S + t (P − S). The character's new position is X + 0.45 × (V · N) × N, where V is the ch...
-    - [x] SPEC-0018 Petpet frame-record wall pass (High for filtering; Medium-High for contact gates) {auto: title named in code}
+    - [ ] SPEC-0018 Petpet frame-record wall pass (High for filtering; Medium-High for contact gates)
     - [ ] SPEC-0018 Follow-camera contact-normal countdowns (High for ownership and expiry order)
   - [x] SPEC-0018 Finite cylinder tests (High for the weapon-against-bone use and the whole decision table; Medium-High for the argumen... {auto: title named in code}
     - [ ] SPEC-0018, Finite cylinder tests (High for the weapon-against-bone u...: Quick reject: no overlap when d is greater than sqrt(r_A^2 + (h_A / 2)^2) + sqrt(r_B^2 + (h_B...
@@ -7804,7 +7804,7 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, G1. Scope of the shipped fight: Every controller state (0 to 20) occurs except big laugh (state 3), whose request word is never set. The big-laugh chance an...
     - [ ] SPEC-0019, G1. Scope of the shipped fight: Phase 2 and phase 3 are real: attack chances change, a scripted scene plays, and the King's play rate rises to R = 1.2 (phas...
     - [ ] SPEC-0019, G1. Scope of the shipped fight: The King of pack 985 is held by its arena script for the whole Gnarfas fight and never acts (Activation in play). It is not...
-  - [x] SPEC-0019 G2. Initial values (run 1) {auto: title named in code}
+  - [ ] SPEC-0019 G2. Initial values (run 1)
     - [ ] SPEC-0019, G2. Initial values (run 1): Health: 800 of 800 (the Hit Points field of monster row 16; SPEC-0029). Defence (Damage Reduction) 0, Blocking Angle 0.0, no wea...
     - [ ] SPEC-0019, G2. Initial values (run 1): Controller record: state 0 (idle), sub-animation 0, ready flag 1, phase field 0, catch request 0, big-laugh request 0, reaction-...
     - [ ] SPEC-0019, G2. Initial values (run 1): Tunables come from the disc words listed in Layout: percent chances, ranges, walk, orbit and hop distances, cooldown seconds, da...
@@ -7812,7 +7812,7 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, G2. Initial values (run 1): Play rate R = 1.0 in phase 1: every King clip has speed byte 2, so a clip advances 0.25 R key per tick (4 ticks per key at R = 1...
     - [ ] SPEC-0019, G2. Initial values (run 1): Target: every distance, direction, attack-edge and hero-down test uses the selected hero (the hero the player currently controls...
     - [ ] SPEC-0019, G2. Initial values (run 1): Random numbers: every roll and coin uses the one shared generator (Roll and coin rules). A selector draws only after its other g...
-  - [x] SPEC-0019 G3. Per-tick order (one controller pass per tick; the pass does not run while the King's base state is 33, 16, 25, 36... {auto: title named in code}
+  - [ ] SPEC-0019 G3. Per-tick order (one controller pass per tick; the pass does not run while the King's base state is 33, 16, 25, 36...
     - [ ] SPEC-0019, G3. Per-tick order (one controller pass per tick; the pas...: Top of the pass: store the King's id in the selected hero's forced lock-on target field (+0x15...
     - [ ] SPEC-0019, G3. Per-tick order (one controller pass per tick; the pas...: Pre-check, in this order, a later step replacing the state chosen by an earlier one: hit flinc...
     - [ ] SPEC-0019, G3. Per-tick order (one controller pass per tick; the pas...: Reaction, only on the tick on which the hero's attack predicate turns true: if the state is fr...
@@ -7841,7 +7841,7 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, G4. Animation requests and real durations: 0x1A flame wave 23 no 89
     - [ ] SPEC-0019, G4. Animation requests and real durations: 0x1D block recovery 8 no 29
     - [ ] SPEC-0019, G4. Animation requests and real durations: 0x10, 0x11, 0x12, 0x1B played by the arena script only (phase 2 scene, phase 3 scene, intro, death scene) 24, 44,...
-  - [x] SPEC-0019 G5. State table (ticks counted from T) {auto: title named in code}
+  - [ ] SPEC-0019 G5. State table (ticks counted from T)
     - [ ] SPEC-0019, G5. State table (ticks counted from T): 0 Idle request 0; turn toward the hero with blend 0.05 a pre-check, selector or movement choice
     - [ ] SPEC-0019, G5. State table (ticks counted from T): 1 Flinch unhittable word set every tick; request the chosen flinch T + 37, 45 or 41 (action 0x0B, 0x0C, 0x0D); or an...
     - [ ] SPEC-0019, G5. State table (ticks counted from T): 2 Catch unhittable; request 0x14 T + 29: ready flag 1, boomerang counter 0, idle
@@ -7872,7 +7872,7 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, G6. Reaction and attack choice (priority order): Lunge (ready flag, free, hero closer than 10): cooldown 8 s, roll below 30 / 40 / 50.
     - [ ] SPEC-0019, G6. Reaction and attack choice (priority order): Combo (ready flag, free, hero closer than 10): cooldown 10 s, roll below 10 / 20 / 30.
     - [ ] SPEC-0019, G6. Reaction and attack choice (priority order): Movement (G7).
-  - [x] SPEC-0019 G7. Movement {auto: title named in code}
+  - [ ] SPEC-0019 G7. Movement
     - [ ] SPEC-0019, G7. Movement: Jump chooser, every tick (also on the hero's attack edge): needs ready flag 1, free state, hero closer than 5 (horizontal), King farther than...
     - [ ] SPEC-0019, G7. Movement: Walk: hero farther than 25 (strict, horizontal) from any free state except the flinch: state 16, locomotion mode 0, action 2, moving along the...
     - [ ] SPEC-0019, G7. Movement: Hop timer: the movement selector reaches the timer only when the state is free and not the flinch and the hero is within 25 (strict: not above...
@@ -7982,7 +7982,7 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, G16. Timing table (timing pass): Flinch none T + 37, 45 or 41
     - [ ] SPEC-0019, G16. Timing table (timing pass): Roll none T + 49 or T + 53, then the counter-attack when the hero is within 5
     - [ ] SPEC-0019, G16. Timing table (timing pass): Block recovery none T' + 29
-- [x] SPEC-0019 Arena build guide (pack 1246) {auto: title named in code}
+- [ ] SPEC-0019 Arena build guide (pack 1246)
   - [ ] SPEC-0019 A1. Top-down layout
     - [ ] SPEC-0019, A1. Top-down layout: Floor and bank. The arena is a round pit in the pack's terrain, which is one ground height patch (ground kind 0 and surface word 6 ever...
     - [ ] SPEC-0019, A1. Top-down layout: King's walk mesh. One walk mesh polygon, 32 triangles, 16 vertices, flat at the mesh height 5.29 (not the ground height; used for x and...
@@ -8002,7 +8002,7 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, A3. Hazards, objects and pickups: Nothing in the arena damages the hero by itself: no deadly ground, water, hurting surface, kill volume, crusher or timer....
     - [ ] SPEC-0019, A3. Hazards, objects and pickups: No breakable, pickup, chest, item dispenser or save point lies in the arena. The King and the Bashers have no drop. (The p...
     - [ ] SPEC-0019, A3. Hazards, objects and pickups: The pillars (A1) are the only obstacles inside the bowl; they stop the hero's path but not the King.
-  - [x] SPEC-0019 A4. Script timeline (all tick counts are 60 Hz; "I" is the tick the intro starts) {auto: title named in code}
+  - [ ] SPEC-0019 A4. Script timeline (all tick counts are 60 Hz; "I" is the tick the intro starts)
     - [ ] SPEC-0019, A4. Script timeline (all tick counts are 60 Hz; "I" is th...: Entrance (contact with the entrance sphere, level state 0 clear). Level state 0 is set. The he...
     - [ ] SPEC-0019, A4. Script timeline (all tick counts are 60 Hz; "I" is th...: Bind. The King (and the nearest Bashers, up to the cap of 6) are bound by the first streaming...
     - [ ] SPEC-0019, A4. Script timeline (all tick counts are 60 Hz; "I" is th...: After the movie. The hero stands at locator 11 in the free state with the screen still black....
@@ -8121,9 +8121,9 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, Tuning values used by the behavior: The melee reach test uses a distance gate of 65.0 units, and a finite cylinder of radius 2.5 units and length 7.0 units,...
     - [ ] SPEC-0019, Tuning values used by the behavior: The guard test blocks when the dot product of the facing directions is at most -0.5. A blocked hit calls the hero's take...
     - [ ] SPEC-0019, Tuning values used by the behavior: An attack's hit window ends when its animation reaches 0.99 progress (see Hit window).
-- [x] SPEC-0019 Distances {auto: title named in code}
+- [ ] SPEC-0019 Distances
 - [ ] SPEC-0019 Behavior
-  - [x] SPEC-0019 Controller start (first run only) (Confidence: High for the order; Medium-High for the lookup parameter) {auto: title named in code}
+  - [ ] SPEC-0019 Controller start (first run only) (Confidence: High for the order; Medium-High for the lookup parameter)
     - [ ] SPEC-0019, Controller start (first run only) (Confidence: High for t...: Navigation mesh (SPEC-0018 describes the navigation mesh). Read the boss's current mesh. If no...
     - [ ] SPEC-0019, Controller start (first run only) (Confidence: High for t...: Locomotion slots. Mode 0, 1 and 2 play animation 2; mode 3 and 4 play none; mode 5 (orbit righ...
     - [ ] SPEC-0019, Controller start (first run only) (Confidence: High for t...: Blackboard defaults: state idle, sub-animation 0, ready flag 1, big-laugh request word 0, catc...
@@ -8145,7 +8145,7 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, Activation in play: what makes the King run (Confidence:...: Test vector (phase 1, full health, King on locator 7, hero not swinging, counters above 480): h...
     - [ ] SPEC-0019, Activation in play: what makes the King run (Confidence:...: Flag 281 clear (the Gnarfas fight): the filter admits ordinals 5, 7 and 8 and refuses 0 to 4 an...
     - [ ] SPEC-0019, Activation in play: what makes the King run (Confidence:...: Flag 281 set (the Gelert Assassin fight, SPEC-0013): the filter admits ordinals 0 to 4 and 6 an...
-  - [x] SPEC-0019 Each tick, in order (Confidence: High for the order; Medium-High for the detail of the pre-check) {auto: title named in code}
+  - [ ] SPEC-0019 Each tick, in order (Confidence: High for the order; Medium-High for the detail of the pre-check)
     - [ ] SPEC-0019, Each tick, in order (Confidence: High for the order; Medi...: The class loop clears the boss's unhittable word (+0x7F0) to 0, sets base state 1 (the states...
     - [ ] SPEC-0019, Each tick, in order (Confidence: High for the order; Medi...: Pre-check. The steps below run in this order. A later step can replace the result of an earlie...
     - [ ] SPEC-0019, Each tick, in order (Confidence: High for the order; Medi...: Reaction (on the tick the hero's reaction trigger rises only; see Attack selection). If the st...
@@ -8181,7 +8181,7 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, States (Confidence: High for transitions, entry effects a...: Orbit right 18 3 (locomotion mode 5) Moves toward the point 5 units along the side vector (see...
     - [ ] SPEC-0019, States (Confidence: High for transitions, entry effects a...: Orbit left 19 4 (locomotion mode 6) Moves toward the point 5 units against the side vector, si...
     - [ ] SPEC-0019, States (Confidence: High for transitions, entry effects a...: Death 20 0 Sets story flag 273 through event 0x111 and plays animation 0. When the flag is cle...
-  - [x] SPEC-0019 Attack selection (Confidence: High for the order, gates, distances and chances) {auto: title named in code}
+  - [ ] SPEC-0019 Attack selection (Confidence: High for the order, gates, distances and chances)
     - [ ] SPEC-0019, Attack selection (Confidence: High for the order, gates,...: Cooldown. The attack has a counter. Each tick, whatever the state, the choice first compares th...
     - [ ] SPEC-0019, Attack selection (Confidence: High for the order, gates,...: State gate. A new attack can start only while the state gate is open. The gate is open in idle,...
     - [ ] SPEC-0019, Attack selection (Confidence: High for the order, gates,...: Ready flag. Boomerang, flame wave, swing, lunge and combo require the ready flag to be 1. Block...
@@ -8197,7 +8197,7 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, Attack selection (Confidence: High for the order, gates,...: Combo. Needs the ready flag, the state gate and a hero distance below 10. Cooldown 10 s. Starts...
     - [ ] SPEC-0019, Attack selection (Confidence: High for the order, gates,...: Overhead counter. Decided inside the block state (see the block row of the States table), not a...
     - [ ] SPEC-0019, Attack selection (Confidence: High for the order, gates,...: Roll counter-attack. Follows a roll. Starts if the roll has finished, the hero is closer than 5...
-  - [x] SPEC-0019 Movement (Confidence: High for thresholds, the orbit end rule and the speeds at R = 1) {auto: title named in code}
+  - [ ] SPEC-0019 Movement (Confidence: High for thresholds, the orbit end rule and the speeds at R = 1)
     - [ ] SPEC-0019, Movement (Confidence: High for thresholds, the orbit end...: If the hero is farther than 25 units: the boss walks toward the hero (locomotion mode 0, animat...
     - [ ] SPEC-0019, Movement (Confidence: High for thresholds, the orbit end...: Otherwise, a hop timer adds one each tick on which this step is reached (free state, not the fl...
     - [ ] SPEC-0019, Movement (Confidence: High for thresholds, the orbit end...: Otherwise, if the hero is closer than 10 units and the boss is not already orbiting, a fair coi...
@@ -8228,7 +8228,7 @@ Cited 23 times in the game code.
     - [ ] SPEC-0019, Boomerang flight (Confidence: High for the target order,...: The thrown model frame is rebuilt from the boomerang's current flight direction and a reference...
     - [ ] SPEC-0019, Boomerang flight (Confidence: High for the target order,...: Spin and speed are applied per tick, not per second (Medium-High).
     - [ ] SPEC-0019, Boomerang flight (Confidence: High for the target order,...: Timeout: the 600-tick flight limit stops waypoint updates. The boomerang is placed at its held-...
-  - [x] SPEC-0019 Jump flight (Confidence: High) {auto: title named in code}
+  - [ ] SPEC-0019 Jump flight (Confidence: High)
     - [ ] SPEC-0019, Jump flight (Confidence: High): Launch (animation 6): it turns with weight 0.2 per tick. On the tick the launch clip ends, the velocity becomes v = (dx / 60...
     - [ ] SPEC-0019, Jump flight (Confidence: High): Air (animation 7): each later air tick, if the three-dimensional distance to home is at least 3.0: v.y = v.y - 0.05, then th...
     - [ ] SPEC-0019, Jump flight (Confidence: High): Landing (animation 8): the landing does not move the boss and it does not turn. The state ends when clip 8 ends (see the Jum...
@@ -8458,11 +8458,11 @@ Cited 16 times in the game code.
 - [x] SPEC-0020 Boss behavior: Gnarfas: the code cites this spec {auto: cited in code}
 - [ ] SPEC-0020 Summary
 - [ ] SPEC-0020 Fight AI build guide
-  - [x] SPEC-0020 Initial values {auto: title named in code}
+  - [ ] SPEC-0020 Initial values
     - [ ] SPEC-0020, Initial values: Character: embedded record 7 of pack 985 (type 5, variant 0). Monster row: 225 HP, body cylinder radius 2.5 and height 7.0, defence 0, behav...
     - [ ] SPEC-0020, Initial values: State idle, phase 1, rage flag 0, strike count 0, tree index none, reaction timer 0, hit latch 0, orbit side timer 0, wait flag clear. Jump...
     - [ ] SPEC-0020, Initial values: Disc tunables are the words listed under Tuning values; read them at run time.
-  - [x] SPEC-0020 Per-tick order {auto: title named in code}
+  - [ ] SPEC-0020 Per-tick order
     - [ ] SPEC-0020, Per-tick order: Write the animation-speed word (1.0) to the clip rate scale, set the character's base state to 1 and clear the motion record's per-tick flag...
     - [ ] SPEC-0020, Per-tick order: Count the seven timers down by 1 each, not below 0: reaction, head-butt cooldown, whip cooldown, chain-power cooldown, rapid cooldown, jump...
     - [ ] SPEC-0020, Per-tick order: Damage check (Taking damage). It is skipped in flinch, death, chain whip, rapid strike, chain power, body slam and head butt.
@@ -8472,7 +8472,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0020, Per-tick order: Movement chooser (Movement), only if the state is still a free state (an attack just chosen is not).
     - [ ] SPEC-0020, Per-tick order: The current state's handler (below). A choice made in steps 3 to 7 runs its handler in the same tick, so an attack's request tick is the tic...
     - [ ] SPEC-0020, Per-tick order: Chain spark updates, then wait one tick.
-  - [x] SPEC-0020 State table {auto: title named in code}
+  - [ ] SPEC-0020 State table
     - [ ] SPEC-0020, State table: Idle 3 (clip 0, 44, loop) open a hub, reaction or chooser decision
     - [ ] SPEC-0020, State table: Approach 6 run (clip 13, 13, loop) open orbit when the hero is closer than 6 (see Movement); the walk clip is never used here
     - [ ] SPEC-0020, State table: Orbit 13 or 14 (clip 22, 20, loop) open hero farther than 8 (approach), or an attack or reaction
@@ -8499,7 +8499,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0020, Attack chooser, in priority order (free states only): Rapid strike: cooldown 0 and the hero closer than 9. No roll.
     - [ ] SPEC-0020, Attack chooser, in priority order (free states only): Chain power: cooldown 0 and the hero closer than 9: roll 0 to 100 inclusive against a chance of 0, so...
     - [ ] SPEC-0020, Attack chooser, in priority order (free states only): Head butt: cooldown 0 and the hero closer than 15: roll 0 to 100 inclusive below 40 (phase 1) or 25 (p...
-  - [x] SPEC-0020 Movement (free states, after the choosers) {auto: title named in code}
+  - [ ] SPEC-0020 Movement (free states, after the choosers)
   - [ ] SPEC-0020 Hit and hurt windows in ticks (frame f is live in handler ticks s + 4f to s + 4f + 3; tick s only requests)
     - [ ] SPEC-0020, Hit and hurt windows in ticks (frame f is live in handler...: Chain whip frames 7 to 13: s + 28 to s + 55 one hit of 15 (bone-chain test), full damage even...
     - [ ] SPEC-0020, Hit and hurt windows in ticks (frame f is live in handler...: Rapid strike bit 0x4 frames 6 to 10: s + 24 to s + 43; bit 0x2 frames 10 to 13: s + 40 to s +...
@@ -8557,7 +8557,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0020, Timing table (timing pass): Body slam any tick s + 1 to s + 56 one strike of 30 if the hero is closer than 5
     - [ ] SPEC-0020, Timing table (timing pass): Flinch 49 ticks the hero's damage is applied at the end of the flinch, once
     - [ ] SPEC-0020, Timing table (timing pass): Death clip 41 ticks then level event 2 every tick
-- [x] SPEC-0020 Arena build guide {auto: title named in code}
+- [ ] SPEC-0020 Arena build guide
 - [ ] SPEC-0020 Reach and distances (boss reach pass)
   - [ ] SPEC-0020, Reach and distances (boss reach pass): Chain whip (0x13, bones 29 to 33) s + 28 to s + 55 on the facing line 3.0 to 6.0; 2 units to the side 3.0 to 5.5; 4 t...
   - [ ] SPEC-0020, Reach and distances (boss reach pass): Rapid strike (0x14) four windows (bits 0x4, 0x2, 0x1, 0x8) on the line 1.5 to 6.0 in the first window, 6.5 to 7.5 onl...
@@ -8579,7 +8579,7 @@ Cited 16 times in the game code.
   - [ ] SPEC-0020, Where it lives on the disc: Animation numbers are entries of the boss's animation table (SPEC-0005). Locomotion modes are separate: a mode selects which tab...
   - [ ] SPEC-0020, Where it lives on the disc: "Post event n" means set level flag n (SPEC-0014, cross-boss facts). The level script's set-level-state and query-level-state ca...
 - [ ] SPEC-0020 Layout
-  - [x] SPEC-0020 Tuning values {auto: title named in code}
+  - [ ] SPEC-0020 Tuning values
     - [x] SPEC-0020, Tuning values: Maniacal laugh chance int % 0x2DAD98 30 Chance to laugh after a body slam that hit (the chain power is unreachable) {auto: address in code}
     - [ ] SPEC-0020, Tuning values: Exhausted chance 1 int % 0x2DAD9C 25 Unused
     - [ ] SPEC-0020, Tuning values: Exhausted chance 2 int % 0x2DADA0 75 Unused
@@ -8639,11 +8639,11 @@ Cited 16 times in the game code.
     - [x] SPEC-0020, Tuning values: Knockback push speed float 0x2DAE78 8.0 Speed multiplier of the knockback push (8 x strength) {auto: address in code}
     - [x] SPEC-0020, Tuning values: Run-or-walk distance float units 0x2DAE8C 5.0 Approach uses the run locomotion when farther than this, walk when not {auto: address in code}
 - [ ] SPEC-0020 Behavior
-  - [x] SPEC-0020 Setup at spawn (Confidence: High) {auto: title named in code}
+  - [ ] SPEC-0020 Setup at spawn (Confidence: High)
     - [ ] SPEC-0020, Setup at spawn (Confidence: High): The state starts at idle. The jump timer starts at 30 ticks.
     - [ ] SPEC-0020, Setup at spawn (Confidence: High): Each cooldown is drawn once at spawn: the head-butt cooldown from its min and max, the chain whip cooldown from its min a...
     - [ ] SPEC-0020, Setup at spawn (Confidence: High): The four tree points are found in the level (ids 101 to 104).
-  - [x] SPEC-0020 Each tick, in order {auto: title named in code}
+  - [ ] SPEC-0020 Each tick, in order
     - [ ] SPEC-0020, Each tick, in order: Write the animation-speed tunable to the boss character's per-tick speed scale P. This class coroutine runs after the NPC update resets...
     - [ ] SPEC-0020, Each tick, in order: Count down the timers: the reaction timer, the cooldowns, the jump timer, and the exhaustion timer, each by one tick, not going below z...
     - [ ] SPEC-0020, Each tick, in order: Run the damage check (Taking damage).
@@ -8663,7 +8663,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0020, Phase hub (Confidence: High for the order and the world q...: Death. If p <= 0 (health below 1 percent, since p is truncated), the boss enters the death sta...
     - [ ] SPEC-0020, Phase hub (Confidence: High for the order and the world q...: Death is checked only in free states and only when the hero is not down. A boss at 0 health th...
     - [ ] SPEC-0020, Phase hub (Confidence: High for the order and the world q...: The rage flag is set in the rage state and never cleared, so rage arms at most once per boss.
-  - [x] SPEC-0020 Taking damage (Confidence: Medium-High) {auto: title named in code}
+  - [ ] SPEC-0020 Taking damage (Confidence: Medium-High)
     - [ ] SPEC-0020, Taking damage (Confidence: Medium-High): Melee hit : the hero is attacking, the hero's attack is active and the hero's weapon touches Gnarfas (the hero's si...
     - [ ] SPEC-0020, Taking damage (Confidence: Medium-High): Missile hit : each of the hero's six missile slots is tested as a sphere (the slot's point and radius) against Gnar...
     - [ ] SPEC-0020, Taking damage (Confidence: Medium-High): The flinch plays animation 9. The flinch records "was exhausted" when it starts in the exhausted state.
@@ -8722,7 +8722,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0020, Clip table and durations (Confidence: High for the clip d...: 21 17 32 no 124 chain power (never started)
     - [ ] SPEC-0020, Clip table and durations (Confidence: High for the clip d...: 22 3 15 no 57 body slam
     - [ ] SPEC-0020, Clip table and durations (Confidence: High for the clip d...: 24 9 20 no 77 head butt
-  - [x] SPEC-0020 Missile reaction (Confidence: High for the rolls and timer; Medium-High for the contact shape) {auto: title named in code}
+  - [ ] SPEC-0020 Missile reaction (Confidence: High for the rolls and timer; Medium-High for the contact shape)
     - [ ] SPEC-0020, Missile reaction (Confidence: High for the rolls and time...: Roll less than the missile block chance (100 in phase 1, 25 in phase 2): enter the block-missi...
     - [ ] SPEC-0020, Missile reaction (Confidence: High for the rolls and time...: Otherwise roll less than the missile dodge chance (25): enter the dodge-missile state (animati...
     - [ ] SPEC-0020, Missile reaction (Confidence: High for the rolls and time...: Otherwise roll less than the missile jump chance (25): start the jump sequence from its first...
@@ -8731,14 +8731,14 @@ Cited 16 times in the game code.
     - [ ] SPEC-0020, Missile reaction (Confidence: High for the rolls and time...: The block holds still. The state makes no animation request, never turns the boss and never ca...
     - [ ] SPEC-0020, Missile reaction (Confidence: High for the rolls and time...: Exit. The state ends on the first tick on which no armed slot's 120-tick path touches a bone c...
     - [ ] SPEC-0020, Missile reaction (Confidence: High for the rolls and time...: Guard path (Medium-High). In base state 20 a non-hero character counts as guarding for the her...
-  - [x] SPEC-0020 Melee reaction (Confidence: High) {auto: title named in code}
-  - [x] SPEC-0020 Attack selection (Confidence: High for the order and tests; High for the cooldown rules) {auto: title named in code}
+  - [ ] SPEC-0020 Melee reaction (Confidence: High)
+  - [ ] SPEC-0020 Attack selection (Confidence: High for the order and tests; High for the cooldown rules)
     - [ ] SPEC-0020, Attack selection (Confidence: High for the order and test...: Block counter (unreachable, High). The step has its own flag, which lives in the boss's own co...
     - [ ] SPEC-0020, Attack selection (Confidence: High for the order and test...: Chain whip. If the chain-whip cooldown is zero and the hero is closer than 9 units, start the...
     - [ ] SPEC-0020, Attack selection (Confidence: High for the order and test...: Rapid strike. If the rapid-strike cooldown is zero and the hero is closer than 9 units, start...
     - [ ] SPEC-0020, Attack selection (Confidence: High for the order and test...: Chain power. If the chain-power cooldown is zero and the hero is closer than 9 units: roll; if...
     - [ ] SPEC-0020, Attack selection (Confidence: High for the order and test...: Head butt. If the head-butt cooldown is zero and the hero is closer than 15 units: roll; if th...
-  - [x] SPEC-0020 Movement (Confidence: High for thresholds; Medium for meaning) {auto: title named in code}
+  - [ ] SPEC-0020 Movement (Confidence: High for thresholds; Medium for meaning)
     - [ ] SPEC-0020, Movement (Confidence: High for thresholds; Medium for mea...: If the hero is farther than 8 units, the boss goes to approach.
     - [ ] SPEC-0020, Movement (Confidence: High for thresholds; Medium for mea...: Otherwise, if the hero is at least 6 units away, or the boss is already orbiting, the jump tim...
     - [ ] SPEC-0020, Movement (Confidence: High for thresholds; Medium for mea...: Otherwise (the hero is closer than 6 units and the boss is not orbiting), the boss starts orbi...
@@ -8782,9 +8782,9 @@ Cited 16 times in the game code.
     - [ ] SPEC-0020, Jump to tree (Confidence: High for steps and exits; Mediu...: After the landing. The no-gravity flag stops, the lock word is cleared by the next tick's top...
     - [ ] SPEC-0020, Jump to tree (Confidence: High for steps and exits; Mediu...: Typical length. Step 0 lasts 26 ticks and the first flight about 50, then at each perch the le...
     - [ ] SPEC-0020, Jump to tree (Confidence: High for steps and exits; Mediu...: Flinch inside the sequence. A hit during any step starts a flinch; at its end the state is idl...
-  - [x] SPEC-0020 Body slam (Confidence: High) {auto: title named in code}
-  - [x] SPEC-0020 Head butt (Confidence: High) {auto: title named in code}
-  - [x] SPEC-0020 Knockback (Confidence: High) {auto: title named in code}
+  - [ ] SPEC-0020 Body slam (Confidence: High)
+  - [ ] SPEC-0020 Head butt (Confidence: High)
+  - [ ] SPEC-0020 Knockback (Confidence: High)
     - [ ] SPEC-0020, Knockback (Confidence: High): It runs only when the hero is not down (action state not 16; the same test as the hub's hold). Otherwise nothing changes. A ki...
     - [ ] SPEC-0020, Knockback (Confidence: High): The hero's velocity is cleared, then 12.0 is added to its vertical part and 9 d to its horizontal part, where d is the horizon...
     - [x] SPEC-0020, Knockback (Confidence: High): The result is normalized and scaled by 8.0 x s (8.0 is the push speed word 0x2DAE78): velocity = normalize(9 d + 12 up) x 8 s.... {auto: address in code}
@@ -8804,7 +8804,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0020, Chain whip and rapid strike (Confidence: High): Rapid strike (0x14) bit 0x4: frames 6 to 10; bit 0x2: frames 10 to 13; bit 0x1: frames 18 to 23; bit 0x8: fr...
     - [ ] SPEC-0020, Chain whip and rapid strike (Confidence: High): Chain power (0x15) bits 0x1, 0x2, 0x4 and 0x8: frames 9 to 17 of 32 13 (unreachable)
     - [ ] SPEC-0020, Chain whip and rapid strike (Confidence: High): Bone-chain test. On each tick, the event bits on in the current frame select runs of the boss's bones, teste...
-  - [x] SPEC-0020 Chain power (Confidence: High for its gate; Medium for its hit) {auto: title named in code}
+  - [ ] SPEC-0020 Chain power (Confidence: High for its gate; Medium for its hit)
   - [ ] SPEC-0020 Arena flow (level script module 985; owned by SPEC-0041; Confidence: High for the calls and order unless noted)
     - [ ] SPEC-0020, Arena flow (level script module 985; owned by SPEC-0041;...: On world activation (game state 281 clear): the hero is moved to locator 9, the normal camera i...
     - [ ] SPEC-0020, Arena flow (level script module 985; owned by SPEC-0041;...: Phase 2 hand-over. Each tick the script's control thread checks: if level state 0 is set and le...
@@ -9088,7 +9088,7 @@ Cited 104 times in the game code.
   - [ ] SPEC-0021 Heal streak
     - [ ] SPEC-0021, Heal streak: A heal of amount H at time t: when t minus the time of the previous heal of the same pool is strictly less than 4.5 s, H is added to the accumu...
     - [ ] SPEC-0021, Heal streak: After the heal, compare the accumulator with half of the pool's current maximum. When it is at least half, it resets to 0 and the reaction id b...
-  - [x] SPEC-0021 Use cues {auto: title named in code}
+  - [ ] SPEC-0021 Use cues
   - [x] SPEC-0021 Quick-item selection marker (Medium-High) {auto: title named in code}
     - [ ] SPEC-0021, Quick-item selection marker (Medium-High): +0x155C 4 Selection marker: an item id, or -1 when empty. It is an item id, not an entry index.
     - [ ] SPEC-0021, Quick-item selection marker (Medium-High): Setting the marker to a different item id plays cue 0xA3. Setting it to the id it already holds does nothing. Cle...
@@ -9285,7 +9285,7 @@ Cited 104 times in the game code.
     - [ ] SPEC-0021, Mote drain (mote eater) (High; timing Medium-High): Each group entry, when it spawns, drains 20 charge from its Mote by the use rule of Mote charge: if the...
     - [ ] SPEC-0021, Mote drain (mote eater) (High; timing Medium-High): When the Mote is then not held (or was never held), every equipment word of the active hero that holds i...
     - [ ] SPEC-0021, Mote drain (mote eater) (High; timing Medium-High): Test vectors: a Fire Mote with charge 15 is removed by one drain and unequipped (cue 0xA4 if it was equi...
-  - [x] SPEC-0021 Pickup dispatch and the luck gate {auto: title named in code}
+  - [ ] SPEC-0021 Pickup dispatch and the luck gate
     - [ ] SPEC-0021, Pickup dispatch and the luck gate: Region start-up : for each kind-8 placement, in order: the luck gate (below); then, for keys 0 or more, the equipment vet...
     - [ ] SPEC-0021, Pickup dispatch and the luck gate: Scripted add (the script asks for an item to be added at a placement): the luck gate, then for keys 0 or more the equipme...
     - [ ] SPEC-0021, Pickup dispatch and the luck gate: Drop action on a placement: the money and item flow described above, run only on the events of When a drop roll runs. The...
@@ -9316,7 +9316,7 @@ Cited 104 times in the game code.
     - [ ] SPEC-0021, Important-item give (quirk, reproducible): Quirk: for an important id whose carry limit Q is not 1, a dropped copy can be added twice: once by the take and...
     - [ ] SPEC-0021, Important-item give (quirk, reproducible): These six ids have no source except flag-3 enemy drops (Sources, Conditional placements), so every world copy is...
     - [ ] SPEC-0021, Important-item give (quirk, reproducible): Test vectors: Black Feather (78, Q 5): pickups give counts 2, 4, then 5; at 5 every world copy of 78 is removed....
-  - [x] SPEC-0021 Clover patches {auto: title named in code}
+  - [ ] SPEC-0021 Clover patches
     - [ ] SPEC-0021, Clover patches: The entry is tested when the hero's stick speed value is above 0 (the stick length after the dead zone, divided by 87.5 and capped at 1.0; S...
     - [ ] SPEC-0021, Clover patches: The entry must contain the hero (within 5.0 units horizontally, and a 0.7 sphere against the hero's body) and its found flag must be clear.
     - [ ] SPEC-0021, Clover patches: Patch kind 239 (Four-Leaf Clover) rolls only while the current world's bit in the item-19 world set is clear; patch kind 268 (Twelve-Leaf Cl...
@@ -9391,7 +9391,7 @@ Cited 104 times in the game code.
     - [ ] SPEC-0021, Inventory: Adding a charm (type 17, a Mote) uses a count of 100 through the player's pool. Other items add one. The 100 is the Mote's charge (Mote charge).
     - [ ] SPEC-0021, Inventory: A byte count is at most 255. The add also never raises the held count above the item's carry limit Q (text row +0x08) when Q is above 0. After a...
     - [ ] SPEC-0021, Inventory: The item screen shows each kind's owned count. A count of 0 hides the cell, a count of 1 shows the icon without a number, and a count above 1 sho...
-  - [x] SPEC-0021 Mote charge {auto: title named in code}
+  - [ ] SPEC-0021 Mote charge
     - [ ] SPEC-0021, Mote charge: Every Mote (type 17, ids 160 to 173) in the inventory has a charge count, set to 100 when the Mote is added.
     - [ ] SPEC-0021, Mote charge: Using charge n: if n is below the count, the count becomes count minus n. Otherwise the Mote is removed from the inventory (its slot is cleared...
     - [ ] SPEC-0021, Mote charge: The same scheme serves all three equipment words: word 2 (the weapon Mote), word 1 (the shield Mote) and word 0 (the armour Mote). Each use fin...
@@ -9633,7 +9633,7 @@ Cited 104 times in the game code.
     - [ ] SPEC-0021, Counts (all 208 config records): 85 Box of Spare Parts 1017 (Guildsman Fearghas)
     - [ ] SPEC-0021, Counts (all 208 config records): 87 The Bandit's Plans 784
     - [ ] SPEC-0021, Counts (all 208 config records): 128 Neophyte Garb 1327
-- [x] SPEC-0021 Neopoints {auto: title named in code}
+- [ ] SPEC-0021 Neopoints
   - [x] SPEC-0021 The wallet {auto: title named in code}
     - [ ] SPEC-0021, The wallet: Where. One signed 32-bit word at +0x14 of the party item container. Both heroes' inventory links point at that one container, so the wallet is s...
     - [ ] SPEC-0021, The wallet: No cap. No maximum value exists anywhere in the program. A coin pickup, a reward and the Act 3 merge are plain additions. The only guard is on t...
@@ -10145,7 +10145,7 @@ Cited 45 times in the game code.
     - [ ] SPEC-0022, Showing text: Show table line i: the line's speaker and colour are applied, no blocking.
     - [ ] SPEC-0022, Showing text: Show table line i and wait until the box closes.
     - [ ] SPEC-0022, Showing text: Show table line i (or, if the index is negative, no line), with two choice labels, and wait. The result is 1 for Circle and 0 for Triangle, an...
-  - [x] SPEC-0022 Substitution codes {auto: title named in code}
+  - [ ] SPEC-0022 Substitution codes
     - [ ] SPEC-0022, Substitution codes: A code whose run-pass mask (V − 2) has bit 5 (value 32) set is a substitution code. No type has a handler for it, and the draw and revea...
     - [ ] SPEC-0022, Substitution codes: When the dialogue box opens a text, it first scans the text byte by byte. Each substitution code is replaced by the text of substitution...
     - [ ] SPEC-0022, Substitution codes: the result (the text before the code, then the slot text, then the text after the code) is built in a 512-byte work area;
@@ -10171,7 +10171,7 @@ Cited 45 times in the game code.
     - [ ] SPEC-0022, Reveal and paging: Skip: on a Square press (press edge, logical bit 0x0080) with p above 0, p is set to B / r and the whole page shows in that update. The p...
     - [ ] SPEC-0022, Reveal and paging: The page is complete when n ≥ B. Input for the prompt row is read only in an update that starts with the page already complete (set by th...
     - [ ] SPEC-0022, Reveal and paging: A box opened with the instant flag (the controller message) is complete on its first update.
-  - [x] SPEC-0022 Choices, input and release {auto: title named in code}
+  - [ ] SPEC-0022 Choices, input and release
     - [ ] SPEC-0022, Choices, input and release: Last page, not choice mode, prompt allowed: label "Finish". A Square press closes the box: the text is cleared. The box plays no...
     - [ ] SPEC-0022, Choices, input and release: Stop pending: label "Next". A Square press moves to the page after the stop (finding the next stop), plays cue 0x98 (advance) an...
     - [ ] SPEC-0022, Choices, input and release: Choice mode, last page: a Circle press sets the result to 1 and plays cue 0x98. A Triangle press sets the result to 0 and plays...
@@ -10509,8 +10509,8 @@ Cited 45 times in the game code.
     - [ ] SPEC-0022, Progress flags: Clear(i): for an out-of-range index, does nothing. Otherwise it posts a notification with flag i, the new value off and the old bit, then cl...
     - [ ] SPEC-0022, Progress flags: Watcher callbacks: each flag i has its own watcher slot i (slot records are 24 bytes: callback, busy word, new value, old value, and two reg...
     - [ ] SPEC-0022, Progress flags: Level-scoped state is separate from the global bitmap. SetLevelState(i, value, world) changes one of 64 bits of that world's own state, with...
-    - [x] SPEC-0022 Initial state {auto: title named in code}
-    - [x] SPEC-0022 Stage table {auto: title named in code}
+    - [ ] SPEC-0022 Initial state
+    - [ ] SPEC-0022 Stage table
       - [ ] SPEC-0022, Stage table: Pair entries (stage id, flag index): each flag is set when the flag index is zero or more.
       - [ ] SPEC-0022, Stage table: Triple entries (stage id, flag index, value): when the value is positive and the flag index is zero or more, the flag is set through the world'...
     - [ ] SPEC-0022 Flags used by the engine
@@ -10980,7 +10980,7 @@ Cited 67 times in the game code.
     - [ ] SPEC-0023, HUD record defaults (record of 0x2A0 bytes; Open question...: +0x27C to +0x288 4 words 0 Cleared
     - [ ] SPEC-0023, HUD record defaults (record of 0x2A0 bytes; Open question...: +0x294 4 0 Cleared (last offset written; the record is at least 0x298 bytes)
 - [ ] SPEC-0023 Behavior
-  - [x] SPEC-0023 1. Per-tick order {auto: title named in code}
+  - [ ] SPEC-0023 1. Per-tick order
     - [ ] SPEC-0023, 1. Per-tick order: Compare the four watched values (health current, health maximum, pool current, pool maximum) with the values stored last time. If any dif...
     - [ ] SPEC-0023, 1. Per-tick order: If the pool current fell, start the pool loss response (section 3).
     - [ ] SPEC-0023, 1. Per-tick order: Store the four values for the next comparison.
@@ -10990,7 +10990,7 @@ Cited 67 times in the game code.
     - [ ] SPEC-0023, 1. Per-tick order: Lay out the health bar: frame and fill from its maximum and current value (section 3), and its dividers.
     - [ ] SPEC-0023, 1. Per-tick order: If the pool maximum is at least 1, lay out the pool bar the same way.
     - [ ] SPEC-0023, 1. Per-tick order: Push alpha(C) to the subtree of group 0x31 (section 4), then lower C by 1 if it is above 0.
-  - [x] SPEC-0023 2. Tint pulse {auto: title named in code}
+  - [ ] SPEC-0023 2. Tint pulse
     - [ ] SPEC-0023, 2. Tint pulse: A pulse has a half-length D (20 ticks), a colour target, and a ramp value t that starts at 0.
     - [ ] SPEC-0023, 2. Tint pulse: Each tick while a pulse runs, t increases by 1/D. When t reaches 1, the direction reverses and t is held at 1. When t falls to 0 on the way d...
     - [ ] SPEC-0023, 2. Tint pulse: Total length is about 2D = 40 ticks, with the peak at tick 20 from the start.
@@ -11044,7 +11044,7 @@ Cited 67 times in the game code.
     - [ ] SPEC-0023, 5. Quick-item slots: The counts are value-text nodes in the three equipment panels: slot 0 in panel 0x1D (armour icon for Tor, robe for Roberta), slot 1 in...
     - [ ] SPEC-0023, 5. Quick-item slots: The four-entry quick-item panel is a separate control, specified in SPEC-0021; its four entries are the quick-item cross of section 11.
   - [ ] SPEC-0023 6. Map icons
-  - [x] SPEC-0023 7. Petpet meter (element 0x12) {auto: title named in code}
+  - [ ] SPEC-0023 7. Petpet meter (element 0x12)
     - [ ] SPEC-0023, 7. Petpet meter (element 0x12): The meter shows the active petpet's meter (SPEC-0047): A = the petpet's current meter value and B = its meter maximum (SPEC-...
     - [ ] SPEC-0023, 7. Petpet meter (element 0x12): Width in pixels W = round half away from zero (A x (60 / B)). Full width is 60 px. The fill node's x scale (about 1.11) wide...
     - [ ] SPEC-0023, 7. Petpet meter (element 0x12): A maximum of zero (Medium-High): B is set together with A when the petpet is fed or restored, and A only counts down from it...
@@ -11064,7 +11064,7 @@ Cited 67 times in the game code.
     - [ ] SPEC-0023, 9. D-pad hint icon (element 0xBB): So the hint is at full alpha for 210 ticks after L3 and then ramps down to alpha 32 at D = 0.
     - [ ] SPEC-0023, 9. D-pad hint icon (element 0xBB): D is set to 0 when the pause page or item screen opens. The icon is hidden while the letterbox or screen fade is busy, wh...
     - [ ] SPEC-0023, 9. D-pad hint icon (element 0xBB): The icon is not gated by D. It is drawn on every pass in which none of those hiding conditions holds, at the alpha above....
-  - [x] SPEC-0023 10. Monster health bar {auto: title named in code}
+  - [ ] SPEC-0023 10. Monster health bar
     - [ ] SPEC-0023, 10. Monster health bar: Every non-hero character in a world region is the same kind of game object. Its take-hit step (SPEC-0029, SPEC-0038 Behavior 37) arm...
     - [ ] SPEC-0023, 10. Monster health bar: These bosses also arm the bar from their own hit code, at the point where their own damage rule applies (each is the same arm step):
     - [ ] SPEC-0023, 10. Monster health bar: Black Knight: in the four enraged stun states (charge, high swing, floor strike, sword spin), after a part loses HP.
@@ -11233,12 +11233,12 @@ Cited 67 times in the game code.
     - [ ] SPEC-0023, 31. On-screen countdown timer (High): Activate(0, 0, counting up): the value is 0.0 on every tick (the cap is 0). A level script uses this call.
     - [ ] SPEC-0023, 31. On-screen countdown timer (High): Activate(5, 0, counting up), Stop, 120 ticks: value 5.0 (no step and no clamp while stopped). Start, then 1 tick: valu...
     - [ ] SPEC-0023, 31. On-screen countdown timer (High): Activate(5, -1, counting up), 60 ticks: value 6.0 (a negative limit means no cap).
-  - [x] SPEC-0023 32. Low-health warning (sound only) {auto: title named in code}
+  - [ ] SPEC-0023 32. Low-health warning (sound only)
     - [ ] SPEC-0023, 32. Low-health warning (sound only): Each hero update tick (SPEC-0040), using the active hero's own values: if float(health current) < float(health maximum)...
     - [ ] SPEC-0023, 32. Low-health warning (sound only): Cue 158 is the magic-pool warning, not a second hero's health warning. The rule is the same for both heroes.
     - [ ] SPEC-0023, 32. Low-health warning (sound only): The bars get no low-health visual. Setting C alone keeps the bar update running but does not keep the bars drawn (group...
     - [ ] SPEC-0023, 32. Low-health warning (sound only): A maximum of 0 gives no warning (0 is not below 0).
-  - [x] SPEC-0023 33. Button prompts {auto: title named in code}
+  - [ ] SPEC-0023 33. Button prompts
     - [ ] SPEC-0023, 33. Button prompts: The HUD tree has six button-prompt slots: L1, L2, R1, R2, Square and Cross icons, stacked around x 295, y 371 to 400, each with a captio...
     - [ ] SPEC-0023, 33. Button prompts: Only the Square slot (slot 4) has a live writer. Its caption buffer is at data address 0x37C060 and its shown count at 0x2DCD40. The set...
     - [ ] SPEC-0023, 33. Button prompts: Draw rule (the caption draw of section 30): once per pass, after the world update, the in-play state draws each slot whose count is abov...
@@ -11297,7 +11297,7 @@ Cited 67 times in the game code.
     - [ ] SPEC-0023, G1. The in-play HUD overlay: Closes: the pause page (Select, cue 0x94), the item screens (Start), the box host (dialogue), the book reader, the game-over pa...
     - [ ] SPEC-0023, G1. The in-play HUD overlay: Inputs read by the HUD itself: only L3 (pressed: shows everything for 4 s; section 4 and 9). Quick-item and Mote panels are dri...
     - [ ] SPEC-0023, G1. The in-play HUD overlay: Sounds: none of its own, except the low-health cues 0x9D and 0x9E (section 32).
-  - [x] SPEC-0023 G2. Per pass {auto: title named in code}
+  - [ ] SPEC-0023 G2. Per pass
     - [ ] SPEC-0023, G2. Per pass: The page tree is drawn (pre-order, G3), using the values the handler stored on the previous pass (one-pass lag, section 1).
     - [ ] SPEC-0023, G2. Per pass: The handler runs: play gates; counts; bar update when the change timer is not 0; group fades; meters, icons, hint, swing, countdown texts, mon...
     - [ ] SPEC-0023, G2. Per pass: The HUD page is drawn last in the frame, over the world, the screen fade and the letterbox bars (SPEC-0046 step 12).
@@ -11578,7 +11578,7 @@ Cited 11 times in the game code.
     - [ ] SPEC-0024, Strings: Table 9 (64 strings): 19 substitution codes (type 5, n 3, L 13, V 34), all in field +0x00 of 16 records; first argument 0 in 16 codes and 1 in 3. T...
     - [ ] SPEC-0024, Strings: Tables 1, 3, 5, 13 and 15: no control bytes.
     - [ ] SPEC-0024, Strings: Pointer checks on disc: every non-zero pointer in table 1 (476 of 476), table 3 (44 of 44), table 5 (77 of 77), table 13 (36 of 36) and table 15 (4...
-  - [x] SPEC-0024 Path records (type 43, chunks 17 to 19) {auto: title named in code}
+  - [ ] SPEC-0024 Path records (type 43, chunks 17 to 19)
     - [ ] SPEC-0024, Path records (type 43, chunks 17 to 19): +0x000 256 bytes Name: a NUL-terminated string, zero-padded. The loader does not use it. H
     - [ ] SPEC-0024, Path records (type 43, chunks 17 to 19): +0x100 4 u32 Entry count N. H
     - [ ] SPEC-0024, Path records (type 43, chunks 17 to 19): +0x104 8 x N entries Entry i for i = 0 to N - 1: u32 start in units, then u32 length in units. H
@@ -11775,7 +11775,7 @@ Cited 11 times in the game code.
     - [ ] SPEC-0024, Emote choice (tables 7 and 8): A clip index that gives a directory entry of zero length plays nothing.
   - [ ] SPEC-0024 Save state
   - [ ] SPEC-0024 Loading order
-  - [x] SPEC-0024 Path records (type 43) {auto: title named in code}
+  - [ ] SPEC-0024 Path records (type 43)
     - [ ] SPEC-0024, Path records (type 43): 17 0x90 144 characterEmotes.bls Table 7 character emote clips
     - [ ] SPEC-0024, Path records (type 43): 18 0x91 145 heroEmotes.bls Table 8 hero emote clips
     - [ ] SPEC-0024, Path records (type 43): 19 0x240 576 BOOKS.bls Book page sounds
@@ -12021,7 +12021,7 @@ Cited 41 times in the game code.
     - [ ] SPEC-0025, Per-world tables: T1 (SPEC-0048). A break sets bit (script index) in the current world's row, for script indexes below 128. At world load each breakable's s...
     - [ ] SPEC-0025, Per-world tables: T2 (SPEC-0006). Each resident world holds a live 33-byte kill block (world record +0x40): 256 kill bits of its character records, then one...
     - [ ] SPEC-0025, Per-world tables: Quirks: rows 167 and 180, the second entries of the duplicate keys 1391 and 1414, are never used, because the world index comes from the f...
-  - [x] SPEC-0025 Empty-slot template {auto: title named in code}
+  - [ ] SPEC-0025 Empty-slot template
     - [ ] SPEC-0025, Empty-slot template: 0x020 0 (u32)
     - [ ] SPEC-0025, Empty-slot template: 0x024, 0x028, 0x02C -1 (s32 each)
     - [ ] SPEC-0025, Empty-slot template: 0x200, 0x204 0 (u32 each)
@@ -12033,7 +12033,7 @@ Cited 41 times in the game code.
     - [ ] SPEC-0025, Empty-slot template: 0x307C 2 (u32)
     - [ ] SPEC-0025, Empty-slot template: 0x30A4 to 0x30BB -1 (s32 each, all 6 values)
     - [ ] SPEC-0025, Empty-slot template: 0x30BC, 0x30C0 0 (u32 each)
-  - [x] SPEC-0025 Validity rules (no checksum) {auto: title named in code}
+  - [ ] SPEC-0025 Validity rules (no checksum)
     - [ ] SPEC-0025, Validity rules (no checksum): There is no checksum, CRC or sum field in the slot or in the file. The save writer and the load path compute no sum over the s...
     - [ ] SPEC-0025, Validity rules (no checksum): Empty: key A is negative. The save writer's present flag is the sign bit of key A before the rebuild. The load treats any nega...
     - [ ] SPEC-0025, Validity rules (no checksum): Slot index: 0 to 3 only. An index of 4 or more copies nothing and returns nothing.
@@ -12056,7 +12056,7 @@ Cited 41 times in the game code.
     - [ ] SPEC-0025, Name text and glyph codes: Base table (virtual address 0x2ECDE0): three entries of 4 bytes, each a two-byte code with first byte 0x82 followed by an ASCII b...
 - [ ] SPEC-0025 Behavior
   - [ ] SPEC-0025 Creating the save file
-  - [x] SPEC-0025 Slot index {auto: title named in code}
+  - [ ] SPEC-0025 Slot index
     - [ ] SPEC-0025, Slot index: Valid slot indices are 0, 1, 2 and 3. The save screen draws four rows, one per index, and the slot copy on load accepts the same indices.
     - [ ] SPEC-0025, Slot index: A load with an index of 4 or more copies nothing and returns no data. The load stops and the world is not changed (High).
     - [ ] SPEC-0025, Slot index: Rows: the picker draws four rows, one per index. A filled slot's row shows the slot's location name, its date text and an act icon: the row type...
@@ -12138,7 +12138,7 @@ Cited 41 times in the game code.
     - [ ] SPEC-0025, Delete job (kind 5): Make the save folder current (Shared rules) and wait. Any negative result fails the job.
     - [ ] SPEC-0025, Delete job (kind 5): Delete the file named in the step record and wait.
     - [ ] SPEC-0025, Delete job (kind 5): A result of zero or above, or -4 ("not found", the file is already absent), ends the job as done, with a diagnostic line. Any other res...
-  - [x] SPEC-0025 Write job {auto: title named in code}
+  - [ ] SPEC-0025 Write job
     - [ ] SPEC-0025, Write job: Make the save folder current (Shared rules) and wait. -4 (path not found) raises event 0x11 and fails the job; any other negative result fails it...
     - [ ] SPEC-0025, Write job: Open the file by its bare name with the open value 0x203 and wait. In the card library's open modes 0x200 means "create the file if it is missing...
     - [ ] SPEC-0025, Write job: Write the data block of the step record (its data pointer and byte size words) and wait. A non-negative result is the byte count written; it is s...
@@ -12240,7 +12240,7 @@ Cited 41 times in the game code.
     - [ ] SPEC-0025, Session snapshot and pending flag: The save sets the flag when the write starts, before the card result is known, so a failed write still leaves the snapsho...
     - [ ] SPEC-0025, Session snapshot and pending flag: Only the world teardown (quit, or game over without the flag) clears the pending flag (High).
     - [ ] SPEC-0025, Session snapshot and pending flag: Game-over Continue with the flag set re-applies the snapshot from memory, with no card access, exactly as a load applies...
-  - [x] SPEC-0025 Progress tier (byte 0x2FBA) {auto: title named in code}
+  - [ ] SPEC-0025 Progress tier (byte 0x2FBA)
   - [ ] SPEC-0025 Loading
     - [ ] SPEC-0025, Loading: The load scan reads the card file (Card jobs, Load scan). No card shows record 13; an unformatted card or a missing save folder shows record 11. Ot...
     - [ ] SPEC-0025, Loading: The load screen shows the four slot rows from the scan (same as saving).
@@ -12304,7 +12304,7 @@ Cited 41 times in the game code.
     - [ ] SPEC-0025, New game and reset: runs the engine's world reset.
     - [ ] SPEC-0025, New game and reset: Index 0 (plain new game): sets the two start-key globals to -1, so the start worlds fall back to world key 691 (saved id 11) in the tran...
     - [ ] SPEC-0025, New game and reset: Indices 1 to 8: sets flag 707 for every index. Runs the stage events listed for those indices in SPEC-0035 section 5. Each event sets it...
-  - [x] SPEC-0025 Hero maxima and restore {auto: title named in code}
+  - [ ] SPEC-0025 Hero maxima and restore
     - [ ] SPEC-0025, Hero maxima and restore: Tor health: if the word at 0x20C is from 1 to 500, the maximum is that word. Otherwise the maximum is 500.
     - [ ] SPEC-0025, Hero maxima and restore: Tor magic: if the word at 0x210 is from 1 to 300, the maximum is that word. Otherwise it is 300.
     - [ ] SPEC-0025, Hero maxima and restore: Roberta health: if the word at 0x30BC is from 1 to 400, the maximum is that word. Otherwise, let X be the word at 0x20C. If X is fr...
@@ -12609,7 +12609,7 @@ Cited 34 times in the game code.
     - [ ] SPEC-0026, Movie queue: Played words one u32 per movie index (92 words, 368 bytes) Set to 1 when the movie starts to play and kept; read by HasMoviePlayed and by the s...
     - [ ] SPEC-0026, Movie queue: No-skip word u32 Cleared by every queue add and set by nothing, so the skip check of every movie is enabled
   - [ ] SPEC-0026 Bush instance record (moved)
-  - [x] SPEC-0026 Game-state code {auto: title named in code}
+  - [ ] SPEC-0026 Game-state code
   - [ ] SPEC-0026 Timers and counters
 - [ ] SPEC-0026 Behavior
   - [ ] SPEC-0026 Boot order (once, before the first pass)
@@ -12723,7 +12723,7 @@ Cited 34 times in the game code.
     - [ ] SPEC-0026, The main loop, one pass: Render frame counter += 1.
     - [ ] SPEC-0026, The main loop, one pass: Transition driver. Advance any pending area load (see Area loading).
     - [ ] SPEC-0026, The main loop, one pass: Flip and clock. Swap display buffers. Game time (0x368F94, 0.0 at start-up) += dt, the tick-length word (1/60 s). Pass counter (0x3...
-  - [x] SPEC-0026 End-of-pass apply (step 15) {auto: title named in code}
+  - [ ] SPEC-0026 End-of-pass apply (step 15)
     - [ ] SPEC-0026, End-of-pass apply (step 15): Render-block clears.
     - [ ] SPEC-0026, End-of-pass apply (step 15): The pack-1299 object integrator.
     - [ ] SPEC-0026, End-of-pass apply (step 15): The petpet item timer (5 s; SPEC-0047). It has no game-state gate.
@@ -12767,7 +12767,7 @@ Cited 34 times in the game code.
     - [ ] SPEC-0026, World memory budget and level setup: The three world slots get an object capacity of 200 (current), 1,000 (next) and 2,000 (other). Two more objects get 100...
     - [ ] SPEC-0026, World memory budget and level setup: Each area load allocates from the world pool: a character block of 2,960 bytes, the world's script manager (428 bytes),...
     - [ ] SPEC-0026, World memory budget and level setup: World pool reset (High): each world buffer has its own bump pool (base, cursor, end). Releasing the buffer sets the cur...
-  - [x] SPEC-0026 Game-state code (once per pass) {auto: title named in code}
+  - [ ] SPEC-0026 Game-state code (once per pass)
     - [ ] SPEC-0026, Game-state code (once per pass): 1 9 No focus character; or the play-active word GG+0x04 is 0 (the value left by the previous pass's front end; see Pause an...
     - [ ] SPEC-0026, Game-state code (once per pass): 2 7 Flag A set
     - [ ] SPEC-0026, Game-state code (once per pass): 3 8 Flag B set
@@ -12965,7 +12965,7 @@ Cited 34 times in the game code.
     - [ ] SPEC-0026, Cut-scene start (two variants): Fade in from white over 8 frames (game ticks), from alpha 128 to 0.
     - [ ] SPEC-0026, Cut-scene start (two variants): Set the focus state to 1 (free).
     - [ ] SPEC-0026, Cut-scene start (two variants): Yield one frame, then stop the sound cue.
-  - [x] SPEC-0026 Teleport landing {auto: title named in code}
+  - [ ] SPEC-0026 Teleport landing
     - [ ] SPEC-0026, Teleport landing: If the index is negative or at or past the end of the list, the teleport is refused and a message is logged.
     - [ ] SPEC-0026, Teleport landing: A plane is flat when its vertical normal component is above 0.85 in absolute value. Flat plane: the landing point is the plane point offse...
     - [ ] SPEC-0026, Teleport landing: When the hero is the focus and the world is the interior buffer (the "other" world slot) and has entry records, entry record 0 of that wor...
@@ -13441,7 +13441,7 @@ Cited 36 times in the game code.
     - [ ] SPEC-0027, Stick value and spin input (Confidence: High for the arit...: Sum with the leans.
     - [ ] SPEC-0027, Stick value and spin input (Confidence: High for the arit...: Drift.
     - [ ] SPEC-0027, Stick value and spin input (Confidence: High for the arit...: Reachable drift values (High).
-  - [x] SPEC-0027 Chase and manual elevation (Confidence: High for the arithmetic and for the recentring gate) {auto: title named in code}
+  - [ ] SPEC-0027 Chase and manual elevation (Confidence: High for the arithmetic and for the recentring gate)
     - [ ] SPEC-0027, Chase and manual elevation (Confidence: High for the arit...: m is an absolute elevation. Its limit is +1.5 rad (about 86 degrees, nearly overhead) for posi...
     - [ ] SPEC-0027, Chase and manual elevation (Confidence: High for the arit...: One step can carry m past the limit once, because the test uses the previous value. P.e = t_e...
     - [ ] SPEC-0027, Chase and manual elevation (Confidence: High for the arit...: Manual, stick 0.5 (k = 0.01): step = 0.01 x 0.5 x 0.5 = 0.0025 per tick. After 4 ticks m has r...
@@ -13490,21 +13490,21 @@ Cited 36 times in the game code.
     - [ ] SPEC-0027, Blended transition (mode 8) (Confidence: High): Elevation.
     - [ ] SPEC-0027, Blended transition (mode 8) (Confidence: High): Pose.
   - [x] SPEC-0027 Death camera (mode 8 at game over) (Confidence: High for the trigger and the arguments; Medium-High for "in front") {auto: title named in code}
-  - [x] SPEC-0027 Blocked latch (modes 8, 9 and 10) (Confidence: Medium-High) {auto: title named in code}
+  - [ ] SPEC-0027 Blocked latch (modes 8, 9 and 10) (Confidence: Medium-High)
   - [ ] SPEC-0027 Smoothed follow (mode 9) (Confidence: Medium for the update; its entry has no caller)
     - [ ] SPEC-0027, Smoothed follow (mode 9) (Confidence: Medium for the upda...: Target point.
     - [ ] SPEC-0027, Smoothed follow (mode 9) (Confidence: Medium for the upda...: Pivot step.
     - [ ] SPEC-0027, Smoothed follow (mode 9) (Confidence: Medium for the upda...: Look blend.
   - [ ] SPEC-0027 Fallback pose (mode 10) (Confidence: High for the lookup; Medium for the entry; Low for the stored target)
   - [ ] SPEC-0027 Return to normal (modes 8, 9 and 10 only) (Confidence: High)
-  - [x] SPEC-0027 Target distance (Confidence: High) {auto: title named in code}
+  - [ ] SPEC-0027 Target distance (Confidence: High)
     - [ ] SPEC-0027, Target distance (Confidence: High): Profile 1 at 0.25 gives 8.6419. Profile 3 at 0.6 gives 11.8915 (the eye 6.7144 above the focus).
   - [ ] SPEC-0027 Dormant eye-lag and rig path (DORMANT: no known live caller) (Confidence: Medium for what it computes)
     - [ ] SPEC-0027, Dormant eye-lag and rig path (DORMANT: no known live call...: The forward blend runs for a positive Y only when the current forward component is above -0.9,...
     - [ ] SPEC-0027, Dormant eye-lag and rig path (DORMANT: no known live call...: Otherwise it does not run. These gates are fixed constants (Open questions).
     - [ ] SPEC-0027, Dormant eye-lag and rig path (DORMANT: no known live call...: Both vectors are then renormalised and the basis is rebuilt.
-  - [x] SPEC-0027 Ground probe (per tick) (Confidence: High) {auto: title named in code}
-  - [x] SPEC-0027 Ground clearance (Confidence: Medium-High) {auto: title named in code}
+  - [ ] SPEC-0027 Ground probe (per tick) (Confidence: High)
+  - [ ] SPEC-0027 Ground clearance (Confidence: Medium-High)
     - [ ] SPEC-0027, Ground clearance (Confidence: Medium-High): A separate minimum-height rule, used by some camera paths, raises the camera position (0x30) to at least the pro...
   - [ ] SPEC-0027 Walls and the stuck timers (Confidence: Medium-High for the flow; Medium for the push geometry)
   - [ ] SPEC-0027 Eye pass per-primitive routines (Confidence: High that they belong to the camera; Medium for the steps)
@@ -13520,7 +13520,7 @@ Cited 36 times in the game code.
   - [ ] SPEC-0027 Side-swing event (Confidence: High)
     - [ ] SPEC-0027, Side-swing event (Confidence: High): Flag 0: the side-swing increment (0x1C8) = k and the counter (0x1CC) = n.
     - [ ] SPEC-0027, Side-swing event (Confidence: High): Flag 1: only when N . F > 0, with F the camera's forward row (0x20): the increment = k, negated when N . R < 0 (R the c...
-  - [x] SPEC-0027 Eye pass failure flag (Confidence: High for the flag, the counter, the limit and which primitive kinds each routine h... {auto: title named in code}
+  - [ ] SPEC-0027 Eye pass failure flag (Confidence: High for the flag, the counter, the limit and which primitive kinds each routine h...
     - [ ] SPEC-0027, Eye pass failure flag (Confidence: High for the flag, the...: At the start of each eye pass: failure = 0.
     - [ ] SPEC-0027, Eye pass failure flag (Confidence: High for the flag, the...: A per-primitive routine that cannot resolve its contact sets failure = 1. While any of the pre...
     - [ ] SPEC-0027, Eye pass failure flag (Confidence: High for the flag, the...: At the end of the pass:
@@ -13542,10 +13542,10 @@ Cited 36 times in the game code.
     - [ ] SPEC-0027, Pose setter with pull-in (set-pose rule, not per tick) (C...: If the ground there is higher than F.y + 5.0, the horizontal offset is halved: E' = (F.x + 0.5...
     - [ ] SPEC-0027, Pose setter with pull-in (set-pose rule, not per tick) (C...: E' (with w = 1) is written to the camera position (0x30), the eye (0xE0) and the previous eye...
     - [ ] SPEC-0027, Pose setter with pull-in (set-pose rule, not per tick) (C...: The wall push runs; the eye is set to the pushed position, the focus is recomputed and camera...
-  - [x] SPEC-0027 Camera reset (Confidence: High for the writes) {auto: title named in code}
+  - [ ] SPEC-0027 Camera reset (Confidence: High for the writes)
   - [x] SPEC-0027 Camera initialisation (Confidence: High) {auto: title named in code}
   - [ ] SPEC-0027 Placement after a load or restart (Confidence: High)
-  - [x] SPEC-0027 Fade ramp (follow step 12) (Confidence: High for the rule; High for the sort rule and Medium-High for the composite d... {auto: title named in code}
+  - [ ] SPEC-0027 Fade ramp (follow step 12) (Confidence: High for the rule; High for the sort rule and Medium-High for the composite d...
     - [ ] SPEC-0027, Fade ramp (follow step 12) (Confidence: High for the rule...: 1.7 to 5.0: target = (v - 1.7) / 3.3 x 128.
     - [ ] SPEC-0027, Fade ramp (follow step 12) (Confidence: High for the rule...: 5.0 or more: target = 128.
   - [ ] SPEC-0027 Fade writer (confirmed)
@@ -13935,7 +13935,7 @@ Cited 64 times in the game code.
     - [ ] SPEC-0028, 6.4 Cylinder records (0x50 bytes): Medium-High: +0x3C f32 copy of the radius 2.579 in all 10 records of pack 684
     - [ ] SPEC-0028, 6.4 Cylinder records (0x50 bytes): Medium-High: +0x40 4 × f32 unit axis x, y, z; w = 0 unit length and w = 0 in all 10,028 complete on-disc shape records (t...
   - [ ] SPEC-0028 6.5 Other 0x50-byte records (the fourth header list): layout High, role High
-  - [x] SPEC-0028 6.6 Record order {auto: title named in code}
+  - [ ] SPEC-0028 6.6 Record order
   - [ ] SPEC-0028 7. Type 29: placed objects and their part records (121 packs, 3,495 objects, 642 with parts)
     - [ ] SPEC-0028, 7. Type 29: placed objects and their part records (121 pa...: 0x100 4 × 4 floats transform block used to draw the inline mesh
     - [ ] SPEC-0028, 7. Type 29: placed objects and their part records (121 pa...: 0x1A0 s32 object state 3 in 3,491 objects on disc, 7 in 4; written by the script calls of sect...
@@ -14429,7 +14429,7 @@ Cited 119 times in the game code.
   - [ ] SPEC-0029, Where it lives on the disc: Tuning words (boot program data; each taken from the disc image and read as the stated type): 0x2DB1D8 = 0.5 (f32); 0x2DAAB8 = 1...
   - [ ] SPEC-0029, Where it lives on the disc: Run-time words of the projectile pool (above the disc image, not read from the disc): the pool base pointer at 0x35C8D8, the gra...
   - [ ] SPEC-0029, Where it lives on the disc: Tick-rate words held at run time (above the disc image) are not read from the disc. Where a range is written as seconds, the cle...
-  - [x] SPEC-0029 Tuning words (read from disc) {auto: title named in code}
+  - [ ] SPEC-0029 Tuning words (read from disc)
     - [ ] SPEC-0029, Tuning words (read from disc): 0x2DB240, 0x2DB244, 0x2DB248, 0x2DB24C f32 3.0, 1.5, 7.0, 5.0 Live petpet follow gait thresholds: gait 0 to walk, gait 1 to i...
     - [ ] SPEC-0029, Tuning words (read from disc): 0x2DB200, 0x2DB204 s32 -1, -1 No-target sentinels, read by a controller that picks a point at distance 3.0
     - [ ] SPEC-0029, Tuning words (read from disc): 0x2DB250, 0x2DB268 s32 1, -1 0x2DB250: the Whinny pen count, read by the pen setup, the pen entry and the wander routine (Beh...
@@ -15020,7 +15020,7 @@ Cited 119 times in the game code.
       - [ ] SPEC-0029, 6.1 Stages: Stages 2 and 4 are never entered in this build (High): the stage is set only to 1 at start and to 3, 5 and 6, never to 2 or 4. Their choosers an...
       - [ ] SPEC-0029, 6.1 Stages: The level can force stage 5 with all nine parts broken when level state 17 (0x11) is set; only a debug shortcut of the pack 1096 module sets it,...
       - [ ] SPEC-0029, 6.1 Stages: A global pause flag puts the Draik in a paused state (28) until the flag clears; no code writes the flag in the shipped game, so state 28 never...
-    - [x] SPEC-0029 6.2 Cooldowns {auto: title named in code}
+    - [ ] SPEC-0029 6.2 Cooldowns
       - [x] SPEC-0029, 6.2 Cooldowns: Breath fire and ice beams 4 to 8 (0x2DA650, 0x2DA664) {auto: address in code}
       - [x] SPEC-0029, 6.2 Cooldowns: Spit fire and ice spit 1 to 2 (0x2DA6DC, 0x2DA6F0) {auto: address in code}
       - [x] SPEC-0029, 6.2 Cooldowns: Claw claw 1 to 3 (0x2DA72C, 0x2DA740) {auto: address in code}
@@ -15180,7 +15180,7 @@ Cited 119 times in the game code.
       - [ ] SPEC-0029, 6.12 Arena build guide: the Treasure Vault floor (world p...: The lethal head hit leaves HP 1; 70 ticks later the head breaks and level state 12 is posted....
       - [ ] SPEC-0029, 6.12 Arena build guide: the Treasure Vault floor (world p...: The hero walks east over the north-east strip to (634.34, -1603.92, -605.61) and takes the rod...
       - [ ] SPEC-0029, 6.12 Arena build guide: the Treasure Vault floor (world p...: The hero climbs the tower and enters the exit rectangle at (313.55, -1216.35, -599.43): the sc...
-  - [x] SPEC-0029 7. Class 37 (Darkest Faerie family, three-way entry dispatcher) and class 38 (Queen Fyora controller) (High for the r... {auto: title named in code}
+  - [ ] SPEC-0029 7. Class 37 (Darkest Faerie family, three-way entry dispatcher) and class 38 (Queen Fyora controller) (High for the r...
     - [ ] SPEC-0029, 7. Class 37 (Darkest Faerie family, three-way entry dispa...: If game state 364 (progress flag 0x16C) is set: run the four-member controller (below).
     - [ ] SPEC-0029, 7. Class 37 (Darkest Faerie family, three-way entry dispa...: Otherwise, if level state 18 (0x12) is set: run alternate loop A.
     - [ ] SPEC-0029, 7. Class 37 (Darkest Faerie family, three-way entry dispa...: Otherwise: run alternate loop B.
@@ -16116,7 +16116,7 @@ Cited 116 times in the game code.
     - [ ] SPEC-0030, 3. Callback information record (Confidence: High for the...: The first fire moves the state from 0 to 1.
     - [ ] SPEC-0030, 3. Callback information record (Confidence: High for the...: A later written fire moves the state from 1 to 2 when the stamp differs from the current frame;...
     - [ ] SPEC-0030, 3. Callback information record (Confidence: High for the...: Decay, in the script step after the record's thread is resumed: when the state is not 0 and the...
-  - [x] SPEC-0030 4. Slot record (runtime) (Confidence: High for offsets, counts and the region lists; Medium for the other field meani... {auto: title named in code}
+  - [ ] SPEC-0030 4. Slot record (runtime) (Confidence: High for offsets, counts and the region lists; Medium for the other field meani...
     - [ ] SPEC-0030, 4. Slot record (runtime) (Confidence: High for offsets, c...: +0x00 4 Pack number; region = pack + 1 + j, or j + 1 when the pack number is negative High
     - [ ] SPEC-0030, 4. Slot record (runtime) (Confidence: High for offsets, c...: +0x04 4 Archive handle, passed to region size and load Medium
     - [ ] SPEC-0030, 4. Slot record (runtime) (Confidence: High for offsets, c...: +0x14 4 Heap handle, passed to allocations High
@@ -17136,7 +17136,7 @@ Cited 44 times in the game code.
     - [ ] SPEC-0031, 1. Bank file header (file offsets, little-endian u32): 0x14 u32 C: sample pool length in bytes (bank 10: 0xC3080) B + C = D in 134 of 134 High
     - [ ] SPEC-0031, 1. Bank file header (file offsets, little-endian u32): 0x18 u32 D: file offset of the tail header (bank 10: 0xC4790) High
     - [ ] SPEC-0031, 1. Bank file header (file offsets, little-endian u32): 0x1C u32 E: length of the tail that starts at D (the 0x10-byte tail header plus the MMID container) t...
-  - [x] SPEC-0031 2. Bank section (base = file 0x20; all section offsets below are relative to that base) {auto: title named in code}
+  - [ ] SPEC-0031 2. Bank section (base = file 0x20; all section offsets below are relative to that base)
     - [ ] SPEC-0031, 2. Bank section (base = file 0x20; all section offsets be...: +0x00 4 ASCII "SBv2" High
     - [ ] SPEC-0031, 2. Bank section (base = file 0x20; all section offsets be...: +0x04 u32 2 Medium
     - [ ] SPEC-0031, 2. Bank section (base = file 0x20; all section offsets be...: +0x08 u32 4 Medium
@@ -17155,7 +17155,7 @@ Cited 44 times in the game code.
     - [ ] SPEC-0031, 2. Bank section (base = file 0x20; all section offsets be...: +0x34 28 bytes the bank's object record (section 2a); the record ends at 0x50, where the direc...
     - [ ] SPEC-0031, 2. Bank section (base = file 0x20; all section offsets be...: +0x38 4 bank name again Medium
     - [ ] SPEC-0031, 2. Bank section (base = file 0x20; all section offsets be...: +0x3C 4 bank name again Medium
-  - [x] SPEC-0031 2a. Object record (28 bytes at section +0x34, one per bank) {auto: title named in code}
+  - [ ] SPEC-0031 2a. Object record (28 bytes at section +0x34, one per bank)
     - [ ] SPEC-0031, 2a. Object record (28 bytes at section +0x34, one per bank): +0x00 u8 object type 5 in 134 of 134 High
     - [ ] SPEC-0031, 2a. Object record (28 bytes at section +0x34, one per bank): +0x04 4 bank name (the same name as in section +0x0C) equal in 134 of 134 High
     - [ ] SPEC-0031, 2a. Object record (28 bytes at section +0x34, one per bank): +0x10 u16 default volume 127 (130 banks), 120 (4 banks) Medium
@@ -17164,7 +17164,7 @@ Cited 44 times in the game code.
     - [ ] SPEC-0031, 2a. Object record (28 bytes at section +0x34, one per bank): +0x14 u16 default argument 0 (130 banks), 64 (4 banks) Low
     - [ ] SPEC-0031, 2a. Object record (28 bytes at section +0x34, one per bank): +0x17 u8 flags 2 in 134 Low
     - [ ] SPEC-0031, 2a. Object record (28 bytes at section +0x34, one per bank): +0x18 u32 runtime pointer, zero on disc 0 in 134 High (on disc), Medium (role)
-  - [x] SPEC-0031 3. Directory record (8 bytes, n2 records at w8) {auto: title named in code}
+  - [ ] SPEC-0031 3. Directory record (8 bytes, n2 records at w8)
     - [ ] SPEC-0031, 3. Directory record (8 bytes, n2 records at w8): +0 u8 voice count of the group (0 to 32); 0 means an empty group High
     - [ ] SPEC-0031, 3. Directory record (8 bytes, n2 records at w8): +1 u8 group (instrument) volume, 65 to 127; 100 in about 70%, 127 in about 20% Medium-High
     - [ ] SPEC-0031, 3. Directory record (8 bytes, n2 records at w8): +2 u16 group pan angle in degrees, added to the channel pan on the volume step (Driver volume, pan and pitc...
@@ -17265,7 +17265,7 @@ Cited 44 times in the game code.
       - [ ] SPEC-0031, 8a. "MID " child header (offsets from the "MID " tag; lit...: +0x20 u32 initial tempo in microseconds per quarter note 300,000 to 833,333 (31 distinct values)
       - [ ] SPEC-0031, 8a. "MID " child header (offsets from the "MID " tag; lit...: +0x24 u32 ticks per quarter note (PPQ): 480 all
       - [ ] SPEC-0031, 8a. "MID " child header (offsets from the "MID " tag; lit...: +0x28 to +0xE7 0xC0 bytes run-time state area; stale values on disc; ignore
-    - [x] SPEC-0031 8b. Event stream {auto: title named in code}
+    - [ ] SPEC-0031 8b. Event stream
       - [ ] SPEC-0031, 8b. Event stream: 0x8n note, velocity: note off.
       - [ ] SPEC-0031, 8b. Event stream: 0x9n note, velocity: note on; velocity 0 is a note off (none on disc). Ignored while channel n is muted (8c).
       - [ ] SPEC-0031, 8b. Event stream: 0xDn note (one data byte): note off for that note. This replaces the standard channel-pressure meaning. On disc it is the only note-off fo...
@@ -17278,7 +17278,7 @@ Cited 44 times in the game code.
       - [ ] SPEC-0031, 8b. Event stream: 0xFF with any other type: error.
       - [ ] SPEC-0031, 8b. Event stream: 0xF0 0x75 ...: command message (8c).
       - [ ] SPEC-0031, 8b. Event stream: 0xF0 with any other second byte: skipped up to and including the first 0xF7.
-    - [x] SPEC-0031 8c. Command messages (F0 75 ... F7) {auto: title named in code}
+    - [ ] SPEC-0031 8c. Command messages (F0 75 ... F7)
       - [ ] SPEC-0031, 8c. Command messages (F0 75 ... F7): Start, jump and stop children. 0x12 s starts child s (no effect if it is already playing). 0x11 s starts child s and st...
       - [ ] SPEC-0031, 8c. Command messages (F0 75 ... F7): Registers. 0x13 r x sets register r to x. 0x14 r adds 1 (at most 127) and 0x15 r subtracts 1 (at least 0) (both unused...
       - [ ] SPEC-0031, 8c. Command messages (F0 75 ... F7): Register tests. 0x16 r x runs the next command only if register r = x. 0x06 r x: only if register r < x. 0x07 r x: only...
@@ -17299,7 +17299,7 @@ Cited 44 times in the game code.
       - [ ] SPEC-0031, 8d. Timing and looping: For each delta d (MIDI ticks): a = 100 d + carry. If a < 0 or a < trunc(rate / 2), the next event runs in the same sequencer tick an...
       - [ ] SPEC-0031, 8d. Timing and looping: End of track: the repeat count (0 for every child on disc) is decreased by 1. If it is then 0 the child ends; if it is below 0 it is...
       - [ ] SPEC-0031, 8d. Timing and looping: Commands appear every 480 MIDI ticks (one quarter note) in all 93 interactive banks, so segment changes happen on beats. Children th...
-  - [x] SPEC-0031 9. Clip sets (resources 144 and 145) {auto: title named in code}
+  - [ ] SPEC-0031 9. Clip sets (resources 144 and 145)
     - [ ] SPEC-0031, 9. Clip sets (resources 144 and 145): No index. There is no index, directory or count in front of the clips. The first clip starts at offset 0 of the resource.
     - [ ] SPEC-0031, 9. Clip sets (resources 144 and 145): Start. Each clip starts at a multiple of 2,048 bytes from the start of the resource.
     - [ ] SPEC-0031, 9. Clip sets (resources 144 and 145): End and next start. A clip's data ends at its start + 0x30 + its data size. The next clip starts at the first multiple...
@@ -17450,7 +17450,7 @@ Cited 44 times in the game code.
       - [ ] SPEC-0031, Save-point cue (0xA8): Cue 0xA8 (168, the save-point activation cue by the cue-name index rule) is played by the boot program. Once per tick, the world's ow...
       - [ ] SPEC-0031, Save-point cue (0xA8): Start or keep alive: if a voice with the same slot, cue and emitter is already playing, that voice is refreshed (a per-voice keep-ali...
       - [ ] SPEC-0031, Save-point cue (0xA8): Emitter quirk (reproduce or decide). The emitter passed with the cue is meant to be the save point, but in the branch that serves zer...
-  - [x] SPEC-0031 Positional volume and pan, keep-alive and loop voices {auto: title named in code}
+  - [ ] SPEC-0031 Positional volume and pan, keep-alive and loop voices
     - [ ] SPEC-0031, Positional volume and pan, keep-alive and loop voices: With the camera facing world +z or -z, an emitter on the camera's right (along row 0) gives pan 269 a...
     - [ ] SPEC-0031, Positional volume and pan, keep-alive and loop voices: With the camera facing world +x or -x, the same emitter gives pan 89 and is heard on the right; one a...
     - [ ] SPEC-0031, Positional volume and pan, keep-alive and loop voices: At the diagonals (yaw 45 degrees and so on) an emitter on the camera's right is heard near the centre.
@@ -17962,7 +17962,7 @@ Cited 113 times in the game code.
     - [ ] SPEC-0033, 1. Order within a tick: The hero's per-tick input step (the button chain of Behavior 1A) and ground step run first. The hero then runs the routine for its c...
     - [ ] SPEC-0033, 1. Order within a tick: Within a locomotion routine, the stick is processed (Behavior 2), then one of the two locomotion paths runs: the enable-bit path (Be...
     - [ ] SPEC-0033, 1. Order within a tick: Height: the ground probe sets the world height (Behavior 6, SPEC-0018). The hero's displayed height then follows it (Behavior 7). No...
-  - [x] SPEC-0033 1A. Controls (button routes) {auto: title named in code}
+  - [ ] SPEC-0033 1A. Controls (button routes)
     - [ ] SPEC-0033, 1A. Controls (button routes): The hero reads the buttons once per tick, from the same snapshot as every other update (Behavior 1). A press edge is a button...
     - [ ] SPEC-0033, 1A. Controls (button routes): The hero reads buttons only when the global input-enable setting is on (bit 0 of the run-time word 0x35C984) and the game stat...
     - [ ] SPEC-0033, 1A. Controls (button routes): Latch: the face buttons and the D-pad (0xF0F0) are hidden from the hero while quick-item panel A (open flag 0x2DCCC4) or panel...
@@ -18129,7 +18129,7 @@ Cited 113 times in the game code.
     - [ ] SPEC-0033, 3A. Writers of routed states: Cooldown rule (Medium). The cooldown counter (hero field +0xA04) is set to the frame-rate word, which is 60 ticks (one second)...
     - [ ] SPEC-0033, 3A. Writers of routed states: Respawn reset (High). Every respawn at a start pose (world load, teleport, deadly-ground respawn, new game; SPEC-0040, SPEC-00...
   - [ ] SPEC-0033 3B. Climb dispatch (state 21, sub-mode map)
-  - [x] SPEC-0033 3C. State 13 (attack step; locomotion summary) {auto: title named in code}
+  - [ ] SPEC-0033 3C. State 13 (attack step; locomotion summary)
     - [ ] SPEC-0033, 3C. State 13 (attack step; locomotion summary): Dispatch: the state-13 routine dispatches on the hero variant word (0 Tor, 1 Roberta). Each tick it runs tha...
     - [x] SPEC-0033, 3C. State 13 (attack step; locomotion summary): Tor's arm table, as it affects locomotion: sub-state 0 goes to state 1 and requests animation 0. Sub-states... {auto: address in code}
     - [ ] SPEC-0033, 3C. State 13 (attack step; locomotion summary): Tor, sub-states 7 and 8 request animations 19 and 18 and move the hero along the stick direction. The raw in...
@@ -18228,7 +18228,7 @@ Cited 113 times in the game code.
     - [ ] SPEC-0033, 4B. State 29 door hold (stick stepping): Requests: 40 (still), and 41 or 42 by the forward stick. Codes 40, 41 and 42 are also the block clips of state 18 (...
     - [ ] SPEC-0033, 4B. State 29 door hold (stick stepping): The constants 0.075, 0.5 and 1.5 are fixed constants (Medium).
   - [ ] SPEC-0033 5. Speed tiers and ground speed (enable bit clear)
-    - [x] SPEC-0033 5.1 Speed tiers {auto: title named in code}
+    - [ ] SPEC-0033 5.1 Speed tiers
       - [ ] SPEC-0033, 5.1 Speed tiers: If v ≤ 0.1 (word 0x2DD7DC): request state 1 (stop) when the hero is in states 2 to 6, 39 or 40 (state 22 instead while in states 22, 39 or...
       - [ ] SPEC-0033, 5.1 Speed tiers: Otherwise v′ = max(v, 0.3) (word 0x2DD7E0).
       - [ ] SPEC-0033, 5.1 Speed tiers: Run mode: R1 (control word bit 3) is held and run is allowed. Run is allowed when the hero is already in state 4, or when a counter has rea...
@@ -18335,7 +18335,7 @@ Cited 113 times in the game code.
     - [ ] SPEC-0033, 10. Bounce pad (state 56): Phase 1, dip (4 ticks): each tick request animation 68 and move the sub-object by −0.2 divided by the counter. The counter runs 1...
     - [ ] SPEC-0033, 10. Bounce pad (state 56): Phase 2, rise (4 ticks): each tick request animation 68 and move the sub-object by +0.2 divided by the counter. The counter runs...
     - [ ] SPEC-0033, 10. Bounce pad (state 56): Phase 3, launch: first a pending lift is added. It is 5.0 (word 0x2DD830) when the target record is absent or its kind is not 18....
-  - [x] SPEC-0033 11. Strafe jumps (states 43 to 46) {auto: title named in code}
+  - [ ] SPEC-0033 11. Strafe jumps (states 43 to 46)
     - [ ] SPEC-0033, 11. Strafe jumps (states 43 to 46): Sides (Medium-High): state 43 is the jump to the hero's right (chosen from the actions with a negative side value, that...
     - [ ] SPEC-0033, 11. Strafe jumps (states 43 to 46): Launch: a phase outside 0 to 10, which includes the launch-pending value -1, requests 102 (state 43), 104 (state 44), 65...
     - [ ] SPEC-0033, 11. Strafe jumps (states 43 to 46): Phase 7 (moving landing) returns to state 32 (strafe) instead of state 4.
@@ -18470,7 +18470,7 @@ Cited 113 times in the game code.
     - [ ] SPEC-0033, 23. Aim-view marker object (High for the channel layout,...: Mode: the record stores a mode number from 0 to 4 (the aim-view mode of SPEC-0036: 0 off, 1 aim...
     - [ ] SPEC-0033, 23. Aim-view marker object (High for the channel layout,...: Tick order: the step receives dt and stores it; adds dt to an accumulated time; sets an active...
     - [ ] SPEC-0033, 23. Aim-view marker object (High for the channel layout,...: Where it runs: once per tick from the hero's right-stick aim update (SPEC-0036, Right-stick aim...
-  - [x] SPEC-0033 24. Hold counter (High) and the petpet regeneration gates (High) {auto: title named in code}
+  - [ ] SPEC-0033 24. Hold counter (High) and the petpet regeneration gates (High)
   - [ ] SPEC-0033 25. Integer step with dither (Low)
     - [ ] SPEC-0033, 25. Integer step with dither (Low): Target T = floor(0.1 x N) + 1.
     - [ ] SPEC-0033, 25. Integer step with dither (Low): Rate per second: 1.0, or 2.0 when the flag argument is nonzero (words 0x2DD464 and 0x2DD478). Per tick the rate is divid...
@@ -19478,7 +19478,7 @@ Cited 63 times in the game code.
       - [ ] SPEC-0034, 2.2 Definition (0x90 bytes, 666 on disc): +0x80 f32 motion scale S, copied into every spawner the effect object starts (4.1, 4.2) 1.0 in all High
       - [ ] SPEC-0034, 2.2 Definition (0x90 bytes, 666 on disc): +0x84 f32 cull distance, squared; -1 = never culled -1 (649); 90000 (300 units) in 8; 22500 in 4; others High (val...
       - [ ] SPEC-0034, 2.2 Definition (0x90 bytes, 666 on disc): +0x88 u8 cone/direction test enabled 1 (643), 0 (23) High (value), Medium (role)
-    - [x] SPEC-0034 2.3 Emitter node (0x70 bytes, 1,651 on disc) {auto: title named in code}
+    - [ ] SPEC-0034 2.3 Emitter node (0x70 bytes, 1,651 on disc)
       - [ ] SPEC-0034, 2.3 Emitter node (0x70 bytes, 1,651 on disc): +0x00 64 local transform identity in most; 45-degree rotations in some Medium
       - [ ] SPEC-0034, 2.3 Emitter node (0x70 bytes, 1,651 on disc): +0x40 u32 spawner pool used by this node; written for every node when its group is bound (3.16); zero means "n...
       - [ ] SPEC-0034, 2.3 Emitter node (0x70 bytes, 1,651 on disc): +0x44 u32 particle pool used by this node; written at the same bind zero on disc High
@@ -19494,7 +19494,7 @@ Cited 63 times in the game code.
       - [ ] SPEC-0034, 2.3 Emitter node (0x70 bytes, 1,651 on disc): +0x66 u8 ring fill: 0 = random radius in [0, r]; non-zero = exactly r (4.1 step 2) 0 on 66 of the 71 ring node...
       - [ ] SPEC-0034, 2.3 Emitter node (0x70 bytes, 1,651 on disc): +0x68 s8.8 spawn ring radius r; 0 = no ring (4.1 step 2) 0 on 1,580 nodes; non-zero on 71 High
       - [ ] SPEC-0034, 2.3 Emitter node (0x70 bytes, 1,651 on disc): +0x6A, +0x6C, +0x6E s8.8 each sprite half-extent factors (128 = 0.5): the half-extent lane x takes the factor...
-    - [x] SPEC-0034 2.4 Emitter record A (0x90 bytes, 952 on disc): timing and gates {auto: title named in code}
+    - [ ] SPEC-0034 2.4 Emitter record A (0x90 bytes, 952 on disc): timing and gates
       - [ ] SPEC-0034, 2.4 Emitter record A (0x90 bytes, 952 on disc): timing an...: +0x00 size start vector (x, y, z, w) x, y, z in 0 to 40 (common 0, 0.3, 0.5, 1.0); w = 1.0 in...
       - [ ] SPEC-0034, 2.4 Emitter record A (0x90 bytes, 952 on disc): timing an...: +0x0C w of the start vector 1.0 in all 952 part of channel 2's start value; not the motion sca...
       - [ ] SPEC-0034, 2.4 Emitter record A (0x90 bytes, 952 on disc): timing an...: +0x10, +0x20, +0x30 three size rate rows (vec4) range -65 to 150 rate of channel 2 per unit of...
@@ -19512,14 +19512,14 @@ Cited 63 times in the game code.
       - [ ] SPEC-0034, 2.4 Emitter record A (0x90 bytes, 952 on disc): timing an...: +0x85 u8 follow flag: particles add the spawner's per-tick displacement to their position, and...
       - [ ] SPEC-0034, 2.4 Emitter record A (0x90 bytes, 952 on disc): timing an...: +0x86 u8 loop flag: while the spawner runs, a particle at its life end restarts at the emitter...
       - [ ] SPEC-0034, 2.4 Emitter record A (0x90 bytes, 952 on disc): timing an...: +0x87 u8 light emitter: its particles are never drawn; each tick each publishes a point light...
-    - [x] SPEC-0034 2.5 Emitter record B (0x90 bytes, 1,227 on disc): curve rows and clocks {auto: title named in code}
+    - [ ] SPEC-0034 2.5 Emitter record B (0x90 bytes, 1,227 on disc): curve rows and clocks
       - [ ] SPEC-0034, 2.5 Emitter record B (0x90 bytes, 1,227 on disc): curve r...: +0x00 to +0x0F vec4 (4 floats) row 0: start value of colour channel 1 (r, g, b, a), copied whe...
       - [ ] SPEC-0034, 2.5 Emitter record B (0x90 bytes, 1,227 on disc): curve r...: +0x08 f32 row 0, blue component High
       - [ ] SPEC-0034, 2.5 Emitter record B (0x90 bytes, 1,227 on disc): curve r...: +0x0C f32 row 0, alpha component; 0, 1.0, 0.5 or 0.16 on disc High
       - [ ] SPEC-0034, 2.5 Emitter record B (0x90 bytes, 1,227 on disc): curve r...: +0x10 to +0x5F 5 vec4 colour rate rows 1 to 5 (row k at B +0x10 k). The RGB part is taken from...
       - [ ] SPEC-0034, 2.5 Emitter record B (0x90 bytes, 1,227 on disc): curve r...: +0x60 to +0x77 6 f32 RGB key times, as life fractions (the RGB key index advances past them) High
       - [ ] SPEC-0034, 2.5 Emitter record B (0x90 bytes, 1,227 on disc): curve r...: +0x78 to +0x8F 6 f32 alpha key times, as life fractions High
-    - [x] SPEC-0034 2.6 Emitter record C (0x50 bytes, 664 on disc): motion parameters {auto: title named in code}
+    - [ ] SPEC-0034 2.6 Emitter record C (0x50 bytes, 664 on disc): motion parameters
       - [ ] SPEC-0034, 2.6 Emitter record C (0x50 bytes, 664 on disc): motion pa...: +0x10 vec4 zero extra acceleration term, divided by the acceleration clock T (4.1 step 6) High
       - [ ] SPEC-0034, 2.6 Emitter record C (0x50 bytes, 664 on disc): motion pa...: +0x20 s8.8 -20 to 20 vertical acceleration along world up, in units/s^2 (negative = falls). Pe...
       - [ ] SPEC-0034, 2.6 Emitter record C (0x50 bytes, 664 on disc): motion pa...: +0x22 s8.8 -20 to 20 drag in 1/s; per tick k = C +0x22 x dt (4.2) High
@@ -19599,7 +19599,7 @@ Cited 63 times in the game code.
       - [ ] SPEC-0034, 3.2 Emitter cycle clock: Otherwise : the elapsed time grows by dt and the phase by dt / p. A new cycle starts when the phase reaches 1 or more, or on the fi...
       - [ ] SPEC-0034, 3.2 Emitter cycle clock: End rule (every tick, not only at a boundary): if the cycle count is below A +0x74, or A +0x60 is negative, the spawner keeps runni...
       - [ ] SPEC-0034, 3.2 Emitter cycle clock: Always: delta = position - previous point; previous point = position.
-    - [x] SPEC-0034 3.3 Random draws {auto: title named in code}
+    - [ ] SPEC-0034 3.3 Random draws
     - [ ] SPEC-0034 3.4 Spawner creation per node
       - [ ] SPEC-0034, 3.4 Spawner creation per node: Take a spawner from the node's spawner pool. If none is free, that emitter is skipped.
       - [ ] SPEC-0034, 3.4 Spawner creation per node: Initialise it (3.2) from the node's records (A, B and C, 2.4 to 2.6), the node's transform, the effect position and frame, an...
@@ -19789,7 +19789,7 @@ Cited 63 times in the game code.
     - [ ] SPEC-0034 4.4 Curves over life
       - [ ] SPEC-0034, 4.4 Curves over life: Colour channel 1 (r, g, b, a): start value B row 0; rows k = 0 to 5 at B +0x10 k act as rates; an RGB key index (key times at B +0x60)...
       - [ ] SPEC-0034, 4.4 Curves over life: Size channel 2 (x, y, z): start value A +0x00; three rate rows at A +0x10, +0x20 and +0x30, picked per axis by the thresholds at A +0x...
-    - [x] SPEC-0034 4.5 Light emitters (A +0x87) {auto: title named in code}
+    - [ ] SPEC-0034 4.5 Light emitters (A +0x87)
     - [ ] SPEC-0034 4.6 Per-tick order, curves and expiry
       - [ ] SPEC-0034, 4.6 Per-tick order, curves and expiry: Age and end: elapsed grows by dt. If elapsed > life: when A +0x86 = 1 and the spawner is not draining, the particle l...
       - [ ] SPEC-0034, 4.6 Per-tick order, curves and expiry: Colour: f = elapsed / life (the pre-restart value on a restart tick). The RGB key index advances by one when f is abo...
@@ -20419,7 +20419,7 @@ Cited 91 times in the game code.
     - [ ] SPEC-0035, Header (payload +0x00 to +0x9F): +0x50 u32 count Records in section C (key pairs) 94
     - [ ] SPEC-0035, Header (payload +0x00 to +0x9F): +0x54 to +0x90 16 x u32 offset Start offset of each section, in file order A, T, C, D, E, F, G, H, I, J, K, L, M, N, O, tai...
     - [ ] SPEC-0035, Header (payload +0x00 to +0x9F): +0x94, +0x98, +0x9C 3 x u32 pointer Filled in at load time with the addresses of tables A, B and C (A and B are handler tab...
-  - [x] SPEC-0035 Section table {auto: title named in code}
+  - [ ] SPEC-0035 Section table
     - [ ] SPEC-0035, Section table: A string index 0x0A0 220 4 55 size and count match
     - [ ] SPEC-0035, Section table: T text 0x17C 588 - 55 strings all 55 resolve
     - [ ] SPEC-0035, Section table: C key pairs 0x3C8 752 8 94 size and count match
@@ -20594,7 +20594,7 @@ Cited 91 times in the game code.
     - [ ] SPEC-0035, Section O: asset paths (345 x 136): Kind word +0x08: 2 on 244 records (sheet assets). -1 (0xFFFFFFFF) on 101 records: a full-screen picture that is not load...
     - [ ] SPEC-0035, Section O: asset paths (345 x 136): Word +0x0C on a picture record: the picture selector v, 2 to 102. The resource number is 575 + v, so the 101 picture rec...
     - [ ] SPEC-0035, Section O: asset paths (345 x 136): A picture record is used only as the asset of the first child sprite of a section D record's top node. Exactly one sprit...
-  - [x] SPEC-0035 Texture chunk (type 4) {auto: title named in code}
+  - [ ] SPEC-0035 Texture chunk (type 4)
   - [x] SPEC-0035 Options menu and option block (32 bytes, part of each save) {auto: title named in code}
     - [ ] SPEC-0035, Options menu and option block (32 bytes, part of each save): Controls: Vibration, Invert Left-Right and Invert Up-Down. Each is a toggle shown as On or Off.
     - [ ] SPEC-0035, Options menu and option block (32 bytes, part of each save): Audio: Music, Sound effects and Voice. Each is a slider from 0 to 100.
@@ -20627,7 +20627,7 @@ Cited 91 times in the game code.
     - [ ] SPEC-0035, 1b. One front-end pass and the generic menu step: Triangle (0x0010), or a Cross target of -1: the back rule (section 9). It plays sound slot 6 for Triangle;...
     - [ ] SPEC-0035, 1b. One front-end pass and the generic menu step: Otherwise one focus move (section 9d), tested in the order Down (0x4000), Up (0x1000), Right (0x2000), Lef...
     - [ ] SPEC-0035, 1b. One front-end pass and the generic menu step: Resolve the result. Stay (-3, or 0 after a generic step that did nothing): the pass count grows by 1, up t...
-  - [x] SPEC-0035 1a. Full-screen pictures (resources 577 to 677) {auto: title named in code}
+  - [ ] SPEC-0035 1a. Full-screen pictures (resources 577 to 677)
     - [ ] SPEC-0035, 1a. Full-screen pictures (resources 577 to 677): At front-end set-up, two picture buffers of 267,776 bytes each are reserved. The base number 577 is stored...
     - [ ] SPEC-0035, 1a. Full-screen pictures (resources 577 to 677): When a screen is entered, its node tree is searched children first. The search looks for the first sprite n...
     - [ ] SPEC-0035, 1a. Full-screen pictures (resources 577 to 677): The picture resource is 575 + v, where v is the record's +0x0C word (2 to 102). Its first 267,264 bytes are...
@@ -20947,7 +20947,7 @@ Cited 91 times in the game code.
     - [ ] SPEC-0035, 9b. Node conditions, search and key masks: A node with no handler and mode 3: P = 1, so the mode 3 test fails. The chain fails.
     - [ ] SPEC-0035, 9b. Node conditions, search and key masks: A key search for 7 over a parent with key 3 and a child with key 7: the parent does not match, its child is searc...
     - [ ] SPEC-0035, 9b. Node conditions, search and key masks: A key mask with bits 1 and 3 set, and entries keyed 1, 2 and 3: entries 1 and 3 change, and entry 2 does not.
-  - [x] SPEC-0035 9c. Predicate table (table A, 74 slots) {auto: title named in code}
+  - [ ] SPEC-0035 9c. Predicate table (table A, 74 slots)
     - [ ] SPEC-0035, 9c. Predicate table (table A, 74 slots): 0 always 1 Load Game on the pause and title pages (never hidden). High
     - [ ] SPEC-0035, 9c. Predicate table (table A, 74 slots): 2, 56 always 1 No use identified. High
     - [ ] SPEC-0035, 9c. Predicate table (table A, 74 slots): 12 always 0 Library gate: keeps groups out of the automatic page draw (below). High
@@ -21021,7 +21021,7 @@ Cited 91 times in the game code.
     - [ ] SPEC-0035, 11. Sprite frames: Setting a frame on a non-sprite node is refused and the node is unchanged.
     - [ ] SPEC-0035, 11. Sprite frames: The three group counts contribute to one contiguous valid frame-index range; the setter accepts indices below their sum. The sprite rende...
     - [ ] SPEC-0035, 11. Sprite frames: Sprites with a count of 0 (779 records) ignore all frame requests. The 778 linked zero-count sprites have a 1-by-1 grid and current frame...
-  - [x] SPEC-0035 12. Sprite drawing {auto: title named in code}
+  - [ ] SPEC-0035 12. Sprite drawing
     - [ ] SPEC-0035, 12. Sprite drawing: A sprite's on-screen size is its width and height multiplied by its scale, divided by 4096: displayed width = width x scaleX / 4096, dis...
     - [ ] SPEC-0035, 12. Sprite drawing: Alignment is the node's byte +0x2E, applied in the node transform (Section J): 0 = x is the left edge; 1 = x is the centre (shift x by h...
     - [ ] SPEC-0035, 12. Sprite drawing: Integer coordinates are rounded away from zero (add or subtract 0.5 before truncating; Medium).
@@ -21855,7 +21855,7 @@ Cited 149 times in the game code.
     - [ ] SPEC-0036, Status timers: 11 Poison attack none on a hero (enemy 30) The hero's method ignores it. It is an enemy buff: while it is active, every melee hit that enemy...
     - [ ] SPEC-0036, Status timers: 12 Health regeneration 60 +2 HP when the status-12 timer is a multiple of 60
     - [ ] SPEC-0036, Status timers: 13 Magic regeneration 60 +2 MP when the status-12 timer (not 13) is a multiple of 60 (quirk; Status effects)
-  - [x] SPEC-0036 Hero shot slots {auto: title named in code}
+  - [ ] SPEC-0036 Hero shot slots
     - [ ] SPEC-0036, Hero shot slots: +0x00 0x10D0 16 bytes 4 x f32 Side axis of the shot frame: unit(d x up) at launch (Roberta shot projectile, launch).
     - [ ] SPEC-0036, Hero shot slots: +0x10 0x10E0 16 bytes 4 x f32 Up axis of the shot frame: unit(side x d) at launch.
     - [ ] SPEC-0036, Hero shot slots: +0x20 0x10F0 16 bytes 4 x f32 Direction d (w = 0): unit(aim point - body anchor) at launch, then the steered or bounced direction.
@@ -21950,7 +21950,7 @@ Cited 149 times in the game code.
   - [ ] SPEC-0036 Enemy navigation goal fallback offset (pointer)
   - [ ] SPEC-0036 Jump speeds (not an attack movement)
   - [ ] SPEC-0036 Combat in the jump states (states 7 to 11 and 43 to 46)
-  - [x] SPEC-0036 Hero action states (by state number) {auto: title named in code}
+  - [ ] SPEC-0036 Hero action states (by state number)
     - [ ] SPEC-0036, Hero action states (by state number): Target: the hero's target record, which holds a direction vector, offset vectors, a height limit, a second height valu...
     - [ ] SPEC-0036, Hero action states (by state number): Along-component: the projection of the target offset on the target direction. Planar distance: the distance in the hor...
     - [x] SPEC-0036, Hero action states (by state number): Progress: the fraction of the current action that has played, read from the action track. The 0.99 gate uses the data... {auto: address in code}
@@ -22001,8 +22001,8 @@ Cited 149 times in the game code.
     - [ ] SPEC-0036, Hero action states (by state number): 49 Feed a petpet (138) SPEC-0047
     - [ ] SPEC-0036, Hero action states (by state number): 58 Climb onto a block (70 on entry, then 134) SPEC-0033 Behavior 51
   - [ ] SPEC-0036 Hero action-state event switch (none)
-  - [x] SPEC-0036 In-air ledge chooser (states 30, 35 and 47) {auto: title named in code}
-  - [x] SPEC-0036 Landings (not combat) {auto: title named in code}
+  - [ ] SPEC-0036 In-air ledge chooser (states 30, 35 and 47)
+  - [ ] SPEC-0036 Landings (not combat)
   - [ ] SPEC-0036 Stick-forward exit to state 4 (boosted jump)
   - [ ] SPEC-0036 Attack power and the equipped attack
     - [ ] SPEC-0036, Attack power and the equipped attack: The power P comes from the table in the Layout section, at the index for the hero row and a Mote id. It is read from t...
@@ -22414,7 +22414,7 @@ Cited 149 times in the game code.
     - [ ] SPEC-0036, Timed glow (Roberta's leap): On any tick with another sub-state word (any state), the effect is stopped and the accumulator is set to zero.
     - [ ] SPEC-0036, Timed glow (Roberta's leap): The glow is a separate timer: it is not the held-tick counter and not the entry timer of Timed attack-family groups.
   - [ ] SPEC-0036 Showcase pose task (pointer to SPEC-0021)
-  - [x] SPEC-0036 Random draws (shared helpers) {auto: title named in code}
+  - [ ] SPEC-0036 Random draws (shared helpers)
     - [ ] SPEC-0036, Random draws (shared helpers): Uniform real between two values a and b: a + (b − a) × U, where U is uniform in [0, 1). The two values may come in either ord...
     - [ ] SPEC-0036, Random draws (shared helpers): Uniform whole number between two inclusive limits lo and hi: lo plus a uniform whole number from 0 to hi − lo. Used for the r...
     - [ ] SPEC-0036, Random draws (shared helpers): Uniform whole number below n: a value from 0 to n − 1, and 0 when n is 0, with no draw from the generator (the rock gravity s...
@@ -22488,7 +22488,7 @@ Cited 149 times in the game code.
     - [ ] SPEC-0036, Roberta shot projectile: The chosen cue plays once from the shooter's weapon bank (+0x19C).
     - [ ] SPEC-0036, Roberta shot projectile: full-release shot with a Mote in word 2: a 14-entry table keyed by the Mote id (ids 160 to 173); a full-release shot with no Mote:...
     - [ ] SPEC-0036, Roberta shot projectile: quick shot: a table of the slot index, chosen by the launch class (one table each for classes 0, 1 and 2; class 3 starts no effect).
-  - [x] SPEC-0036 Attack spawn (two routines, same shape) {auto: title named in code}
+  - [ ] SPEC-0036 Attack spawn (two routines, same shape)
     - [ ] SPEC-0036, Attack spawn (two routines, same shape): Inputs: the attacker's aim point (its vector field at 0xA0), and the target object that the caller passes in. The t...
     - [ ] SPEC-0036, Attack spawn (two routines, same shape): Distance d: the length of the vector from the attacker's aim point to the target's aim point.
     - [ ] SPEC-0036, Attack spawn (two routines, same shape): The message is posted to an object found through a run-time lookup (the effect host), not to the target.
@@ -23415,7 +23415,7 @@ Cited 86 times in the game code.
   - [ ] SPEC-0038 5. Counter-attack fields (used by the counter-attack choice, Behavior 14)
     - [ ] SPEC-0038, 5. Counter-attack fields (used by the counter-attack choi...: 0x22C + 4k s32 Counter attack trigger code. Codes 1 to 6 select a trigger rule of Behavior 14...
     - [ ] SPEC-0038, 5. Counter-attack fields (used by the counter-attack choi...: 0x23C + 4k f32 Counter attack chance, a percent from 0 to 100. Compared with a roll in Behavio...
-  - [x] SPEC-0038 6. Animation table (High) {auto: title named in code}
+  - [ ] SPEC-0038 6. Animation table (High)
     - [ ] SPEC-0038, 6. Animation table (High): Each enemy plays its animations through the main table of its own character record: the kind-2 table named by the record's main t...
     - [ ] SPEC-0038, 6. Animation table (High): Size: N = 166 on 1,653 of the 1,654 class-17 records, and 138 on one (resource 1273, monster type 9). Code 137 (map-search attack...
     - [ ] SPEC-0038, 6. Animation table (High): Table-checked picks: the slot attack ids 33 + 5k + p (slot k from 0 to 3; phase p = 0 wind-up, 1 strike, 2 follow-through, 3 bloc...
@@ -23499,7 +23499,7 @@ Cited 86 times in the game code.
     - [ ] SPEC-0038, 6. Target search and hurt handling (Medium): Navmesh pick (High). What the pre-step calls "picking the target again" is a navmesh choice, not a target choic...
     - [ ] SPEC-0038, 6. Target search and hurt handling (Medium): Hit reaction: every hit runs the take-hit hook (Behavior 37). It sends a non-agro enemy to agro, doubles the da...
     - [ ] SPEC-0038, 6. Target search and hurt handling (Medium): Death: every kind dies through the death hook (Behavior 34), spiders included. Reanimating rows use class state...
-  - [x] SPEC-0038 7. Normal attack choice (High) {auto: title named in code}
+  - [ ] SPEC-0038 7. Normal attack choice (High)
     - [ ] SPEC-0038, 7. Normal attack choice (High): It runs only while the hero is attackable, that is, while the selected hero's hittable query passes (SPEC-0036, Hit detectio...
     - [ ] SPEC-0038, 7. Normal attack choice (High): Each of the four slot cooldowns goes down by one when positive.
     - [ ] SPEC-0038, 7. Normal attack choice (High): If the agro outer sub-state is 2 (an attack is running), stop. Otherwise the selected slot (0xA24) is set to -1.
@@ -23523,7 +23523,7 @@ Cited 86 times in the game code.
     - [ ] SPEC-0038, 12. Spider states used by the nest (Medium overall; relea...: Variant values listed in the source are 97, 115, 116, 117, 118, 119 and 142. The values 115 to...
     - [ ] SPEC-0038, 12. Spider states used by the nest (Medium overall; relea...: Each tick the chooser returns the current idle variant. When the hold counter is set, it is dr...
     - [ ] SPEC-0038, 12. Spider states used by the nest (Medium overall; relea...: A spider-side test can select variant 142 instead of the 115 to 119 range. The test, and the r...
-  - [x] SPEC-0038 13. Attack sequencer (agro outer sub-state 2) and projectile spawners (Medium-High for the states and transitions; Hi... {auto: title named in code}
+  - [ ] SPEC-0038 13. Attack sequencer (agro outer sub-state 2) and projectile spawners (Medium-High for the states and transitions; Hi...
     - [ ] SPEC-0038, 13. Attack sequencer (agro outer sub-state 2) and project...: One-shot clip of F keys with speed byte 2: the cursor reaches F − 1 after 4(F − 1) passes, the...
     - [ ] SPEC-0038, 13. Attack sequencer (agro outer sub-state 2) and project...: Looping clip: the gate passes when (cursor + fraction) / F first reaches 0.99 (the fraction te...
     - [ ] SPEC-0038, 13. Attack sequencer (agro outer sub-state 2) and project...: A move to the next state made with "then state n" takes effect in the next tick, except where...
@@ -23563,7 +23563,7 @@ Cited 86 times in the game code.
     - [ ] SPEC-0038, 13. Attack sequencer (agro outer sub-state 2) and project...: Flight mode 2 17 (homing) hero position + (0, 2.5, 0) unit(aim - launch) x v 2 x trunc(range / v)
     - [ ] SPEC-0038, 13. Attack sequencer (agro outer sub-state 2) and project...: Flight mode 1 1 (gravity, area on landing) hero position ballistic, ramp speed s trunc(60 T) + 1
     - [ ] SPEC-0038, 13. Attack sequencer (agro outer sub-state 2) and project...: Row flag 0x02 8 (lobbed summon) hero position ballistic, speed v trunc(60 T) + 1
-  - [x] SPEC-0038 14. Counter-attack choice (High) {auto: title named in code}
+  - [ ] SPEC-0038 14. Counter-attack choice (High)
     - [ ] SPEC-0038, 14. Counter-attack choice (High): Walk the table slots 0 to 3 (1 to 4 when slots are counted from 1). A slot is eligible when all of these hold:
     - [ ] SPEC-0038, 14. Counter-attack choice (High): 1: the active hero's recover window is open this tick (below);
     - [ ] SPEC-0038, 14. Counter-attack choice (High): 2: after a dodge: outer sub-state 5 or 6, and the recover window;
@@ -23594,17 +23594,17 @@ Cited 86 times in the game code.
     - [ ] SPEC-0038, 19. Animation codes by stage, Draik Skeleton lookups (High): D 7 0x14 (none) (none) (none)
     - [ ] SPEC-0038, 19. Animation codes by stage, Draik Skeleton lookups (High): E (none) (none) 0x20 (none) 0x35
   - [ ] SPEC-0038 20. Attack and emerge codes from state words (High)
-  - [x] SPEC-0038 21. Action-19 gate (Medium) {auto: title named in code}
+  - [ ] SPEC-0038 21. Action-19 gate (Medium)
   - [ ] SPEC-0038 22. Spacing predicate (Medium)
   - [ ] SPEC-0038 23. Agro tail: route flag and leash (High)
     - [ ] SPEC-0038, 23. Agro tail: route flag and leash (High): In outer sub-states 1, 3 and 4 only: the route flag (0xAFC) is set to whether a route to the hero exists.
     - [ ] SPEC-0038, 23. Agro tail: route flag and leash (High): With no route: if one slot's trigger band holds d and the selected slot index is 1, the enemy faces the hero and...
     - [ ] SPEC-0038, 23. Agro tail: route flag and leash (High): With a route, or in any other outer sub-state: the leash counter is set to 0.
     - [ ] SPEC-0038, 23. Agro tail: route flag and leash (High): When the leash counter is above 180 ticks (3 seconds), it is set to 0 and the setter runs with 0 (the default ca...
-  - [x] SPEC-0038 24. Distance-hide gate (High) {auto: title named in code}
+  - [ ] SPEC-0038 24. Distance-hide gate (High)
   - [ ] SPEC-0038 25. Proximity retarget (High for the gate, point and target update; Medium-High for the distance-threshold role)
   - [ ] SPEC-0038 26. Value tables (lookups High; meaning unknown)
-  - [x] SPEC-0038 34. Death hook (High for the branches, the flyer test and the coin split) {auto: title named in code}
+  - [ ] SPEC-0038 34. Death hook (High for the branches, the flyer test and the coin split)
     - [ ] SPEC-0038, 34. Death hook (High for the branches, the flyer test and...: Reanimation test. Read the row's reanimation flag (0x15C).
     - [ ] SPEC-0038, 34. Death hook (High for the branches, the flyer test and...: Flag 0 (106 of the 109 class-17 rows): if the row's class id is not 1, 32 or 11, the base acto...
     - [ ] SPEC-0038, 34. Death hook (High for the branches, the flyer test and...: Flag nonzero (rows 224, 226 and 227): if the reanimation countdown (object offset 0xD14) is at...
@@ -23633,7 +23633,7 @@ Cited 86 times in the game code.
     - [ ] SPEC-0038, 36. Dead state and corpse removal, non-reanimating enemie...: Once the death clip reaches a progress of 0.95, the disappear countdown goes down by 1 each ti...
     - [ ] SPEC-0038, 36. Dead state and corpse removal, non-reanimating enemie...: Sink. When the enemy is not flying and the countdown, after that tick's decrement, is below th...
     - [ ] SPEC-0038, 36. Dead state and corpse removal, non-reanimating enemie...: When the countdown is below 0, the target and pool searches treat the enemy as gone. It is not...
-  - [x] SPEC-0038 37. Take-hit hook (High for the order, state changes and first-hit damage multiplier) {auto: title named in code}
+  - [ ] SPEC-0038 37. Take-hit hook (High for the order, state changes and first-hit damage multiplier)
     - [ ] SPEC-0038, 37. Take-hit hook (High for the order, state changes and...: Script hold. If the enemy's script-hold word (object offset 0xC54) is nonzero, stop. The word i...
     - [ ] SPEC-0038, 37. Take-hit hook (High for the order, state changes and...: If the base actor state is 16 (dead), stop.
     - [ ] SPEC-0038, 37. Take-hit hook (High for the order, state changes and...: Health bar. The enemy becomes the target of the single enemy name and health bar, shown for 10...
@@ -24540,7 +24540,7 @@ Cited 89 times in the game code.
     - [ ] SPEC-0040, 1C. Hero placement: start pose, respawn, moves, new game...: If C is the focus hero, W is the interior slot and W has entries: L and G are replaced by W's e...
     - [ ] SPEC-0040, 1C. Hero placement: start pose, respawn, moves, new game...: C is moved to (L, G) at once. If W has entries, C's start pose becomes W's entry 0.
     - [ ] SPEC-0040, 1C. Hero placement: start pose, respawn, moves, new game...: Focus hero only: the partner takes the same world id, the same start pose and the same (L, G),...
-  - [x] SPEC-0040 2. Teardown (reset, not free) {auto: title named in code}
+  - [ ] SPEC-0040 2. Teardown (reset, not free)
     - [ ] SPEC-0040, 2. Teardown (reset, not free): Release the character's handle and its owner link (if any).
     - [ ] SPEC-0040, 2. Teardown (reset, not free): Release both attachment handles.
     - [ ] SPEC-0040, 2. Teardown (reset, not free): Clear every status timer to -1 and clear the hit list.
@@ -24682,7 +24682,7 @@ Cited 89 times in the game code.
     - [ ] SPEC-0040, 6. Health and the second pool: Add a: MP rises by a and is capped at max MP; the MP-gained notification runs. Fill sets MP to max MP and runs the MP-gained...
     - [ ] SPEC-0040, 6. Health and the second pool: Set max to m: both max MP and MP become m. The MP-max-changed notification runs only when m differs from the old max.
     - [ ] SPEC-0040, 6. Health and the second pool: A spend happens only when an attack lands (SPEC-0036).
-  - [x] SPEC-0040 7. Status timers {auto: title named in code}
+  - [ ] SPEC-0040 7. Status timers
     - [ ] SPEC-0040, 7. Status timers: There are 14 timers, one per status (names and effects in SPEC-0036).
     - [ ] SPEC-0040, 7. Status timers: A status is active when its timer is at least 1. A value of 0 or below, including -1, is inactive.
     - [ ] SPEC-0040, 7. Status timers: Clearing all statuses sets every timer to -1. Death and teardown both clear them.
@@ -24733,7 +24733,7 @@ Cited 89 times in the game code.
     - [ ] SPEC-0040, 9. Ground probe and surface basis: No gravity, fall, jump or landing is applied in this path. The hit result is the character's world height (SPEC-0018 says...
     - [ ] SPEC-0040, 9. Ground probe and surface basis: Other probe start heights (High for the counts, Medium for the roles): 10.0 above the hero's feet in the hero ledge guard...
     - [ ] SPEC-0040, 9. Ground probe and surface basis: Surface basis blend (High for lane and branch behavior; Medium for basis naming). Let slot 1 be the input surface vector....
-  - [x] SPEC-0040 10. Root motion {auto: title named in code}
+  - [ ] SPEC-0040 10. Root motion
     - [ ] SPEC-0040, 10. Root motion: Accumulation. The clip root record contributes to its accumulator on each sampled tick. When the looping end rule sets its wrap flag, the l...
     - [ ] SPEC-0040, 10. Root motion: Stored root. The character keeps a root group in its pose block: a root vector, two neighbouring vectors and a tail vector. The writer of t...
     - [ ] SPEC-0040, 10. Root motion: Gate. The per-tick root step does nothing unless the character's pose update has run in this tick (a flag equal to 1). Confidence: High.
@@ -24881,7 +24881,7 @@ Cited 89 times in the game code.
     - [ ] SPEC-0040, 14E. Edge guard (motion-record pre-step) (High): Otherwise, if the ground record's short word at +0x40 is 2: a flag is set when the gap magnitude is below 0.2.
     - [ ] SPEC-0040, 14E. Edge guard (motion-record pre-step) (High): Otherwise, if the character's navmesh height cache (+0x17C) is set: compare the record's reference height (...
     - [ ] SPEC-0040, 14E. Edge guard (motion-record pre-step) (High): When the flag is set, a count of 0.4 times the run-time word 0x368F94 is formed as a whole number. When 0x3...
-  - [x] SPEC-0040 15. State numbers (what is and is not known) {auto: title named in code}
+  - [ ] SPEC-0040 15. State numbers (what is and is not known)
     - [ ] SPEC-0040, 15. State numbers (what is and is not known): The state numbers 0 to 23 are the enemy states that have labelled debug text. The labels belong to an enemy de...
     - [ ] SPEC-0040, 15. State numbers (what is and is not known): The enemy debug overlay table is not the hero's action-state table. It gives no hero behaviour and must not be...
     - [ ] SPEC-0040, 15. State numbers (what is and is not known): Hero action states are one number per hero (SPEC-0033, Hero action state field). The routes, the routines that...
@@ -26524,7 +26524,7 @@ Cited 56 times in the game code.
     - [ ] SPEC-0046, Packet submission (Medium-Low): Otherwise a 1024-byte packet buffer is cleared and the data is copied to its start. Two 32-byte header blocks are taken from...
     - [ ] SPEC-0046, Packet submission (Medium-Low): The packet is submitted with a length equal to the data size plus 88 bytes.
     - [ ] SPEC-0046, Packet submission (Medium-Low): If the submit fails, a cleanup routine runs and an error is logged.
-  - [x] SPEC-0046 Model parts (High) {auto: title named in code}
+  - [ ] SPEC-0046 Model parts (High)
     - [ ] SPEC-0046, Model parts (High): Build the part's eight corners from the box (see Corner builder and eight-corner clip test below).
     - [ ] SPEC-0046, Model parts (High): Classify the corners with the side mask of model parts (all sides except far; see Culling).
     - [ ] SPEC-0046, Model parts (High): Use the outcome:
@@ -26584,7 +26584,7 @@ Cited 56 times in the game code.
     - [ ] SPEC-0046, Per-triangle clipping in the vertex program (High for the...: S·w, T·w, w, the colour and the homogeneous depth are interpolated linearly along the cut edge...
     - [ ] SPEC-0046, Per-triangle clipping in the vertex program (High for the...: The polygon is drawn as a triangle fan (GS primitive type 5) after the batch.
     - [ ] SPEC-0046, Per-triangle clipping in the vertex program (High for the...: Otherwise: keep it; the GS scissor trims it.
-  - [x] SPEC-0046 Volume test (Medium-Low; inactive on disc) {auto: title named in code}
+  - [ ] SPEC-0046 Volume test (Medium-Low; inactive on disc)
   - [x] SPEC-0046 Light slots and the lit draw (High for the slots and the light block; Medium-High for the vertex arithmetic) {auto: title named in code}
     - [ ] SPEC-0046, Light slots and the lit draw (High for the slots and the...: For each slot with an entry: new = the entry's colour (all four lanes) × the slot weight w.
     - [ ] SPEC-0046, Light slots and the lit draw (High for the slots and the...: If the slot's kind is 0 and its second value is 0, the stored colour moves 5 percent of the way...
@@ -26673,7 +26673,7 @@ Cited 56 times in the game code.
   - [ ] SPEC-0046 Frame flush entry points (Medium for the storage; Low for the flush)
     - [ ] SPEC-0046, Frame flush entry points (Medium for the storage; Low for...: Two of them store the caller's count into the current draw list, when a current list exists an...
     - [ ] SPEC-0046, Frame flush entry points (Medium for the storage; Low for...: The other two first make the list of the caller's record the current list, when that record na...
-  - [x] SPEC-0046 Default colour word (High) {auto: title named in code}
+  - [ ] SPEC-0046 Default colour word (High)
     - [ ] SPEC-0046, Default colour word (High): 2D draw records (draw rectangles and the 0x30-byte draw records) start with the colour word 0x80808080: three colour bytes of 12...
     - [ ] SPEC-0046, Default colour word (High): The view object holds the background colour. It starts as 128, 128, 128 and a fourth byte of 0. The camera volume blend later wr...
   - [ ] SPEC-0046 Fog (High)
@@ -27072,7 +27072,7 @@ Cited 33 times in the game code.
     - [ ] SPEC-0047, Membership sets for hit multipliers: A 150, 146, 156, 58
     - [ ] SPEC-0047, Membership sets for hit multipliers: B 149, 157, 147, 59
     - [ ] SPEC-0047, Membership sets for hit multipliers: C 153, 155, 152, 57, 56, 55, 50
-  - [x] SPEC-0047 Base hit value by target type code {auto: title named in code}
+  - [ ] SPEC-0047 Base hit value by target type code
     - [ ] SPEC-0047, Base hit value by target type code: 145 (anchor) 0
     - [ ] SPEC-0047, Base hit value by target type code: 146 5.0
     - [ ] SPEC-0047, Base hit value by target type code: 147 10.0
@@ -27094,7 +27094,7 @@ Cited 33 times in the game code.
     - [ ] SPEC-0047, Kind multipliers: 6 target in A or C target in B or C - 1.0
     - [ ] SPEC-0047, Kind multipliers: 7 - - target in A, B or C 1.0
     - [ ] SPEC-0047, Kind multipliers: 2, 4, 5, 8, 9 and others - - - 1.0
-  - [x] SPEC-0047 Save fields (slot-relative, SPEC-0025) {auto: title named in code}
+  - [ ] SPEC-0047 Save fields (slot-relative, SPEC-0025)
     - [ ] SPEC-0047, Save fields (slot-relative, SPEC-0025): 0x214 4, signed Petpet type id Written as -1 (0xFFFFFFFF) when there is no pet or its T is below 1, and as the pet's...
     - [ ] SPEC-0047, Save fields (slot-relative, SPEC-0025): 0x218 4, signed Remaining time T The live pet's remaining companion time in ticks at save time; 0 with no pet
     - [ ] SPEC-0047, Save fields (slot-relative, SPEC-0025): 0x21C 4, signed Full time F The full time set at the pet's last meal; 0 with no pet
@@ -27134,7 +27134,7 @@ Cited 33 times in the game code.
     - [ ] SPEC-0047, Acquisition (joining): A fresh game has no petpet. The pending pet type is -1 after the subsystem reset, so the script query returns -1 and every level bran...
     - [ ] SPEC-0047, Acquisition (joining): No default save image exists on the disc. A fresh game starts from the empty slot that the code builds, which holds no pet type (Medi...
   - [ ] SPEC-0047 Per-tick loop
-  - [x] SPEC-0047 State selection {auto: title named in code}
+  - [ ] SPEC-0047 State selection
     - [ ] SPEC-0047, State selection: If the petpet is 10 or more units from its hero, it goes to roam (state 3), unless it is already in strike (4) or hover (5). Those two keep...
     - [ ] SPEC-0047, State selection: Otherwise (within 10 units of the hero):
     - [ ] SPEC-0047, State selection: if a non-anchor target is within 10 units of the petpet, it goes to strike (4);
@@ -27303,7 +27303,7 @@ Cited 33 times in the game code.
       - [ ] SPEC-0047, G3. Model, body, clips and sounds: 3 0.225198 13.51 0.225198 (same clip) 13.51
       - [ ] SPEC-0047, G3. Model, body, clips and sounds: 6 0.029554 1.77 0.225198 13.51
       - [ ] SPEC-0047, G3. Model, body, clips and sounds: 7, 8 0.32231 mean (0.32143 to 0.32387) 19.34 same clip 19.34
-    - [x] SPEC-0047 G4. Per-tick order {auto: title named in code}
+    - [ ] SPEC-0047 G4. Per-tick order
     - [ ] SPEC-0047 G5. Shared follow rules (exact numbers)
       - [ ] SPEC-0047, G5. Shared follow rules (exact numbers): Hero moving means the selected hero's action state is 2, 3, 4, 5, 6 (stance walk, run and reverse), 32 (walk and tu...
       - [ ] SPEC-0047, G5. Shared follow rules (exact numbers): State 2 (hero moving). Follow point Q = hero position + 4.0 × B3 + 1.5 × B1 of the hero, recomputed every tick. d =...
@@ -27684,7 +27684,7 @@ Cited 75 times in the game code.
     - [ ] SPEC-0048, Reaction object (type-40 kind 5): Reaction (each fire of trigger 0): object 0 is hidden; object 1 is shown, played once at speed 1.0 and waited for, then se...
     - [ ] SPEC-0048, Reaction object (type-40 kind 5): A later fire runs the reaction again once the previous run has ended; a fire during a run does not start a second one.
     - [ ] SPEC-0048, Reaction object (type-40 kind 5): Its key is 0 in every kind-5 entry on disc (SPEC-0028 section 11), so the collected table is not involved.
-  - [x] SPEC-0048 Button query (press input) {auto: title named in code}
+  - [ ] SPEC-0048 Button query (press input)
     - [ ] SPEC-0048, Button query (press input): 0 0x0080 (Square) 9 0x0400 (R3)
     - [ ] SPEC-0048, Button query (press input): 1 0x0010 (Triangle) 10 0x0002 (R2)
     - [ ] SPEC-0048, Button query (press input): 2 0x0020 (Circle) 11 0x0008 (R1)
@@ -28111,7 +28111,7 @@ Cited 7 times in the game code.
     - [ ] SPEC-0049, New game and start indices: 6 0, 1, 3
     - [ ] SPEC-0049, New game and start indices: 7 0, 1, 3, 6
     - [ ] SPEC-0049, New game and start indices: 8 0, 1, 2, 7
-  - [x] SPEC-0049 Act-start setup (TriggerActStart) {auto: title named in code}
+  - [ ] SPEC-0049 Act-start setup (TriggerActStart)
     - [ ] SPEC-0049, Act-start setup (TriggerActStart): 1 none Runs its own area setup (SPEC-0026).
     - [ ] SPEC-0049, Act-start setup (TriggerActStart): 2 220 (0xDC)
     - [ ] SPEC-0049, Act-start setup (TriggerActStart): 3 248 (0xF8)
@@ -28227,7 +28227,7 @@ Cited 7 times in the game code.
     - [ ] SPEC-0049, Quest steps and the journal: Row A with start flag 5 and done flag 6, and row B with start flag 6 and done flag 7. On an all-off bitmap, row A is listed whe...
     - [ ] SPEC-0049, Quest steps and the journal: Package Delivery (disc rows 230 to 237): the start flags are 605 to 612 and all eight rows share done flag 604. In pack 1358 th...
     - [ ] SPEC-0049, Quest steps and the journal: A row with start flag -1 is never listed, whatever the bitmap holds.
-  - [x] SPEC-0049 Save and load {auto: title named in code}
+  - [ ] SPEC-0049 Save and load
     - [ ] SPEC-0049, Save and load: Save: the bitmap is copied as a block of 93 bytes into the slot at offset 0x030.
     - [ ] SPEC-0049, Save and load: Load: the 93-byte block is copied back into the live bitmap. Nothing else is written per bit.
     - [ ] SPEC-0049, Save and load: Empty slot: its bitmap is zero.
@@ -28341,7 +28341,7 @@ Cited 16 times in the game code.
 - [ ] SPEC-0050 Layout
   - [ ] SPEC-0050 Wallet
     - [ ] SPEC-0050, Wallet: NP value 4 bytes signed 32-bit Shared Neopoints for the whole party. Both heroes read and write the same value.
-  - [x] SPEC-0050 Coin ids {auto: title named in code}
+  - [ ] SPEC-0050 Coin ids
     - [ ] SPEC-0050, Coin ids: 135 1 per coin Adds the coin's count, one per coin.
     - [ ] SPEC-0050, Coin ids: 136 5
     - [ ] SPEC-0050, Coin ids: 137 10 Catalogue name blank and catalogue price 0. The value comes from the denomination word, not the catalogue.
@@ -28369,7 +28369,7 @@ Cited 16 times in the game code.
     - [ ] SPEC-0050, 1. Wallet: Query: returns the value, or 0 when no wallet exists.
     - [ ] SPEC-0050, 1. Wallet: Add and remove with no wallet: nothing changes.
     - [ ] SPEC-0050, 1. Wallet: The same value is read and written whichever hero a script names.
-  - [x] SPEC-0050 2. Coin pickups {auto: title named in code}
+  - [ ] SPEC-0050 2. Coin pickups
     - [ ] SPEC-0050, 2. Coin pickups: A coin in the world is not kept as an item. Picking it up adds its value to the wallet (table in Layout), and it plays the coin cue of SPEC...
     - [ ] SPEC-0050, 2. Coin pickups: The values 100, 25, 10, 5 and 1 are the denominations of the coins. A money amount is split into coins in that order (SPEC-0021, drop and m...
     - [ ] SPEC-0050, 2. Coin pickups: Ids 140 to 144 are coin-class rows that add nothing when picked up. Nothing in the code spawns or adds them (Open questions).
@@ -28765,7 +28765,7 @@ Cited 35 times in the game code.
     - [ ] SPEC-0051, 7. Projection and hero marker: Marker corners: angle pi (hero facing +Z, no yaw), point (200, 100): C = -1, S = 0, so the corner offset (-16, -16) becomes (...
     - [ ] SPEC-0051, 7. Projection and hero marker: Marker colour: float pulse 0.8 -> (102, 102, 102); 1.0 -> (128, 128, 128); 1.5 -> (192, 192, 192).
     - [ ] SPEC-0051, 7. Projection and hero marker: Area 75 (a = 1.5625, b = 0.0, c = 0.0, d = 1.8125, tx = 261.0, tz = 802.0): the world point (x -100, z -400) gives screen x =...
-  - [x] SPEC-0051 8. Overlay group {auto: title named in code}
+  - [ ] SPEC-0051 8. Overlay group
     - [ ] SPEC-0051, 8. Overlay group: "Triangle Exit", always.
     - [ ] SPEC-0051, 8. Overlay group: "Cross View Quest", only while the current icon has items and no overlay is busy.
     - [x] SPEC-0051, 8. Overlay group: The area name label: a text node in front-end font 0 (line height 21), letter spacing 0, at (256, 40) with centre alignment. Before each d... {auto: address in code}
@@ -29087,7 +29087,7 @@ Cited 13 times in the game code.
     - [ ] SPEC-0052, Movies in scenes: 36 by trigger 1, once (only while movie 36 has not played);
     - [ ] SPEC-0052, Movies in scenes: 37 by the control thread while level state 1 is set and flag 258 is off.
     - [ ] SPEC-0052, Movies in scenes: Confidence: High for the calls and gates; Medium for the pack 753 cell route. The full list is in SPEC-0026, Movie play sites.
-  - [x] SPEC-0052 Skipping {auto: title named in code}
+  - [ ] SPEC-0052 Skipping
     - [ ] SPEC-0052, Skipping: No in-engine scene can be skipped. The cutscene route has no button check that ends a scene early.
     - [ ] SPEC-0052, Skipping: The button tests in the cutscene modules that look like skip checks sit inside a debug-mode gate. That flag is constant false in this build (SPEC-...
     - [ ] SPEC-0052, Skipping: Module 1217's one non-debug button test (Select, button code 5) passes a true third argument, which makes IsButtonPressed constant false. Its bran...
@@ -29197,7 +29197,7 @@ Cited 28 times in the game code.
     - [ ] SPEC-0053, 2.1 Hero records: +0xFA4 u32 integer Stored charge power. See SPEC-0036. per hero High
     - [ ] SPEC-0053, 2.1 Hero records: +0x1544, +0x1548, +0x154C s32 integer Equipment words 0, 1 and 2 (the three equipped Motes; SPEC-0021, Equipment slots): an item id, or -1...
     - [ ] SPEC-0053, 2.1 Hero records: +0x155C s32 integer Quick-item selection marker (SPEC-0021). per hero Medium-High
-  - [x] SPEC-0053 2.2 Selector {auto: title named in code}
+  - [ ] SPEC-0053 2.2 Selector
     - [ ] SPEC-0053, 2.2 Selector: +0x20 Base of the hero table (Tor's record), data address 0x35C7D0. It holds 0x335270 from start-up.
     - [ ] SPEC-0053, 2.2 Selector: +0x24 Selected pointer, data address 0x35C7D4: 0x335270 + 0x1680 × hero index. It equals the base when Tor is selected, and the base plus 0x16...
     - [ ] SPEC-0053, 2.2 Selector: +0x04 Pointer to the camera object, data address 0x35C7B4 (written once at start-up; it does not change). A switch re-attaches the camera to t...
@@ -29222,7 +29222,7 @@ Cited 28 times in the game code.
     - [ ] SPEC-0053, 2.5 HUD portrait words (boot program data): 0x2DCF00 f32 4.0 Hold length in seconds after a refused request: 4.0 x 60 = 240 ticks.
     - [ ] SPEC-0053, 2.5 HUD portrait words (boot program data): 0x2DCF08 u32 1 Tor's portrait "available" word (0 = portrait dimmed).
     - [ ] SPEC-0053, 2.5 HUD portrait words (boot program data): 0x2DCF0C u32 1 Roberta's portrait "available" word.
-  - [x] SPEC-0053 2.6 Hero resource table (boot program data) {auto: title named in code}
+  - [ ] SPEC-0053 2.6 Hero resource table (boot program data)
 - [ ] SPEC-0053 Behavior
   - [ ] SPEC-0053 3.1 Swap modes (the lock)
     - [ ] SPEC-0053, 3.1 Swap modes (the lock): 0 Refused while Tor is selected. A request from Roberta to Tor is allowed. Locked to Tor
@@ -29285,7 +29285,7 @@ Cited 28 times in the game code.
     - [ ] SPEC-0053, 3.6 HUD portraits on every request: Refused: the angles and the blend are not changed; hold = 4.0 x 60 = 240 ticks.
     - [ ] SPEC-0053, 3.6 HUD portraits on every request: The swing is drawn only while it is active and the swap mode is 2. A portrait is dimmed while its available word is 0. T...
   - [ ] SPEC-0053 3.6b Camera hand-off
-  - [x] SPEC-0053 3.7 Act-start setup by stage (TriggerActStart) {auto: title named in code}
+  - [ ] SPEC-0053 3.7 Act-start setup by stage (TriggerActStart)
     - [ ] SPEC-0053, 3.7 Act-start setup by stage (TriggerActStart): 1 0 (locked to Tor) Tor, by a normal switch request (section 3.4 runs) none none Does not set mode 2 first....
     - [ ] SPEC-0053, 3.7 Act-start setup by stage (TriggerActStart): 2 1 (locked to Roberta) Roberta, set directly (placement and select, no task) 220 Roberta only Also runs the...
     - [ ] SPEC-0053, 3.7 Act-start setup by stage (TriggerActStart): 3 2 (free) Tor, set directly 248 both
@@ -29452,12 +29452,12 @@ Cited 21 times in the game code.
     - [ ] SPEC-0054, What the player must do (final fight): The third stun sets the swap to Roberta (hero 1; the clock is stopped for the roughly 80-tick swap) and starts the bu...
     - [ ] SPEC-0054, What the player must do (final fight): After the third absorb she falls at 0.1 per tick and lands at the finale volume (she never moves horizontally). Level...
     - [ ] SPEC-0054, What the player must do (final fight): If the fight clock reaches 0.0 first, the timeout ending (movie 80) runs and the game is over. The clock is stopped o...
-  - [x] SPEC-0054 Initial values (main controller) {auto: title named in code}
+  - [ ] SPEC-0054 Initial values (main controller)
     - [ ] SPEC-0054, Initial values (main controller): Code 0, chooser hold flag 0, first-tick flag 0, stun count 0, kind 0. Cooldown: a whole number drawn uniformly from 60 to...
     - [ ] SPEC-0054, Initial values (main controller): Position: the placement point (57.66, 270.64, -326.07), on the floor (the floor height there is about 270.63), then the en...
     - [ ] SPEC-0054, Initial values (main controller): The gate sets code 1 on any controller pass that occurs while level state 10 is set, or while game state 364 is clear (Ini...
     - [ ] SPEC-0054, Initial values (main controller): Tuning words and fixed constants: see Layout (cooldown 60 to 240 ticks from the words 1.0 s and 4.0 s, window 3000 ticks,...
-  - [x] SPEC-0054 Per-tick order {auto: title named in code}
+  - [ ] SPEC-0054 Per-tick order
     - [ ] SPEC-0054, Per-tick order: Clear the per-tick steering flag.
     - [ ] SPEC-0054, Per-tick order: Step every active projectile slot, in slot order 0 to 3 (Projectiles).
     - [ ] SPEC-0054, Per-tick order: Move the cast glow with her mouth point while the code is 3, otherwise stop it.
@@ -29465,7 +29465,7 @@ Cited 21 times in the game code.
     - [ ] SPEC-0054, Per-tick order: Choice (Chooser), unless the hold flag is set.
     - [ ] SPEC-0054, Per-tick order: Run the handler of the current code once. A handler that ends its animation sets the next code in that same tick, and the next code's handle...
     - [ ] SPEC-0054, Per-tick order: Yield one frame.
-  - [x] SPEC-0054 State table {auto: title named in code}
+  - [ ] SPEC-0054 State table
     - [ ] SPEC-0054, State table: 0 idle 6: 20 keys, loop (80 ticks per cycle) Turn toward the hero, blend 0.25. Request 6. Chooser
     - [ ] SPEC-0054, State table: 1 wait/burst 6 each tick No turn. On level 14: clear 14 and 10, 4 burst requests, absorb count 0, window 3000, code 7. On level 15: clear 15 an...
     - [ ] SPEC-0054, State table: 2 shove 9: 39 keys, one-shot Tick 0 request. Tick 1 push (once). Hero collidable word cleared every tick Gate at tick 152: code 0 and request 6...
@@ -29489,7 +29489,7 @@ Cited 21 times in the game code.
     - [ ] SPEC-0054, Attacks: Aimed bolt (code 4 or a guarded orb). Same flight. When the separation before a step is under 2.0 the slot clears and one Minion Warrior is summone...
     - [ ] SPEC-0054, Attacks: Shove (code 2). No damage; see Chooser and Attacks, summary for the velocity.
     - [ ] SPEC-0054, Attacks: Burst (code 1, on level 14): four summon requests of key 2844 at her front, back and two sides (4 units on her forward axis and on her side axis, e...
-  - [x] SPEC-0054 Movement {auto: title named in code}
+  - [ ] SPEC-0054 Movement
   - [ ] SPEC-0054 Hit and hurt windows
     - [ ] SPEC-0054, Hit and hurt windows: She is invulnerable for the whole fight. The only weak point is the reflected orb (stun 180 ticks, then Stun) and the only damage-like...
     - [ ] SPEC-0054, Hit and hurt windows: Stun hit: Tor in attack sub-state 4, 7, 8 or 12, or Roberta in sub-state 4, with the weapon sweep reaching her body, on any tick of co...
@@ -29517,7 +29517,7 @@ Cited 21 times in the game code.
     - [ ] SPEC-0054, Queen Fyora chamber (pack 1428): State 4 (field around her): request 9 (39 keys, gate 152). On every tick the first-tick flag is clear, the hero is thrown:...
     - [ ] SPEC-0054, Queen Fyora chamber (pack 1428): Queen Fyora's side: her state 3 cast (animation 22; release at tick 32, gate 65, cooldown 30 to 45) opens a type-1 orb homi...
     - [ ] SPEC-0054, Queen Fyora chamber (pack 1428): Level state 2 is pulsed for one tick by the touch volume (SPEC-0041) and only blocks a summon test or type-2 arrival on tha...
-  - [x] SPEC-0054 Pack 1174 (Act 1 escape) {auto: title named in code}
+  - [ ] SPEC-0054 Pack 1174 (Act 1 escape)
   - [ ] SPEC-0054 Port pitfalls
     - [ ] SPEC-0054, Port pitfalls: Animation 14 (not 20) is what the absorb window plays; the timeout descent requests nothing.
     - [ ] SPEC-0054, Port pitfalls: Guard at release turns the orb into a bolt; blocking needs the guard predicate, facing, and the shield Mote element.
@@ -29575,7 +29575,7 @@ Cited 21 times in the game code.
     - [ ] SPEC-0054, Timing table (timing pass): Landed window 900 ticks
     - [ ] SPEC-0054, Timing table (timing pass): Height 0.05 per tick toward the hover height (code 7), 0.05 down (code 8), 0.1 down (code 9)
 - [x] SPEC-0054 Arena build guide (packs 1432 and 1428) {auto: title named in code}
-  - [x] SPEC-0054 A1. Final fight (pack 1432): top-down layout {auto: title named in code}
+  - [ ] SPEC-0054 A1. Final fight (pack 1432): top-down layout
     - [ ] SPEC-0054, A1. Final fight (pack 1432): top-down layout: Floor. One flat ground patch (ground kind 0, surface 6) at y = 270.63 under the whole complex: hall, both bays...
     - [ ] SPEC-0054, A1. Final fight (pack 1432): top-down layout: Hall. A circle of radius about 40.1 round H. Its wall is a closed outline of invisible vertical panels (120 ta...
     - [ ] SPEC-0054, A1. Final fight (pack 1432): top-down layout: Barriers. Three placed objects, each a closed solid box 4.57 thick and 22.72 tall (y 268.77 to 291.49): object...
@@ -29595,7 +29595,7 @@ Cited 21 times in the game code.
     - [ ] SPEC-0054, A3. Hazards, objects and pickups: Damage sources: her orbs (10 each), the Warriors and the Grunts. The shove does no damage. There is no deadly ground, hurt...
     - [ ] SPEC-0054, A3. Hazards, objects and pickups: Projectile sources: the Faerie only (four shared slots). Enemy melee comes from the Warriors and Grunts.
     - [ ] SPEC-0054, A3. Hazards, objects and pickups: Ambient sound: two loops (cue 1 of the area's sound block, spheres of radius 40 centred (48.89, 275.31, -325.72) and (-48....
-  - [x] SPEC-0054 A4. Script timeline (final fight) {auto: title named in code}
+  - [ ] SPEC-0054 A4. Script timeline (final fight)
     - [ ] SPEC-0054, A4. Script timeline (final fight): Pack activation: level state 10 on, the three barrier objects active, script flag 9 on, game states 364 and 358 on, effec...
     - [ ] SPEC-0054, A4. Script timeline (final fight): Fight-start step (A2), once per load. Control at tick 90; script flag 10 on.
     - [ ] SPEC-0054, A4. Script timeline (final fight): The hero walks to the east barrier. Crossing the entry plane sets flag 0.
@@ -29684,7 +29684,7 @@ Cited 21 times in the game code.
     - [ ] SPEC-0054, Monster row fields (rows 128 and 129): Attack 2 Spawn Type +0x3CE u16 2844 none Summon key (SPEC-0029 Behavior 31) used by the burst
     - [ ] SPEC-0054, Monster row fields (rows 128 and 129): Attack 2 Spawn Count +0x3D6 u16 4 4 Burst entity count
     - [ ] SPEC-0054, Monster row fields (rows 128 and 129): Death Disappear Timer +0x80 u16 510 510 Same value on both rows
-  - [x] SPEC-0054 Tuning words (boot program data) {auto: title named in code}
+  - [ ] SPEC-0054 Tuning words (boot program data)
     - [x] SPEC-0054, Tuning words (boot program data): 0x2DA618 f 1.0 s cooldown minimum Lower bound of attack cooldowns {auto: address in code}
     - [x] SPEC-0054, Tuning words (boot program data): 0x2DA61C f 4.0 s cooldown maximum Upper bound of attack cooldowns {auto: address in code}
     - [x] SPEC-0054, Tuning words (boot program data): 0x2DA628 f 50.0 s absorb window Length of the absorb window {auto: address in code}
@@ -29715,7 +29715,7 @@ Cited 21 times in the game code.
     - [ ] SPEC-0054, Tuning words (boot program data): Loop A countdown: 3 s, set after each knockback.
     - [ ] SPEC-0054, Tuning words (boot program data): Loop B proximity to a class-38 entity: 1.5 (horizontal).
     - [ ] SPEC-0054, Tuning words (boot program data): Frame rate: 60 ticks per second (SPEC-0007).
-  - [x] SPEC-0054 Orb kinds {auto: title named in code}
+  - [ ] SPEC-0054 Orb kinds
     - [ ] SPEC-0054, Orb kinds: 0 (aimed bolt) 2127, 412 none
     - [ ] SPEC-0054, Orb kinds: 1 1603, 991 1617
     - [ ] SPEC-0054, Orb kinds: 2 1605, 993 1619
@@ -29768,7 +29768,7 @@ Cited 21 times in the game code.
     - [ ] SPEC-0054, Chooser: If the distance is under 10 and the current code is not 5 or 6: the choice is code 2 (the shove), unless the current code is already 2. This branch...
     - [ ] SPEC-0054, Chooser: Otherwise (distance 10 or more, or the current code is 5 or 6): nothing changes unless the current code is ready and the cooldown is 0. Then code 4...
     - [ ] SPEC-0054, Chooser: Each new choice clears the code's first-tick flag.
-  - [x] SPEC-0054 Projectiles (the four slots) {auto: title named in code}
+  - [ ] SPEC-0054 Projectiles (the four slots)
     - [ ] SPEC-0054, Projectiles (the four slots): Elemental orb (slot type 0; kind 1 to 6). Moves toward the hero's aim point each tick (re-aimed every tick). The tests use the...
     - [ ] SPEC-0054, Projectiles (the four slots): If the hero is guarding (the guard predicate of SPEC-0036: shield state, Roberta's spins, or the automatic guard timer above 0...
     - [x] SPEC-0054, Projectiles (the four slots): Otherwise the orb hits the hero once for 10 (the orb damage, word 0x2DA634; the 10 is not an effect id, since no effect defini... {auto: address in code}
@@ -30187,7 +30187,7 @@ Cited 20 times in the game code.
     - [ ] SPEC-0055, 4. Game over: Roberta selected: swap mode 1 is set on the tick she dies. When her death clip reaches progress 0.95 the death-state handler's switch request...
     - [ ] SPEC-0055, 4. Game over: With item 50 held, neither happens and the normal death rules apply. With flag 83 clear (the Act 1 Juppie fight) the thread does not test.
     - [ ] SPEC-0055, 4. Game over: Item 50 (Potion of Revival) revives the partner to full health and sets a switch request. It has no percent heal (SPEC-0021). It gates the gam...
-  - [x] SPEC-0055 5. Death callbacks {auto: title named in code}
+  - [ ] SPEC-0055 5. Death callbacks
     - [ ] SPEC-0055, 5. Death callbacks: A death from the engine side of the pass (an enemy or boss hit in the region pass, a projectile hit, a poison tick or a deadly-ground or...
     - [ ] SPEC-0055, 5. Death callbacks: A death from a level script (DamageHero or a kill inside a trigger callback, a zone helper or a control thread) happens after that step...
     - [ ] SPEC-0055, 5. Death callbacks: Test vectors: an enemy blow takes the hero to 0 HP on pass N: the callback's first slice runs on pass N. A trigger callback's DamageHero...
@@ -30608,7 +30608,7 @@ Cited 39 times in the game code.
     - [ ] SPEC-0056, SetAI_Behavior: If the code differs from the stored code, the code is stored and the mode is set to 0 directly. The mode setter is not used, so there is no...
     - [ ] SPEC-0056, SetAI_Behavior: New values act at their next use, for example at the next wander point.
     - [ ] SPEC-0056, SetAI_Behavior: In the level scripts, SetAI_Behavior uses codes 0, 5, 6, 7 and 8. Code 7 is used once, by the road-fight intro of the module shared by packs...
-  - [x] SPEC-0056 Mode from code (High) {auto: title named in code}
+  - [ ] SPEC-0056 Mode from code (High)
     - [ ] SPEC-0056, Mode from code (High): The behavior code starts as the placement record's code (kind-3 data +0x84). Every placement has one, and SetAI_Behavior replaces it.
     - [ ] SPEC-0056, Mode from code (High): Each class-6 tick begins with a pre-step (see "Townsfolk routine"). While the mode is 0, the pre-step calls the mode setter with the...
     - [ ] SPEC-0056, Mode from code (High): A code-0 character stays in mode 0. A character with code c is never in mode 0 when its mode body runs. It returns to c on the first...
@@ -30778,7 +30778,7 @@ Cited 39 times in the game code.
     - [ ] SPEC-0056, Patrol (mode 6) (High): When the reached flag is set, the path step advances the index and the new point becomes the target. The first step happens on the s...
     - [ ] SPEC-0056, Patrol (mode 6) (High): Walking (pause timer below 1): the navigation step runs toward the point. When the horizontal distance is below 0.5, the reached fla...
     - [ ] SPEC-0056, Patrol (mode 6) (High): Pausing: as wander step 4, with fidget id 11 in place of id 2. After the fidget's clip reaches progress 0.99, the fidget timer is dr...
-  - [x] SPEC-0056 Villager pair (mode 3) (High) {auto: title named in code}
+  - [ ] SPEC-0056 Villager pair (mode 3) (High)
     - [ ] SPEC-0056, Villager pair (mode 3) (High): Search. It runs in the pre-step, in modes 5 and 6 only. Each tick the pair's two counters drop by 1, the cooldown among them....
     - [ ] SPEC-0056, Villager pair (mode 3) (High): is eligible;
     - [ ] SPEC-0056, Villager pair (mode 3) (High): has the same navigation index;
@@ -31271,7 +31271,7 @@ Cited 4 times in the game code.
     - [ ] SPEC-0057, 7A. Ground rules of the hero motion tick: TV-G5: a deadly-ground entry (kind 2) with surface word 2: rule 1 applies, so the hurting tick does not run on it.
     - [ ] SPEC-0057, 7A. Ground rules of the hero motion tick: TV-G6 (surface meaning): a hero killed on a deadly-ground entry with surface word 2 plays death clip 173 with the...
     - [ ] SPEC-0057, 7A. Ground rules of the hero motion tick: TV-G7 (disc-backed entry): pack 696 entry 121 is a kind-0 surface-2 ground entry. With that entry underfoot, groun...
-  - [x] SPEC-0057 8. Edge cases {auto: title named in code}
+  - [ ] SPEC-0057 8. Edge cases
     - [ ] SPEC-0057, 8. Edge cases: Pool overflow (needs eleven concurrent runs; the shared pool holds ten): the eleventh run gets index 10 and the allocator writes nothing. The...
     - [ ] SPEC-0057, 8. Edge cases: Kill-branch timing: with the default-death state-16 path and no external status or playback-scale change, R = 1 and the 17-frame S=2 death cl...
     - [ ] SPEC-0057, 8. Edge cases: Mode-0 kill: with disc data no mode-0 object ever kills; the kill rule of mode 0 is unreachable in play (Behavior 2).
@@ -31283,7 +31283,7 @@ Cited 4 times in the game code.
     - [ ] SPEC-0057, 8. Edge cases: Element gate on enemies: a poison hit on an enemy of target type 2 applies nothing and writes no extra words (SPEC-0029). Heroes have no such...
     - [ ] SPEC-0057, 8. Edge cases: Hurting surface phase: entering the surface just after a 2.5 s mark of the game clock gives up to 2.5 s of grace; entering just before gives...
     - [ ] SPEC-0057, 8. Edge cases: Dead hero: the hazard triggers do not check whether the hero is dead (SPEC-0044, module 1091; Low). A hit on a hero in the death state (Damag...
-  - [x] SPEC-0057 9. Test vectors (summary) {auto: title named in code}
+  - [ ] SPEC-0057 9. Test vectors (summary)
     - [ ] SPEC-0057, 9. Test vectors (summary): TV-S1: SetHeroStatus(2, -1) on a hero with no statuses. Poison timer 7200. First hit at reading 6960 (4 s after the apply); last...
     - [ ] SPEC-0057, 9. Test vectors (summary): TV-S2: SetHeroStatus(7, -1) on a hero at 10 HP. Fire timer 300. No damage at any reading; health stays 10 and the timer expires a...
     - [ ] SPEC-0057, 9. Test vectors (summary): TV-S3: status 9 active with timer 3600, then SetHeroStatus(2, -1). The poison timer is not changed. No extra words written. Effec...
@@ -31327,7 +31327,7 @@ Cited 5 times in the game code.
     - [ ] SPEC-0058, Quest row fields used by the story (table 1): +0x0C 4 u32 Title text: offset from the start of the table block (SPEC-0024, Pointers and string relocation) t...
     - [ ] SPEC-0058, Quest row fields used by the story (table 1): +0x10 4 u32 Objective text: same rule as +0x0C. All 238 resolve. High
     - [ ] SPEC-0058, Quest row fields used by the story (table 1): +0x20 4 s32 Scene id: row index into table 5 (area names), or -1 for no single area. High for the lookup
-  - [x] SPEC-0058 Area names (table 5) {auto: title named in code}
+  - [ ] SPEC-0058 Area names (table 5)
     - [ ] SPEC-0058, Area names (table 5): +0x00 4 u32 Area name: offset from the start of the table block to a NUL-terminated string. All 77 resolve.
     - [ ] SPEC-0058, Area names (table 5): +0x04 4 u32 Run-time count (SPEC-0024); zero on disc.
   - [ ] SPEC-0058 Act structure by quest rows
@@ -31350,7 +31350,7 @@ Cited 5 times in the game code.
     - [ ] SPEC-0058, Stage table as checkpoints: 5 Squire chores done
     - [ ] SPEC-0058, Stage table as checkpoints: 6 Act 3 up to entering the dungeons
     - [ ] SPEC-0058, Stage table as checkpoints: 7 Act 4 legends done
-  - [x] SPEC-0058 Walkthrough (New Game, start index 0) {auto: title named in code}
+  - [ ] SPEC-0058 Walkthrough (New Game, start index 0)
     - [ ] SPEC-0058, Walkthrough (New Game, start index 0): 1 T 691 and 909 New-game default load First boot: the publisher and developer pages, card check, logo page (301 passe...
     - [ ] SPEC-0058, Walkthrough (New Game, start index 0): 2 T 909 farm start Act 1 opening. The opening block of 909's update needs only 707 on and 1 off; it does not test 706...
     - [ ] SPEC-0058, Walkthrough (New Game, start index 0): 3 T 909 - Farm chores, in quest-table order: round up the three Whinnies. Once flag 110 is set, Patricia's next talk...
@@ -31978,7 +31978,7 @@ Cited 25 times in the game code.
     - [ ] SPEC-0059, Prize wheel copies: 1023 36 (flags 64 and 11 clear) 15 1042 1026 1027 to 1030 1032 1033 to 1036 1031 1037 to 1041 20, 40, 60, 80; 160 478, 479, 480 11, 10 o...
     - [ ] SPEC-0059, Prize wheel copies: 758 3 (no gate) 25 335 319 320 to 323 325 326 to 329 324 330 to 334 45, 65, 105, 175; 325 536, 537, 538 9, 8 object 0 about locator 4's...
     - [ ] SPEC-0059, Prize wheel copies: 1358 0 (flag 102 set) 100 109 93 94 to 97 99 100 to 103 98 104 to 108 140, 180, 250, 400; 700 none 7, 6 object 0 about locator 1's forwa...
-  - [x] SPEC-0059 Game words (run-time; module data) {auto: title named in code}
+  - [ ] SPEC-0059 Game words (run-time; module data)
     - [ ] SPEC-0059, Game words (run-time; module data): Wheel stage G 0 0 new game, 1 last spin won, -1 last spin lost
     - [ ] SPEC-0059, Game words (run-time; module data): Wheel round r 0 number of go-on answers so far in this game (0 to 4)
     - [ ] SPEC-0059, Game words (run-time; module data): Wheel angle A 0.0 wheel angle in degrees, float32
@@ -32192,7 +32192,7 @@ Cited 22 times in the game code.
   - [ ] SPEC-0060, Where it lives on the disc: 0x2EB344: shot test margin. It is 1.5 on disc.
   - [ ] SPEC-0060, Where it lives on the disc: All other values in this spec are fixed constants of the program. They are given as values. The drop tables are among them, so t...
 - [ ] SPEC-0060 Layout
-  - [x] SPEC-0060 Patch record (0x40 bytes) {auto: title named in code}
+  - [ ] SPEC-0060 Patch record (0x40 bytes)
     - [ ] SPEC-0060, Patch record (0x40 bytes): +0x00 4 x f32 Box x0, x1, z0, z1 (x min, x max, z min, z max). Every row and plant lies inside it. High
     - [ ] SPEC-0060, Patch record (0x40 bytes): +0x10 u32 Pool count = number of rows (1 to 18, and 27) High
     - [ ] SPEC-0060, Patch record (0x40 bytes): +0x14 u32 Header-relative offset of the first row High
@@ -32255,7 +32255,7 @@ Cited 22 times in the game code.
     - [ ] SPEC-0060, 1. Build at world load (High): 36 174 (Red Negg)
     - [ ] SPEC-0060, 1. Build at world load (High): 38 151 (Golden Negg)
     - [ ] SPEC-0060, 1. Build at world load (High): 39 154 (Starry Negg)
-  - [x] SPEC-0060 2. Placement (Medium-High) {auto: title named in code}
+  - [ ] SPEC-0060 2. Placement (Medium-High)
     - [ ] SPEC-0060, 2. Placement (Medium-High): Centre C = ((x0 + x1)/2, y, (z0 + z1)/2), with y = +0x1C.
     - [ ] SPEC-0060, 2. Placement (Medium-High): Patch radius = 0.7072 × max(x1 − x0, z1 − z0). The bounding radius used by the draw is the patch radius plus 0.5 × the near mode...
     - [ ] SPEC-0060, 2. Placement (Medium-High): Plant k of row r starts at (x0 + plant offset, y, z0 + row offset).
@@ -32278,7 +32278,7 @@ Cited 22 times in the game code.
     - [ ] SPEC-0060, 3. Distances and fade bands (High): S ≤ d ≤ S + W: b = 1 and a = (S + W − d) / W;
     - [ ] SPEC-0060, 3. Distances and fade bands (High): beyond S + W: far only (a = 0, b = 1).
     - [ ] SPEC-0060, 3. Distances and fade bands (High): No model: a = b = 1.
-  - [x] SPEC-0060 4. Per frame (High for the order; Medium-High for the eye source) {auto: title named in code}
+  - [ ] SPEC-0060 4. Per frame (High for the order; Medium-High for the eye source)
     - [ ] SPEC-0060, 4. Per frame (High for the order; Medium-High for the eye...: Gate. The patch goes on only when all three of these hold:
     - [ ] SPEC-0060, 4. Per frame (High for the order; Medium-High for the eye...: It has a model or a material.
     - [ ] SPEC-0060, 4. Per frame (High for the order; Medium-High for the eye...: The zone query passes, with column = the zone (+0x20, low byte). The key is −1 when the patch'...
@@ -32303,7 +32303,7 @@ Cited 22 times in the game code.
   - [ ] SPEC-0060 5. Grass, G (Medium-High)
     - [ ] SPEC-0060, 5. Grass, G (Medium-High): A plant within 20 units of the view point takes the patch's sway phase.
     - [ ] SPEC-0060, 5. Grass, G (Medium-High): A plant within 2.0 units has its alpha scaled. The factor is 0 within 0.25, and (d − 0.25) / 1.75 from 0.25 to 2.0. The scaled va...
-  - [x] SPEC-0060 6. Bushes, B (High unless marked) {auto: title named in code}
+  - [ ] SPEC-0060 6. Bushes, B (High unless marked)
     - [ ] SPEC-0060, 6. Bushes, B (High unless marked): Helpers. They are skipped when the state is 1 and the regrow counter is at most 450 at the start of the step. A regrowing...
     - [ ] SPEC-0060, 6. Bushes, B (High unless marked): Cut flag set: the up axis springs back (step below), and the countdown drops by 1. When it reaches 0, the cut flag become...
     - [ ] SPEC-0060, 6. Bushes, B (High unless marked): Otherwise, for every bush key except 5: spring-back, then the hero bend and the weapon test within 5 units, then the shot...
@@ -32483,7 +32483,7 @@ Cited 0 times in the game code.
 - [ ] SPEC-0061 Summary
 - [ ] SPEC-0061 Where it lives on the disc
 - [ ] SPEC-0061 Layout
-  - [x] SPEC-0061 1. Cut content {auto: title named in code}
+  - [ ] SPEC-0061 1. Cut content
     - [ ] SPEC-0061, 1. Cut content: Cloud Beast boss (monster class 9) and its companion (class 10) No record places either monster type, no script spawns them, no model or ani...
     - [ ] SPEC-0061, 1. Cut content: Spyder Nest encounter: nest controller (class 3) and its valves (class 4) No placement record of the nest or valve types exists in any pack,...
     - [ ] SPEC-0061, 1. Cut content: Monster classes that no row places (3, 4, 9, 10 on unplaced rows; 22 and 27 to 31 named by no row) No spawn path names them, so their behavi...
@@ -32904,12 +32904,12 @@ Cited 1 times in the game code.
     - [ ] SPEC-0063, Arena start and wake-up: The hero stands at locator 0, 30.19 units from home. A hero who stands still there does not wake him (28 < 30.19). Any walk or run...
     - [ ] SPEC-0063, Arena start and wake-up: A hit on a hidden or otherwise non-agro Rogue wakes him at once: the take-hit hook sets agro on the hit and doubles that hit's dama...
     - [ ] SPEC-0063, Arena start and wake-up: Entering agro (setter for state 19): outer sub-state 0, defence hold 0, recovery countdown 0, melee-swing latch 0, all four slot co...
-  - [x] SPEC-0063 Per-tick order (agro) {auto: title named in code}
+  - [ ] SPEC-0063 Per-tick order (agro)
     - [ ] SPEC-0063, Per-tick order (agro): The pre-step (Behavior 2): awareness countdown, alert flag, retarget countdown, alarm check, map search (see below), then the agro ma...
     - [ ] SPEC-0063, Per-tick order (agro): Agro machine: recovery countdown down by 1 when positive; guard-state reset; missile defence; melee defence; lost-sight test; normal...
     - [ ] SPEC-0063, Per-tick order (agro): The class-19 handler: defence hold down by 1; in the hold inner state, face the hero (blend 0.9) and request id 31; in outer 0 reques...
     - [ ] SPEC-0063, Per-tick order (agro): The animation pass, then the motion pass (one-tick request-to-step latency, SPEC-0038 Behavior 48).
-  - [x] SPEC-0063 Attack chooser {auto: title named in code}
+  - [ ] SPEC-0063 Attack chooser
     - [ ] SPEC-0063, Attack chooser: Each slot cooldown goes down by 1 when positive.
     - [ ] SPEC-0063, Attack chooser: If the outer sub-state is 2 (an attack running), stop. Otherwise the selected slot is cleared.
     - [ ] SPEC-0063, Attack chooser: Continue only in outer sub-states 1, 3, 4 and 11 and only while the recovery countdown is below 1. The Rogue's movement state is outer 4, so...
@@ -32921,7 +32921,7 @@ Cited 1 times in the game code.
     - [ ] SPEC-0063, Attack chooser: a route to the hero exists (slot 2), or, for slots 0 and 3, a route exists or the distance is below 10.0.
     - [ ] SPEC-0063, Attack chooser: On a choice: the slot's cooldown is drawn (slot 0: int[30, 60]; slot 2: int[60, 120]; slot 3: 0), the sequencer starts in state 0 (slots 0 a...
     - [ ] SPEC-0063, Attack chooser: Probability that an attack starts in a tick when all cooldowns are 0, recovery is 0 and the hero is in front: d between 5 and 10: 1 - 0.76 x...
-  - [x] SPEC-0063 State table {auto: title named in code}
+  - [ ] SPEC-0063 State table
     - [ ] SPEC-0063, State table: Hidden (class 8, sub 0) 9 -> clip 0 25, loops 1.0 Wake rule above; leaves on the next tick
     - [ ] SPEC-0063, State table: Emerge (class 8, sub 1) 10 -> skipped none none Same tick: agro (class 19)
     - [ ] SPEC-0063, State table: Agro set-up (outer 0) idle pick: 0 -> clip 0, or a fidget 115 to 119 after int[120, 600] ticks 25 1.0 One tick, then outer 4 (strafe) with inne...
@@ -32969,7 +32969,7 @@ Cited 1 times in the game code.
     - [ ] SPEC-0063, Hit and hurt windows: The hurt side: he can be struck while hidden, walking, circling, holding, attacking, recovering, in hit reaction, or fetching coins. H...
     - [ ] SPEC-0063, Hit and hurt windows: A hero who is hurt, knocked down or dead is not attackable: the Rogue picks no new attack and slot cooldowns stop, but an attack alrea...
     - [ ] SPEC-0063, Hit and hurt windows: Damage on the hero: SPEC-0036 (Enemy attack damage to a hero). With no armour, slot 3 deals 10 per hit and slot 0 deals 6. Slot 2's ba...
-  - [x] SPEC-0063 Weapon reach {auto: title named in code}
+  - [ ] SPEC-0063 Weapon reach
     - [ ] SPEC-0063, Weapon reach: 0 (B, clip 8) s+20 to s+51 (s+20 to s+51) -0.4 to 2.8 / 0.8 to 1.5 / -2.0 to -0.7 -1.8 to 4.0 -1.1 to 6.4 -8.0 to 7.0
     - [ ] SPEC-0063, Weapon reach: 2 steal (C, clip 39) sC+36 to sC+43 (sC+38 to sC+43) -0.3 to 3.6 / 2.4 to 6.7 / -3.2 to 1.5 -2.4 to 9.0 0.8 to 12.4 -6.5 to 12.0
     - [ ] SPEC-0063, Weapon reach: 3 first blow (B, clip 38) s+16 to s+31 (s+16 to s+31) 0.2 to 2.1 / 2.3 to 2.9 / -1.5 to 1.8 -4.2 to 8.6 -3.5 to 9.4 -6.0 to 8.5
@@ -33256,8 +33256,8 @@ Cited 1 times in the game code.
     - [ ] SPEC-0063, Arena start sequence: Emerge, one sub-state per tick: tick T0 sets sub-state 1 (distance test passed); tick T0 + 1 requests animation 10 and sets sub-state...
     - [ ] SPEC-0063, Arena start sequence: Agro tick 1 (T0 + 182): outer sub-state 0 stores outer 1 (rush) with inner 1 (hold). Agro tick 2 (T0 + 183): inner 1 sees d above 5.0,...
     - [ ] SPEC-0063, Arena start sequence: The normal attack choice first runs in agro tick 2 (T0 + 183), because it needs outer sub-state 1.
-  - [x] SPEC-0063 Per-tick order (agro) {auto: title named in code}
-  - [x] SPEC-0063 State table {auto: title named in code}
+  - [ ] SPEC-0063 Per-tick order (agro)
+  - [ ] SPEC-0063 State table
     - [ ] SPEC-0063, State table: Scripted intro control grabbed, then 73 73 -> clip 20 36 keys, 0.25 per tick 140 released: class state 8
     - [ ] SPEC-0063, State table: 8 sub 0 (hide) hero closer than 40 x F1 9 -> clip 11 1 key loop none sub 1 next tick
     - [ ] SPEC-0063, State table: 8 sub 1 next tick 10 -> clip 10 46 keys request sub 2
@@ -33274,12 +33274,12 @@ Cited 1 times in the game code.
     - [ ] SPEC-0063, State table: Outer 10 kind 0 (hit reaction) any damaging hit 57 -> clip 1 17 keys 65 outer 0
     - [ ] SPEC-0063, State table: Class 10 (victory pose) the fighter's strike leaves the hero at 0 HP 73 36 keys 140 setter 0 -> class 0 -> setter 8 (home)
     - [ ] SPEC-0063, State table: Class 16 (reanimation countdown) death 58 -> clip 13 56 keys, 0.5 per tick 110, then holds the last key rises after 12000 to 18000 ticks (never...
-  - [x] SPEC-0063 Attack chooser {auto: title named in code}
+  - [ ] SPEC-0063 Attack chooser
   - [ ] SPEC-0063 Phase timing for each slot (tick 0 = tick in which the sequencer requests the strike clip; the choice happened one ti...
     - [ ] SPEC-0063, Phase timing for each slot (tick 0 = tick in which the se...: 0 keys 9 to 12 -> ticks 36 to 51 36 40 (start distance 3.0 to 8.5); 42 at 9.0 53 54 50
     - [ ] SPEC-0063, Phase timing for each slot (tick 0 = tick in which the se...: 1 keys 7 to 8 -> ticks 28 to 35 29 29 (start distance 3.5 to 7) 65 66 60
     - [ ] SPEC-0063, Phase timing for each slot (tick 0 = tick in which the se...: 2 keys 5 to 13 -> from tick 29 (strike speed 0.7 until the first contact) 32 with the chase st...
-  - [x] SPEC-0063 Weapon reach {auto: title named in code}
+  - [ ] SPEC-0063 Weapon reach
     - [ ] SPEC-0063, Weapon reach: 0 (B, clip 4) s+36 to s+51 (s+36 to s+44) -1.5 to 3.6 / 0.9 to 3.8 / -2.3 to 3.0 -2.8 to 6.0 -0.4 to 9.1 -3.5 to 5.5
     - [ ] SPEC-0063, Weapon reach: 1 (B, clip 3) s+28 to s+35 (s+29 to s+35) 2.2 to 3.3 / 0.5 to 4.8 / -0.4 to 1.0 0.6 to 5.6 3.1 to 7.7 -4.5 to 6.0
     - [ ] SPEC-0063, Weapon reach: 2 lunge (B, clip 21) s+29 to s+74 (s+32 to s+74) -0.1 to 3.7 / 1.8 to 4.5 / -2.4 to -0.6 1.6 to 5.6 6.7 to 14.7 -3.0 to 6.0
@@ -33408,7 +33408,7 @@ Cited 1 times in the game code.
     - [ ] SPEC-0063, Hit/hurt windows (tick 0 = the tick the sequencer request...: 0 (clip 8, weapon 1) keys 5 to 7: ticks 20 to 31 1, at tick 20 or the first contact tick 57 58 35
     - [ ] SPEC-0063, Hit/hurt windows (tick 0 = the tick the sequencer request...: 2 (clip 7) weapon 1 keys 7 to 10: ticks 28 to 43; weapon 2 keys 13 to 14: ticks 52 to 59; weap...
     - [ ] SPEC-0063, Hit/hurt windows (tick 0 = the tick the sequencer request...: 1 charge hit (clip 28, weapon 3) keys 1 to 3: ticks 4 to 15 after the C request 1 25 next tick...
-  - [x] SPEC-0063 Weapon reach {auto: title named in code}
+  - [ ] SPEC-0063 Weapon reach
     - [ ] SPEC-0063, Weapon reach: 0 jab (B, clip 8) w1 s+20 to s+31 (s+20 to s+31) 0.4 to 2.5 / 1.6 to 3.0 / -1.6 to 1.9 -1.4 to 5.0 1.9 to 8.1 -2.0 to 3.5
     - [ ] SPEC-0063, Weapon reach: 1 charge hit (C, clip 28) w3 sC+4 to sC+15 (sC+4 to sC+15) 2.0 to 3.0 / 1.7 to 2.7 / -0.2 to 0.0 0.8 to 4.8 1.9 to 8.2 -3.5 to 4.5
     - [ ] SPEC-0063, Weapon reach: 2 three-hit swing, first (B, clip 7) w1 s+28 to s+43 (s+28 to s+43) 0.2 to 2.9 / 1.2 to 3.0 / -2.1 to 3.0 -1.0 to 5.4 1.7 to 9.0 -2.0 to 4.0
@@ -33607,7 +33607,7 @@ Cited 1 times in the game code.
     - [ ] SPEC-0064, Start states and what a spawn record supplies: 7 sentry or guard one flag word 0: stand at home and look around. Nonzero: hold the placed facing
     - [ ] SPEC-0064, Start states and what a spawn record supplies: 8 hide emerge distance (float), cue word, selector (always 0 on disc) Wait hidden at home
     - [ ] SPEC-0064, Start states and what a spawn record supplies: 9 follow target character id, stay distance, stop flag Follow a named character (Cogham Village Spearmen, two...
-  - [x] SPEC-0064 Idle states {auto: title named in code}
+  - [ ] SPEC-0064 Idle states
     - [ ] SPEC-0064, Idle states: State 5, wander. Each tick the pause timer counts down while positive. With no goal held, a goal is chosen: if R is below 0.1 the goal is the c...
     - [ ] SPEC-0064, Idle states: State 6, patrol. The record's +0xB8 names a path of the area's path list, a run of entry records of the pack (SPEC-0006, Tagged tables, tag 0x0...
     - [ ] SPEC-0064, Idle states: State 7, sentry or guard. Farther than 0.5 from home: walk home. At home with the flag 0: stand with animation 7 (flyers 144); whenever the fid...
@@ -33622,13 +33622,13 @@ Cited 1 times in the game code.
     - [ ] SPEC-0064, Noticing the hero: Aim at the stored point with the aim turn weight.
     - [ ] SPEC-0064, Noticing the hero: Run the notice check again with fresh rolls. If it passes, or animation 82 is current: if 82 is not current and the table has it, request...
     - [ ] SPEC-0064, Noticing the hero: If the check failed and 82 is not current: the stored countdown goes down by 1; at or below 0 (always, on the first tick) request animati...
-  - [x] SPEC-0064 Alarm groups {auto: title named in code}
+  - [ ] SPEC-0064 Alarm groups
   - [ ] SPEC-0064 Hits, doubled damage and reactions
-  - [x] SPEC-0064 Socialize {auto: title named in code}
+  - [ ] SPEC-0064 Socialize
   - [ ] SPEC-0064 Map search and support casts
-  - [x] SPEC-0064 Grab machine {auto: title named in code}
+  - [ ] SPEC-0064 Grab machine
   - [ ] SPEC-0064 Weapon contact and the hero's hurt shape (the general rule)
-  - [x] SPEC-0064 Weapon reach tables (how the per-kind figures are made) {auto: title named in code}
+  - [ ] SPEC-0064 Weapon reach tables (how the per-kind figures are made)
     - [ ] SPEC-0064, Weapon reach tables (how the per-kind figures are made): Slot (phase, clip): the attack slot, whether the strike clip is the first one requested on tick s (...
     - [ ] SPEC-0064, Weapon reach tables (how the per-kind figures are made): Weapon: the weapon number, radius by height.
     - [ ] SPEC-0064, Weapon reach tables (how the per-kind figures are made): Window ticks: the ticks on which the clip's frame carries that weapon's window bit; "level contact"...
@@ -33684,7 +33684,7 @@ Cited 1 times in the game code.
     - [ ] SPEC-0064, Timing table and units (every common enemy; timing pass): Using 30 Hz frames or 50 Hz: one key of a speed-byte-2 clip is 4 ticks at 60 Hz.
     - [ ] SPEC-0064, Timing table and units (every common enemy; timing pass): Starting the disappear countdown at the death tick instead of at the 0.95 point of the death clip.
     - [ ] SPEC-0064, Timing table and units (every common enemy; timing pass): Drawing the slot cooldown only once; it is drawn at the choice and again at the end path.
-  - [x] SPEC-0064 Attack manager {auto: title named in code}
+  - [ ] SPEC-0064 Attack manager
   - [ ] SPEC-0064 Agro: idle pick, defence and counters
     - [ ] SPEC-0064, Agro: idle pick, defence and counters: Agro idle pick. In agro the idle pick (set-up on outer sub-state 0, and the idle animation of stand-still sub-states)...
     - [ ] SPEC-0064, Agro: idle pick, defence and counters: Defence is rolled once per swing. The melee defence roll is latched per hero swing: it runs only when the defence hol...
@@ -33751,7 +33751,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, What a port most likely gets wrong, shared by the four kinds: Treating state 5 as a standing idle. It walks goal to goal over a square of side R about home...
       - [ ] SPEC-0064, What a port most likely gets wrong, shared by the four kinds: Waking state-8 minions on a timer or notice roll. They use only the emerge distance and the al...
       - [ ] SPEC-0064, What a port most likely gets wrong, shared by the four kinds: Returning at once to the default state. Every exit passes through state 23 and clip 81 (visibl...
-  - [x] SPEC-0064 Minion Grunt (rows 183 to 189) {auto: title named in code}
+  - [ ] SPEC-0064 Minion Grunt (rows 183 to 189)
     - [ ] SPEC-0064 Identity and tunables
       - [ ] SPEC-0064, Identity and tunables: Records Monster type 80, variants 0 to 6 (rows 183 to 189), name "Minion Grunt"; one clip table shared by 171 of the 175 records (a d...
       - [ ] SPEC-0064, Identity and tunables: Class and approach Class 17; approach routine 1 (rush); Can fly 1 (flies while the retarget countdown is at most 0, which it always i...
@@ -33790,7 +33790,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Animation ids and clips (shared by all rows): 81, 82, 165 disappear, appear, flyer emerge clip 31 (18 keys, gate s+69), clip 32 (17 keys, gate s+65), clip 32
       - [ ] SPEC-0064, Animation ids and clips (shared by all rows): 73 (163) victory pose clip 15 (37 keys, gate s+144)
     - [ ] SPEC-0064 Per-tick order, start and wake
-    - [x] SPEC-0064 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0064 State table (agro)
       - [ ] SPEC-0064, State table (agro): Set-up (outer 0) agro idle pick 141 while flying, else 1 (the table has neither: clip 0) 10 one tick, then outer 1 inner 1
       - [ ] SPEC-0064, State table (agro): Rush hold (inner 1) 155 -> clip 4 21, loops d < 8.0 gives back off; d > 15.0 gives approach
       - [ ] SPEC-0064, State table (agro): Approach (inner 0) 101 -> clip 2 10, loops row speed 14 per second (0.2333 per tick); gait 2 (same clip) when d > 30; ends when d < desired
@@ -33804,8 +33804,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, State table (agro): Wait in line (outer 12) 98 -> clip 20 12 walks to a stand-off point (SPEC-0038 Behavior 45)
       - [ ] SPEC-0064, State table (agro): Victory pose (state 10) 163 -> clip 15 37 gate s+144, then the default state
       - [ ] SPEC-0064, State table (agro): Dead 58 -> clip 30 10 plays once; corpse removal as in the shared section
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Attack chooser
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, walk home, wait in line root + row 98 (12) 0.245 14.68 (8.68 + 6) steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement: Approach (inner 0) row only 101: no root 0.233 14.0 steer d below the drawn desired 9.4 to 13.6
       - [ ] SPEC-0064, Movement: Hold (inner 1), 8 to 15 none 155 0 0 aim 0.8 d below 8 or above 15
@@ -33815,7 +33815,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Movement: Dodge 138 / 139, 140 root (10) each side 11.36 over 40 ticks; back 13.63 over 40 gate
       - [ ] SPEC-0064, Movement: Corpse root, falls 58 (10), then grounded by the death hook back 11.82 over 40 ticks facing kept disappear timer 1 tick: no held slide
     - [ ] SPEC-0064 Hit and hurt windows
-    - [x] SPEC-0064 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0064 Weapon reach
       - [ ] SPEC-0064, Weapon reach: 1 (B, clip 10) w1 (3.0 x 1.0) s+16 to s+27 (s+24 to s+27) -1.2 to 4.6 / -1.0 to 6.4 / -3.2 to 1.4 0.0 to 7.4 2.0 to 9.3 -7.0 to 9.0
       - [ ] SPEC-0064, Weapon reach: 2 (B, clip 12) w1 (3.0 x 1.0) s+32 to s+43 (s+36 to s+43) -0.6 to 5.3 / -0.7 to 5.5 / -2.0 to -0.3 -2.8 to 7.8 -0.3 to 10.0 -6.5 to 8.0
       - [ ] SPEC-0064, Weapon reach: 2 (B, clip 12) w2 (3.0 x 1.0) s+32 to s+43 (s+36 to s+43) -0.1 to 5.3 / -0.7 to 5.7 / 0.1 to 1.6 -2.8 to 8.0 -0.3 to 10.2 -7.0 to 8.0
@@ -33845,13 +33845,13 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, What a port most likely gets wrong: A single melee slot. The Grunt has two: a blockable 25-damage swing and an unblockable 50-damage swing, 69 percent per t...
       - [ ] SPEC-0064, What a port most likely gets wrong: Letting it dodge freely. Dodge needs a quick swing (49 of 100); after one dodge there is a 120 to 300 tick quiet period.
       - [ ] SPEC-0064, What a port most likely gets wrong: Missing the status. Every hit rolls 50 of 101 for its row's status (stun for rows 186 and 189), duration 30 to 60 second...
-    - [x] SPEC-0064 Test vector {auto: title named in code}
+    - [ ] SPEC-0064 Test vector
     - [ ] SPEC-0064 Open questions
       - [ ] SPEC-0064, Open questions: Whether a Grunt in sequencer state 0 reaches d <= 5.0 on tick c + 31 or c + 32 (floating-point error at exactly 5.0; needs a runtime check)....
       - [ ] SPEC-0064, Open questions: Weapon contact geometry. Resolved: the general rule of the shared field behaviour (weapon cylinders on attachment frames 0 to 2 against the...
       - [ ] SPEC-0064, Open questions: Resolved (timing pass): blocked-strike timing. Only slot 1 can be blocked (slot 2 is unblockable). The blocked tick is b; state 4 runs from...
       - [ ] SPEC-0064, Open questions: Resolved (Medium-High; proactive (open close-out)): the actor render loops gate each actor with a drawable predicate that requires a render...
-  - [x] SPEC-0064 Minion Archer (rows 190 to 196) {auto: title named in code}
+  - [ ] SPEC-0064 Minion Archer (rows 190 to 196)
     - [ ] SPEC-0064 Identity and tunables
       - [ ] SPEC-0064, Identity and tunables: Records Monster type 80, variants 7 to 13 (rows 190 to 196), name "Minion Archer"; one clip table for all 156 records. Placements: ro...
       - [ ] SPEC-0064, Identity and tunables: Class and approach Class 17; approach routine 3 (keep distance); Can fly 1 (airborne always)
@@ -33873,15 +33873,15 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Identity and tunables: 195, 196 6 1 curse, 30 to 60 s 1.3 10 to 100
     - [ ] SPEC-0064 Animation ids and clips
     - [ ] SPEC-0064 Wake and start
-    - [x] SPEC-0064 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0064 State table (agro)
       - [ ] SPEC-0064, State table (agro): Hold (inner 4) 156 -> clip 4 21, loops d > 60 gives approach; d < 15 gives back off
       - [ ] SPEC-0064, State table (agro): Approach (inner 3) 107 -> clip 5 10, loops 16 per second; ends when d < desired (24 to 51)
       - [ ] SPEC-0064, State table (agro): Back off (inner 5) 108 -> clip 3 10, loops 27 per second, toward the point 60 units from the hero; ends when d > desired
       - [ ] SPEC-0064, State table (agro): Slot 3 shot 49 -> clip 14 20, one-shot arrow at s+56 (s+44 on rows 192 to 196), gate s+77 (s+59), end path s+78 (s+60)
       - [ ] SPEC-0064, State table (agro): Slot 2 pose 43 -> clip 15 37, one-shot gate s+144, end path s+145
       - [ ] SPEC-0064, State table (agro): Dodges, hit reaction, death, look, appear as the Grunt
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Attack chooser
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, patrol, walk home root + row 98 or 99 (12) 0.278 16.68 (8.68 + 8) steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement: Approach (inner 3), d above 60 row only 107: no root 0.267 16.0 steer d below the drawn desired 24 to 51
       - [ ] SPEC-0064, Movement: Hold (inner 4), 15 to 60 none 156 0 0 aim 0.25 then 0.1 (effective 0.325) d above 60 or below 15
@@ -33913,7 +33913,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, What a port most likely gets wrong: Aiming at a moving target with lead. The aim is the hero's present position + 2.5 up (+ 5.0 sideways off camera); a runn...
       - [ ] SPEC-0064, What a port most likely gets wrong: Using wind-up ids or the Grunt's rush bands. The Archer holds between 15 and 60 and retreats at 27 per second.
       - [ ] SPEC-0064, What a port most likely gets wrong: Ignoring the sight-line-free notice. The Archer notices through walls from 56 units and more.
-    - [x] SPEC-0064 Test vector {auto: title named in code}
+    - [ ] SPEC-0064 Test vector
     - [ ] SPEC-0064 Open questions
       - [ ] SPEC-0064, Open questions: Resolved (High; proactive (open close-out)): no lead and no flight-time compensation. Every shot aims once, at its release tick, at the hero...
       - [ ] SPEC-0064, Open questions: The hidden-state back-off point for flyers in state 8 (it walks home with the ground gait id). The state-8 handler walks home with gait 0 (S...
@@ -33957,7 +33957,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Animation ids and clips: 16, 17, 18 look, lose interest, search clip 21 (49 keys, gate 192), clip 16 (65 keys, gate 256), clip 19 (38 keys, gate 148)
       - [ ] SPEC-0064, Animation ids and clips: 73 victory pose clip 26 (116 keys at speed byte 1, gate s+230)
     - [ ] SPEC-0064 Wake and start
-    - [x] SPEC-0064 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0064 State table (agro)
       - [ ] SPEC-0064, State table (agro): Set-up (outer 0) agro idle pick 1 (absent: clip 0, the same 35-key idle clip) 35 one tick, then outer 1 inner 1
       - [ ] SPEC-0064, State table (agro): Hold (inner 1) 22 -> clip 17 25, loops d < 9.0 gives back off, d > 17.0 gives approach
       - [ ] SPEC-0064, State table (agro): Approach (inner 0) 21 -> clip 20 20, loops 13.54 per second (0.2257 per tick); ends when d < desired
@@ -33969,8 +33969,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, State table (agro): Block (outer 7) 56 -> clip 10 1, loops while the hero's swing predicate is true, then the defence exit
       - [ ] SPEC-0064, State table (agro): Hit reaction kind 0 (outer 10) 57 -> clip 12 7 gate s+25, then outer 0
       - [ ] SPEC-0064, State table (agro): Dead 58 -> clip 11 61 plays once
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Attack chooser
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, patrol, walk home, wait in line root 2 or 4 (40) 0.0313 1.88 steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement: Approach (inner 0), above the desired distance root 21 (20), 0.147 to 0.257 per tick inside the cycle 0.226 13.54 steer d below the drawn desired...
       - [ ] SPEC-0064, Movement: Hold (inner 1), 9 to 17 none 22 0 0 aim 0.2 d below 9 or above 17
@@ -33981,7 +33981,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Movement: Corpse root 58 (61) wobbles, net 4.04 back over 244 ticks facing kept timer 6 ticks: released before the clip ends
     - [ ] SPEC-0064 Grab and throw (slot 1)
     - [ ] SPEC-0064 Hit and hurt windows
-    - [x] SPEC-0064 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0064 Weapon reach
       - [ ] SPEC-0064, Weapon reach: 0 (B, clip 4) w2 (4.0 x 1.0) s+40 to s+50 (s+44 to s+45) -2.5 to 8.7 / 1.8 to 5.5 / -7.2 to 7.5 4.4 to 12.8 6.5 to 14.6 -2.5 to 3.0
       - [ ] SPEC-0064, Weapon reach: 2 (B, clip 9) w3 (20.0 x 20.0) s+96 to s+108 (s+96 to s+108) -0.7 / 0.8 to 1.6 / 0.0 -12.4 to 11.8 -12.4 to 11.8 -22.0 to 14.0
     - [ ] SPEC-0064 Defence and counter rules
@@ -34007,7 +34007,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, What a port most likely gets wrong: Making the slam hit like a swing at the club's reach. The window is weapon 3 (radius 20, height 20) and opens at s+96, w...
       - [ ] SPEC-0064, What a port most likely gets wrong: Always blocking. Row 169 blocks 75 of 100 swings, the other rows 25 of 100, once per swing, with a quiet period of 30 to...
       - [ ] SPEC-0064, What a port most likely gets wrong: Skipping the missing wind-ups. Slot 0 and 2 have only strike phases (slot 2 also a recovery), so a swing starts when the...
-    - [x] SPEC-0064 Test vector {auto: title named in code}
+    - [ ] SPEC-0064 Test vector
     - [ ] SPEC-0064 Open questions
       - [ ] SPEC-0064, Open questions: Resolved (enemy sweep): grab timing. The strike state first runs on s + 1, where the choose step seizes the hero and requests clip 40; the r...
       - [ ] SPEC-0064, Open questions: Resolved: the thrown hero takes no damage; the grab path deals 0 damage on every row (bog and sewer creatures, Swamp Tentacle grab).
@@ -34030,7 +34030,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Identity and tunables: 2 melee flurry 3 to 10 40 0.707 4.0 int[120, 240] 15, 3.0, unblockable trigger 6 (hit reaction), chance 25
     - [ ] SPEC-0064 Animation ids and clips (rows 204 to 209)
     - [ ] SPEC-0064 Wake and start
-    - [x] SPEC-0064 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0064 State table (agro)
       - [ ] SPEC-0064, State table (agro): Hold (inner 10) 31 -> clip 2 8, loops hold timer int[60, 180], then hold, left or right circle; d > 20 gives approach; d < 12 gives back...
       - [ ] SPEC-0064, State table (agro): Approach (inner 7) 28 -> clip 3 6, loops 12.5 per second (0.2083 per tick); ends when d < desired
       - [ ] SPEC-0064, State table (agro): Circle left / right (inner 8, 9) 30 / 29 -> clip 36 6, loops 12.5 per second sideways; a wall contact ends it with a lock of 120 ticks
@@ -34054,7 +34054,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Chooser, movement, windows, defence: Dodge 53 / 54, 55 root (10) each side 7.67 over 40; back 7.97 over 40 gate
       - [ ] SPEC-0064, Chooser, movement, windows, defence: Return to the default state (state 23, clip 81) root 81 (20) back 8.81 over 80 ticks kept end, then the default state
       - [ ] SPEC-0064, Chooser, movement, windows, defence: Corpse root 58 (27) back 3.36 over 108 ticks facing kept timer 4 ticks: a held slide of about 2 ticks at 0.084
-    - [x] SPEC-0064 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0064 Weapon reach
       - [ ] SPEC-0064, Weapon reach: 0 (B, clip 6) w1 (3.0 x 2.0) s+28 to s+39 (s+28 to s+39) 0.7 to 3.7 / -0.5 to 3.8 / -2.2 to 1.3 -2.2 to 7.4 0.9 to 10.5 -5.0 to 3.5
       - [ ] SPEC-0064, Weapon reach: 1 (C, clip 11) w1 (3.0 x 2.0) sC+24 to sC+35 (sC+24 to sC+35) 0.7 to 3.7 / 0.6 to 3.4 / -1.5 to 0.4 -1.4 to 7.2 2.4 to 11.2 -5.0 to 6.5
       - [ ] SPEC-0064, Weapon reach: 1 (C, clip 11) w2 (3.0 x 2.0) sC+24 to sC+35 (sC+24 to sC+35) 0.8 to 4.0 / 0.2 to 3.3 / -0.3 to 1.9 -2.0 to 7.4 1.4 to 11.4 -6.0 to 6.0
@@ -34080,7 +34080,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, What a port most likely gets wrong: Attacking at 20 units. The Warrior holds at 12 to 20 and attacks from 3 to 10 (melee) or charges from 10 to 17 only when...
       - [ ] SPEC-0064, What a port most likely gets wrong: Applying the block roll as "below": it is at or below (60 of 100) while the dodge is strictly below (59, 39, 29 of 100).
       - [ ] SPEC-0064, What a port most likely gets wrong: Wake distance from the hero standing: a hero in state 1 shrinks the emerge distance to 0.7.
-    - [x] SPEC-0064 Test vector {auto: title named in code}
+    - [ ] SPEC-0064 Test vector
     - [ ] SPEC-0064 Open questions
       - [ ] SPEC-0064, Open questions: Resolved (High, flag checked on rows 204 to 210: flag 1, pair values 20.0 and 5.0; proactive (open close-out)): the Warrior rows carry the s...
       - [ ] SPEC-0064, Open questions: The geometry of the weapon volumes (3.0 by 2.0 on attachment points 0 to 2). Resolved: the general rule of the shared field behaviour. The d...
@@ -34120,7 +34120,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Death and drops (all kinds): 147, 148 58 clip 8, 30 keys, 116 / 112 about 413
       - [ ] SPEC-0064, Death and drops (all kinds): 149 58 clip 4, 3 keys, 9 / 9 about 20 (the 10-tick countdown ends before the sink starts)
       - [ ] SPEC-0064, Death and drops (all kinds): 219, 220, 221 58 clip 13, 33 keys, 128 / 124 about 425
-  - [x] SPEC-0064 Flower Monster {auto: title named in code}
+  - [ ] SPEC-0064 Flower Monster
     - [ ] SPEC-0064 Flower Monster, melee build (row 147)
       - [ ] SPEC-0064, Flower Monster, melee build (row 147): 0 melee, no use 0 to 0 0 0.9239 13.0 int[60, 120] 1, 1, 1 7 / 0 none none
       - [ ] SPEC-0064, Flower Monster, melee build (row 147): 1 melee claw lunge 0 to 20 50, 49 % 0.9914 10.0 int[120, 300] 1, 1, 1 5 / 0 none none
@@ -34363,7 +34363,7 @@ Cited 1 times in the game code.
     - [ ] SPEC-0064, Plant Monster: Whether the grab's choose step can run on a later tick when the first fails. Resolved (Medium; proactive (open close-out)): no; the choose st...
 - [ ] SPEC-0064 Road and Ridge Brigands
   - [ ] SPEC-0064 Common field rules for this batch
-    - [x] SPEC-0064 Where they stand {auto: title named in code}
+    - [ ] SPEC-0064 Where they stand
       - [ ] SPEC-0064, Where they stand: Thief 36 4 6 1 12 13 Bandit Caves 16, Farm Road 7, Meridell Plains 4, Brightvale Coast 3, Drackon Ridge 3
       - [ ] SPEC-0064, Where they stand: Bandit 32 3 6 4 6 13 Bandit Caves 13, Farm Road 6, Meridell Plains 5, Brightvale Coast 4
       - [ ] SPEC-0064, Where they stand: Thug 12 1 1 1 6 3 Bandit Caves 4, Western Brightvale 2, Coliseum 2, Farm Road 1
@@ -34424,14 +34424,14 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Identity and tunables: 111 to 114 chat none (idle pick)
       - [ ] SPEC-0064, Identity and tunables: 115 to 119 idle fidgets clips 26, 34, 29, 13, 19
     - [ ] SPEC-0064 Start and wake
-    - [x] SPEC-0064 Per-tick order (agro) {auto: title named in code}
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
+    - [ ] SPEC-0064 Per-tick order (agro)
+    - [ ] SPEC-0064 Attack chooser
       - [ ] SPEC-0064, Attack chooser: 0 < d <= 5 0 49 %
       - [ ] SPEC-0064, Attack chooser: 5 < d < 10 2, 1, 0 1 - 0.51 x 0.51 x 0.51 = about 87 % (slot 2 49 %, slot 1 25 %, slot 0 13 %)
       - [ ] SPEC-0064, Attack chooser: 10 <= d < 20 2, 1 about 74 % (slot 2 49 %, slot 1 25 %)
       - [ ] SPEC-0064, Attack chooser: 20 <= d < 50 1 49 % (the arc for slot 1 is 15 degrees)
       - [ ] SPEC-0064, Attack chooser: d >= 50 none 0
-    - [x] SPEC-0064 State table {auto: title named in code}
+    - [ ] SPEC-0064 State table
       - [ ] SPEC-0064, State table: Hidden (class 8, sub 0) 9 -> clip 37 10, one-shot 1.0 Wake rule; the clip plays once and holds its last pose
       - [ ] SPEC-0064, State table: Emerge (class 8, sub 1 and 2) 10 -> clip 36 15, one-shot 1.0 Gate s + 57, then agro the same tick
       - [ ] SPEC-0064, State table: Wander / patrol / guard 2 / 4 / 7 (see common rules) Notice leads to state 2
@@ -34451,7 +34451,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, State table: Victory pose (class 10) 73 -> clip 12 28 1.0 After a strike leaves the hero at 0 HP; at the gate the default state runs
       - [ ] SPEC-0064, State table: Coin fetch (class 17) the gait set left by the previous state Common rules
       - [ ] SPEC-0064, State table: Dead (base state 16) 58 -> clip 24 19, one-shot 1.0 Plays once; the disappear countdown (600) starts at progress 0.95
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, patrol, walk home root 2 or 4 (15) 0.0708 4.25 steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement: Wait in line root 2 (15) 0.0708 4.25 steer, then aim waiting ends
       - [ ] SPEC-0064, Movement: Approach (inner 7), above 16; sequencer state 0 root 28 (12) 0.1825 10.95 steer d below desired; state 0: d at most 5.0
@@ -34468,7 +34468,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Hit and hurt windows: Slot 0 (clip 8) s + 20 to s + 51 one, on the first touching tick (row 152 exact level straight-ahead samples: s+26 at d=3.0–4.5; s+27...
       - [ ] SPEC-0064, Hit and hurt windows: Slot 2 (clip 33, weapon 2, c0 = request of C) c0 + 16 to c0 + 27 one, at c0 + 16 1 (0 after any body armour), blockable, steal roll 50...
       - [ ] SPEC-0064, Hit and hurt windows: Slot 1 (shot) release at b + 48 (frame 12 is seen on b + 48 to b + 51; one projectile) one shot, 1.2 units per tick for up to 62 ticks...
-    - [x] SPEC-0064 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0064 Weapon reach
       - [ ] SPEC-0064, Weapon reach: 0 (B, clip 8) w1 (3.0 x 1.0) s+20 to s+51 (s+20 to s+51) -0.5 to 2.8 / 0.7 to 1.3 / -2.1 to -0.7 -1.8 to 4.0 -1.1 to 6.4 -5.0 to 4.0
       - [ ] SPEC-0064, Weapon reach: 2 (C, clip 33) w2 (5.0 x 1.0) sC+16 to sC+27 (sC+16 to sC+27) 0.6 to 3.8 / 1.2 to 3.7 / 0.0 to 1.5 -2.4 to 9.2 -1.4 to 10.4 -6.5 to 6.0
     - [ ] SPEC-0064 Defence and counters
@@ -34574,13 +34574,13 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Identity and tunables: 14, 111 to 114 chat Bandit: id 14 clip 25, ids 111 to 114 clips 4, 5, 6, 7; Thug: id 14 clip 5, ids 111 to 113 clips 4, 6, 7 (114 mis...
       - [ ] SPEC-0064, Identity and tunables: 115 to 119 fidgets clips 2, 3, 5, 0, 0
     - [ ] SPEC-0064 Start and wake
-    - [x] SPEC-0064 Per-tick order (agro) {auto: title named in code}
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
+    - [ ] SPEC-0064 Per-tick order (agro)
+    - [ ] SPEC-0064 Attack chooser
       - [ ] SPEC-0064, Attack chooser: 0 < d < 6 89 % (slot 2 19 %, slot 1 40 %, slot 0 31 %) 88 % (slot 3 74 %, slot 2 5 %, slot 1 5 %, slot 0 4 %); slot 1 is the empty feint
       - [ ] SPEC-0064, Attack chooser: 6 <= d < 10 79 % (slot 2 19 %, slot 0 60 %) 84 % (slot 3 74 %, slot 2 5 %, slot 0 5 %)
       - [ ] SPEC-0064, Attack chooser: 10 <= d < 15 19 % (slot 2 only) 79 % (slot 3 74 %, slot 2 5 %)
       - [ ] SPEC-0064, Attack chooser: d >= 15 0 0
-    - [x] SPEC-0064 Movement (rush, outer sub-state 1) {auto: title named in code}
+    - [ ] SPEC-0064 Movement (rush, outer sub-state 1)
       - [ ] SPEC-0064, Movement (rush, outer sub-state 1): Wander, walk home, wait in line, named-target follow root 2 or 11 (12) 0.094 5.63 steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement (rush, outer sub-state 1): Patrol root 4 (15), 0.008 to 0.161 per tick inside the cycle 0.066 3.96 steer arrival 0.5
       - [ ] SPEC-0064, Movement (rush, outer sub-state 1): Approach (inner 0), sequencer state 0 root 21 (8) 0.210 12.60 steer d below desired; state 0: the slot range
@@ -34591,7 +34591,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Movement (rush, outer sub-state 1): Hit (reaction kind 0) none (0.02) 57 (11) 0 0 snap to attacker gate
       - [ ] SPEC-0064, Movement (rush, outer sub-state 1): Dodge none: ids 53 to 55 missing (clip 0, no root) 0 0
       - [ ] SPEC-0064, Movement (rush, outer sub-state 1): Corpse none 58 0 0 kept timer 600
-    - [x] SPEC-0064 State table {auto: title named in code}
+    - [ ] SPEC-0064 State table
       - [ ] SPEC-0064, State table: Hidden (class 8, sub 0) 9 -> clip 28 (Bandit) or clip 0 (Thug) 20 / 40 1.0 Wake rule
       - [ ] SPEC-0064, State table: Emerge 10 -> clip 29 15, one-shot 1.0 Gate s + 57 then agro
       - [ ] SPEC-0064, State table: Search (class 2) 16 -> clip 8, 18 -> clip 10, 17 -> clip 9 50 / 34 / 40 1.0 18: gate s + 132 then agro; 17: gate s + 156 then the default state
@@ -34621,7 +34621,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Hit and hurt windows: Slot 2 (both), B requested at b b + 4 to b + 15 one, on the first touching tick (b + 4 to b + 9 by distance, state table) Bandit 20, T...
       - [ ] SPEC-0064, Hit and hurt windows: Thug slot 3 no window; hero seized at s + 1, thrown at s + 101 steal roll at s + 101 0, steal 50 of 101, 20 to 200 Neopoints
       - [ ] SPEC-0064, Hit and hurt windows: Thug slot 1 none (no clip) none 0
-    - [x] SPEC-0064 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0064 Weapon reach
       - [ ] SPEC-0064, Weapon reach: Bandit 0 (B, clip 12) w1 (4.0 x 1.5) s+28 to s+35 (s+28 to s+33) 2.1 to 3.7 / 0.5 to 2.2 / -1.8 to 2.5 1.8 to 7.2 3.5 to 9.0 -6.0 to 5.5
       - [ ] SPEC-0064, Weapon reach: Bandit 1 (B, clip 14) w1 (4.0 x 1.5) s+23 to s+32 (s+23 to s+32) -1.4 to 2.9 / 0.7 to 2.0 / -2.9 to 1.4 -5.2 to 7.4 -3.5 to 8.4 -5.5 to 5.0
       - [ ] SPEC-0064, Weapon reach: Bandit 2 (B, clip 37) w1 (4.0 x 1.5) b+4 to b+15 (b+4 to b+15) 2.2 to 3.8 / 0.3 to 5.1 / -0.8 to -0.4 -0.2 to 8.2 1.0 to 9.6 -6.5 to 9.0
@@ -34722,8 +34722,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Identity and tunables: 73 victory pose clip 22 (30 keys, gate 116)
       - [ ] SPEC-0064, Identity and tunables: 115 to 117 fidgets Drackonack clips 11, 20, 24 (118 and 119 missing); the Giant has none
     - [ ] SPEC-0064 Start and wake
-    - [x] SPEC-0064 Per-tick order (agro) {auto: title named in code}
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
+    - [ ] SPEC-0064 Per-tick order (agro)
+    - [ ] SPEC-0064 Attack chooser
       - [ ] SPEC-0064, Attack chooser: 0 < d < 10 32 % (slot 1 24 %, slot 0 11 %) 61 % (slot 1 49 %, slot 0 24 %) 61 % (slot 1 49 %, slot 0 24 %)
       - [ ] SPEC-0064, Attack chooser: 10 <= d < 15 24 % 49 % 49 % (slot 1 only)
       - [ ] SPEC-0064, Attack chooser: 15 <= d < 25 0 0 49 %
@@ -34734,7 +34734,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Charge (sequencer states 6, 7, 8, 12), the only way these...: State 8 (bite): its first tick c0 is the tick after state 7 saw the hero within 5.0, and it re...
       - [ ] SPEC-0064, Charge (sequencer states 6, 7, 8, 12), the only way these...: Because the run does not steer, a hero who steps aside is missed. Because it does not test str...
       - [ ] SPEC-0064, Charge (sequencer states 6, 7, 8, 12), the only way these...: If the drawn charge distance is shorter than the hero's distance minus 5.0 the charge stops sh...
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, walk home, wait in line, named-target follow root 2 or 11 (8) 0.125 7.50 steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement: Patrol root 4 (10) 0.0547 3.28 steer arrival 0.5
       - [ ] SPEC-0064, Movement: Approach (inner 7), above 10 root 28 (12) 0.441 26.49 steer d below desired
@@ -34756,7 +34756,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Movement: Hit (reaction kind 0) root 57 (9) back 3.71 over 36 ticks snap to attacker gate
       - [ ] SPEC-0064, Movement: Dodge 53 / 54, 55 root (9), 55 = the back-off clip side 7.89 over 36; back 13.79 per second while it plays gate
       - [ ] SPEC-0064, Movement: Corpse root 58 (22) back 6.01 over 88 ticks, nothing held kept timer 420
-    - [x] SPEC-0064 State table {auto: title named in code}
+    - [ ] SPEC-0064 State table
       - [ ] SPEC-0064, State table: Hidden (class 8, sub 0) 9 -> clip 2 20, loops 1.0 Wake rule
       - [ ] SPEC-0064, State table: Emerge 10 -> clip 1 22, one-shot 1.0 Gate s + 85 then agro
       - [ ] SPEC-0064, State table: Search (class 2) 16 -> clip 23, 18 -> clip 25, 17 -> clip 13 40 / 25 / 28 1.0 18: gate s + 96 then agro; 17: gate s + 108 then the default state
@@ -34774,7 +34774,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Hit and hurt windows: Drackonack slot 0 or 1 bite c0 + 4 to c0 + 7 one, at c0 + 4 7, blockable
       - [ ] SPEC-0064, Hit and hurt windows: Giant slot 0 bite c0 + 4 to c0 + 7 one 25, blockable
       - [ ] SPEC-0064, Hit and hurt windows: Giant slot 1 bite c0 + 4 to c0 + 7 one 50, blockable
-    - [x] SPEC-0064 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0064 Weapon reach
       - [ ] SPEC-0064, Weapon reach: Drackonack 0 and 1 (C, clip 19) w3 (5.0 x 3.0) c0+4 to c0+7 (c0+4 to c0+7) 1.1 to 1.9 / 1.6 to 2.3 / -0.1 -4.2 to 7.0 -3.5 to 7.8 -6.0 to 6.0
       - [ ] SPEC-0064, Weapon reach: Giant Drackonack 0 and 1 (C, clip 19) w3 (3.0 x 3.0) c0+4 to c0+7 (c0+4 to c0+7) 0.7 to 2.7 / 3.9 to 4.4 / -0.1 to 0.1 -1.8 to 6.2 -1.1 to 7.1...
     - [ ] SPEC-0064 Defence and counters
@@ -34931,7 +34931,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Alert sequence (every notice or alarm in the field): When the notice test passes, or the alarm check requested clip 18 directly: play id 18 (32 keys, 124 ti...
       - [ ] SPEC-0064, Alert sequence (every notice or alarm in the field): When the countdown reaches 0 with the test failing: Dumb and Fighter play id 17 (clip 2, a looping walk...
       - [ ] SPEC-0064, Alert sequence (every notice or alarm in the field): A hit at any point of the sequence: the take-hit hook enters agro immediately, the first hit's damage i...
-    - [x] SPEC-0064 Alarm groups {auto: title named in code}
+    - [ ] SPEC-0064 Alarm groups
     - [ ] SPEC-0064 Breakable summons (Haunted Tombs)
     - [ ] SPEC-0064 Dying, rising and streaming (rows 224, 226, 227)
   - [ ] SPEC-0064 Dumb Skeleton
@@ -34958,8 +34958,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Start and wake: Meridell Plains: three regions each hold a group of three hidden skeletons (emerge distance 5.0, cue word 1, alarm group 5): the first one t...
       - [ ] SPEC-0064, Start and wake: Haunted Tombs: 6 reserved records are bound by breakables (shared rules); 2 records use state 9 (see Open questions).
       - [ ] SPEC-0064, Start and wake: Return home after a lost fight: a hidden record walks home with the rush gait and hides again.
-    - [x] SPEC-0064 Per-tick order (agro) {auto: title named in code}
-    - [x] SPEC-0064 State table {auto: title named in code}
+    - [ ] SPEC-0064 Per-tick order (agro)
+    - [ ] SPEC-0064 State table
       - [ ] SPEC-0064, State table: 5 wander / 6 patrol / 7 sentry default state of the record 2 -> clip 2 (gait), 0 -> clip 0 (idle), 3 -> clip 15, 6 -> clip 16, 8 -> clip 15 see...
       - [ ] SPEC-0064, State table: 8 hide hero not near 9 -> clip 11 1 key, loop none hero inside emerge distance x F1 -> sub 1
       - [ ] SPEC-0064, State table: 8 sub 1 / sub 2 next tick, then wait 10 -> clip 10 46 keys 180 agro (setter 19)
@@ -34976,8 +34976,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, State table: Class 10 its strike leaves the hero at 0 HP 73 -> clip 19 32 keys 124 setter 0, default state
       - [ ] SPEC-0064, State table: Class 16 killed 58 -> clip 13 56 keys, 0.5 per tick 110, holds countdown, then rise 85 -> clip 14 (77), then agro
       - [ ] SPEC-0064, State table: Breakable arrival spawned by key 82 -> clip 10 requested once, replaced by the first agro request 46 keys not waited for agro
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Attack chooser
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, patrol, walk home, wait in line, follow, confused (69, Dumb only) root 2, 4, 11 or 69 (17); 0.000 to 0.102 per tick inside the cycle 0.051...
       - [ ] SPEC-0064, Movement: Approach (inner 0), sequencer state 0 root 21 (11) 0.250 15.01 steer d below desired
       - [ ] SPEC-0064, Movement: Hold (inner 1) none 22 0 0 aim 1.0 d below 3.5 or above 5.0
@@ -34989,7 +34989,7 @@ Cited 1 times in the game code.
     - [ ] SPEC-0064 Hit and hurt windows (tick 0 = tick the sequencer requests the strike clip; the choice happened one tick earlier)
       - [ ] SPEC-0064, Hit and hurt windows (tick 0 = tick the sequencer request...: 0 keys 9 to 12 -> ticks 36 to 51 36 40 (any start distance from 3.5 to 7) 53 54 30 3.53
       - [ ] SPEC-0064, Hit and hurt windows (tick 0 = tick the sequencer request...: 1 keys 7 to 8 -> ticks 28 to 35 29 29 (any start distance from 3.5 to 7) 65 66 40 5.49
-    - [x] SPEC-0064 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0064 Weapon reach
       - [ ] SPEC-0064, Weapon reach: 0 (B, clip 4) w1 (2.0 x 2.0) s+36 to s+51 (s+36 to s+44) -1.5 to 3.6 / 0.9 to 3.8 / -2.3 to 3.0 -2.8 to 6.0 -0.4 to 9.1 -3.5 to 5.5
       - [ ] SPEC-0064, Weapon reach: 1 (B, clip 3) w1 (2.0 x 2.0) s+28 to s+35 (s+29 to s+35) 2.2 to 3.3 / 0.5 to 4.8 / -0.4 to 1.0 0.6 to 5.6 3.1 to 7.7 -4.5 to 6.0
     - [ ] SPEC-0064 Defence and counters
@@ -35053,7 +35053,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, What differs from the Dumb Skeleton (same rig and rush mo...: Notice: awareness / near-edge chance 65 / 50 80 / 75
       - [ ] SPEC-0064, What differs from the Dumb Skeleton (same rig and rush mo...: Rush hold clip (id 22) clip 25, loops clip 19, 32 keys, stays on its last key after 124 ticks
       - [ ] SPEC-0064, What differs from the Dumb Skeleton (same rig and rush mo...: Victory clip (73) clip 19 clip 20
-    - [x] SPEC-0064 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0064 Weapon reach
       - [ ] SPEC-0064, Weapon reach: 0 (B, clip 4) w1 (2.0 x 2.0) s+36 to s+51 (s+36 to s+44) -1.5 to 3.6 / 0.9 to 3.8 / -2.3 to 3.0 -2.8 to 6.0 -0.4 to 9.1 -3.5 to 5.5
       - [ ] SPEC-0064, Weapon reach: 1 (B, clip 3) w1 (2.0 x 2.0) s+28 to s+35 (s+29 to s+35) 2.2 to 3.3 / 0.5 to 4.8 / -0.4 to 1.0 0.6 to 5.6 3.1 to 7.7 -4.5 to 6.0
       - [ ] SPEC-0064, Weapon reach: 2 (B, clip 21) w1 (2.0 x 2.0) s+29 to s+74 (s+32 to s+74) -0.1 to 3.7 / 1.8 to 4.5 / -2.4 to -0.6 1.6 to 5.6 6.7 to 14.7 -3.0 to 6.0
@@ -35109,8 +35109,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Start and wake: Hidden (20): emerge distances 4.0 to 40.0, cue word 0 on 17 (not hittable while hiding). The Coliseum pair has 40.0 and cue word 1.
       - [ ] SPEC-0064, Start and wake: Notice: far, forgiving and facing-dependent (awareness 65 % per 52-tick cycle times a chance of about 50 to 100 %; half that behind its back...
       - [ ] SPEC-0064, Start and wake: Alert and alarm: clip 18 for 124 ticks, then agro. Groups: Crypt of the Exiled 1 and 4 (four Archers each), Oubliette 3, Black Keep Dungeon...
-    - [x] SPEC-0064 Per-tick order (agro) {auto: title named in code}
-    - [x] SPEC-0064 State table {auto: title named in code}
+    - [ ] SPEC-0064 Per-tick order (agro)
+    - [ ] SPEC-0064 State table
       - [ ] SPEC-0064, State table: 5, 6, 7, 8, 2 as the shared rules wander/patrol clip 6, idle clip 5, hide 11, emerge 10, search 32, alert 18 agro
       - [ ] SPEC-0064, State table: Outer 0 agro entry agro idle pick 1 (absent: clip 0; the out-of-agro idle 0 is clip 5) outer 3, inner 4
       - [ ] SPEC-0064, State table: Outer 3 inner 4 (hold) 20 <= d <= 25 25 -> clip 20 36 keys one-shot, then holds the last key 140 d > 25 inner 3; d < 15 inner 5; d < 20 inner 6
@@ -35122,8 +35122,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, State table: Outer 6 / 8 Roberta shot 53 / 54 -> clip 7 / 8 (89 %), 56 -> clip 23 (never) 13 / 15 keys 49 / 57 defence exit
       - [ ] SPEC-0064, State table: Outer 10 kind 0 hit 57 -> clip 1 17 keys 65 outer 0
       - [ ] SPEC-0064, State table: Class 16 killed 58 -> clip 13, then rise 85 -> clip 14 110 / 77 agro
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Attack chooser
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, patrol, walk home, wait in line, follow, confused root 2, 4, 11 or 69 (10), with a small side sway 0.0987 5.92 steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement: Approach (inner 3) root 24 (11) 0.250 15.01 steer d below desired, then d below 20 sends it to retreat
       - [ ] SPEC-0064, Movement: Hold (inner 4) none 25 0 0 aim 0.25 then 1.0 (a snap) d above 25 (Wizard 30), below 15, below 20
@@ -35196,8 +35196,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Identity and tunables: 0 0 < d < 25 100 (99 of 100) 0.0 int[30, 60] 1.0 / 1.5 / 1.0 straight, speed 1.0 per tick, range 100.0 (lifetime 100, 101 moves), rad...
       - [ ] SPEC-0064, Identity and tunables: 1 0 < d < 75 0 0.0 0 1.0 / 2.0 / 1.0 speed 2.0, range 75 0 none B 39 = clip 9
     - [ ] SPEC-0064 Start and wake
-    - [x] SPEC-0064 Per-tick order {auto: title named in code}
-    - [x] SPEC-0064 State table {auto: title named in code}
+    - [ ] SPEC-0064 Per-tick order
+    - [ ] SPEC-0064 State table
       - [ ] SPEC-0064, State table: 5, 6, 7, 8, 2 shared rules wander clip 6, idle clip 5, search clip 29 (37 keys, 144 ticks), alert 18 (124) agro
       - [ ] SPEC-0064, State table: Outer 3 inner 4 (hold) 20 <= d <= 30 25 -> clip 25 22 keys, loop none d > 30 inner 3; d < 15 inner 5; d < 20 inner 6
       - [ ] SPEC-0064, State table: Inner 3, 5, 6 24 / 26 / 24 -> clip 24 / 12 / 24 +0.2502, -0.2908, +0.2502 per tick as the Archer, with the Wizard's bands
@@ -35207,13 +35207,13 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, State table: Outer 6 / 8 Roberta shot 53 / 54 -> clip 7 / 8 (49 %) 13 / 15 keys 49 / 57 defence exit
       - [ ] SPEC-0064, State table: Outer 10 kind 0 hit 57 -> clip 1 17 keys 65 outer 0
       - [ ] SPEC-0064, State table: Class 16 not used death is the plain base-state death: 58 -> clip 13 56 keys 110, then removal
-    - [x] SPEC-0064 Attack chooser (the bolt) {auto: title named in code}
+    - [ ] SPEC-0064 Attack chooser (the bolt)
     - [ ] SPEC-0064 Map search and the raising spell (High)
       - [ ] SPEC-0064, Map search and the raising spell (High): Pick a candidate from the list of active region characters (enemies and the other characters of the list; not the h...
       - [ ] SPEC-0064, Map search and the raising spell (High): Roll int[1, 100]: the step continues only when the roll is below 75 (74 %). The roll is drawn only on ticks that ha...
       - [ ] SPEC-0064, Map search and the raising spell (High): The recovery countdown must be below 1; otherwise the step ends (and repeats next tick).
       - [ ] SPEC-0064, Map search and the raising spell (High): Success: target stored; class state 18 (the setter requests the idle clip), the cooldown becomes int[120, 300] ticks.
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Movement
     - [ ] SPEC-0064 Hit and hurt windows (tick 0 = request tick)
       - [ ] SPEC-0064, Hit and hurt windows (tick 0 = request tick): Bolt spawned (slot 0) 27
       - [ ] SPEC-0064, Hit and hurt windows (tick 0 = request tick): Strike gate / end path 43 / 44
@@ -35312,7 +35312,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Map-search spells (Magician rows 197 to 199 and 201; Wiza...: Cast. The enemy enters class state 18 and draws its search cooldown (Magician int[120, 300], W...
       - [ ] SPEC-0064, Map-search spells (Magician rows 197 to 199 and 201; Wiza...: Spell. A projectile (kind by type, speed 1.0 unit per tick, lifetime distance + 5 ticks, damag...
       - [ ] SPEC-0064, Map-search spells (Magician rows 197 to 199 and 201; Wiza...: A caster that is hit while in state 18 takes doubled damage and the hit sends it to agro at on...
-  - [x] SPEC-0064 Minion Wizard (rows 211 to 216) {auto: title named in code}
+  - [ ] SPEC-0064 Minion Wizard (rows 211 to 216)
     - [ ] SPEC-0064 Identity and tunables (all six rows unless a row is named)
       - [ ] SPEC-0064, Identity and tunables (all six rows unless a row is named): Class, approach Class 17; approach 3 (keep distance); Can fly 2 (always flying)
       - [ ] SPEC-0064, Identity and tunables (all six rows unless a row is named): Hit points, body 200; radius 1.75, height 6.0, weight 5.5; hostile; Display in default 0 (invisi...
@@ -35352,7 +35352,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Animation ids and clips (flyer ids; the same for every ro...: 163 victory pose clip 15 (40 keys, gate 156)
       - [ ] SPEC-0064, Animation ids and clips (flyer ids; the same for every ro...: 76, 74, 149, 56, 150, 151 hit kind 7, its follow-up, alert, block absent (row 214 maps 56 and...
     - [ ] SPEC-0064 Start, wake, per-tick order
-    - [x] SPEC-0064 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0064 State table (agro)
       - [ ] SPEC-0064, State table (agro): Set-up (outer 0) agro idle pick 141 (Can fly 2; absent: clip 0, the same 30-key idle clip) 30 one tick, then outer 3 inner 4
       - [ ] SPEC-0064, State table (agro): Hold (inner 4) 156 -> clip 4 30, loops d > 60 gives approach; d < 25 gives back off
       - [ ] SPEC-0064, State table (agro): Approach (inner 3) 107 -> clip 1 10, loops 46.8 per second (0.78 per tick) toward the hero; ends when d < desired (32 to 53)
@@ -35367,8 +35367,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, State table (agro): Cast (class state 18) 137 -> clip per row per row map-search rows only; setter 19 at the gate
       - [ ] SPEC-0064, State table (agro): Victory pose (state 10) 163 -> clip 15 40 gate 156, then the default state
       - [ ] SPEC-0064, State table (agro): Dead 153 -> clip 17 70 plays once
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Attack chooser
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, patrol, walk home root + row 98 or 99 (30) 0.0718 4.31 (2.51 + 1.8) steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement: Approach (inner 3), d above 60 root + row 107 (10, S1) 0.780 46.82 (45.02 + 1.8) steer d below the drawn desired 32 to 53
       - [ ] SPEC-0064, Movement: Hold (inner 4), 25 to 60 none 156 0 0 aim 0.25 then 0.7 (effective 0.775) d above 60, below 25, below 20
@@ -35409,7 +35409,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, What a port most likely gets wrong: Letting a row-215 ghost take damage during its ghost phase.
       - [ ] SPEC-0064, What a port most likely gets wrong: Using the Magician's casts here: only rows 213 and 216 cast support spells, and they cast on any nearby character, not o...
       - [ ] SPEC-0064, What a port most likely gets wrong: Forgetting the double damage on a Wizard hit during its decloak (136 ticks), its state 23 (89 ticks) and its cast (state...
-    - [x] SPEC-0064 Test vector {auto: title named in code}
+    - [ ] SPEC-0064 Test vector
     - [ ] SPEC-0064 Open questions
       - [ ] SPEC-0064, Open questions: Resolved (High; R-0199): whether row 212's bolt (slot 0, flag word 0x80, arc 0.9914) fires. It does, every time it is chosen and the cast is...
       - [ ] SPEC-0064, Open questions: Whether the kind-7 reaction's ground-gap wait is reached on level ground at all (the Wizard's own height versus the ground under it). Defaul...
@@ -35417,7 +35417,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Open questions: Whether row 213's polymorph reloads the target's HP from the new row: Resolved (High; proactive (open close-out)): no. The variant re-pick s...
       - [ ] SPEC-0064, Open questions: The distance lane of the candidate filter: Resolved (High; proactive (open close-out)): horizontal. The picker takes the distance from the s...
       - [ ] SPEC-0064, Open questions: Resolved: the first fire lob does not strike a hero standing at 30 units even with scatter 0: its step (about 2.6 per tick) carries it past...
-  - [x] SPEC-0064 Minion Magician (rows 197 to 202) {auto: title named in code}
+  - [ ] SPEC-0064 Minion Magician (rows 197 to 202)
     - [ ] SPEC-0064 Identity and tunables
       - [ ] SPEC-0064, Identity and tunables: Class, approach Class 17; approach 3 (keep distance); Can fly 2 (always flying)
       - [ ] SPEC-0064, Identity and tunables: Hit points, body 80; radius 2.5, height 5.0, weight 2.0; attack-manager weight 12 (approach 3 never waits); hostile; Display in defau...
@@ -35450,7 +35450,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Animation ids and clips (flyer ids): 144, 145, 142 sentry stand, sentry fidget, patrol fidget clip 15 (30 keys, loops), clip 14 (30 keys, gate 116), clip 19...
       - [ ] SPEC-0064, Animation ids and clips (flyer ids): 163 victory pose clip 10 (57 keys, gate 224)
     - [ ] SPEC-0064 Start, wake, per-tick order
-    - [x] SPEC-0064 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0064 State table (agro)
       - [ ] SPEC-0064, State table (agro): Hold (inner 4) 156 -> clip 5 25, loops d > 40 gives approach; d < 15 gives back off
       - [ ] SPEC-0064, State table (agro): Approach (inner 3) 107 -> clip 3 10, loops 20.0 per second (0.333 per tick); ends when d < desired (20 to 35)
       - [ ] SPEC-0064, State table (agro): Back off (inner 5) 108 -> clip 2 12, loops 12.5 per second backward; d < 15 gives retreat
@@ -35461,8 +35461,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, State table (agro): Melee / missile dodge 140 -> clip 12 / 138 or 139 -> clip 13 15 / 10 gate 57 / 37, then the defence exit hold int[30, 120]
       - [ ] SPEC-0064, State table (agro): Hit reaction kind 6 (outer 10) 152 -> clip 16 20 gate 77 after the last hit, then outer 0; restarts on every hit
       - [ ] SPEC-0064, State table (agro): Dead 153 -> the row's clip 14 to 50 plays once
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Attack chooser
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, walk home root + row 98 (10) 0.129 7.76 (6.76 + 1.0) steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement: Patrol row only 99: clip 0, no root 0.0167 1.00 steer arrival 0.5
       - [ ] SPEC-0064, Movement: Decloak on waking (82) root 82 (23) forward 19.91 over 92 ticks aim gate, then agro
@@ -35498,7 +35498,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, What a port most likely gets wrong: Skipping the support casts, or aiming them at the hero.
       - [ ] SPEC-0064, What a port most likely gets wrong: Omitting the bolt-less statuses of rows 200 and 202 (damage 0, status 100 percent).
       - [ ] SPEC-0064, What a port most likely gets wrong: Forgetting that row 200 and 202 slot 1 are checked before slot 0.
-    - [x] SPEC-0064 Test vector {auto: title named in code}
+    - [ ] SPEC-0064 Test vector
     - [ ] SPEC-0064 Open questions
       - [ ] SPEC-0064, Open questions: Whether the buff types exclude characters that are not enemies of the hero (townsfolk, petpets): Resolved (High; proactive (open close-out))...
       - [ ] SPEC-0064, Open questions: The distance lane (horizontal or three-dimensional) of the candidate test: Resolved (High; proactive (open close-out)): horizontal (see the...
@@ -35533,7 +35533,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Animation ids and clips: 16, 17, 18, 82, 10, 81 look, lose interest, alert, decloak, emerge, state 23 clips 26, 24, 2, 2, 2 (gate 93; the model advances 7.2...
       - [ ] SPEC-0064, Animation ids and clips: 73 victory pose clip 28 (45 keys, gate 176)
     - [ ] SPEC-0064 Start, wake, per-tick order
-    - [x] SPEC-0064 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0064 State table (agro)
       - [ ] SPEC-0064, State table (agro): Hold (inner 4) 25 -> clip 1 20, loops d > 75 gives approach; d < 40 gives back off
       - [ ] SPEC-0064, State table (agro): Approach (inner 3) 24 -> clip 16 15, loops 20.2 per second (0.337 per tick); ends when d < desired (47 to 68)
       - [ ] SPEC-0064, State table (agro): Back off (inner 5) 26 -> clip 20 15, loops 15.3 per second backward toward the point 75 from the hero; ends when d > desired; d < 25 giv...
@@ -35544,8 +35544,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, State table (agro): Bite (state 8) 40 -> clip 6 15 requested on the tick after state 7 saw the hero within 10.0 (call it b); weapon 3 live at b + 4 to b + 2...
       - [ ] SPEC-0064, State table (agro): Charge end (state 12) E absent end path on the next tick
       - [ ] SPEC-0064, State table (agro): Dodges, reaction, death as the table above gates 41, 41, 37, 140
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Attack chooser
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, walk home, wait in line root 2 (30) 0.0377 2.26 steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement: Patrol root 4 (20) 0.0625 3.75 steer arrival 0.5
       - [ ] SPEC-0064, Movement: Waking (emerge 10 or decloak 82) root (24) forward 11.57 over 96 ticks gate, agro
@@ -35562,7 +35562,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Hit and hurt windows: Volley: ten shots 8 to 120 ticks after B, each aimed at the hero's position + 2.5 up at its own release tick; flight 1.3 per tick (fir...
       - [ ] SPEC-0064, Hit and hurt windows: Charge: the run does no damage. The bite's weapon 3 (radius 2.0, height 2.0) is live at b + 4 to b + 23 and the bite clip lunges the A...
       - [ ] SPEC-0064, Hit and hurt windows: Hurt: the Artillery can be hit in every state except the dodges (outer 5 and 6), dead and hidden; the charge and the volley are cancel...
-    - [x] SPEC-0064 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0064 Weapon reach
       - [ ] SPEC-0064, Weapon reach: 1 (C, clip 6) w3 (2.0 x 2.0) b+4 to b+23 (b+4 to b+19) 2.7 to 4.0 / 0.9 to 6.9 / 0.1 to 0.4 0.4 to 6.6 2.7 to 16.6 -3.5 to 8.5
     - [ ] SPEC-0064 Defence and counters
     - [ ] SPEC-0064 Hero actions against this enemy
@@ -35585,12 +35585,12 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, What a port most likely gets wrong: Letting the hero outrun or out-dodge the charge: the run is fixed in heading and fast, the bite is unblockable.
       - [ ] SPEC-0064, What a port most likely gets wrong: Forgetting that melee and Roberta's shots are dodged 99 percent of the time.
       - [ ] SPEC-0064, What a port most likely gets wrong: Using one walk speed: forward 20.2, back 15.3, wander 2.26, patrol 3.75.
-    - [x] SPEC-0064 Test vector {auto: title named in code}
+    - [ ] SPEC-0064 Test vector
     - [ ] SPEC-0064 Open questions
       - [ ] SPEC-0064, Open questions: The Artillery's weapon 3 contact geometry during the lunge. Resolved by the general rule of the shared field behaviour (the lunge moves the...
       - [ ] SPEC-0064, Open questions: The first charge distance before any normal choice: Resolved (High; proactive (open close-out)). The creation draw reads the two row words b...
       - [ ] SPEC-0064, Open questions: Whether the volley's shots are blocked by the guard. Default if unresolved (rewrite choice): the pool rules of SPEC-0029 Behavior 9 (guard b...
-  - [x] SPEC-0064 Dark Knight (row 139) {auto: title named in code}
+  - [ ] SPEC-0064 Dark Knight (row 139)
     - [ ] SPEC-0064 Identity and tunables
       - [ ] SPEC-0064, Identity and tunables: Class, approach Class 17; approach 4 (strafe); Can fly 0
       - [ ] SPEC-0064, Identity and tunables: Hit points, body 150; radius 3.0, height 5.0, weight 3.0; defence value 10.0 (SPEC-0036 damage formula); attack-manager weight 12 (ap...
@@ -35633,7 +35633,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Start, wake, return: Chance that a still hero within the cone is noticed per cycle: inside 7.0 units 1.0 (no roll B), otherwise (ceil(c) - 1) / 100 with c =...
       - [ ] SPEC-0064, Start, wake, return: Alarm group: a member entering agro broadcasts; Dark Knights in states 0, 3, 5, 6, 7 go to state 2 within int[15, 45] ticks and request...
       - [ ] SPEC-0064, Start, wake, return: A hit at any time wakes it into agro with doubled damage and a kind-0 reaction (13 keys, 49 ticks), from state 0, 2, 3, 5, 6, 7. Return...
-    - [x] SPEC-0064 Per-tick order (agro) and state table {auto: title named in code}
+    - [ ] SPEC-0064 Per-tick order (agro) and state table
       - [ ] SPEC-0064, Per-tick order (agro) and state table: Set-up (outer 0) agro idle pick 1 (this section's table lists no id 1: clip 0, the strafe-forward loop; the Spirit Sw...
       - [ ] SPEC-0064, Per-tick order (agro) and state table: Strafe hold (inner 10) 31 -> clip 23 20, loops hold counts down from int[60, 180]; at 0 a roll int[1, 3]: 1 stay, 2 c...
       - [ ] SPEC-0064, Per-tick order (agro) and state table: Circle (inner 8 / 9) 30 / 29 -> clip 2 / 1 12, loops steer 2.0 to the side; sideways about 4.5 / 4.2 per second; hold...
@@ -35650,8 +35650,8 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Per-tick order (agro) and state table: Wait in line (outer 12) walk 2 -> clip 5 30 stand-off point 15.0 from the hero (SPEC-0038 Behavior 45)
       - [ ] SPEC-0064, Per-tick order (agro) and state table: Victory pose (state 10) 73 -> clip 24 38 gate 148, then the default state
       - [ ] SPEC-0064, Per-tick order (agro) and state table: Dead 58 -> clip 25 56 plays once
-    - [x] SPEC-0064 Attack chooser {auto: title named in code}
-    - [x] SPEC-0064 Movement {auto: title named in code}
+    - [ ] SPEC-0064 Attack chooser
+    - [ ] SPEC-0064 Movement
       - [ ] SPEC-0064, Movement: Wander, patrol, walk home, wait in line root 2 or 4 (30) 0.050 3.00 steer arrival 0.5, notice
       - [ ] SPEC-0064, Movement: Named-target follow (state 9) root 11 (30) 0.027 1.60 steer distance rule
       - [ ] SPEC-0064, Movement: Approach (inner 7), above 16; sequencer state 0; every missing id (20 to 26, the alert 18, the emerge 10) root 28 = clip 0 (15) 0.167 10.01 steer...
@@ -35663,7 +35663,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Movement: Dodge 53 / 54, 55 root (13), (10) side 14.16 over 52; back 5.15 over 40 gate
       - [ ] SPEC-0064, Movement: Corpse root 58 (56) back 1.33 over 224 ticks, nothing held kept timer 510
     - [ ] SPEC-0064 Hit and hurt windows
-    - [x] SPEC-0064 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0064 Weapon reach
       - [ ] SPEC-0064, Weapon reach: 0 (B, clip 18) w1 (6.0 x 2.0) s+6 to s+10 (s+7 to s+10) 3.3 to 4.9 / 1.2 to 4.0 / -3.1 to 2.9 3.0 to 9.4 4.8 to 11.1 -7.0 to 9.0
       - [ ] SPEC-0064, Weapon reach: 1 (B, clip 13) w1 (6.0 x 2.0) s+48 to s+77 (s+48 to s+77) 1.4 to 4.4 / 0.1 to 5.2 / -2.4 to -0.6 -4.0 to 10.8 -0.8 to 15.1 -8.5 to 10.0
       - [ ] SPEC-0064, Weapon reach: 2 (B, clip 10) w1 (6.0 x 2.0) s+16 to s+37 (s+16 to s+37) 0.3 to 4.6 / 1.1 to 2.5 / -2.6 to -0.6 -0.4 to 6.4 2.6 to 13.7 -8.0 to 8.0
@@ -35693,7 +35693,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, What a port most likely gets wrong: Missing the unblockable curse of slot 1 and its counter use after a blocked swing.
       - [ ] SPEC-0064, What a port most likely gets wrong: Forgetting the 74 percent dodge with a 120 to 300 tick quiet period after each dodge.
       - [ ] SPEC-0064, What a port most likely gets wrong: Giving it a fast gait: approach 10.0, circle 4.4, back off 6.0 per second.
-    - [x] SPEC-0064 Test vector {auto: title named in code}
+    - [ ] SPEC-0064 Test vector
     - [ ] SPEC-0064 Open questions
       - [ ] SPEC-0064, Open questions: Weapon contact geometry (volume anchor and the hero's capsule pose). Resolved by the general rule of the shared field behaviour. The distanc...
       - [ ] SPEC-0064, Open questions: Whether the group-alarm wait (clip 0 as id 18) ends at that clip's 59-tick gate with the full forward slide: Resolved (High for the length,...
@@ -35718,7 +35718,7 @@ Cited 1 times in the game code.
   - [ ] SPEC-0064, Distances and ranged reach (every kind of this spec): Thief 152, slot 1 5 < d < 50, within 15 deg s + 48 (s after the wind-up); (-0.72, 3.51, 1.83) straight...
   - [ ] SPEC-0064, Distances and ranged reach (every kind of this spec): Skeleton Archer 224, slot 0 0 < d < 75, in front s + 50; (-0.80, 1.37, 1.65) straight 2.0 50; 102; 104...
   - [ ] SPEC-0064, Distances and ranged reach (every kind of this spec): Skeleton Wizard 225, slot 0 0 < d < 25, in front s + 27; (-0.83, 1.64, 1.68) straight 1.0 100; 101; 10...
-    - [x] SPEC-0064 Minion Grunt {auto: title named in code}
+    - [ ] SPEC-0064 Minion Grunt
       - [ ] SPEC-0064, Minion Grunt: Notice band (x0.7 standing, x1.75 running) 0 to 20 (0 to 14; 0 to 35)
       - [ ] SPEC-0064, Minion Grunt: Sight cone half-angle 60 deg
       - [ ] SPEC-0064, Minion Grunt: Rush: hold band; walk-in target; back-off point 8 to 15; 9.4 to 13.6; 17
@@ -35728,7 +35728,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Minion Grunt: Wait-in-line square 25
       - [ ] SPEC-0064, Minion Grunt: Hover height above the hero min(10, 0.2 d), floor ground + 2
       - [ ] SPEC-0064, Minion Grunt: Chase stop; confused strike 3.17; 3.42
-    - [x] SPEC-0064 Minion Archer {auto: title named in code}
+    - [ ] SPEC-0064 Minion Archer
       - [ ] SPEC-0064, Minion Archer: Notice band (x0.7 standing, x1.75 running) row 190: 5 to 80 (3.5 to 56; 8.75 to 140); rows 191 to 196: 10 to 100 (7 to 70; 17.5 to 175); sees...
       - [ ] SPEC-0064, Minion Archer: Sight cone half-angle 60 deg
       - [ ] SPEC-0064, Minion Archer: Keep distance: hold band; walk-in target; back-off point 15 to 60; 24 to 51; 60
@@ -35759,7 +35759,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Minion Warrior: Lost-sight search point last seen + 12
       - [ ] SPEC-0064, Minion Warrior: Wait-in-line square 10
       - [ ] SPEC-0064, Minion Warrior: Chase stop; confused strike 2.42; 2.67
-    - [x] SPEC-0064 Minion Wizard {auto: title named in code}
+    - [ ] SPEC-0064 Minion Wizard
       - [ ] SPEC-0064, Minion Wizard: Notice band (x0.7 standing, x1.75 running) 10 to 20 (7 to 14; 17.5 to 35)
       - [ ] SPEC-0064, Minion Wizard: Sight cone half-angle 22.5 deg
       - [ ] SPEC-0064, Minion Wizard: Keep distance: hold band; walk-in target; back-off point 25 to 60; 32 to 53; 60
@@ -35770,7 +35770,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Minion Wizard: Hover height above the hero 0 (cap ground + 20)
       - [ ] SPEC-0064, Minion Wizard: Map search distance; greedy range row 213: 200; 0; row 216: 120; 0; other rows: none
       - [ ] SPEC-0064, Minion Wizard: Chase stop; confused strike 2.92; 3.17
-    - [x] SPEC-0064 Minion Magician {auto: title named in code}
+    - [ ] SPEC-0064 Minion Magician
       - [ ] SPEC-0064, Minion Magician: Notice band (x0.7 standing, x1.75 running) 3.5 to 50 (2.45 to 35; 6.12 to 87.5); sees through walls
       - [ ] SPEC-0064, Minion Magician: Sight cone half-angle 45 deg
       - [ ] SPEC-0064, Minion Magician: Keep distance: hold band; walk-in target; back-off point 15 to 40; 20 to 35; 40
@@ -35790,7 +35790,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Minion Artillery: Slot 1 melee, 15 < d < 40, within 15 deg, charge run 30 to 50 (ends early when d <= 10)
       - [ ] SPEC-0064, Minion Artillery: Lost-sight search point last seen + 40
       - [ ] SPEC-0064, Minion Artillery: Chase stop; confused strike 3.17; 3.42
-    - [x] SPEC-0064 Dark Knight {auto: title named in code}
+    - [ ] SPEC-0064 Dark Knight
       - [ ] SPEC-0064, Dark Knight: Notice band (x0.7 standing, x1.75 running) 10 to 50 (7 to 35; 17.5 to 87.5)
       - [ ] SPEC-0064, Dark Knight: Sight cone half-angle 22.5 deg
       - [ ] SPEC-0064, Dark Knight: Strafe: circle band; walk-in target; back-off point 6 to 16; 8 to 14; 16
@@ -35801,7 +35801,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Dark Knight: Lost-sight search point last seen + 6
       - [ ] SPEC-0064, Dark Knight: Wait-in-line square 15
       - [ ] SPEC-0064, Dark Knight: Chase stop; confused strike 4.17; 4.42
-    - [x] SPEC-0064 Flower Monster {auto: title named in code}
+    - [ ] SPEC-0064 Flower Monster
       - [ ] SPEC-0064, Flower Monster: Notice band (x0.7 standing, x1.75 running) row 147: 3.5 to 50 (2.45 to 35; 6.12 to 87.5); row 149: 1 to 10 (0.7 to 7; 1.75 to 17.5), sees th...
       - [ ] SPEC-0064, Flower Monster: Sight cone half-angle 45 deg
       - [ ] SPEC-0064, Flower Monster: Spacing row 147 rush: hold 4 to 17; walk-in target 6.6 to 14.4; back-off point 19. Row 149 keep distance: hold 3 to 35; walk-in target 9.4 t...
@@ -35880,7 +35880,7 @@ Cited 1 times in the game code.
       - [ ] SPEC-0064, Thug: Lost-sight search point last seen
       - [ ] SPEC-0064, Thug: Wait-in-line square 20
       - [ ] SPEC-0064, Thug: Chase stop; confused strike 3.67; 3.92
-    - [x] SPEC-0064 Drackonack {auto: title named in code}
+    - [ ] SPEC-0064 Drackonack
       - [ ] SPEC-0064, Drackonack: Notice band (x0.7 standing, x1.75 running) 3 to 50 (2.1 to 35; 5.25 to 87.5)
       - [ ] SPEC-0064, Drackonack: Sight cone half-angle 22.5 deg
       - [ ] SPEC-0064, Drackonack: Strafe: circle band; walk-in target; back-off point 4 to 10; 5.2 to 8.8; 10
@@ -36038,8 +36038,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Animation ids and clips (one table for every record in pl...: 53, 54 missile dodge none: the request plays clip 0 (24 keys, one-shot, no travel), gate s + 93
       - [ ] SPEC-0065, Animation ids and clips (one table for every record in pl...: 33, 35, 37, 38, 40, 42, 43, 47 wind-ups, follow-throughs of slots 0 and 1, recoveries none: sk...
     - [ ] SPEC-0065 Start and wake
-    - [x] SPEC-0065 Per-tick order (agro) {auto: title named in code}
-    - [x] SPEC-0065 State table {auto: title named in code}
+    - [ ] SPEC-0065 Per-tick order (agro)
+    - [ ] SPEC-0065 State table
       - [ ] SPEC-0065, State table: Hidden (class 8, sub 0) 9 -> clip 5 1, loops 1.0 Wake rule
       - [ ] SPEC-0065, State table: Emerge (sub 1 and 2) 10 -> clip 17 40, one-shot 1.0 Gate s + 156, then agro
       - [ ] SPEC-0065, State table: Agro set-up (outer 0) agro idle pick 1 -> clip 15 (the table maps id 1 to its hold loop) 36, loops 1.0 One tick, then outer 1 inner 1
@@ -36059,12 +36059,12 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, State table: Victory pose 73 -> clip 25 30 1.0 Gate s + 116, then the default state
       - [ ] SPEC-0065, State table: Wait in line (outer 12) 2, which this table lacks: clip 0 (24 keys, one-shot, no root travel), so the Tentacle stays where it is; idle pick whi...
       - [ ] SPEC-0065, State table: Dead 58 -> clip 9 25, one-shot 1.0 Plays once; disappear countdown 180 from progress 0.95
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
       - [ ] SPEC-0065, Attack chooser: 0 < d <= 5 24 % slot 0 only
       - [ ] SPEC-0065, Attack chooser: 5 < d <= 7 61 % slot 2 (49 %), then slot 0 (12 %)
       - [ ] SPEC-0065, Attack chooser: 7 < d < 17 80 % slot 2 (49 %), slot 1 (25 %), slot 0 (6 %)
       - [ ] SPEC-0065, Attack chooser: d >= 17 0
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Field (default state 8 on all 51) none 0 0 none (hides in place: distance-hide flag) 9: clip 5, 1 key wake test
       - [ ] SPEC-0065, Movement: Rush approach (inner 0, gaits 0 and 2) and sequencer approach (state 0) root 0.3376 on every key 20.25 steering blend 0.3 / 0.1 21: clip 13, 20, l...
       - [ ] SPEC-0065, Movement: Rush hold (inner 1) none 0 0 aim weight 1.0 (snaps) 22: clip 22, 16, loop d below 3.0 or above 12.0
@@ -36086,7 +36086,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Hit and hurt windows: Slot 0 lash s + 11 to s + 21 one, on the first touching tick: s + 13 for a still hero 3.2 to 4.0 away, s + 14 at 5.0 15, blockable, kn...
       - [ ] SPEC-0065, Hit and hurt windows: Slot 1 smash s + 25 to s + 40 one, on the first touching tick: s + 26 at 5.0, s + 27 to s + 28 at 6.0 to 7.0 25, unblockable
       - [ ] SPEC-0065, Hit and hurt windows: Slot 2 grab s + 1 (seize) and s + 76 (throw) the throw counts as a hit 0
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 (B, clip 23) w1 to w5 s+11 to s+21 (s+11 to s+21) -3.0 to 9.0 / -0.1 to 4.9 / -0.9 to 1.6 -6.0 to 14.6 -6.1 to 15.1 -6.5 to 9.5
       - [ ] SPEC-0065, Weapon reach: 1 (B, clip 14) w1 to w5 s+25 to s+40 (s+25 to s+40) -2.1 to 9.0 / -0.4 to 6.6 / -0.1 to 0.3 -3.6 to 15.0 -3.6 to 15.4 -7.5 to 11.5
     - [ ] SPEC-0065 Defence and counters
@@ -36142,7 +36142,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Open questions: The tick on which the home-walk of state 14 sees animation 0 current. Resolved (Medium-High; proactive (open close-out)): the tick after the...
       - [ ] SPEC-0065, Open questions: Whether the rise (82) is skipped when a Tentacle returns to state 8 because no route to the hero exists. Resolved (High; proactive (open clo...
       - [ ] SPEC-0065, Open questions: The ambush camera and sound cue of an alarm emerge (cue word 0). Resolved (High; proactive (open close-out)): the cue is the shared stinger...
-  - [x] SPEC-0065 Tentacle (row 237, and the field placements of row 239) {auto: title named in code}
+  - [ ] SPEC-0065 Tentacle (row 237, and the field placements of row 239)
     - [ ] SPEC-0065 Identity and tunables
       - [ ] SPEC-0065, Identity and tunables: Records Monster type 96, variant 0, name "Tentacle"; 35 records (25 in play: Meridell Sewers 10, Ancient Sewers 8, Secret Sewers 7);...
       - [ ] SPEC-0065, Identity and tunables: Class, approach 17, rush; T = 2 (nature: ignores poison); Display in default 1 same, T = 2
@@ -36188,8 +36188,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Start and wake: Wander (state 5, Secret Sewers). Visible and hittable while it wanders (Display 1). Walks the wander rules of the shared section (walk id 2...
       - [ ] SPEC-0065, Start and wake: Search (state 2). Look clip 16 (172 ticks) starts, the notice check repeats in the same tick and once per 32 ticks. A pass requests the aler...
       - [ ] SPEC-0065, Start and wake: Return to the default state after losing the hero: the setter with 0 gives state 0 and then the default: 8 hides in place, 5 resumes wanderi...
-    - [x] SPEC-0065 Per-tick order (agro) {auto: title named in code}
-    - [x] SPEC-0065 State table {auto: title named in code}
+    - [ ] SPEC-0065 Per-tick order (agro)
+    - [ ] SPEC-0065 State table
       - [ ] SPEC-0065, State table: Hidden (class 8, sub 0) 9 -> clip 5 1, loops 1.0 Wake rule
       - [ ] SPEC-0065, State table: Emerge 10 -> clip 17 40 1.0 Gate s + 156, then agro
       - [ ] SPEC-0065, State table: Search (state 2) 16 -> clip 20, 18 -> clip 22, 17 -> clip 11 44 / 16 / 50 1.0 18: gate s + 63 then agro; 17: gate s + 196 then the default state
@@ -36205,12 +36205,12 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, State table: Hit reaction kind 0 (outer 10) 57 -> clip 2 25 1.0 Gate s + 96, then outer 0
       - [ ] SPEC-0065, State table: Retreat (state 14) 81 -> clip 4, then 125 -> clip 19, then 82 -> clip 1 23 / 20 / 25 1.0 Phase 0 89 ticks (visible); phase 1 hidden, walk home...
       - [ ] SPEC-0065, State table: Dead 58 -> clip 9 25 1.0 Plays once; disappear 200 from progress 0.95
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
       - [ ] SPEC-0065, Attack chooser: 3 < d < 10 80 % slot 2 24, slot 1 37, slot 0 19
       - [ ] SPEC-0065, Attack chooser: 10 <= d < 13 61 % slot 2 24, slot 0 37
       - [ ] SPEC-0065, Attack chooser: 13 <= d < 17 49 % slot 0
       - [ ] SPEC-0065, Attack chooser: d >= 17 or d <= 3 0
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Wander (state 5, five Secret Sewers records), wait in line root 0.1192 on every key 7.15 steering blend 0.3 / 0.1 2 (and 4): clip 16, 21, loop wan...
       - [ ] SPEC-0065, Movement: Hidden (state 8) none 0 0 none (hides in place) 9: clip 5 wake
       - [ ] SPEC-0065, Movement: Rush approach (inner 0) and sequencer approach root 0.1189 average; per key 0.080 to 0.176 7.14 steering 21: clip 18, 21, loop d below desired (3...
@@ -36225,7 +36225,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Hit and hurt windows: Slot 2 s + 8 to s + 15 one, on the first touching tick: s + 10 to s + 12 for a still hero 3.2 to 6.0 away 45, blockable, knockback 12
       - [ ] SPEC-0065, Hit and hurt windows: Slot 1 s + 12 to s + 17 one, s + 12 to s + 13 (3.2 to 4.0 away) 20, knockback 3
       - [ ] SPEC-0065, Hit and hurt windows: Slot 0 s + 18 to s + 29 one, s + 20 to s + 21 (3.2 to 5.0 away) 10
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 (B, clip 14) w1 to w5 s+18 to s+29 (s+18 to s+29) -1.4 to 5.7 / -0.1 to 4.1 / -0.1 to 0.2 -2.8 to 8.2 -2.8 to 8.6 -4.5 to 6.0
       - [ ] SPEC-0065, Weapon reach: 1 (B, clip 6) w1 to w5 s+12 to s+17 (s+12 to s+17) 0.2 to 5.6 / -0.1 to 2.4 / 0.0 to 1.7 -1.8 to 8.2 -1.5 to 8.7 -5.0 to 3.5
       - [ ] SPEC-0065, Weapon reach: 2 (B, clip 23) w1 to w5 s+8 to s+15 (s+8 to s+15) -1.9 to 5.7 / -0.1 to 2.9 / -0.5 to 1.1 -3.4 to 8.2 -3.5 to 8.7 -5.0 to 4.5
@@ -36324,8 +36324,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Start and wake: Wander, patrol, guard (5, 6, 7). As the shared rules. A Slorg walks at 0.048 per tick, so a wander leg of 20 units takes 7 seconds; its rest...
       - [ ] SPEC-0065, Start and wake: Search (state 2). A notice pass plays 16 (look, 124 ticks); a pass while 18 is not playing requests 18 (10 keys, 37 ticks) and agro follows...
       - [ ] SPEC-0065, Start and wake: Return to the default after losing the hero: the shared exits (leash, lost-sight search, victory pose). A Slorg whose default is 8 walks hom...
-    - [x] SPEC-0065 Per-tick order (agro) {auto: title named in code}
-    - [x] SPEC-0065 State table {auto: title named in code}
+    - [ ] SPEC-0065 Per-tick order (agro)
+    - [ ] SPEC-0065 State table
       - [ ] SPEC-0065, State table: Hidden (class 8) 9 -> clip 18 2 1.0 Wake rule
       - [ ] SPEC-0065, State table: Emerge 10 -> clip 4 20 1.0 Gate s + 77, then agro
       - [ ] SPEC-0065, State table: Search (state 2) 16 -> clip 5, 18 -> clip 6 32 / 10 1.0 18: gate s + 37 then agro; no 17: default state at once
@@ -36343,7 +36343,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, State table: Wait in line (outer 12) 2 -> clip 0 (the walk clip; the same clip as the rush id 21) 21 2.90 units per second Stand-off point in a 10 x 10 squa...
       - [ ] SPEC-0065, State table: Victory pose 73 1.0 Slorg gate s + 124; Giant s + 224
       - [ ] SPEC-0065, State table: Dead 58 -> clip 17 40 1.0 Plays once; disappear 300 from progress 0.95
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
       - [ ] SPEC-0065, Attack chooser: 0 < d <= 5 74 % (slot 1) 74 % (slot 1)
       - [ ] SPEC-0065, Attack chooser: 5 < d < 6 93 % (slot 1 74, slot 0 19) 87 % (slot 2 49, slot 1 38)
       - [ ] SPEC-0065, Attack chooser: 6 <= d <= 7 87 % (slot 2 49, slot 0 38) 49 % (slot 2)
@@ -36360,7 +36360,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Charge (slot 2; sequencer states 6, 7, 8, 12): State 9 (blocked): the slot's blocked-charge kind 4 is not 0, 1 or 2, so hit-reaction kind 3 starts (ids 62 t...
       - [ ] SPEC-0065, Charge (slot 2; sequencer states 6, 7, 8, 12): State 12: E (id 47, clip 13) plays to its gate (96 ticks; Giant 74), then the end path (recovery int[60, 120]...
     - [ ] SPEC-0065 Bite (slot 1)
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Wander, patrol, walk home (state 8), wait in line, rush approach (inner 0), bite approach (state 0) root 0.0483 average; per key 0.003 to 0.090 (a...
       - [ ] SPEC-0065, Movement: Rush hold (inner 1) none 0 0 aim 1.0 22: clip 7, 18, loop d below 5.0 (6.0) or above 20.0 (25.0)
       - [ ] SPEC-0065, Movement: Back off (inner 2) root, backward 0.0220 1.32 faces the hero 23: clip 8, 21, loop d above desired; point 22 (27) from the hero
@@ -36374,7 +36374,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Hit and hurt windows: Spit launch tick s + 32 (bolt arrives distance/1.0 ticks later) one bolt 15 (Giant 25)
       - [ ] SPEC-0065, Hit and hurt windows: Bite s + 11 to s + 16 one, on the first touching tick: s + 11 (Slorg), s + 14 (Giant) 20 (Giant 25 and stun)
       - [ ] SPEC-0065, Hit and hurt windows: Charge from the first run tick until contact one 6, knockback 3
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: Slorg 1 bite (B, clip 10) w3 (5.0 x 3.0) s+11 to s+16 (s+11 to s+16) -1.1 to 0.8 / 2.1 to 2.4 / 0.1 to 0.5 -6.2 to 6.4 -6.4 to 7.1 -4.0 to 6.0
       - [ ] SPEC-0065, Weapon reach: Slorg 2 charge (B, clip 12) w1 (2.0 x 4.0) s+1 to s+27 (s+1 to s+27) -0.7 to 0.7 / -0.2 to 2.3 / 0.0 -3.4 to 3.8 -2.2 to 15.3 -5.5 to 4.5
       - [ ] SPEC-0065, Weapon reach: Giant Slorg 1 bite (B, clip 10) w3 (5.0 x 3.0) s+11 to s+16 (s+11 to s+16) -1.2 to 1.4 / 2.7 to 3.5 / 0.1 to 0.7 -6.4 to 7.2 -6.6 to 7.9 -3.0...
@@ -36466,7 +36466,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Where they stand: default states and counts: 7 int +0xC4 (0 fidget at home, else keep the placed facing) 0 on all nine Crokabek sentries
       - [ ] SPEC-0065, Where they stand: default states and counts: 8 float +0xC0 (wake distance); int +0xC4 (1: no alarm stinger, and visible hover); int +0xC8 (hide pick selecto...
       - [ ] SPEC-0065, Where they stand: default states and counts: 9 int +0xBC (the named character's list id); float +0xC0 (follow distance); int +0xC4 (1) Mountain: id 0 at 10....
-    - [x] SPEC-0065 Start states {auto: title named in code}
+    - [ ] SPEC-0065 Start states
       - [ ] SPEC-0065, Start states: State 0 (one Shooting Spellbook). The setter runs the default word 0 every tick, so the book stays in state 0 for ever: it plays the idle pick...
       - [ ] SPEC-0065, Start states: State 5 (wander). The goal rule of the shared field model: with R below 0.1 a random triangle centroid of the current (flying) navmesh, otherw...
       - [ ] SPEC-0065, Start states: State 6 (patrol). The locator group named by +0xB8 is flown in loop order with gait id 99; there is no rest at the points (+0xC4 = +0xC8 = 0)...
@@ -36546,7 +36546,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, What a port most likely gets wrong, shared by the five: Charge bookkeeping. The start point is rewritten on every wind-up tick; the row speed (agro velocity...
       - [ ] SPEC-0065, What a port most likely gets wrong, shared by the five: The edge guard. It must skip airborne flyers (a hovering charge keeps the clip's root travel) and ac...
       - [ ] SPEC-0065, What a port most likely gets wrong, shared by the five: Mesh and route. A grounded Crokabek still uses the flying (kind 2) mesh, so its walk range is the fl...
-  - [x] SPEC-0065 Crokabek {auto: title named in code}
+  - [ ] SPEC-0065 Crokabek
     - [ ] SPEC-0065 Identity and tunables
       - [ ] SPEC-0065, Identity and tunables: Record Monster type 61, variant 0, row 136, name "Crokabek"; one clip table for all 48 placements (a second, test-block-only copy in...
       - [ ] SPEC-0065, Identity and tunables: Class and approach Class 17; approach 4 (strafe); Can Fly 1; hostile; Display in default 1
@@ -36594,7 +36594,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Animation ids and clips: 37, 38, 47 slot 0 / 1 / 2 recovery and wind-up none: skipped in the same tick
       - [ ] SPEC-0065, Animation ids and clips: 165 flyer emerge none (state 8 enters agro at once)
     - [ ] SPEC-0065 Per-tick order, start and wake
-    - [x] SPEC-0065 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0065 State table (agro)
       - [ ] SPEC-0065, State table (agro): Set-up (outer 0) agro idle pick: 141 while flying (not in this table: clip 0), 1 on the ground (clip 21) 10, loop one tick, then outer 4...
       - [ ] SPEC-0065, State table (agro): Hold (inner 10) 132 (clip 23) 14, loop hold int[60, 180], then the side-step draw; d above 15 gives approach, d below 3 gives back-off
       - [ ] SPEC-0065, State table (agro): Approach (inner 7) 103 (clip 1) 16, loop 16 units per second toward the hero; ends when d is below the desired distance
@@ -36611,8 +36611,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, State table (agro): Wait in line (outer 12) 98 (clip 16) 10, loop flies to the stand-off point
       - [ ] SPEC-0065, State table (agro): Victory pose (state 10) 163 (clip 28) 10 gate s + 37, then the default state
       - [ ] SPEC-0065, State table (agro): Dead 58 (clip 12) 2 corpse leaves about 7 ticks after death
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Wander, patrol, follow, wait in line (airborne) row speed only (idle 3.0) 0.100 6.0 steering 0.3 / 0.1 98, 99, 100: clip 16, 10, loop, no root goa...
       - [ ] SPEC-0065, Movement: Strafe approach (inner 7), back off (inner 11), circles (inners 8, 9) row speed only (agro 8.0) 0.267 16.0 approach steers; back and circles face...
       - [ ] SPEC-0065, Movement: Strafe hold (inner 10) none 0 0 aim 0.5 (flying weight) 132: clip 23, 14, loop hold count, distance tests
@@ -36638,7 +36638,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Hit and hurt windows: Steal. On the hit tick a roll int[0, 100] strictly below 100 passes on 100 of the 101 draws; it takes one of the items 150 and 149 tha...
       - [ ] SPEC-0065, Hit and hurt windows: Ground peck (slot 1). B (rate 3.0) hits on its fifth key at s + 8 (single hit, damage 2); a miss ends B at s + 10. Recovery clip E run...
       - [ ] SPEC-0065, Hit and hurt windows: Hurt. The Crokabek can be hit in every agro sub-state except the dodges (outer 5, 6), while dead, in state 8 for the hidden placement,...
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 lunge (C, clip 9) sC+52 to sC+69 (sC+52 to sC+69) 0.5 to 1.9 / 0.6 to 3.0 / -0.6 to 0.0 -4.0 to 6.6 10.7 to 23.7 -5.0 to 6.5
       - [ ] SPEC-0065, Weapon reach: 1 peck (B, clip 6) s+8 to s+10 (s+8 to s+10) 0.4 to 0.5 / 1.4 to 2.5 / -0.5 to -0.2 -3.8 to 5.2 -3.8 to 5.9 -3.5 to 5.5
       - [ ] SPEC-0065, Weapon reach: 1 peck (C, clip 7) sC+1 (sC+1) 0.4 / 3.6 / -0.8 -3.8 to 4.0 -3.8 to 4.0 -3.5 to 7.5
@@ -36658,7 +36658,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, What a port most likely gets wrong: Keeping it airborne after a hit; it falls and fights on the ground.
       - [ ] SPEC-0065, What a port most likely gets wrong: Using the plain walking gait while hovering.
       - [ ] SPEC-0065, What a port most likely gets wrong: Giving it a missile or a block.
-    - [x] SPEC-0065 Test vector {auto: title named in code}
+    - [ ] SPEC-0065 Test vector
       - [ ] SPEC-0065, Test vector: Hit tick (R or the tick before): damage applies with no doubling (already in agro), outer sub-state 10 with kind 7, the force-start word is set...
       - [ ] SPEC-0065, Test vector: R: handler, kind 7, animation 76 is not current: request 76 (clip 13 starts at key 0 on this tick's animation step), the flying test passes, so...
       - [ ] SPEC-0065, Test vector: R + 1: the pre-step counts 600 down to 599. The update hook no longer sets the no-gravity flag; the keeper and row speed are off. The handler s...
@@ -36695,7 +36695,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Differences from the Crokabek: Table differences The slot ids, the flyer gait ids, the dodge ids and the knock-down ids (76, 74, 75, 57, 58) are the Crokabe...
       - [ ] SPEC-0065, Differences from the Crokabek: Start states 16 patrols (loop, no rest), 3 follow a named character (state 9), 1 wander (R 0)
       - [ ] SPEC-0065, Differences from the Crokabek: Item steal none (unused slot)
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 lunge (C, clip 9) sC+52 to sC+69 (sC+52 to sC+69) -0.4 to 0.0 / 0.8 to 2.8 / 0.0 -5.8 to 6.0 5.4 to 18.4 -7.5 to 8.0
       - [ ] SPEC-0065, Weapon reach: 1 peck (B, clip 6) s+8 to s+10 (s+8 to s+10) 0.0 / 0.3 to 1.8 / 0.0 -3.4 to 5.6 -3.4 to 5.6 -8.0 to 6.5
       - [ ] SPEC-0065, Weapon reach: 1 peck (C, clip 7) sC+1 (sC+1) 0.0 / 3.6 / 0.0 -2.6 to 4.8 -2.6 to 4.8 -5.0 to 9.0
@@ -36704,7 +36704,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, What a port most likely gets wrong: Missing its grounded bite: 45 damage and a knockdown, the hardest hit of the batch.
       - [ ] SPEC-0065, What a port most likely gets wrong: Letting it dodge shots (defend time 0), or forgetting its high melee dodge (74 percent for a quick swing).
       - [ ] SPEC-0065, What a port most likely gets wrong: Treating its patrols as wander.
-    - [x] SPEC-0065 Test vector {auto: title named in code}
+    - [ ] SPEC-0065 Test vector
     - [ ] SPEC-0065 Open questions
       - [ ] SPEC-0065, Open questions: The two Steppe Plateau placements have no flying mesh. Resolved (High; proactive (open close-out)): they keep navigation index -1 and cannot...
       - [ ] SPEC-0065, Open questions: The named-character ids 0 and 8 of the state-9 records. Resolved in part (Medium-High; proactive (open close-out)): the ids are record ordin...
@@ -36729,10 +36729,10 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, What a port most likely gets wrong: Forgetting the dud's recovery: after each attempt the Swamp Crokabek is idle for 30 to 60 ticks.
       - [ ] SPEC-0065, What a port most likely gets wrong: Giving it the steal.
       - [ ] SPEC-0065, What a port most likely gets wrong: Keeping it near the hero: its strafe band is 10 to 30.
-    - [x] SPEC-0065 Test vector {auto: title named in code}
+    - [ ] SPEC-0065 Test vector
     - [ ] SPEC-0065 Open questions
       - [ ] SPEC-0065, Open questions: Whether a state-0 missile wait loops when the hero is off the walk mesh. Resolved (High; proactive (open close-out)): it waits only until th...
-  - [x] SPEC-0065 Biting Spellbook {auto: title named in code}
+  - [ ] SPEC-0065 Biting Spellbook
     - [ ] SPEC-0065 Identity and tunables
       - [ ] SPEC-0065, Identity and tunables: Record Monster type 60, variant 0, row 134, name "Biting Spellbook"; one clip table (25 clips) in all 31 playable records (a second c...
       - [ ] SPEC-0065, Identity and tunables: Class and approach Class 17; approach 4; Can Fly 1; hostile; Display in default 1
@@ -36766,7 +36766,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Animation ids and clips: 33, 37, 38, 40, 42 the other phases none: skipped in the same tick
       - [ ] SPEC-0065, Animation ids and clips: 165 flyer emerge none
     - [ ] SPEC-0065 Per-tick order, start and wake
-    - [x] SPEC-0065 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0065 State table (agro)
       - [ ] SPEC-0065, State table (agro): Set-up (outer 0) agro idle pick 141 while flying, 1 on the ground (both clip 0) 9, loop one tick, then outer 4 inner 10
       - [ ] SPEC-0065, State table (agro): Hold (inner 10) 132 (clip 0) 9, loop hold int[60, 180]; faces the hero at once
       - [ ] SPEC-0065, State table (agro): Approach / circle / back-off 103 (clip 0), 105 or 106 (clip 9 or 8), 104 (clip 21) 9, loops 6 units per second; desired 7.2 to 13.8; app...
@@ -36777,8 +36777,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, State table (agro): Missile dodge (outer 6) 138 or 139 (clips 10, 11) 16 gate s + 61; 5.5 units sideways
       - [ ] SPEC-0065, State table (agro): Stagger (outer 10 kind 6) 152 (clip 3) 10 gate s + 37; recoil about 6.4 units
       - [ ] SPEC-0065, State table (agro): Dead 58 (clip 4) 10 corpse about 47 ticks after death
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Wander (state 5), wait in line row speed only (idle 1.0) 0.0333 2.0 steering 0.3 / 0.1 98 missing: clip 0, 9-key hover, no root (the gait id still...
       - [ ] SPEC-0065, Movement: Hover in state 8 none 0 0 none 9 / 129: one-key poses wake
       - [ ] SPEC-0065, Movement: Strafe approach, back off, circles row speed only (agro 3.0) 0.100 6.0 approach steers; back and circles face the hero 103: clip 0; 104: clip 21 (...
@@ -36793,7 +36793,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Hit and hurt windows: Lunge. B requested at c (no wind-up clip), state 7 from c + 1 at 0.211 units per tick (rate 2.0: clip 20 root plus the 0.1 row speed);...
       - [ ] SPEC-0065, Hit and hurt windows: Bite. From state 0 the book flies at the hero; at d at most 4.25 state 1 runs: no wind-up, B requested at s (the first tick runs at th...
       - [ ] SPEC-0065, Hit and hurt windows: Hurt. Hittable in every agro sub-state except the dodges (outer 5, 6), while dead, and in its wake state when the hide pose is on.
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 lunge (C, clip 1) sC+8 to sC+19 (sC+8 to sC+19) 0.7 / 0.0 to 0.1 / 0.0 -2.6 to 4.2 -1.9 to 6.0 -4.0 to 1.0
       - [ ] SPEC-0065, Weapon reach: 1 bite (B, clip 1) s+7 to s+18 (s+7 to s+18) 0.7 / 0.0 to 0.1 / 0.0 -2.6 to 4.2 -2.6 to 4.2 -4.0 to 1.0
     - [ ] SPEC-0065 Defence and counters
@@ -36810,7 +36810,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, What a port most likely gets wrong: Running the lunge fast: 0.211 units per tick, a lumbering 12 units per second at most (6 u/s agro row speed plus 6.7 of...
       - [ ] SPEC-0065, What a port most likely gets wrong: Grounding it after a hit: it only staggers (kind 6).
       - [ ] SPEC-0065, What a port most likely gets wrong: Skipping the counters after a dodge.
-    - [x] SPEC-0065 Test vector {auto: title named in code}
+    - [ ] SPEC-0065 Test vector
     - [ ] SPEC-0065 Open questions
       - [ ] SPEC-0065, Open questions: Whether the Library block of 18 placements (region 1331) is ever loaded. Resolved (High; proactive (open close-out)): never; no level module...
       - [ ] SPEC-0065, Open questions: The anchor of attachment 2 for the lunge window. Resolved by the Weapon reach table (the weapon centre is 0.7 ahead of the book at its own h...
@@ -36838,7 +36838,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, What a port most likely gets wrong: Firing from under 10 units.
       - [ ] SPEC-0065, What a port most likely gets wrong: Firing two shots per attack (one window, one shot).
       - [ ] SPEC-0065, What a port most likely gets wrong: Giving it the Biting Spellbook's lunge or backbiter: this book has one missile slot and a backbiter of 1.0.
-    - [x] SPEC-0065 Test vector {auto: title named in code}
+    - [ ] SPEC-0065 Test vector
     - [ ] SPEC-0065 Open questions
       - [ ] SPEC-0065, Open questions: Whether any level script puts the Shooting Spellbook into agro. Resolved (High; proactive (open close-out)): none does; the only module call...
       - [ ] SPEC-0065, Open questions: The lone placement's purpose. Unknowable (developer intent is not encoded anywhere); behave as above.
@@ -36929,7 +36929,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Start, wake, return: A released spirit (breakable key 1816) starts in agro with animation 82 requested once (clip 27, 25 keys); the agro idle pick replaces...
       - [ ] SPEC-0065, Start, wake, return: A hit at any time wakes it into agro with doubled damage and a kind-6 reaction, unless the ghost rule absorbs it (a ghost-phase hit onl...
       - [ ] SPEC-0065, Start, wake, return: Return after losing the hero: the shared exits; the lost-sight search and the leash apply as usual (the spirit sees through walls for n...
-    - [x] SPEC-0065 Per-tick order (agro) and state table {auto: title named in code}
+    - [ ] SPEC-0065 Per-tick order (agro) and state table
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Set-up (outer 0) 141 30 one tick, then outer 1 inner 1 (hold)
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Approach (inner 0) 101 -> clip 28 26, loops 6.56 per second (0.109 per tick) toward the hero; d < desired (3.4 to 4.6...
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Hold (inner 1) 155 -> clip 25 30, loops faces the hero at weight 0.7; d < 3.0 gives back off; d > 5.0 gives approach
@@ -36944,8 +36944,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Wait in line (outer 12) 98 absent: clip 0 20, loops stand-off point 10.0 from the hero (SPEC-0038 Behavior 45)
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Victory pose 163 absent state 0
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Dead 153 -> clip 30 44 plays once
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Wander, patrol, walk home (states 5, 6, 7, 8) row speed only (idle 1.0) 0.0333 2.0 steering 0.3 / 0.1 98, 99, 100 missing: clip 0, 20-key loop, no...
       - [ ] SPEC-0065, Movement: Rush approach (inner 0) and loop approach (sequencer 13) root + row speed (agro 2.0) 0.0427 + 0.0667 = 0.110 6.56 steering 101: clip 28, 26, loop...
       - [ ] SPEC-0065, Movement: Rush hold (inner 1) none 0 0 aim 0.7 (flying weight) 155: clip 25 d below 3.0 or above 5.0
@@ -36959,7 +36959,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Hit and hurt windows: Swipe: weapon 1 (radius 7.0, height 5.0) is live from s + 26 to s + 29 at rate 3.0, one hit of 60 per window; the clip's forward lunge...
       - [ ] SPEC-0065, Hit and hurt windows: Drain: no volume; the hero must be within 5.0 horizontally of the spirit when the countdown reaches 0 (the loop exit test runs after t...
       - [ ] SPEC-0065, Hit and hurt windows: Hurt shapes (Medium): body capsule of length 3.55 radius 0.96 and limb capsules of radius 0.3 to 0.7. The spirit can be hit in every s...
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 1 swipe (B, clip 29) w1 (7.0 x 5.0) s+26 to s+29 (s+26 to s+29) -0.4 to 4.1 / 2.1 to 5.9 / -3.1 to 2.8 -6.2 to 11.4 -4.8 to 14.3 -5.5 to 9.0
     - [ ] SPEC-0065 Ghost cycle
       - [ ] SPEC-0065, Ghost cycle: A hit in the ghost phase deals no damage, starts no reaction and sets the reveal countdown int[10, 30]. While the reveal runs the spirit takes...
@@ -36993,7 +36993,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, What a port most likely gets wrong: Treating waiting spirits as visible and hittable (cue word 0).
       - [ ] SPEC-0065, What a port most likely gets wrong: Giving the missing gait ids a walk speed from the table instead of the row speed.
       - [ ] SPEC-0065, What a port most likely gets wrong: Forgetting the 99 percent dodge, which makes the spirit nearly untouchable by melee while its hold is below 1.
-    - [x] SPEC-0065 Test vector {auto: title named in code}
+    - [ ] SPEC-0065 Test vector
       - [ ] SPEC-0065, Test vector: Slot 1 chosen at c: s = c + 1; hit at c + 27 (60 damage, slow at 10 percent for 1 to 3 s, hero knocked into the long-fall state); B gate c + 63...
       - [ ] SPEC-0065, Test vector: Slot 0 chosen at c: state 13 on c + 1 (d = 4.0 is within range), state 14 from c + 2; drain hits at c + 62 and then every 61 to 121 ticks (c +...
       - [ ] SPEC-0065, Test vector: Over 600 ticks (20000 simulated runs, hero never moving or guarding, every window landing): mean 0.66 swipes and one drain loop, mean first dam...
@@ -37046,7 +37046,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Start, wake, return: Waiting in state 8: 5 of 7 records have cue word 1 and are visible and hittable while they wait (a hit wakes them with doubled damage);...
       - [ ] SPEC-0065, Start, wake, return: Socialize (flag 1): while idle in state 5, 6 or 7 the quiet countdown float[420, 480) runs; at zero the enemy looks for a peer (flag se...
       - [ ] SPEC-0065, Start, wake, return: Return after losing the hero: the shared exits and default-state rules. A wanderer resumes roaming from where it stands.
-    - [x] SPEC-0065 Per-tick order (agro) and state table {auto: title named in code}
+    - [ ] SPEC-0065 Per-tick order (agro) and state table
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Set-up (outer 0) 1 25 one tick, then outer 1 inner 1 (hold)
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Hold (inner 1) 22 -> clip 1 25, loops faces the hero at weight 0.5; d < 10 gives back off; d > 30 gives approach
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Approach (inner 0) 21 -> clip 3 25, loops 6.12 per second (0.102 per tick); ends when d < desired (14 to 26)
@@ -37061,8 +37061,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Wait in line (outer 12) walk 2 -> clip 13 25, loops stand-off point 10.0 from the hero
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Victory pose 73 absent state 0
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Dead 58 -> clip 17 65 plays once
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Wander (R 1000), patrol, walk home, wait in line root 0.085 on every key 5.10 steering 0.3 / 0.1 2, 4, 11: clip 13, 25, loop goal or point reached
       - [ ] SPEC-0065, Movement: Rush approach (inner 0) and sequencer approach root 0.102 average; per key 0.085 to 0.108 6.12 steering 21: clip 3, 25, loop d below desired (10 +...
       - [ ] SPEC-0065, Movement: Rush hold (inner 1) none 0 0 aim 0.5 (halves the angle each tick) 22: clip 1, 25, loop d below 10 or above 30
@@ -37075,7 +37075,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Hit and hurt windows: Single shot: leaves at s + 36 from emit point 0, aimed at the hero's position + (0, 2.5, 0) at that tick (scatter 0; +5.0 outside the...
       - [ ] SPEC-0065, Hit and hurt windows: Volley: five shots at 2.0 per tick (26 moves, 52 units); each shot is aimed at the hero's position at its own release tick, so a hero...
       - [ ] SPEC-0065, Hit and hurt windows: Hurt shapes (Medium): body capsule of length 1.93 radius 0.97 and limb capsules of radius 0.2 to 1.1. The Skull Spirit can be hit in e...
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 2 bite (B, clip 11) w1 to w5 (each 2.0 x 2.0) s+20 to s+83 (s+20 to s+83) -10.3 to 11.4 / -0.4 to 8.6 / -7.7 to 9.2 -8.0 to 9.4 -8.0 to 9.4 -5...
     - [ ] SPEC-0065 Defence and counters
     - [ ] SPEC-0065 Hero actions against this enemy
@@ -37101,7 +37101,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, What a port most likely gets wrong: Aiming volley shots at one point: each shot re-aims at the hero's position at its own tick.
       - [ ] SPEC-0065, What a port most likely gets wrong: Forgetting that waiting records with cue word 1 are visible.
       - [ ] SPEC-0065, What a port most likely gets wrong: Using the wrong shot ranges: the single shot reaches 31 units, the volley shot 52.
-    - [x] SPEC-0065 Test vector {auto: title named in code}
+    - [ ] SPEC-0065 Test vector
       - [ ] SPEC-0065, Test vector: Single shot chosen at c: s = c + 1; shot leaves c + 37 from high above and behind the skull and expires on c + 67 without reaching a hero 30 un...
       - [ ] SPEC-0065, Test vector: Volley chosen at c: shots leave at c + 125, 149, 177, 193, 217 and reach the hero (2.0 per tick; 14, 17, 16, 9 and 11 ticks after each release,...
       - [ ] SPEC-0065, Test vector: The hero walks in to 15 units: the bite (59 percent per ready tick) walks in at 0.102 per tick: the bite is requested about 108 ticks after the...
@@ -37156,7 +37156,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Start, wake, return: Alarm group: none of the 16 records has a group.
       - [ ] SPEC-0065, Start, wake, return: A hit at any time wakes it into agro (doubled damage, kind-0 reaction). A sword in state 8 with cue word 0 cannot be hit.
       - [ ] SPEC-0065, Start, wake, return: Return after losing the hero: the shared exits; a sentry walks home and stands, a hidden sword walks home and hides again.
-    - [x] SPEC-0065 Per-tick order (agro) and state table {auto: title named in code}
+    - [ ] SPEC-0065 Per-tick order (agro) and state table
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Set-up (outer 0) 1 20 one tick, then outer 4 inner 10
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Strafe hold (inner 10) 31 -> clip 23 20, loops hold counts down from int[60, 180]; at 0 a roll int[1, 3]: 1 stay, 2 c...
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Circle (inner 8 / 9) 30 / 29 -> clip 2 / 1 12, loops sideways about 4.5 / 4.2 per second; hold int[60, 180]; ends at...
@@ -37174,8 +37174,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Wait in line (outer 12) walk 2 -> clip 5 30, loops stand-off point 15.0 from the hero (SPEC-0038 Behavior 45)
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Victory pose (state 10) 73 -> clip 24 38 gate 148, then the default state
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Dead 58 -> clip 25 56 plays once
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Walk home (state 7 sentries, state 8), wait in line root 0.0501 on every key 3.00 steering 0.3 / 0.1 2, 4: clip 5, 30, loop home reached
       - [ ] SPEC-0065, Movement: Strafe approach (inner 7) and sequencer approach root 0.1668 on every key 10.01 steering 28: clip 0, 15, loop d below desired (6 + 10f, 8 to 14) o...
       - [ ] SPEC-0065, Movement: Circle (inners 8, 9) root sideways 29: 0.0703 (+x), 30: 0.0753 (-x) 4.22, 4.52 faces the hero (side gait rule) 29: clip 1; 30: clip 2; 12, loop ho...
@@ -37190,7 +37190,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Hit and hurt windows: Slot 2: weapon 1 (radius 6.0, height 2.0) live from s + 16 until the clip ends; one hit of 30 per window (the window is one continuous...
       - [ ] SPEC-0065, Hit and hurt windows: Hit damage before armour and shield: 30, 30, 15 (and 10 for the unreachable slot 3 of row 141). A guarding hero (L1, facing the sword)...
       - [ ] SPEC-0065, Hit and hurt windows: Hurt shapes (Medium): body capsule of length 2.55 radius 1.45 and limb capsules of radius 0.6 to 1.0 (variant 1 carries a 6.1-long bla...
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 (B, clip 18) w1 (6.0 x 2.0) s+6 to s+10 (s+7 to s+10) 3.3 to 4.9 / 1.2 to 4.0 / -3.1 to 2.9 3.0 to 9.4 4.8 to 11.1 -7.0 to 9.0
       - [ ] SPEC-0065, Weapon reach: 1 (B, clip 13) w1 (6.0 x 2.0) s+48 to s+77 (s+48 to s+77) 1.4 to 4.4 / 0.1 to 5.2 / -2.4 to -0.6 -4.0 to 10.8 -0.8 to 15.1 -8.5 to 10.0
       - [ ] SPEC-0065, Weapon reach: 2 (B, clip 10) w1 (6.0 x 2.0) s+16 to s+37 (s+16 to s+37) 0.3 to 4.6 / 1.1 to 2.5 / -2.6 to -0.6 -0.4 to 6.4 2.6 to 13.7 -8.0 to 8.0
@@ -37219,7 +37219,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, What a port most likely gets wrong: Missing the unblockable curse of slot 1 and its counter use after a blocked swing.
       - [ ] SPEC-0065, What a port most likely gets wrong: Giving it a fast gait: approach 10.0, circle 4.4, back off 6.0 per second.
       - [ ] SPEC-0065, What a port most likely gets wrong: Dropping the E clips (they add 38 and 18 ticks to slots 2 and 1).
-    - [x] SPEC-0065 Test vector {auto: title named in code}
+    - [ ] SPEC-0065 Test vector
       - [ ] SPEC-0065, Test vector: Slot 0 at c: d = 12 is inside its range 13, so s = c + 1, A to s + 37 (the wind-up clip has no root travel), B requested at c + 38; the blade r...
       - [ ] SPEC-0065, Test vector: Slot 1 at c: hit at c + 51 (first touch s + 50 at 12 units; 30 damage, and curse on 75 of 101 draws for 30 to 60 s), end path c + 96 (B gate c...
       - [ ] SPEC-0065, Test vector: Recovery int[60, 180] follows the end path, then the next choice at the per-tick chances above (slot 2 added once the sword has closed inside 1...
@@ -37271,7 +37271,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Start, wake, return: Chance of a pass per cycle for a still hero in the cone: 0.18 at 3 units, 0.36 at 5, 0.54 at 7, none beyond 7; 0.09 at 2; a walking or...
       - [ ] SPEC-0065, Start, wake, return: A hit at any time wakes it into agro with doubled damage, unless the ghost rule absorbs it.
       - [ ] SPEC-0065, Start, wake, return: Return after losing the hero: the shared exits; a sentry walks back to its post and faces it, a hidden knight walks home and hides agai...
-    - [x] SPEC-0065 Per-tick order (agro) and state table {auto: title named in code}
+    - [ ] SPEC-0065 Per-tick order (agro) and state table
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Set-up (outer 0) 141 20 one tick, then outer 1 inner 1 (hold)
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Approach (inner 0) 101 -> clip 3 15, loops 14.0 per second (0.233 per tick); ends when d < desired (7 to 13)
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Hold (inner 1) 155 absent: clip 0 20, loops faces the hero at weight 1.0; d < 5.0 gives back off; d > 15 gives approach
@@ -37289,8 +37289,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Wait in line (outer 12) 98 -> clip 0 20, loops stand-off point 20.0 from the hero
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Victory pose (state 10) 163 -> clip 11 40 gate 156, then the default state
       - [ ] SPEC-0065, Per-tick order (agro) and state table: Dead 153 -> clip 30 44 plays once
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Walk home (states 7, 8), wait in line row speed only (idle 2.0) 0.0667 4.0 steering 0.3 / 0.1 98, 99: clip 0, no root home reached
       - [ ] SPEC-0065, Movement: Rush approach (inner 0) and sequencer approach row speed only (agro 7.0); the clip has no travel 0.233 14.0 steering 101: clip 3, 15, loop d below...
       - [ ] SPEC-0065, Movement: Rush hold none 0 0 aim 1.0 155 d below 5 or above 15
@@ -37303,7 +37303,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Hit and hurt windows: Quick cut: weapon 1 (radius 7.0, height 1.0) live s + 14 to s + 19 at rate 3.0, one hit of 30 plus a slow roll; heavy cut: weapon 1 li...
       - [ ] SPEC-0065, Hit and hurt windows: Hit damage before armour and shield: 30, 60, 10. A guarding hero (L1, facing the knight) blocks slot 0 (state 4, no damage), blocks th...
       - [ ] SPEC-0065, Hit and hurt windows: Hurt shapes (Medium): body capsule of length 3.55 radius 0.96 and limb capsules of radius 0.3 to 0.7. The knight can be hit in every s...
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 quick cut (B, clip 21) s+14 to s+20 (s+14 to s+20) -2.6 to 2.7 / 1.9 to 5.7 / -2.3 to 1.4 -5.6 to 5.6 -2.9 to 8.1 -7.5 to 11.5
       - [ ] SPEC-0065, Weapon reach: 1 heavy cut (B, clip 23) s+16 to s+21 (s+18 to s+21) -1.2 to 4.3 / 2.8 to 8.3 / -4.3 to 2.5 0.4 to 11.0 1.4 to 12.6 -6.0 to 14.0
       - [ ] SPEC-0065, Weapon reach: 2 charge, pass 1 (B, clip 5) s+19 to s+26 (s+19 to s+26) -2.9 to 2.3 / 1.9 to 3.7 / -3.4 to 1.1 -3.6 to 8.0 3.8 to 18.3 -8.0 to 10.0
@@ -37340,7 +37340,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, What a port most likely gets wrong: Using the Dark Knight's strafe numbers: this knight is a rush flyer (approach 14.0, back off 26.25 per second).
       - [ ] SPEC-0065, What a port most likely gets wrong: Forgetting that the quick-swing block and dodge rates (10 and 80 percent) are far higher than the normal-swing rates (50...
       - [ ] SPEC-0065, What a port most likely gets wrong: Giving the notice check a range that shrinks with distance: the chance rises from 1 percent at 1 unit to 90 percent at 1...
-    - [x] SPEC-0065 Test vector {auto: title named in code}
+    - [ ] SPEC-0065 Test vector
       - [ ] SPEC-0065, Test vector: Quick cut chosen at c: the knight flies 8 units to d <= 4.0 (35 ticks at 0.233), so s is about c + 36; B at rate 3.0; hit at c + 50 (30 damage,...
       - [ ] SPEC-0065, Test vector: Charge chosen at c: B requested c + 1 at rate 2.0; state 7 from c + 2 at 0.415 per tick; the knight has covered about 7.4 units when the first...
       - [ ] SPEC-0065, Test vector: The hero swings at the knight (quick swing) in front of it: block 10 percent, dodge 80 percent (79 ticks, hold int[15, 30]), hit 10 percent.
@@ -37464,7 +37464,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Animation ids and clips (rows 159, 160, 161; speed byte 2...: Slot 1 B 39 clip 13, 20 keys never chosen
       - [ ] SPEC-0065, Animation ids and clips (rows 159, 160, 161; speed byte 2...: Slot 2 lunge B 44, C 45, D 46 clip 6 (7 keys, loops, 20.0 per second), clip 4 (22 keys, gate 8...
     - [ ] SPEC-0065 Wake and start
-    - [x] SPEC-0065 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0065 State table (agro)
       - [ ] SPEC-0065, State table (agro): Hold (outer 4, inner 10) 31, clip 31 no gate. Hold timer down by 1 per tick; while it is positive the distance tests apply (d > 20.0 giv...
       - [ ] SPEC-0065, State table (agro): Approach (inner 7) 28 until d is below the drawn desired distance (12 to 18): hold timer 0, inner 10
       - [ ] SPEC-0065, State table (agro): Sidestep (inner 8, 9) 30, 29 hold timer down by 1 per tick, at 0 inner 10; a wall block gives inner 10 with a 120-tick lock; then the di...
@@ -37477,11 +37477,11 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, State table (agro): Hit reaction (outer 10) 57 49 ticks, then outer 0
       - [ ] SPEC-0065, State table (agro): Victory pose 73 144 ticks, then default state
       - [ ] SPEC-0065, State table (agro): Dead (base 16) 58 108 ticks, corpse removed 360 ticks after the 0.95 point
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
       - [ ] SPEC-0065, Attack chooser: d in 10 to the lunge band maximum (30 on row 159, 50 on rows 160 and 161): lunge at 24 % per tick.
       - [ ] SPEC-0065, Attack chooser: d below 10: lunge at 24 % first, else jab at 49 % (row 159) or 24 % (rows 160, 161): row 159 jabs on 37 % of ticks, rows 160 and 161 on 18 %.
       - [ ] SPEC-0065, Attack chooser: d above the band maximum: no attack; the strafe approach closes the distance.
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Wander, patrol, walk home, wait in line root 0.0833 on every key 5.00 steering 0.3 / 0.1 2, 4, 11: clip 20, 12, loop goal or point reached
       - [ ] SPEC-0065, Movement: Idle pick none 0 0 none 0: clip 30, 50, loop (a frame-stored clip with no root travel) -
       - [ ] SPEC-0065, Movement: Strafe approach (inner 7) and sequencer approach root row 159: 0.3334; rows 160, 161: 0.0945 20.0; 5.67 steering 28: row 159 clip 26 (7 keys, the...
@@ -37494,7 +37494,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Movement: Hit reaction kind 0 root backward 2.93 units over the clip's 52 ticks (gate 49) 3.38 snapped to the attacker 57: clip 11, 13 gate
       - [ ] SPEC-0065, Movement: Death root backward 1.68 units - none 58: clip 10 removal
     - [ ] SPEC-0065 Hit and hurt windows
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 jab (B, clip 0) w1 (4.0 x 2.0) s+20 to s+39 (s+20 to s+39) 0.6 to 1.2 / 2.6 to 3.6 / -1.1 to -0.7 -1.6 to 2.8 1.3 to 6.3 -4.5 to 7.5
       - [ ] SPEC-0065, Weapon reach: 1 (B, clip 13; row 159 only) w4 (2.0 x 2.0) s+48 to s+63 (s+48 to s+63) -0.7 to 1.1 / 1.7 to 3.2 / 0.3 to 0.8 -3.0 to 3.6 -2.3 to 5.0 -3.0 to 4.5
       - [ ] SPEC-0065, Weapon reach: 1 (B, clip 13; row 159 only) w5 (2.0 x 2.0) s+48 to s+63 (s+48 to s+63) -0.6 to 1.4 / 1.7 to 2.8 / -0.6 to 0.5 -2.6 to 3.8 -1.5 to 5.2 -2.5 to...
@@ -37577,7 +37577,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Animation ids and clips (all three rows; speed byte 2): Slot 1 B 39 clip 3, 21 keys; window frames 12 to 15 at rate 1.3 gate 62
       - [ ] SPEC-0065, Animation ids and clips (all three rows; speed byte 2): Slot 2 (157, 158) A 43, B 44 clip 10 (20 keys, gate 77), clip 2 (9 keys, gate 33, release bit on fra...
     - [ ] SPEC-0065 Wake and start
-    - [x] SPEC-0065 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0065 State table (agro)
       - [ ] SPEC-0065, State table (agro): Hold (outer 3, inner 4) 25, clip 0 d above 40.0 gives approach (inner 3); d below 10.0 gives back off (inner 5); otherwise stay
       - [ ] SPEC-0065, State table (agro): Approach (inner 3) 24 until d is below the drawn desired distance (16 to 34), then hold
       - [ ] SPEC-0065, State table (agro): Back off (inner 5) 26 steer to the point 40.0 units from the hero along the line away; until d exceeds the desired distance
@@ -37587,8 +37587,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, State table (agro): Melee dodge (outer 5), missile dodge (outer 6) 55, 53 / 54 63 and 69 ticks, unhittable
       - [ ] SPEC-0065, State table (agro): Hit reaction (outer 10) 57 49 ticks
       - [ ] SPEC-0065, State table (agro): Victory pose, dead 73, 58 as the shared rules
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Wander, patrol, walk home, wait in line root 0.0833 5.00 steering 0.3 / 0.1 2, 4: clip 23, 12, loop goal or point reached
       - [ ] SPEC-0065, Movement: Keep-distance walk-in (inner 3) root 0.0833 5.00 steering 24: clip 22, 11, loop d below desired (10 + 30f, 16 to 34)
       - [ ] SPEC-0065, Movement: Keep-distance hold (inner 4) none 0 0 0.25 blend then the row weight: Ixi Archer 0.7 (0.78 effective), Dark Ixi Archer 1.0 25 d above 40, below 10
@@ -37598,7 +37598,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Movement: Hit reaction kind 0 root backward, a little sideways 3.11 units over the clip's 52 ticks (gate 49) 3.59 snapped to the attacker 57: clip 25 gate
       - [ ] SPEC-0065, Movement: Death none 0 0 none 58: clip 24 removal
     - [ ] SPEC-0065 Hit and hurt windows
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 156 Ixi Archer 1 (B, clip 3) w4 and w5 (2.5 x 2.0) s+37 to s+49 (s+37 to s+49) 0.3 to 0.9 / 2.1 to 2.8 / 0.0 -2.4 to 3.4 -2.4 to 3.4 -3.5 to 5.0
       - [ ] SPEC-0065, Weapon reach: 158 Dark Ixi Archer 1 (B, clip 3) w4 and w5 (3.0 x 3.0) s+48 to s+63 (s+48 to s+63) 0.3 to 0.9 / 2.1 to 2.8 / 0.0 -3.0 to 4.2 -3.0 to 4.2 -4.5...
     - [ ] SPEC-0065 Defence and counter rules
@@ -37748,7 +37748,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Animation ids and clips (speed byte 2 throughout): Slot 1 A 38, B 39, C 40, D 41 clip 27 (10 keys, gate 37), clip 41 (8 keys, loops, 28.14 per second), clip...
       - [ ] SPEC-0065, Animation ids and clips (speed byte 2 throughout): Slot 2 B 44, D 46 clip 7 (28 keys, gate 108), clip 26 never played
     - [ ] SPEC-0065 Wake and start
-    - [x] SPEC-0065 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0065 State table (agro)
       - [ ] SPEC-0065, State table (agro): Set-up (outer 0) idle pick id 0 (clip 5) one tick, then outer 1 inner 1
       - [ ] SPEC-0065, State table (agro): Rush hold (inner 1) 22, clip 24 no gate. Faces the hero (weight 0.9). d < 3.5 gives back off; d > 5.0 gives approach
       - [ ] SPEC-0065, State table (agro): Approach (inner 0) 21, clip 9 gait 2 (same clip) when d > 10.0, else gait 0; ends when d < the drawn desired distance (3.8 to 4.7): inne...
@@ -37761,12 +37761,12 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, State table (agro): Wait in line (outer 12) walk id 2, then 73 once at the stand-off point, then a countdown int[600, 800] until the manager releases it
       - [ ] SPEC-0065, State table (agro): Victory pose 73 156 ticks, then the default state
       - [ ] SPEC-0065, State table (agro): Dead (base 16) 58 77 ticks, corpse removed 300 ticks after the 0.95 point
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
       - [ ] SPEC-0065, Attack chooser: d above 50: no attack; the rush approach closes the distance.
       - [ ] SPEC-0065, Attack chooser: d from 20 to 50: charge at 49 % per tick.
       - [ ] SPEC-0065, Attack chooser: d from 12 to 20: no attack; the rush approach closes the distance.
       - [ ] SPEC-0065, Attack chooser: d below 12: jab at 49 % per tick.
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Wander, patrol, walk home, wait in line root 0.1259 average; per key 0.105 to 0.146 7.56 steering 0.3 / 0.1 2, 4: clip 0, 11, loop goal or point r...
       - [ ] SPEC-0065, Movement: Rush approach (inner 0, gaits 0 and 2) and sequencer approach root 0.393 on every key 23.58 steering 21: clip 9, 8, loop d below desired (3.5 + 1....
       - [ ] SPEC-0065, Movement: Rush hold (inner 1) none 0 0 aim 0.9 22 d below 3.5 or above 5.0
@@ -37776,7 +37776,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Movement: Hit reaction kind 0 root backward 3.47 units over the clip's 36 ticks (gate 33) 5.78 snapped to the attacker 57: clip 4, 9 gate
       - [ ] SPEC-0065, Movement: Death none 0 0 none 58: clip 3 removal
     - [ ] SPEC-0065 Hit and hurt windows
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 jab (B, clip 8) w1 s+20 to s+31 (s+20 to s+31) 0.4 to 2.5 / 1.6 to 3.0 / -1.6 to 1.9 -1.4 to 5.0 1.9 to 8.1 -2.0 to 3.5
       - [ ] SPEC-0065, Weapon reach: 1 charge hit (C, clip 28) w3 sC+4 to sC+15 (sC+4 to sC+15) 2.0 to 3.0 / 1.7 to 2.7 / -0.2 to 0.0 0.8 to 4.8 1.9 to 8.2 -3.5 to 4.5
       - [ ] SPEC-0065, Weapon reach: 2 three-hit swing, first (B, clip 7) w1 s+28 to s+43 (s+28 to s+43) 0.2 to 2.9 / 1.2 to 3.0 / -2.1 to 3.0 -1.0 to 5.4 1.7 to 9.0 -2.0 to 4.0
@@ -37857,7 +37857,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Animation ids and clips (speed byte 2 throughout): Slot 0 club B 34, D 36 clip 8 (15 keys, gate 57), clip 26 (17 keys, gate 65) A, C, E skipped
       - [ ] SPEC-0065, Animation ids and clips (speed byte 2 throughout): Slot 2 throw B 44 clip 2 (17 keys, one-shot, gate 65) A, C, D, E skipped. Spawn event on frame 10, ticks...
     - [ ] SPEC-0065 Wake and start
-    - [x] SPEC-0065 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0065 State table (agro)
       - [ ] SPEC-0065, State table (agro): Set-up (outer 0) idle pick id 0 one tick, then outer 3 inner 4
       - [ ] SPEC-0065, State table (agro): Keep hold (inner 4) 25, clip 24 no gate. d > 50 gives approach (inner 3); d < 10 gives back off (inner 5)
       - [ ] SPEC-0065, State table (agro): Approach (inner 3) 24, clip 9 steers to the hero; ends when d < desired (18 to 42): inner 4
@@ -37868,10 +37868,10 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, State table (agro): Block (outer 7) 56, 126 until the swing ends
       - [ ] SPEC-0065, State table (agro): Hit reaction 57 33 ticks
       - [ ] SPEC-0065, State table (agro): Death 58 77 ticks
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
+    - [ ] SPEC-0065 Movement
     - [ ] SPEC-0065 Hit and hurt windows
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 club (B, clip 8) w1 (2.0 x 2.0) s+20 to s+31 (s+20 to s+31) 0.4 to 2.5 / 1.6 to 3.0 / -1.6 to 1.9 -1.4 to 5.0 1.9 to 8.1 -2.0 to 3.5
     - [ ] SPEC-0065 Defence and counter rules
     - [ ] SPEC-0065 Hero actions against this enemy
@@ -37958,7 +37958,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Where it is met and how it starts: Fyora's Library (3). Default 5, R 100, no pause, no alarm group. The three Harris wander over a 100-unit square about the...
       - [ ] SPEC-0065, Where it is met and how it starts: Park Shrine (7). Six Harris (region 1403, script entities 16 to 21) are loaded only after the stage 4 arm trigger and wan...
       - [ ] SPEC-0065, Where it is met and how it starts: Because no Harris has a group, a hit or a notice involves only that Harris.
-    - [x] SPEC-0065 State table (agro) {auto: title named in code}
+    - [ ] SPEC-0065 State table (agro)
       - [ ] SPEC-0065, State table (agro): Set-up (outer 0) idle pick id 0 one tick, then outer 4 inner 10
       - [ ] SPEC-0065, State table (agro): Strafe hold (inner 10) 31, clip 8 hold timer down by 1 per tick; at 0 one roll r = int[1, 3] (1 stay, 2 circle left, 3 circle right; 2 a...
       - [ ] SPEC-0065, State table (agro): Approach (inner 7) 28, clip 9 until d < desired (8.4 to 12.6): hold 0, inner 10
@@ -37971,8 +37971,8 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, State table (agro): Hit reaction (outer 10) 57 116 ticks, then outer 0
       - [ ] SPEC-0065, State table (agro): Wait in line (outer 12) walk id 2; no clip 73, so the 600 to 800-tick countdown is set at once until released
       - [ ] SPEC-0065, State table (agro): Dead (base 16) 58 45 ticks, corpse gone 4 ticks after the 0.95 point
-    - [x] SPEC-0065 Attack chooser {auto: title named in code}
-    - [x] SPEC-0065 Movement {auto: title named in code}
+    - [ ] SPEC-0065 Attack chooser
+    - [ ] SPEC-0065 Movement
       - [ ] SPEC-0065, Movement: Wander, patrol, walk home, wait in line root 0.1251 7.50 steering 0.3 / 0.1 2, 4, 11: clip 5, 10, loop goal or point reached
       - [ ] SPEC-0065, Movement: Search look (state 2) and idle fidget 6 root forward 2.97 units over the clip (177 ticks) 1.0 aims at the last-seen point (weight 1.0) 16 and 6: c...
       - [ ] SPEC-0065, Movement: Strafe approach (inner 7) and sequencer approach root 0.212 average; per key 0.074 to 0.266 12.72 steering 28: clip 9, 10, loop d below desired or...
@@ -37983,7 +37983,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Movement: Hit reaction kind 0 root backward 15.08 units over 117 ticks 7.54 snapped to the attacker 57: clip 23, 30 gate
       - [ ] SPEC-0065, Movement: Death root backward 11.72 units over 45 ticks; the corpse is removed 4 ticks after progress 0.95 - none 58: clip 17, 12 removal
     - [ ] SPEC-0065 Hit and hurt windows
-    - [x] SPEC-0065 Weapon reach {auto: title named in code}
+    - [ ] SPEC-0065 Weapon reach
       - [ ] SPEC-0065, Weapon reach: 0 (B, clip 10) w2 s+28 to s+39 (s+28 to s+39) 0.1 to 1.4 / 1.6 to 3.6 / -0.6 to 0.9 -1.8 to 3.8 1.0 to 6.6 -3.0 to 5.0
       - [ ] SPEC-0065, Weapon reach: 0 (B, clip 10) w1 s+40 to s+51 (s+40 to s+51) -0.3 to 1.1 / 1.5 to 2.9 / -0.8 to 0.8 -2.0 to 3.4 2.0 to 8.6 -2.5 to 4.5
       - [ ] SPEC-0065, Weapon reach: 1 (B, clip 11) w1 s+32 to s+43 (s+32 to s+43) -0.2 to 1.2 / 0.1 to 5.0 / -0.5 to -0.2 -2.0 to 3.8 3.4 to 9.5 -5.0 to 6.5
@@ -38104,7 +38104,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Swamp Tentacle: Distance hide (give-up) d > 10, 75 percent a tick
       - [ ] SPEC-0065, Swamp Tentacle: Wait-in-line square 50
       - [ ] SPEC-0065, Swamp Tentacle: Chase stop; confused strike 3.17; 3.42
-    - [x] SPEC-0065 Tentacle {auto: title named in code}
+    - [ ] SPEC-0065 Tentacle
       - [ ] SPEC-0065, Tentacle: Notice band (x0.7 standing, x1.75 running) 5 to 40 (3.5 to 28; 8.75 to 70)
       - [ ] SPEC-0065, Tentacle: Sight cone half-angle 90 deg
       - [ ] SPEC-0065, Tentacle: Rush: hold band; walk-in target; back-off point 3 to 15; 5.4 to 12.6; 17
@@ -38126,7 +38126,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Slorg: Lost-sight search point last seen
       - [ ] SPEC-0065, Slorg: Wait-in-line square 10
       - [ ] SPEC-0065, Slorg: Chase stop; confused strike 2.35; 2.6
-    - [x] SPEC-0065 Giant Slorg {auto: title named in code}
+    - [ ] SPEC-0065 Giant Slorg
       - [ ] SPEC-0065, Giant Slorg: Notice band (x0.7 standing, x1.75 running) 5 to 70 (3.5 to 49; 8.75 to 122.5)
       - [ ] SPEC-0065, Giant Slorg: Sight cone half-angle 90 deg
       - [ ] SPEC-0065, Giant Slorg: Rush: hold band; walk-in target; back-off point 6 to 25; 9.8 to 21.2; 27
@@ -38136,7 +38136,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Giant Slorg: Lost-sight search point last seen
       - [ ] SPEC-0065, Giant Slorg: Wait-in-line square 10
       - [ ] SPEC-0065, Giant Slorg: Chase stop; confused strike 4.17; 4.42
-    - [x] SPEC-0065 Crokabek {auto: title named in code}
+    - [ ] SPEC-0065 Crokabek
       - [ ] SPEC-0065, Crokabek: Notice band (x0.7 standing, x1.75 running) 10 to 60 (7 to 42; 17.5 to 105)
       - [ ] SPEC-0065, Crokabek: Sight cone half-angle 45 deg
       - [ ] SPEC-0065, Crokabek: Strafe: circle band; walk-in target; back-off point 3 to 15; 5.4 to 12.6; 15
@@ -38168,7 +38168,7 @@ Cited 0 times in the game code.
       - [ ] SPEC-0065, Swamp Crokabek: Wait-in-line square 10
       - [ ] SPEC-0065, Swamp Crokabek: Hover height above the hero min(20, 0.2 d), floor ground + 2
       - [ ] SPEC-0065, Swamp Crokabek: Chase stop; confused strike 2.17; 2.42
-    - [x] SPEC-0065 Biting Spellbook {auto: title named in code}
+    - [ ] SPEC-0065 Biting Spellbook
       - [ ] SPEC-0065, Biting Spellbook: Notice band (x0.7 standing, x1.75 running) 10 to 40 (7 to 28; 17.5 to 70)
       - [ ] SPEC-0065, Biting Spellbook: Sight cone half-angle 45 deg
       - [ ] SPEC-0065, Biting Spellbook: Strafe: circle band; walk-in target; back-off point 5 to 16; 7.2 to 13.8; 16 (backbiter 0: no normal choice while the hero faces it)
