@@ -5428,6 +5428,20 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_FACING=name: that character's position, facing angle and clip on every tick (diagnostic).
+        if let Ok(name) = std::env::var("NEOPETS_TRACE_FACING") {
+            for c in play.characters.iter().filter(|c| c.name.contains(&name)) {
+                let clip = c.anim.clip_state();
+                println!("      FACING {} {:.2} {:.2} {:.1} clip {} world {} current {}", play.ticks, c.position[0], c.position[2], c.facing[2].atan2(c.facing[0]).to_degrees(), clip.action, c.pack, play.world.pack);
+                if play.ticks % 200 == 0 {
+                    let to = c.townsfolk.as_ref().and_then(|t| t.walk_to);
+                    let wk = c.walker.as_ref();
+                    let m = wk.and_then(|w| w.mesh).and_then(|i| play.world.navmeshes.get(i));
+                    println!("      ROUTE {:?} code {:?}", c.townsfolk.as_ref().and_then(|t| t.patrol.as_ref().map(|p| p.points().to_vec())), c.townsfolk.as_ref().map(|t| t.code));
+                    println!("      WALKSTATE {} walk_to {to:?} mesh {:?} arrived {:?} blocked {:?} target in mesh {:?} here in mesh {:?}", play.ticks, wk.map(|w| w.mesh), wk.map(|w| w.arrived), wk.map(|w| w.blocked), to.zip(m).map(|(t, m)| m.locate_full(t)), m.map(|m| m.locate_full(c.position)));
+                }
+            }
+        }
         // NEOPETS_TRACE_CHARS=tick: each character's name, position and activity (diagnostic).
         if std::env::var("NEOPETS_TRACE_CHARS").ok().and_then(|v| v.parse::<u64>().ok()) == Some(play.ticks) {
             for c in &play.characters {

@@ -18,6 +18,20 @@ use crate::{model_texture, part_signature, pass1, pass1_assets, DrawCull, PartSi
 /// The area cell a merged group covers, in world units.
 const CELL: f32 = 64.0;
 
+/// A part lying along the ground: its triangles' area faces mostly up. A soft or fading one is a layer over the ground (a
+/// path's torn grass edge), which almost touches the ground below it, so this build's sun neither shadows the one from
+/// the other nor it from the ground: the layer would draw as a dark band along each path (user's F8 view 17).
+fn lies_flat(p: &neopets_data::model::MeshPart) -> bool {
+    let (mut up, mut all) = (0.0, 0.0);
+    for t in p.indices.chunks_exact(3) {
+        let [a, b, c] = [t[0], t[1], t[2]].map(|v| Vec3::from(p.positions[v as usize]));
+        let n = (b - a).cross(c - a);
+        up += n.y.abs();
+        all += n.length();
+    }
+    all > 0.0 && up / all > 0.8
+}
+
 /// A part's triangles split into those solid at all three corners (vertex alpha at or above 120 of 128) and the others.
 fn split_fading(p: &neopets_data::model::MeshPart) -> (Vec<u32>, Vec<u32>) {
     let (mut solid, mut faded) = (Vec::new(), Vec::new());
@@ -190,6 +204,7 @@ pub fn spawn(
         // solid at all three corners draw as solid, so that what lies behind them stays hidden (user's F8 view 16); the rest
         // blend. Done by triangle, as Bevy's prepass does not see vertex alpha (see `vertex_fades`).
         let split = (fades && !scrolling && env.is_none()).then(|| split_fading(p)).filter(|(solid, _)| !solid.is_empty());
+        let layer = (soft || fades) && lies_flat(p);
         let mesh = match &split {
             Some((solid, faded)) => {
                 let t = p.texture.unwrap_or(0);
@@ -201,6 +216,9 @@ pub fn spawn(
                 if let Some((at, d1, _)) = p.cull {
                     e.insert(DrawCull(Vec3::from(at), d1));
                 }
+                if layer {
+                    e.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+                }
                 meshes.add(part_mesh(&neopets_data::model::MeshPart { indices: faded.clone(), ..p.clone() }))
             }
             None => meshes.add(part_mesh(p)),
@@ -209,6 +227,9 @@ pub fn spawn(
         if let (true, Some(t)) = (soft, p.texture) {
             if let Some(m) = b.blend.get(&t) {
                 let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m.clone()), Transform::IDENTITY, part, b.sigs[i], rank(i, 0)));
+                if layer {
+                    e.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+                }
                 count += 1;
                 if let Some(z) = p.zone {
                     e.insert(ZoneGate(pack, z));
@@ -236,6 +257,9 @@ pub fn spawn(
             e.insert(ZoneGate(pack, z));
         }
         e.insert((b.sigs[i], rank(i, 0)));
+        if layer {
+            e.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+        }
         if let Some((at, d1, _)) = p.cull {
             e.insert(DrawCull(Vec3::from(at), d1));
         }

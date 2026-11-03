@@ -11,8 +11,8 @@ The run reached the end of the list (exit 0).
 | gameover | 3 | The hero died and the world was torn down |
 | manual | 38 | Kind not automated (minigames, pushes, climbs, shots) |
 | nocheck | 95 | Ran, but its Done condition is not machine-readable |
-| already | 29 | Done already held from earlier goals |
-| pass | 188 | Done condition reached |
+| already | 28 | Done already held from earlier goals |
+| pass | 189 | Done condition reached |
 
 ## Failed goals
 

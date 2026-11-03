@@ -595,7 +595,7 @@ fn plane_touched(pl: &TeleportPlane, p: [f32; 3], reach: f32) -> bool {
 /// the navigation step over its mesh steers it, and the motion tick moves it by the walk clip's
 /// root step, kept on the mesh. A clip with no root travel moves at `speed` instead, so a walk
 /// always ends. A character with no walker walks straight at `speed`.
-fn walk_toward(c: &mut Character, to: [f32; 3], speed: f32, hero: [f32; 3], world: &World) {
+fn walk_toward(c: &mut Character, to: [f32; 3], speed: f32, hero: [f32; 3], world: &World) -> bool {
     let root = c.root_step;
     let Some(wk) = c.walker.as_mut() else {
         let (dx, dz) = (to[0] - c.position[0], to[2] - c.position[2]);
@@ -605,7 +605,7 @@ fn walk_toward(c: &mut Character, to: [f32; 3], speed: f32, hero: [f32; 3], worl
         let (x, z) = (c.position[0] + dx * s, c.position[2] + dz * s);
         let y = if c.pack == world.pack { world.ground_at(x, z, c.position[1] + 2.5) } else { None };
         c.position = [x, y.unwrap_or(c.position[1]), z];
-        return;
+        return false;
     };
     wk.set_target();
     let gait = wk.nav_step(&world.navmeshes, to, hero);
@@ -618,6 +618,7 @@ fn walk_toward(c: &mut Character, to: [f32; 3], speed: f32, hero: [f32; 3], worl
     wk.motion_tick(step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
     c.position = wk.position();
     c.facing = wk.facing;
+    idle
 }
 
 /// SPEC-0056 Walker interruptions, Hero in front (classes 23 to 26 and 35): with no hold, the hero
@@ -11325,12 +11326,24 @@ impl Play {
                 let mesh = c.walker.as_ref().and_then(|w| w.mesh).and_then(|m| world.navmeshes.get(m));
                 let arrived = c.walker.as_ref().is_some_and(|w| w.wander_edge(&world.navmeshes));
                 let view = neopets_sim::npc::View { position: c.position, hero, action: clip.action, progress: clip.progress, fidget_entry: c.anim.has(11), wander_fidget: c.anim.has(2), arrived };
-                if let Some(id) = t.tick_on(&mut c.facing, view, rng, mesh) {
+                // SPEC-0056 Walkers held at a mesh edge: the navigation step's arrival requests idle, over the patrol's
+                // walk request, so a patrol whose point cannot be reached stands where it arrived.
+                let walk = if c.anim.has(8) { 8 } else { 1 };
+                let held = c.walker.as_ref().is_some_and(|w| w.arrived);
+                let id = t.tick_on(&mut c.facing, view, rng, mesh);
+                if let Some(id) = id.filter(|&id| !(id == 8 && held)) {
                     // The patrol walk id 8 (speed code 6); a bank without it walks with id 1.
-                    c.anim.play(if id == 8 && !c.anim.has(8) { 1 } else { id });
+                    c.anim.play(if id == 8 { walk } else { id });
                 }
                 if let Some(to) = t.walk_to {
-                    walk_toward(c, to, 0.083_37, hero, world);
+                    let idle = walk_toward(c, to, 0.083_37, hero, world);
+                    if id == Some(8) {
+                        if idle {
+                            c.anim.play(0);
+                        } else if held {
+                            c.anim.play(walk);
+                        }
+                    }
                 }
             }
             c.root_step = c.anim.tick();
