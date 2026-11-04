@@ -7,9 +7,11 @@
 //!
 //! Deviations: the record delays count updates at the driver's 240 Hz (the spec leaves the tick
 //! unit open, Open question 47); the random draws use this crate's generator, not the driver's
-//! 250-entry table (Open question 49). Not built: type 4 (channels) and type 5 (child cues); they do nothing.
+//! 250-entry table (Open question 49). Type 4 channels and type 5 child cues are built; noise voices are not synthesised.
 
 use crate::synth::{Sample, Synth, VoiceDef};
+#[cfg(test)]
+use crate::synth::pan_pull;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -47,6 +49,8 @@ pub struct BlockDef {
     pub commands: Vec<Cmd>,
     /// Voice by table offset: the voice, its signed level and its sample.
     pub voices: HashMap<u32, (VoiceDef, i8, Sample)>,
+    /// The raw type-4 and type-5 records by table offset.
+    pub records: HashMap<u32, Vec<u8>>,
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +58,10 @@ struct Instance {
     id: usize,
     block: Arc<BlockDef>,
     cue: usize,
+    channels: [Option<Channel>; 4],
+    mods: Mods,
+    /// The instance that started this one with a type-5 record.
+    parent: Option<usize>,
     pc: usize,
     end: usize,
     countdown: i32,
@@ -69,17 +77,92 @@ struct Instance {
     start: u64,
 }
 
-/// SPEC-0031 Pan pull (cue flag 0x4): the voice's own angle pulled toward the front by the request volume V (1,024 = 1.0).
-fn pan_pull(a: i32, v: i32) -> i32 {
-    if v >= 854 {
-        a
-    } else if v <= 170 {
-        0
-    } else if a <= 180 {
-        a * (v - 170) / 684
-    } else {
-        360 - (360 - a) * (v - 170) / 684
+/// At most this many channels run at once across the driver (SPEC-0031 type 4).
+const MAX_CHANNELS: usize = 10;
+/// A channel's cycle: 2048 phase units of 65,536 steps.
+const CYCLE: u32 = 1 << 27;
+
+/// A type-4 channel: a low-frequency oscillator moving one voice parameter of its instance.
+#[derive(Clone, Copy, Debug)]
+struct Channel {
+    target: u8,
+    other: usize,
+    shape: u8,
+    width: u32,
+    depth: i32,
+    depth_now: i32,
+    invert: bool,
+    phase: u32,
+    step: u32,
+    step_now: u32,
+    held: i32,
+    second_half: bool,
+}
+
+impl Channel {
+    fn of(r: &[u8]) -> Option<(usize, Self)> {
+        let word = |at: usize| Some(i16::from_le_bytes([*r.get(at)?, *r.get(at + 1)?]) as i32);
+        let step = u32::from_le_bytes([*r.get(12)?, *r.get(13)?, *r.get(14)?, *r.get(15)?]);
+        let depth = word(6)?;
+        let c = Self {
+            target: r[1],
+            other: r[2] as usize,
+            shape: r[3],
+            width: word(4)? as u32,
+            depth,
+            depth_now: depth,
+            invert: r[8] & 1 != 0,
+            phase: (word(10)? as u32).wrapping_mul(65_536) % CYCLE,
+            step,
+            step_now: step,
+            held: 0,
+            second_half: false,
+        };
+        Some((r[0] as usize, c))
     }
+
+    /// The wave at the current phase, about -32,767 to +32,767 (SPEC-0031 type 4 wave shapes).
+    fn wave(&self) -> i32 {
+        let x = self.phase as f64 / CYCLE as f64;
+        let out = match self.shape {
+            1 => (x * std::f64::consts::TAU).sin() * 32_767.0,
+            2 => {
+                if self.phase / 65_536 < self.width {
+                    32_767.0
+                } else {
+                    -32_767.0
+                }
+            }
+            3 => {
+                if x < 0.25 {
+                    x * 4.0 * 32_767.0
+                } else if x < 0.75 {
+                    (0.5 - x) * 4.0 * 32_767.0
+                } else {
+                    (x - 1.0) * 4.0 * 32_767.0
+                }
+            }
+            4 => {
+                if x < 0.5 {
+                    x * 2.0 * 32_767.0
+                } else {
+                    (x - 1.0) * 2.0 * 32_767.0
+                }
+            }
+            5 => self.held as f64,
+            _ => 0.0,
+        } as i32;
+        if self.invert { -out } else { out }
+    }
+}
+
+/// The driver's channel results of an instance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Mods {
+    level: i32,
+    pan: i32,
+    fine: i32,
+    bend: i32,
 }
 
 /// The driver side of the sound blocks: instances over a 24-voice synth.
@@ -90,6 +173,8 @@ pub struct Effects {
     /// The type-25 last pick and the type-39 counter, kept per command record (byte 2).
     counters: HashMap<(u32, usize), u8>,
     rng: u32,
+    /// The ids of child cues, far above the sound manager's.
+    next_child: usize,
     frame: usize,
     clock: u64,
     /// Instances that ended since the last `take_finished`.
@@ -98,7 +183,7 @@ pub struct Effects {
 
 impl Default for Effects {
     fn default() -> Self {
-        Self { synth: Synth::new(), instances: Vec::new(), counters: HashMap::new(), rng: 0x1234_5678, frame: 0, clock: 0, finished: Vec::new() }
+        Self { synth: Synth::new(), instances: Vec::new(), counters: HashMap::new(), rng: 0x1234_5678, next_child: usize::MAX / 2, frame: 0, clock: 0, finished: Vec::new() }
     }
 }
 
@@ -126,7 +211,7 @@ impl Effects {
         if def.flags & 0x2 != 0 {
             let ids: Vec<usize> = self.instances.iter().filter(|i| same(i)).map(|i| i.id).collect();
             for i in ids {
-                self.stop(i, true);
+                self.stop(i, false);
             }
         }
         if def.flags & 0x8 != 0 {
@@ -141,7 +226,7 @@ impl Effects {
                     _ => None,
                 };
                 match victim {
-                    Some(v) => self.stop(v.0, true),
+                    Some(v) => self.stop(v.0, false),
                     None => return false,
                 }
             }
@@ -165,6 +250,9 @@ impl Effects {
             variant: None,
             start: self.clock,
             block,
+            channels: [None; 4],
+            mods: Mods::default(),
+            parent: None,
         };
         self.instances.push(inst);
         let k = self.instances.len() - 1;
@@ -177,6 +265,11 @@ impl Effects {
     /// Stop an instance (SPEC-0031 Stopping a cue and its stop records): its voices are released (or killed), then the records
     /// after the cue's first end record run at once with their delays ignored; voices those start are not released.
     pub fn stop(&mut self, id: usize, kill: bool) {
+        // Child cues of the instance are stopped the same way.
+        let children: Vec<usize> = self.instances.iter().filter(|i| i.parent == Some(id) && !i.stopping).map(|i| i.id).collect();
+        for c in children {
+            self.stop(c, kill);
+        }
         if kill {
             self.synth.kill(id);
         } else {
@@ -211,13 +304,88 @@ impl Effects {
 
     /// A new request volume and pan (the per-pass positional update).
     pub fn set(&mut self, id: usize, volume: i32, pan: Option<i32>) {
-        for i in self.instances.iter_mut().filter(|i| i.id == id) {
-            i.volume = volume;
-            if let Some(p) = pan {
-                i.pan = p;
+        for k in 0..self.instances.len() {
+            if self.instances[k].id == id {
+                self.instances[k].volume = volume;
+                if let Some(p) = pan {
+                    self.instances[k].pan = p;
+                }
+                self.apply_levels(k);
             }
-            self.synth.set_instance(id, volume, i.pan);
         }
+    }
+
+    /// The instance's levels with its channel results, on all its own voices.
+    fn apply_levels(&mut self, k: usize) {
+        let i = &self.instances[k];
+        let pull = i.block.cues[i.cue].flags & 0x4 != 0;
+        let (id, v, c, pan) = (i.id, i.volume, (127 + i.mods.level).clamp(0, 127), (i.pan + i.mods.pan).rem_euclid(360));
+        self.synth.set_instance(id, v, c, pan, pull);
+    }
+
+    /// One driver tick of an instance's channels (SPEC-0031 type 4): results that changed reach its voices.
+    fn step_channels(&mut self, k: usize) {
+        if self.instances[k].channels.iter().all(Option::is_none) {
+            return;
+        }
+        let cue_volume = self.instances[k].block.cues[self.instances[k].cue].volume as i32;
+        let before = self.instances[k].mods;
+        for n in 0..4 {
+            let Some(mut c) = self.instances[k].channels[n] else { continue };
+            c.phase = (c.phase + c.step_now.wrapping_mul(2) % CYCLE) % CYCLE;
+            let second = c.phase >= CYCLE / 2;
+            if c.shape == 5 && second != c.second_half {
+                let r = self.random();
+                let span = (r >> 8 & 0xFFFF) as i32;
+                c.held = if second {
+                    span - 32_766
+                } else if r & 1 == 0 {
+                    0
+                } else {
+                    -(span / 2)
+                };
+            }
+            c.second_half = second;
+            let out = c.wave();
+            let scale = |max: i64| (out as i64 * max / 32_767) as i32;
+            let m = &mut self.instances[k].mods;
+            match c.target {
+                // Only ever down: 0 at the top of the wave, -S at the bottom.
+                1 => {
+                    let s = cue_volume * c.depth_now / 1024;
+                    m.level = -(s as i64 * (32_767 - out) as i64 / 65_534) as i32;
+                }
+                2 => m.pan = scale(c.depth_now as i64 * 45 / 256),
+                3 => m.fine = scale(c.depth_now as i64 * 381 / 64),
+                4 => m.bend = scale(c.depth_now as i64 * 32_767 / 1024),
+                5 | 6 => {
+                    let f = c.depth_now as f64 / 1024.0 * out as f64 / 32_767.0;
+                    if let Some(o) = self.instances[k].channels.get_mut(c.other).and_then(|o| o.as_mut()) {
+                        if c.target == 5 {
+                            o.step_now = (o.step as f64 * (1.0 + f)).max(0.0) as u32;
+                        } else {
+                            o.depth_now = (o.depth as f64 * (1.0 + f)) as i32;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            // A channel can change itself through the other-channel words; keep those.
+            let now = self.instances[k].channels[n].unwrap_or(c);
+            self.instances[k].channels[n] = Some(Channel { phase: c.phase, held: c.held, second_half: c.second_half, ..now });
+        }
+        let after = self.instances[k].mods;
+        if (after.level, after.pan) != (before.level, before.pan) {
+            self.apply_levels(k);
+        }
+        if (after.fine, after.bend) != (before.fine, before.bend) {
+            let i = &self.instances[k];
+            self.synth.set_instance_pitch(i.id, after.fine, i.bend + after.bend);
+        }
+    }
+
+    fn running_channels(&self) -> usize {
+        self.instances.iter().map(|i| i.channels.iter().flatten().count()).sum()
     }
 
     pub fn take_finished(&mut self) -> Vec<usize> {
@@ -278,11 +446,48 @@ impl Effects {
                     if def.pan < 0 {
                         def.pan = (var(i, (-def.pan - 1) as u8) * 360 / 127) as i16;
                     }
-                    if i.block.cues[i.cue].flags & 0x4 != 0 {
-                        def.pan = pan_pull(def.pan as i32, i.volume) as i16;
-                    }
                     let (id, v, vc, pan, bend) = (i.id, i.volume, i.cue_volume, i.pan, i.bend);
+                    let mods = i.mods;
                     self.synth.start_block(id, def, sample, v, vc, lv, pan, bend);
+                    // The voice starts with the pan pull and the channel results as they stand.
+                    self.apply_levels(k);
+                    if mods.fine != 0 || mods.bend != 0 {
+                        self.synth.set_instance_pitch(id, mods.fine, bend + mods.bend);
+                    }
+                }
+                (0, next)
+            }
+            // SPEC-0031 type 4: a channel of this instance; target 0 clears it.
+            4 => {
+                let i = &self.instances[k];
+                if let Some((n, c)) = i.block.records.get(&(cmd.value() as u32)).and_then(|r| Channel::of(r)) {
+                    let free = i.channels.get(n).is_some_and(Option::is_some) || self.running_channels() < MAX_CHANNELS;
+                    if let Some(slot) = self.instances[k].channels.get_mut(n) {
+                        *slot = (c.target != 0 && free).then_some(c);
+                    }
+                }
+                (0, next)
+            }
+            // SPEC-0031 type 5: another cue of this block, only while the cue volume is not 0. Its level and pan come from
+            // the record; the parent's request volume also scales it, so a far emitter's child stays quiet (this build's
+            // reading: the spec gives only the record's level).
+            5 => {
+                let i = &self.instances[k];
+                if i.cue_volume != 0 {
+                    if let Some(r) = i.block.records.get(&(cmd.value() as u32)).cloned() {
+                        let word = |at: usize| r.get(at..at + 4).map_or(0, |b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+                        let select = |x: i32| if x < 0 { var(i, (-x - 1) as u8) } else { x };
+                        let level = select(word(0)).abs().min(127);
+                        let pan = select(word(4));
+                        let (block, cue, volume, parent) = (i.block.clone(), word(12), i.volume * level / 127, i.id);
+                        self.next_child += 1;
+                        let id = self.next_child;
+                        if self.play(id, block, cue, volume, Some(pan)) {
+                            if let Some(c) = self.instances.iter_mut().find(|c| c.id == id) {
+                                c.parent = Some(parent);
+                            }
+                        }
+                    }
                 }
                 (0, next)
             }
@@ -416,6 +621,7 @@ impl Effects {
     /// instance that has issued its last record and has no voice left ends.
     pub fn update(&mut self) {
         for k in 0..self.instances.len() {
+            self.step_channels(k);
             let i = &mut self.instances[k];
             if !i.done {
                 i.countdown -= 1;
@@ -426,8 +632,10 @@ impl Effects {
         }
         let synth = &self.synth;
         let mut ended = Vec::new();
+        // The instance disappears when its program has ended and its last voice and child cue are gone.
+        let parents: Vec<usize> = self.instances.iter().filter_map(|i| i.parent).collect();
         self.instances.retain(|i| {
-            let keep = !(i.done && synth.sounding(i.id) == 0);
+            let keep = !(i.done && synth.sounding(i.id) == 0 && !parents.contains(&i.id));
             if !keep {
                 ended.push(i.id);
             }
@@ -461,7 +669,7 @@ mod tests {
         let sample = Sample { pcm: Arc::new(vec![1000; 2000]), loop_start: None };
         let mut voices = HashMap::new();
         voices.insert(0, (def, 110, sample));
-        Arc::new(BlockDef { number: 347, cues, commands, voices })
+        Arc::new(BlockDef { number: 347, cues, commands, voices, records: HashMap::new() })
     }
 
     fn cmd(kind: u8, operand: [u8; 3], delay: u16) -> Cmd {
@@ -515,6 +723,42 @@ mod tests {
         // A long delay keeps the instance alive.
         e.update();
         assert!(e.playing(3));
+    }
+
+    /// SPEC-0031 type 4: a depth-1024 sine on a cue of volume 120 sweeps the level from 127 down to 7; a step of 1,118,481
+    /// makes a 60-tick cycle; type 5 starts a child cue with the record's level.
+    #[test]
+    fn channels_and_children() {
+        let mut r = vec![0u8; 16];
+        r[1] = 1;
+        r[3] = 1;
+        r[4..6].copy_from_slice(&1024i16.to_le_bytes());
+        r[6..8].copy_from_slice(&1024i16.to_le_bytes());
+        r[12..16].copy_from_slice(&1_118_481u32.to_le_bytes());
+        let mut child = vec![0u8; 32];
+        child[0] = 127;
+        child[12] = 1;
+        let mut records = HashMap::new();
+        records.insert(16, r);
+        records.insert(32, child);
+        let cue = |first, count| CueDef { volume: 120, count, first, ..Default::default() };
+        let commands = vec![cmd(4, [16, 0, 0], 0), cmd(5, [32, 0, 0], 0), cmd(20, [0; 3], 10_000), cmd(20, [0; 3], 10_000)];
+        let b = Arc::new(BlockDef { number: 1, cues: vec![cue(0, 3), cue(3, 1)], commands, voices: HashMap::new(), records });
+        let mut e = Effects::default();
+        e.play(1, b, 0, 1024, None);
+        assert_eq!(e.instances.len(), 2);
+        assert_eq!(e.instances[1].parent, Some(1));
+        let (mut low, mut high) = (0, -200);
+        for _ in 0..60 {
+            e.update();
+            let m = e.instances[0].mods.level;
+            low = low.min(m);
+            high = high.max(m);
+        }
+        assert!(low <= -118 && high >= -2, "{low} {high}");
+        // Stopping the parent stops the child.
+        e.stop(1, false);
+        assert!(e.instances.iter().all(|i| i.done));
     }
 
     /// SPEC-0031 Pan pull's vectors.

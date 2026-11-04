@@ -108,7 +108,7 @@ pub fn block_def(number: u32, b: &neopets_data::block::Block) -> neopets_sim::cu
             Some((off, (def, v.level, sample)))
         })
         .collect();
-    BlockDef { number, cues, commands, voices }
+    BlockDef { number, cues, commands, voices, records: b.records.clone() }
 }
 
 /// The sound blocks' driver side as an endless audio source.

@@ -75,6 +75,19 @@ pub fn bend_term(bend: i32, range: (u8, u8)) -> i32 {
     if bend < 0 { range.0 as i32 * bend * 128 / 32768 } else { range.1 as i32 * bend * 128 / 32767 }
 }
 
+/// SPEC-0031 Pan pull (cue flag 0x4): the voice's own angle pulled toward the front by the request volume V (1,024 = 1.0).
+pub fn pan_pull(a: i32, v: i32) -> i32 {
+    if v >= 854 {
+        a
+    } else if v <= 170 {
+        0
+    } else if a <= 180 {
+        a * (v - 170) / 684
+    } else {
+        360 - (360 - a) * (v - 170) / 684
+    }
+}
+
 /// The channel bend from a 14-bit pitch-bend value: trunc(b x 65535 / 16383) - 32768.
 pub fn bend_value(b: i32) -> i32 {
     b * 65535 / 16383 - 32768
@@ -302,14 +315,23 @@ impl Synth {
         true
     }
 
-    /// A new request volume and pan for an instance's block voices.
-    pub fn set_instance(&mut self, owner: usize, v: i32, pan: i32) {
+    /// The levels of an instance's block voices: request volume v, instance level c, instance pan, and the pan pull of
+    /// cue flag 0x4, taken from each voice's own stored angle each time (SPEC-0031 Driver volume, pan and pitch).
+    pub fn set_instance(&mut self, owner: usize, v: i32, c: i32, pan: i32, pull: bool) {
         for voice in self.voices.iter_mut().flatten().filter(|x| x.owner.0 == owner) {
             if let Some((vc, lv, pv)) = voice.block {
-                let (l, r) = levels(block_x(v, vc, lv, 127), pan + pv);
+                let a = if pull { pan_pull(pv, v) } else { pv };
+                let (l, r) = levels(block_x(v, vc, lv, c), pan + a);
                 voice.left = l >> 1;
                 voice.right = r >> 1;
             }
+        }
+    }
+
+    /// The pitch of an instance's block voices from a fine offset (1/128 semitone) and a bend.
+    pub fn set_instance_pitch(&mut self, owner: usize, fine: i32, bend: i32) {
+        for voice in self.voices.iter_mut().flatten().filter(|x| x.owner.0 == owner && x.block.is_some()) {
+            voice.step = pitch(voice.note_value_base + fine + bend_term(bend, voice.def.bend), voice.def.centre, voice.def.fine) as f64 / 4096.0;
         }
     }
 

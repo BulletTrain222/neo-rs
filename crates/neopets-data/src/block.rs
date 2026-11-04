@@ -63,6 +63,8 @@ pub struct Block {
     pub commands: Vec<Command>,
     /// Voice records by their byte offset in the voice table (the type-1 operand).
     pub voices: HashMap<u32, BlockVoice>,
+    /// The raw records of the type-4 (16 bytes) and type-5 (32 bytes) commands, by voice-table offset.
+    pub records: HashMap<u32, Vec<u8>>,
     /// Decoded samples by (pool offset, length).
     pub samples: HashMap<(u32, u32), Sample>,
 }
@@ -121,7 +123,14 @@ impl Block {
             }
             voices.insert(off, v);
         }
-        Ok(Self { cues, commands, voices, samples })
+        let mut records = HashMap::new();
+        for c in commands.iter().filter(|c| matches!(c.kind, 4 | 5)) {
+            let (off, len) = (c.value(), if c.kind == 4 { 16 } else { 32 });
+            if let Some(r) = s.get(w13 + off as usize..w13 + off as usize + len) {
+                records.insert(off, r.to_vec());
+            }
+        }
+        Ok(Self { cues, commands, voices, records, samples })
     }
 }
 

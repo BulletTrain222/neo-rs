@@ -4529,6 +4529,24 @@ fn play_trace(
         println!("OBJAUDIT {} {:?}", play.world.pack, play.undrawn_but_shown());
         println!("RAILOWNERS {} {:?}", play.world.pack, play.rail_owners());
     }
+    // NEOPETS_TRACE_CUE_RECORDS=1: the type-4 and type-5 records of all sound blocks, against SPEC-0031's counts (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_CUE_RECORDS").is_some() {
+        if let Ok(mut second) = disc.reopen() {
+            let (mut four, mut five, mut targets, mut shapes) = (0, 0, [0; 7], [0; 6]);
+            for number in 347..=490 {
+                let Ok(b) = index.read(&mut second, number).and_then(|b| neopets_data::block::Block::parse(&b)) else { continue };
+                four += b.commands.iter().filter(|c| c.kind == 4).count();
+                five += b.commands.iter().filter(|c| c.kind == 5).count();
+                for c in b.commands.iter().filter(|c| c.kind == 4) {
+                    if let Some(r) = b.records.get(&c.value()) {
+                        targets[(r[1] as usize).min(6)] += 1;
+                        shapes[(r[3] as usize).min(5)] += 1;
+                    }
+                }
+            }
+            println!("CUE RECORDS type 4 {four}, type 5 {five}; targets 0 to 6 {targets:?}; shapes 0 to 5 {shapes:?}");
+        }
+    }
     // NEOPETS_TRACE_DOORS=1: this world's doors with their script context, or none where a scripted door has no rule (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_DOORS").is_some() {
         let doors: Vec<Option<u16>> = (0..play.world.planes.len()).map(|n| neopets_sim::level::teleport_context(play.world.pack, n)).collect();
