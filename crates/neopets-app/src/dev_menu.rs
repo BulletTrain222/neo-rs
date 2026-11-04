@@ -169,6 +169,7 @@ enum Entry {
     Report,
     Inspector,
     Collision,
+    Wireframe,
     EventLog,
     HideHud,
 }
@@ -178,13 +179,13 @@ const SECTIONS: [(&str, &[Entry]); 7] = [
     ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Haste, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
     ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group]),
-    ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Collision, Entry::EventLog, Entry::HideHud]),
+    ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Collision, Entry::Wireframe, Entry::EventLog, Entry::HideHud]),
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::Spawn, Entry::BossFight, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints]),
     ("STORY", &[Entry::Flag]),
 ];
 
-const ENTRIES: [Entry; 30] = [
+const ENTRIES: [Entry; 31] = [
     Entry::God,
     Entry::Noclip,
     Entry::Haste,
@@ -200,6 +201,7 @@ const ENTRIES: [Entry; 30] = [
     Entry::Report,
     Entry::Inspector,
     Entry::Collision,
+    Entry::Wireframe,
     Entry::EventLog,
     Entry::HideHud,
     Entry::Heal,
@@ -225,11 +227,11 @@ enum Kind {
     Action,
 }
 
-/// The number of rows in the left column (the first three sections).
+/// The number of rows in the left column (the first four sections).
 const LEFT: usize = {
     let mut n = 0;
     let mut k = 0;
-    while k < 3 {
+    while k < 4 {
         n += SECTIONS[k].1.len();
         k += 1;
     }
@@ -256,7 +258,7 @@ fn other_column(i: usize) -> usize {
 
 fn kind(e: Entry) -> Kind {
     match e {
-        Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam | Entry::Inspector | Entry::Collision | Entry::EventLog | Entry::HideHud => Kind::Toggle,
+        Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam | Entry::Inspector | Entry::Collision | Entry::Wireframe | Entry::EventLog | Entry::HideHud => Kind::Toggle,
         Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight => Kind::Choice,
         _ => Kind::Action,
     }
@@ -406,10 +408,10 @@ Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), LT/RT o
                 TextColor(DIM),
                 Node { margin: UiRect { top: px(4), bottom: px(4), ..default() }, ..default() },
             ));
-            // Two columns: the first three sections on the left, the rest on the right.
+            // Two columns: the first four sections on the left, the rest on the right.
             let mut k = 0;
             ui.spawn(Node { flex_direction: FlexDirection::Row, column_gap: px(16), ..default() }).with_children(|cols| {
-              for half in [&SECTIONS[..3], &SECTIONS[3..]] {
+              for half in [&SECTIONS[..4], &SECTIONS[4..]] {
                cols.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(3), width: px(408), ..default() }).with_children(|ui| {
                 for (title, entries) in half {
                 let entries: &[Entry] = entries;
@@ -942,6 +944,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             dev.debug.collision = !dev.debug.collision;
             format!("Collision view {}", if dev.debug.collision { "on" } else { "off" })
         }
+        Entry::Wireframe => {
+            dev.debug.wireframe = (dev.debug.wireframe + 1) % 3;
+            format!("Wireframe: {}", crate::debug_tools::wireframe_name(dev.debug.wireframe))
+        }
         Entry::EventLog => {
             dev.debug.log = !dev.debug.log;
             format!("Event log {}", if dev.debug.log { "on" } else { "off" })
@@ -1059,6 +1065,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Report => ("Save a bug report (End)".into(), String::new()),
         Entry::Inspector => ("Inspector".into(), on(dev.debug.inspector)),
         Entry::Collision => ("Collision view".into(), on(dev.debug.collision)),
+        Entry::Wireframe => ("Wireframe (Enter to change)".into(), crate::debug_tools::wireframe_name(dev.debug.wireframe).into()),
         Entry::EventLog => ("Event log".into(), on(dev.debug.log)),
         Entry::HideHud => ("Hide HUD".into(), on(dev.debug.hide_hud)),
         Entry::Neopoints => (format!("Add Neopoints ({} now)", p.state.neopoints), format!("+{}", AMOUNTS[dev.amount])),
@@ -1256,7 +1263,7 @@ mod tests {
         assert_eq!(column_step(LEFT - 1, 1), 0);
         assert_eq!(column_step(LEFT, -1), ENTRIES.len() - 1);
         assert_eq!(other_column(2), LEFT + 2);
-        assert_eq!(other_column(ENTRIES.len() - 1), LEFT - 1);
+        assert_eq!(other_column(ENTRIES.len() - 1), (ENTRIES.len() - 1 - LEFT).min(LEFT - 1));
         assert_eq!(other_column(other_column(3)), 3);
     }
 

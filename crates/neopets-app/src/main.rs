@@ -966,6 +966,7 @@ fn main() {
     app.add_systems(Update, book_view::sync_book.after(play_frame));
     app.add_systems(Update, pick_view::pick.after(play_frame));
     app.init_resource::<debug_tools::DebugState>();
+    app.add_plugins(debug_tools::WireframeTool);
     app.add_systems(Update, (debug_tools::track_events, debug_tools::save_report, debug_tools::show_panel, debug_tools::hide_hud, debug_tools::show_lines).after(play_frame));
     app.insert_resource(goal_start.map_or_else(story_run::GoalWalk::default, story_run::GoalWalk::open));
     app.add_systems(Startup, story_run::spawn_goal_panel);

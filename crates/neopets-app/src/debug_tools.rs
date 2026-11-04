@@ -5,14 +5,21 @@
 //!   minute of input.
 //! - Inspector: a live panel on the hero and the character nearest the view's centre.
 //! - Collision view: walking maps, solid boxes and spheres, doors, ladders, triggers and nearby walls as coloured lines.
+//! - Wireframe: every triangle's edges over the picture, or the edges alone (which also shows what walls hide).
 //! - Event log: flags, items, worlds and pickups as they change.
 //! - Hide HUD: for clean pictures.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use bevy::asset::RenderAssetUsages;
+use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
 use bevy::mesh::PrimitiveTopology;
+use bevy::pbr::wireframe::{wireframe_3d, WireframeColor, WireframeConfig, WireframePlugin};
 use bevy::prelude::*;
+use bevy::render::render_resource::{LoadOp, Operations, RenderPassDescriptor, StoreOp, WgpuFeatures};
+use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
+use bevy::render::view::{ViewDepthTexture, ViewTarget};
+use bevy::render::{Extract, ExtractSchedule, RenderApp};
 
 use crate::dev_menu::DevMenu;
 use crate::PlayState;
@@ -22,17 +29,72 @@ use crate::PlayState;
 pub struct Switches {
     pub inspector: bool,
     pub collision: bool,
+    /// 0 off, 1 over the picture, 2 alone.
+    pub wireframe: u8,
     pub log: bool,
     pub hide_hud: bool,
     pub report: bool,
 }
 
 impl Switches {
-    /// NEOPETS_DEBUG="inspector,collision,log,hud": the tools on from the start, for picture runs (diagnostic).
+    /// NEOPETS_DEBUG="inspector,collision,wireframe,wireonly,log,hud": the tools on from the start, for picture runs (diagnostic).
     pub fn from_env() -> Self {
         let v = std::env::var("NEOPETS_DEBUG").unwrap_or_default();
-        Self { inspector: v.contains("inspector"), collision: v.contains("collision"), log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
+        Self { inspector: v.contains("inspector"), collision: v.contains("collision"), wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
     }
+}
+
+/// The wireframe row's value.
+pub fn wireframe_name(mode: u8) -> &'static str {
+    match mode {
+        0 => "OFF",
+        1 => "Over picture",
+        _ => "Lines only",
+    }
+}
+
+/// The wireframe tool: Bevy's own wireframe pass, which runs after the main pass, and a wipe of the picture between the two for
+/// "lines only".
+pub struct WireframeTool;
+
+impl Plugin for WireframeTool {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(WireframePlugin::default());
+        app.insert_resource(WireframeConfig { global: false, default_color: Color::srgb(0.25, 1.0, 0.45), ..default() });
+        app.add_systems(Update, apply_wireframe);
+        let Some(r) = app.get_sub_app_mut(RenderApp) else { return };
+        r.init_resource::<WipeScene>();
+        r.add_systems(ExtractSchedule, extract_wipe);
+        r.add_systems(Core3d, wipe_scene.after(Core3dSystems::MainPass).before(wireframe_3d));
+    }
+}
+
+fn apply_wireframe(dev: Res<DevMenu>, mut config: ResMut<WireframeConfig>) {
+    let on = dev.debug.wireframe != 0;
+    if config.global != on {
+        config.global = on;
+    }
+}
+
+#[derive(Resource, Default)]
+struct WipeScene(bool);
+
+fn extract_wipe(dev: Extract<Res<DevMenu>>, mut wipe: ResMut<WipeScene>) {
+    wipe.0 = dev.debug.wireframe == 2;
+}
+
+/// Lines only: clears the colour and depth the main pass drew, so the wireframe pass draws on black and nothing hides it but
+/// other lines. A graphics card that can't draw lines keeps the picture, since the screen would otherwise be blank.
+fn wipe_scene(view: ViewQuery<(&ViewTarget, &ViewDepthTexture)>, wipe: Res<WipeScene>, device: Res<RenderDevice>, mut ctx: RenderContext) {
+    if !wipe.0 || !device.features().contains(WgpuFeatures::POLYGON_MODE_LINE | WgpuFeatures::IMMEDIATES) {
+        return;
+    }
+    let (target, depth) = view.into_inner();
+    let mut colour = target.get_color_attachment();
+    colour.ops.load = LoadOp::Clear(LinearRgba::BLACK.into());
+    let mut depth = depth.get_attachment(StoreOp::Store);
+    depth.depth_ops = Some(Operations { load: LoadOp::Clear(0.0), store: StoreOp::Store });
+    let _pass = ctx.begin_tracked_render_pass(RenderPassDescriptor { label: Some("wireframe_wipe"), color_attachments: &[Some(colour)], depth_stencil_attachment: Some(depth), timestamp_writes: None, occlusion_query_set: None, multiview_mask: None });
 }
 
 /// The kinds of collision line, with their colours and names (the panel's legend).
@@ -270,7 +332,7 @@ pub fn show_lines(
         let mut mesh = Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default());
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         let material = materials.add(StandardMaterial { base_color: Color::srgb(c[0], c[1], c[2]), unlit: true, cull_mode: None, ..default() });
-        commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material), Transform::IDENTITY, bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver, DebugLines));
+        commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material), Transform::IDENTITY, bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver, WireframeColor { color: Color::srgb(c[0], c[1], c[2]) }, DebugLines));
     }
 }
 
