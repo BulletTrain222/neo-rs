@@ -314,6 +314,11 @@ impl Synth {
     }
 
     /// Stop an instance's voices at once.
+    /// Whether the instance still owns a voice.
+    pub fn owns(&self, owner: usize) -> bool {
+        self.voices.iter().flatten().any(|v| v.owner.0 == owner)
+    }
+
     pub fn kill(&mut self, owner: usize) {
         for slot in &mut self.voices {
             if slot.as_ref().is_some_and(|v| v.owner.0 == owner) {

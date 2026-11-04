@@ -1,13 +1,13 @@
 //! Sound-block cue playback in the driver (SPEC-0031 section 7, Play rule; Driver volume, pan and
 //! pitch; Cue instance limit): a playback instance per started cue runs the cue's command records
-//! with their delays (types 1 and 9 voice start, 20 no-op, 21 to 23 loops, 24 hold, 25 and 39
-//! variant groups, 26 random delay, 27 and 29 bend, 30 to 32 and 40 variables, 34 wait on a
-//! variable, 35 and 36 labels, 41 release, 42 kill, 43 end) over a voice range of 24 synth voices,
+//! with their delays (types 1 and 9 voice start, 20 no-op, 21 to 23 loops, 24 stop, 25 and 39
+//! variant groups, 26 random delay, 27 and 29 bend, 30 to 32 and 40 variables, 34 a conditional
+//! skip, 35 and 36 labels, 38 wait for voices, 41 release, 42 kill, 43 end) over a voice range of 24 synth voices,
 //! rendered at 48 kHz.
 //!
 //! Deviations: the record delays count updates at the driver's 240 Hz (the spec leaves the tick
 //! unit open, Open question 47); the random draws use this crate's generator, not the driver's
-//! 250-entry table (Open question 49); types 4, 5 and 38 do nothing (their meaning is open).
+//! 250-entry table (Open question 49). Not built: type 4 (channels) and type 5 (child cues); they do nothing.
 
 use crate::synth::{Sample, Synth, VoiceDef};
 use std::collections::HashMap;
@@ -369,6 +369,14 @@ impl Effects {
                     *v = (*v + b[0] as i8 as i32).clamp(-128, 127);
                 }
                 (0, next)
+            }
+            // SPEC-0031 type 38: while the instance owns a voice this record is tried again after its delay plus 1.
+            38 => {
+                if self.synth.owns(self.instances[k].id) {
+                    (1, pc)
+                } else {
+                    (0, next)
+                }
             }
             34 => {
                 let v = var(&self.instances[k], b[0]);
