@@ -190,6 +190,8 @@ pub struct Panel {
     /// below, 1 the side at u = LU, 2 the panel above, 3 the side at u = 0 (SPEC-0033 Climb
     /// terms).
     pub links: [Option<usize>; 4],
+    /// The record's group in the type-10 table.
+    pub group: u32,
 }
 
 /// Every record of the first type-10 chunk, group by group. The chunk's offsets count from the
@@ -211,9 +213,10 @@ pub fn panels(bytes: &[u8], top: &[Chunk]) -> Vec<Panel> {
             let Some(r) = (list as usize).checked_sub(16).map(|l| l + 0x60 * k) else { break };
             let rec = (|| {
                 let o = v4(r)?;
-                Some(Panel { origin: [o[0], o[1], o[2]], normal: v4(r + 0x10)?, u: v4(r + 0x20)?, v: v4(r + 0x30)?, lu: f32_at(p, r + 0x40)?, lv: f32_at(p, r + 0x44)?, kind: *p.get(r + 0x4C)? as i8, links: [None; 4] })
+                Some(Panel { origin: [o[0], o[1], o[2]], normal: v4(r + 0x10)?, u: v4(r + 0x20)?, v: v4(r + 0x30)?, lu: f32_at(p, r + 0x40)?, lv: f32_at(p, r + 0x44)?, kind: *p.get(r + 0x4C)? as i8, links: [None; 4], group: 0 })
             })();
-            let Some(rec) = rec else { break };
+            let Some(mut rec) = rec else { break };
+            rec.group = g as u32;
             at_of.insert(r + 16, out.len());
             raw.push([0, 4, 8, 12].map(|j| u32_at(p, r + 0x50 + j).unwrap_or(0)));
             out.push(rec);

@@ -1,6 +1,6 @@
 # SPEC-0037: Level scripts (set A)
 
-- Answers: R-0061, proactive (level script behavior; extends SPEC-0030 and SPEC-0032), R-0192 (1251 thread A item activation), R-0225 (1427 requests and the resident packs 1429 to 1431)
+- Answers: proactive (talk survey); proactive (open question sweep, world and talk); R-0061, proactive (level script behavior; extends SPEC-0030 and SPEC-0032), R-0192 (1251 thread A item activation), R-0225 (1427 requests and the resident packs 1429 to 1431); proactive (spec consistency pass)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per module (see the Confidence line in each section and the table below). Host call names, argument values and the order of calls: High unless marked. Slot ids: High for the stored-slot rule (the slot a load uses is the SlotCreate result that the module stores); the call path does not remap -1 (High); a load through a slot word that no code stores does nothing (High for 837; the slot word of 906 is stored by Init, so its load uses the stored slot). Branch conditions: Medium. Values not established: marked unknown and listed under Open questions.
@@ -116,7 +116,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
   - Then shared reset (both paths): SetObjToTime(object 0, 0.0 s); SetObjToTime(object 1, 0.0 s); SetObjToTime(object 2, 0.0 s); SetObjToTime(object 4, 0.0 s); PlayAnim(object 0, WAIT 0, 1.0 s); PlayAnim(object 1, WAIT 0, 1.0 s); PlayAnim(object 2, WAIT 0, 1.0 s); PlayAnim(object 4, WAIT 1, 1.0 s).
   - Then: if e is 906, WalkHero(locator 1, WAIT 1, CONTROL 1); otherwise WalkHero(locator 0, WAIT 1, CONTROL 1). Then ReturnToNormalCamera(-1, true).
 - Threads: none. Update: empty. Exit: empty.
-- Edge cases: the event code 906 selects the first path; the events themselves are not named (Open).
+- Edge cases: the event code 906 selects the first path. The callback is never run in play: no live script starts a transition scene, so neither code 906 nor any other code is ever delivered (Resolved question 5).
 - Confidence: High for the calls and order; Medium for the event meaning.
 
 ### 1299: Exterior, two teleports, a world-activate hook and a sting trigger
@@ -208,7 +208,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 
 - Family: Interior. Exit is not exported.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
-- Proximity P (entity): SetConversationTarget(entity, true); LevelMsg(line 4, W, true, WAIT 1); EndConversation(entity).
+- Proximity P (entity; High): no flag test. Lines 4, 5, 6 in turn (branch marker plus counter, restarted on each entry), shown with SetConversationTarget(entity, true); LevelMsg(line, W, true, WAIT 1); EndConversation(entity).
 - Teleport index 0 (T): diagnostic line; AddBlackboardMessage(type 2, value 50, eW 31); if the trigger index is 0: StartLeaveInterior(eW 44, -1, -1, no colour). Then Wait(3.0 s).
 - Activate-world A: diagnostic line; v = GetBlackboardMessageValue(type 2, eW 31); diagnostic line; if v is 50: MoveHero(locator 0, true, CONTROL 1); SetToNormalCamera(5.0, 0.0, true); AddBlackboardMessage(type 2, value -1, eW 31).
 - Dormant routine (not registered): SetConversationTarget(argument, true); LevelMsg(line 2, W, true, WAIT 1); EndConversation(argument).
@@ -243,19 +243,20 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Threads: none. Update: empty. Exit: empty.
 - Confidence: High.
 
-### 789: Interior, a random-free proximity pair and a teleport (no Exit)
+### 789: Interior, a proximity routine with a hero and draw test, and a teleport (no Exit)
 
 - Family: Interior. Exit is not exported.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
 - Proximity P (entity):
-  - If the active hero is hero 1 (WhichHeroIsActive() == 1): Random(1, 3) is drawn (the result is not used by any recorded call); SetConversationTarget(entity); LevelMsg(line 10, W, true, WAIT 1); EndConversation.
-  - Otherwise, if flag 86 is set: SetConversationTarget; LevelMsg(line 4); EndConversation.
-  - Otherwise: SetConversationTarget; LevelMsg(line 7); EndConversation.
+  - Every line is shown with the bracket SetConversationTarget(entity); LevelMsg(line, W, true, WAIT 1); EndConversation (High). The routine keeps one counter c (0 on each entry, no branch marker).
+  - If the active hero is hero 1 (WhichHeroIsActive() == 1) and Random(1, 3) returns 1 (one talk in three): lines 10, 11, 12 in turn by c (c = 0 shows 10 and sets c = 1; c = 1 shows 11 and sets 2; c = 2 shows 12 and sets 0).
+  - Otherwise (hero 0, or hero 1 with a draw of 2 or 3), if flag 86 is set: line 4; otherwise line 7. This path sets c to 1, so the rotation resumes at line 11 after a flag line.
+  - Test vector (fresh entry, hero 1, flag 86 clear, draws 1, 1, 2, 1): lines 10, 11, 7, 11. Hero 0 always shows line 4 or 7.
 - Teleport index 0 (T): diagnostic line; AddBlackboardMessage(type 2, value 40, eW 31); if the trigger index is 0: StartLeaveInterior(eW 44, -1, -1, no colour); Wait(3.0 s).
 - Activate-world A: diagnostic line; v = GetBlackboardMessageValue(type 2, eW 31); if v is 40: MoveHero(locator 1, true, CONTROL 1); SetToNormalCamera(5.0, 0.0, true); AddBlackboardMessage(type 2, value -1, eW 31).
 - Dormant routine: if flag 86 is set: SetConversationTarget; LevelMsg(line 0); EndConversation. Otherwise LevelMsg(line 2) with the same bracket.
 - Threads: none. Update: empty.
-- Confidence: High for the calls; Medium for the draw (its use not recorded).
+- Confidence: High for the calls and the draw test.
 
 ### 947: Exterior, two threads, a slot load, a death watch and a hit-point watch
 
@@ -303,10 +304,12 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Family: Interior. Exit is not exported.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
 - Proximity P (entity):
-  - If flag 421 is set: SetConversationTarget; LevelMsg(line 9); EndConversation.
-  - Else if flag 420 is set: SetGameState(flag 421, true); SetConversationTarget; LevelMsg(line 12); EndConversation.
-  - Else if flag 419 is set: SetConversationTarget; LevelMsg(line 13); EndConversation.
-  - Else: SetGameState(flag 419, true); SetConversationTarget; LevelMsg(line 16); EndConversation.
+  - The routine keeps one counter and no branch marker (shared counter, SPEC-0022 Line rotation patterns); the module restarts it on each entry. Every line is shown with the bracket SetConversationTarget; LevelMsg; EndConversation (High).
+  - If flag 421 is set: lines 9, 10, 11 in turn.
+  - Else if flag 420 is set: SetGameState(flag 421, true) and line 12 (no rotation; the next talk is in the 421 case).
+  - Else if flag 419 is set: lines 13, 14, 15 in turn.
+  - Else: SetGameState(flag 419, true) and line 16 (no rotation; the next talk is in the 419 case, which starts at line 13 on a fresh entry).
+  - Test vector (fresh entry, flags 419 to 421 clear): talks show 16, 13, 14, 15, 13.
 - Teleport index 0 (T): diagnostic line; AddBlackboardMessage(type 2, value 60, eW 31); if the trigger index is 0: StartLeaveInterior(eW 44, -1, -1, no colour); Wait(3.0 s).
 - Activate-world A: diagnostic line; v = GetBlackboardMessageValue(type 2, eW 31); if v is 60: MoveHero(locator 0, true, CONTROL 1); SetToNormalCamera(5.0, 0.0, true); AddBlackboardMessage(type 2, value -1, eW 31).
 - Dormant routine: if flag 421 is set: SetConversationTarget; LevelMsg(line 0); EndConversation. Else if flag 419 is set: LevelMsg(line 2). Else LevelMsg(line 4). (Each with the same bracket.)
@@ -319,7 +322,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Init, in every case: SlotAllocate(W, 1); SlotCreate(W, 1 entry, slot table in module data), its return value stored; RegisterEntityProximityCallback(W, entity 0, P, true); ControlThreadsAllocate(W, 1); ControlThreadStart(W, thread K, W).
   - Flag 543 clear: InitObjOn(object 2, false) and RegisterScriptTrigger(W, S1, index 1).
   - Flag 543 set: InitObjOn(object 3, false) is the call on this side.
-- Proximity P (entity): if flag 591 is set: SetConversationTarget; LevelMsg(line 0, W, true, WAIT 1); EndConversation. If flag 591 is clear: SetGameState(flag 591, true); SetConversationTarget; LevelMsg(line 3, W, true, WAIT 1); EndConversation.
+- Proximity P (entity; High): one counter, no branch marker (shared counter, SPEC-0022 Line rotation patterns), restarted on each entry; every line is shown with the usual conversation bracket. If flag 591 is set: lines 0, 1, 2 in turn. If flag 591 is clear: SetGameState(flag 591, true) and line 3 (no rotation); the next talk is in the 591 case, which starts at line 0 on a fresh entry. Test vector (fresh entry, flag 591 clear): talks show 3, 0, 1, 2, 0.
 - Thread K (runs once): if flag 590 is set and flag 591 is clear: SlotLoad(W, the stored slot, set 0, true, true); SetEntityUndamageable(entity 0, true, W).
 - Trigger index 1 (S1), on every fire (no state test). Nothing happens when the shot word is set. Otherwise, in order:
   - If the confirm button (button 0) is not pressed and flag 543 is clear: DisplaySquareButtonContext(context 4), and the routine ends.
@@ -371,7 +374,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Init: ControlThreadsAllocate(W, 2); ControlThreadStart(W, thread A, argument -1); ControlThreadStart(W, thread B, W); RegisterEntityProximityCallback(W, entity 0, P, true).
 - Thread A (argument -1; runs once): if flag 59 is set: SetConversationTarget(argument); LevelMsg(line 0, W, true, WAIT 1); EndConversation. Else if flag 56 is set: LevelMsg(line 2) with the same bracket. Else LevelMsg(line 4) with the same bracket.
 - Thread B (runs once): SetToNormalCamera(5.0, 0.0, true).
-- Proximity P (entity): if flag 59 is set: SetConversationTarget(entity); LevelMsg(line 6); EndConversation. Else if flag 56 is set: LevelMsg(line 9) with the bracket. Else LevelMsg(line 12) with the bracket.
+- Proximity P (entity; High): every line with the bracket SetConversationTarget(entity); LevelMsg; EndConversation; branch marker plus counter, restarted on each entry; each case is a three-line cycle that restarts at its first line when the case changes. Flag 59 set: lines 6, 7, 8 in turn. Else flag 56 set: lines 9, 10, 11 in turn. Else lines 12, 13, 14 in turn.
 - Update: empty. Exit: empty.
 - Confidence: High.
 
@@ -429,11 +432,13 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Family: Interior.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
 - Proximity P (entity):
-  - If flag 425 is set: SetConversationTarget; LevelMsg(line 10); EndConversation.
-  - Else if flag 424 is set: SetGameState(flag 425, true); SetConversationTarget; LevelMsg(line 13); EndConversation.
-  - Else if flag 423 is set: SetConversationTarget; LevelMsg(line 14); EndConversation.
-  - Else if flag 76 is set: SetGameState(flag 423, true); SetConversationTarget; LevelMsg(line 17); EndConversation.
-  - Else: SetConversationTarget; LevelMsg(line 18); EndConversation.
+  - The routine keeps a branch marker and a counter (SPEC-0022 Line rotation patterns); the module restarts both on each entry. Every line is shown with the bracket SetConversationTarget; LevelMsg; EndConversation (High).
+  - If flag 425 is set: lines 10, 11, 12 in turn.
+  - Else if flag 424 is set: SetGameState(flag 425, true) and line 13 (no rotation; the next talk is in the 425 case).
+  - Else if flag 423 is set: lines 14, 15, 16 in turn.
+  - Else if flag 76 is set: SetGameState(flag 423, true) and line 17 (no rotation; the next talk is in the 423 case).
+  - Else: lines 18, 19, 20, 21 in turn (a four-line cycle).
+  - Test vector (fresh entry, flags 423 to 425 clear, flag 76 set): talks show 17, 14, 15, 16, 14.
 - Teleport index 0 (T): diagnostic line; AddBlackboardMessage(type 2, value 20, eW 31); if the trigger index is 0: StartLeaveInterior(eW 44, -1, -1, no colour); Wait(3.0 s).
 - Activate-world A: diagnostic line; v = GetBlackboardMessageValue(type 2, eW 31); diagnostic line. If v is 20: MoveHero(locator 1, true, CONTROL 1); SetToNormalCamera(5.0, 0.0, true); AddBlackboardMessage(type 2, value -1, eW 31).
 - Dormant routine: flag 425 set -> LevelMsg(line 0); flag 425 clear and flag 423 set -> LevelMsg(line 2); flag 76 set -> LevelMsg(line 4); else LevelMsg(line 7). With the bracket. The dormant routine's other paths also reach lines 1, 3 and 5, and one path is not determined (Low).
@@ -466,12 +471,13 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Thread C (argument 0; runs once): if flag 463 is set: LevelMsg(line 0). Else if flag 462 is set and the hero holds item 22: LevelMsg(line 2). Else if flag 462 is set and item 22 is not held: LevelMsg(line 3). Else if flag 59 is set: LevelMsg(line 5). Else if flag 56 is set: LevelMsg(line 6). Else LevelMsg(line 8). Each with the bracket (target = the argument).
 - Thread B (runs once): SetToNormalCamera(5.0, 0.0, true).
 - Proximity P (entity):
-  - If flag 463 is set: LevelMsg(line 10).
-  - Else if flag 462 is set and item 22 is held: SetGameState(flag 463, true); RemoveItemFromHero(item 22, 1); GiveItemToHero(item 122, 1, false); LevelMsg(line 13).
-  - Else if flag 462 is set and item 22 is not held: LevelMsg(line 14).
-  - Else if flag 59 is set: SetGameState(flag 462, true); LevelMsg(line 17).
-  - Else if flag 56 is set: LevelMsg(line 18).
-  - Else LevelMsg(line 21).
+  - Every line is shown with the usual conversation bracket (High). The routine keeps a branch marker and a counter; a rotating case is a three-line cycle that restarts at its first line when the case changes, and the module restarts on each entry.
+  - If flag 463 is set: lines 10, 11, 12 in turn.
+  - Else if flag 462 is set and item 22 is held: SetGameState(flag 463, true); RemoveItemFromHero(item 22, 1); GiveItemToHero(item 122, 1, false); line 13 (no rotation; the next talk is in the 463 case).
+  - Else if flag 462 is set and item 22 is not held: lines 14, 15, 16 in turn.
+  - Else if flag 59 is set: SetGameState(flag 462, true) and line 17 (no rotation; the next talk is in the 462 case).
+  - Else if flag 56 is set: lines 18, 19, 20 in turn.
+  - Else lines 21, 22, 23 in turn.
 - Update: empty. Exit: empty.
 - Confidence: High.
 
@@ -513,7 +519,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Init: ControlThreadsAllocate(W, 2); ControlThreadStart(W, thread C, argument 0); ControlThreadStart(W, thread K, W); RegisterEntityProximityCallback(W, entity 0, P, true); RegisterItemAskAboutCallback(W, item 100, Q1, true); RegisterItemAskAboutCallback(W, item 107, Q2, true); RegisterItemAskAboutCallback(W, item 113, Q3, true); RegisterHeroBuyItemCallback(W, B, false).
 - Thread C (argument 0; runs once): if flag 59 is set: SetConversationTarget(argument); LevelMsg(line 0); EndConversation. Else if flag 56 is set: LevelMsg(line 2). Else LevelMsg(line 4). With the bracket.
 - Thread K (runs once): SetToNormalCamera(5.0, 0.0, true).
-- Proximity P (entity): if flag 59 is set: LevelMsg(line 10). Else if flag 56 is set: LevelMsg(line 13). Else LevelMsg(line 16). With the bracket.
+- Proximity P (entity; High): with the bracket; branch marker plus counter, restarted on each entry; each case is a three-line cycle that restarts at its first line when the case changes. Flag 59 set: lines 10, 11, 12 in turn. Else flag 56 set: lines 13, 14, 15 in turn. Else lines 16, 17, 18 in turn.
 - Item-ask Q1 (item 100): SetConversationTarget(0); LevelMsg(line 6); EndConversation.
 - Item-ask Q2 (item 107): SetConversationTarget(0); LevelMsg(line 7); EndConversation.
 - Item-ask Q3 (item 113): line 8 when WhichHeroIsActive() returns 0, else line 9, in the bracket SetConversationTarget(0); LevelMsg; EndConversation. (Item-ask callbacks never fire on disc; SPEC-0030 row 257.)
@@ -563,11 +569,11 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 
 ## Open questions
 
-1. Slot id and SlotCreate's return value (determined in part). SlotCreate returns the slot number of the buffer it reserves, in creation order, or -1 when no buffer is left (SPEC-0032 Slot rules; SPEC-0030 row 207). The loads in 1225, 809, 1259, 947, 1220, 784, 1238, 1251 and 1152 use the slot number that the module stored from its SlotCreate call. The call path does not remap -1 (High). Loads through a slot word that no code stores (file value -1): 837 (4 loads, not reached on any path found, High). They do nothing in the original. The 906 slot word is stored by Init (SlotCreate, count 1), and its load in the thread T routine uses that slot.
+1. Resolved: slot id and SlotCreate's return value. Every load of this spec uses a real slot: the stored slot is the SlotCreate result, each result is stored by straight-line code right after its call, and the only loads through a word that no code stores are the dormant ones of 837 (High). Default if unresolved (rewrite choice): none needed. SlotCreate returns the slot number of the buffer it reserves, in creation order, or -1 when no buffer is left (SPEC-0032 Slot rules; SPEC-0030 row 207). The loads in 1225, 809, 1259, 947, 1220, 784, 1238, 1251 and 1152 use the slot number that the module stored from its SlotCreate call. The call path does not remap -1 (High). Loads through a slot word that no code stores (file value -1): 837 (4 loads, not reached on any path found, High). They do nothing in the original. The 906 slot word is stored by Init (SlotCreate, count 1), and its load in the thread T routine uses that slot.
 2. Resolved: +0x20 is the shot word (1 when a hero shot fired the trigger) and +0x24 the attack word (1 when the selected hero's body fired it during a hit-window frame), SPEC-0030 section 3. 784 S1 does nothing on a shot and runs its line and walk only for a non-attacking body; 799 S0 does nothing on a shot (High).
 3. Resolved: 1369 trigger index 1 has no state test (only the object pointer); 1391 trigger index 2 tests the object pointer, a once-word and state 1, in that order, and sets the once-word before its first action; 1369 trigger index 0 tests the object pointer and a once-word that its confirmed press sets (High). Test vector: 1391 trigger 2 fired with state 2 does nothing; fired with state 1 it plays the camera, shake and animation once, and a second state 1 fire in the same module load does nothing.
 4. Resolved: each world id is an area slot; the slot names its pack and the pack's map area gives its name (SPEC-0006 "Area names", SPEC-0051 "Map area names"). E exterior, I interior, T transition: 22 = 735 E, Bogshot Swamp; 31 = 758 E, Brightvale Village; 44 = 797 T, Brightvale Outskirts; 65 = 893 E, Drackon Ridge; 69 = 934 E, Farm Road; 106 = 1098 E, no map area of its own (its script registers 48 and 49, Meridell Castle 1st and 2nd Floor); 119 = 1152 E, Meridell Castle 1st Floor; 126 = 1173 E, no map area, adjoins Meridell Treasure Vault, Meridell Castle 1st Floor and Meridell Sewers; 129 = 1184 E, Shadowglen Woods; 131 = 1220 T, Shadowglen Burrows; 132 = 1225 T, Shadowglen Woods; 141 = 1250 E, Werelupe Woods; 143 = 1253 E, Werelupe Sinkholes; 150 = 1299 E, Fyora's Library; 151 = 1300 E, Fyora's Palace Gardens; 154 = 1327 E, Fyora's Library; 155 = 1335 E, Fyora's Palace; 156 = 1344 T, Fyora's Palace; 157 = 1350 E, Arena District; 165 = 1382 E, Heroes Rest. The override ids are slots too: 187 = 1428 E, Fyora's Tower; 188, 189 and 190 = 1429, 1430 and 1431, interior-kind packs streamed into the exterior buffer (SPEC-0006), no map area, adjoin Fyora's Palace; 191 = 1432 E, no map area, adjoins Fyora's Palace Gardens and Hall of Heroes (High).
-5. Event codes 906 (908) and the world-swap events of the other modules.
+5. Resolved: event codes 906 (908) and the world-swap events of the other modules. The world-swap callbacks (registered by the transition packs 797, 908, 1055 and 1254) run only when a script starts a transition scene, and no live script call does that (the only two calls on disc, in pack 758, are in code that nothing reaches), so the callbacks never run and the codes 906, 1253, 753 and 1098 they compare are never delivered in play (High; SPEC-0030 rows 268, 273 and 283; SPEC-0032 Open question 6). The code 906 looks like a world-pack number (Medium). Default if unresolved (rewrite choice): do not implement the world-swap callback of 908; if a transition scene is ever started, use the 906 branch (camera track 5, hero to locator 0, walk to locator 1) for code 906 and the other branch for every other code.
 6. Resolved: 1238's pickup callback sets flag 579 (when the item id is 83 and flag 579 is clear), and thread T1's set choice depends on flags 50, 567, 568, 578 and 579 as given in its section.
 7. Resolved for 787: the money test is GetNeopoints() >= 500 (500 or more takes 500 and sets flag 448; flag 448 is not tested). Resolved for 947 thread H: the reading is compared strictly below 0.2, line 3 is shown once and the thread ends. Still open: the provider of GetHitPointsPercentage (SPEC-0030 row 52).
 8. Resolved for item names (SPEC-0021 "Item names"): 12 Rathbone Family Tree; 16 Rathbone Crypt Key; 22 Hammer of Thunder; 24 Kreludan Metal; 49 Wild Wartroot; 73 Growth Pod; 82 Poison Seed; 83 Pink Posies; 84 Creepy Package; 100 Knight's Sword; 107 Iron Shield; 109 Golden Shield; 113 Enchanter's Wand; 122 Defender's Armour; 154 Starry Negg (High). Resolved: the item-activation arguments of 1251 are the stored slot, the placement ordinal (0 when flag 460 is set, else 1), snap false, placed true and two null overrides; they select the 3000 or 10000 Witch's Wand record (module 1251 section).

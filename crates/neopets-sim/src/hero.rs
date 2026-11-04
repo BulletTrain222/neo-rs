@@ -749,7 +749,10 @@ impl Locomotion {
         if input.jump && self.body.normal[1] >= 0.82 {
             self.strafe_stick = None;
             if v > 0.0 {
-                self.jump_dir = self.target;
+                // SPEC-0033 Behavior 11: the stick in the hero's own frame, not the camera's.
+                let right = cross(self.facing, [0.0, 1.0, 0.0]);
+                let d: Vec3 = std::array::from_fn(|k| input.forward * self.facing[k] + input.side * right[k]);
+                self.jump_dir = normalise(d);
                 let state = match self.strafe_id {
                     6 | 11 => 45,
                     36 | 38 | 100 | 101 | 152 | 154 => 44,

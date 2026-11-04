@@ -74,6 +74,8 @@ pub struct World {
     pub owner_poses: std::collections::HashMap<usize, neopets_data::ground::OwnerPose>,
     /// The ladders of the type-10 groups (SPEC-0006 Type 10, records of type -3).
     pub rails: Vec<neopets_sim::ladder::Rail>,
+    /// Each type-10 record's group, for the groups a placed object owns.
+    panel_groups: Vec<u32>,
     /// The ladders and climb records at rest, each with the placed object it stands on (R-0226).
     climb_rest: Option<ClimbRest>,
     /// The grab lines (SPEC-0033 Behavior 9): bit-1 cylinders of the type-11 list.
@@ -225,6 +227,7 @@ impl World {
             breakables: Vec::new(),
             blocks: Vec::new(),
             owner_poses: Default::default(),
+            panel_groups: Vec::new(),
             rails: Vec::new(),
             climb_rest: None,
             grab_lines: Vec::new(),
@@ -317,6 +320,7 @@ impl World {
             breakables: Vec::new(),
             blocks: Vec::new(),
             owner_poses: Default::default(),
+            panel_groups: Vec::new(),
             rails: Vec::new(),
             climb_rest: None,
             grab_lines: Vec::new(),
@@ -408,6 +412,7 @@ impl World {
             }
         }
         let records = neopets_data::trigger::panels(&bytes, &chain.chunks);
+        world.panel_groups = records.iter().map(|p| p.group).collect();
         world.rails = records.iter().filter(|p| p.kind == -3).map(|p| neopets_sim::ladder::Rail { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv }).collect();
         world.panels = records.iter().map(|p| neopets_sim::climb::Panel { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv, kind: p.kind, links: p.links }).collect();
         // SPEC-0018 Patch-id table: each placed object's inline model set is registered under
@@ -6432,7 +6437,7 @@ impl Play {
             }
             return false;
         }
-        if neopets_sim::hero::busy_state(self.loco.state) || !self.catch.on {
+        if self.hero_busy() || !self.catch.on {
             return false;
         }
         let (hero, f) = (self.loco.position(), self.loco.facing);
@@ -6951,6 +6956,12 @@ impl Play {
         println!("      showcase {id}: {:?}, corner {:?}", self.showcase.as_ref().map(|s| (s.pose, s.floating, String::from_utf8_lossy(&s.text).into_owned())), self.corner);
     }
 
+    /// SPEC-0033 Behavior 3, the busy routine (IsHeroOccupied), all four parts: the state list, the script-held states,
+    /// the stun timer and a moving screen effect. It reads no sub-state and no air phase.
+    fn hero_busy(&self) -> bool {
+        neopets_sim::hero::busy_state(self.loco.state) || matches!(self.loco.state, 33 | 48 | 50 | 51 | 52 | 53 | 55) || self.statuses.active(neopets_sim::status::STUN) || self.fade.moving()
+    }
+
     fn start_showcase(&mut self, id: u16, pack: u32) {
         // Nothing happens while the full showcase (mode 4) runs.
         if self.showcase.is_some() {
@@ -6959,7 +6970,7 @@ impl Play {
         let first = self.count_announcement(id);
         let flags = &self.state;
         let text = self.design.item_showcase_text(id, first, |f| flags.flag(f));
-        let busy = neopets_sim::hero::busy_state(self.loco.state) || self.dialogue_open;
+        let busy = self.hero_busy() || self.dialogue_open;
         let Some(text) = text.filter(|_| !busy) else {
             // Mode 1 (grow) at (0.5, 0.6, 5.0) with scale 0.
             self.corner = Some(Corner { id, pack, mode: 1, x: 0.5, y: 0.6, z: 5.0, s: 0.0, timer: 0.0, angle: 0.0 });
@@ -8804,8 +8815,14 @@ impl Play {
         };
         let streaming = std::env::var_os("NEOPETS_NO_STREAM").is_none();
         for s in blocks {
-            let cap = if s == EMBEDDED_SLOT { self.max_active.get(&pack).copied().unwrap_or(6) } else { BLOCK_OBJECTS }.min(BLOCK_OBJECTS);
-            let active = self.characters.iter().filter(|c| c.pack == pack && c.slot == s && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead())).count();
+            // SPEC-0064 Seed spawn step 5: a Spore region's slot is loaded with the keep flag, so its cap is 6, and every bound
+            // character counts, corpses too; that slot streams in the original, so only records within 280 of the hero do here.
+            // Other slots keep the cap of 15 of a load with keep clear (this build does not carry the keep argument).
+            let spore = key == 619;
+            let hero = self.loco.position();
+            let cap = if s == EMBEDDED_SLOT { self.max_active.get(&pack).copied().unwrap_or(6) } else if spore { 6 } else { BLOCK_OBJECTS }.min(BLOCK_OBJECTS);
+            let near = |c: &Character| (c.position[0] - hero[0]).powi(2) + (c.position[1] - hero[1]).powi(2) + (c.position[2] - hero[2]).powi(2) < STREAM_RANGE;
+            let active = self.characters.iter().filter(|c| c.pack == pack && c.slot == s).filter(|c| if spore { near(c) } else { c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) }).count();
             if streaming && active >= cap {
                 continue;
             }
@@ -9083,7 +9100,7 @@ impl Play {
     /// without one plays cue 0xA2. The food is the selected quick item (which item the feed
     /// takes is not given; R-0094).
     fn feed_step(&mut self) {
-        if neopets_sim::hero::busy_state(self.loco.state) || !(1..=6).contains(&self.loco.state) {
+        if self.hero_busy() || !(1..=6).contains(&self.loco.state) {
             return;
         }
         let (hero, f) = (self.loco.position(), self.loco.facing);
@@ -10362,7 +10379,8 @@ impl Play {
             // Section 9: L3 also sets the D-pad hint's timer.
             self.hud.d = 240;
         }
-        if out.consumed || was_open {
+        // SPEC-0033 Behavior 1A: the chain's attack part and the jump do nothing for a busy hero; during stun a press is lost.
+        if out.consumed || was_open || self.statuses.active(neopets_sim::status::STUN) {
             input.jump = false;
             input.attack = false;
         }
@@ -10387,7 +10405,7 @@ impl Play {
         }
         // SPEC-0033 Behavior 52: the stick gesture machine (reset while busy or in a box), in
         // the dead-zoned stick units (87.5 at a full push).
-        if neopets_sim::hero::busy_state(self.loco.state) || self.dialogue_open {
+        if self.hero_busy() || self.dialogue_open {
             self.gesture.reset();
         } else {
             self.gesture.tick(input.forward * 87.5, input.side * 87.5, &self.gesture_words);
@@ -10416,6 +10434,14 @@ impl Play {
         if let Some(a) = self.attack.as_mut() {
             let c = self.hero.clip_state();
             a.mote = self.equipment.motes[0][2];
+            // SPEC-0036 Tor arm-table point: in the flick lunge a contact puts him back at the last position without one.
+            if a.sub == 9 {
+                if self.touched && a.f > 0 {
+                    self.loco.body.position = self.leap_point;
+                } else {
+                    self.leap_point = self.loco.position();
+                }
+            }
             match a.tick(input.attack_held, input.attack, neopets_sim::attack::Clip { action: c.action, progress: c.progress }) {
                 Some(r) => {
                     self.loco.set_attack(Some(r.action));
@@ -10857,7 +10883,7 @@ impl Play {
             let pack = self.world.pack;
             self.state.entity_hp = self.characters.iter().filter(|c| c.pack == pack).filter_map(|c| Some((c.entity?, c.hp.max(0)))).collect();
             self.state.hero.sub = self.attack.as_ref().map_or(0, |a| a.sub);
-            self.state.hero.occupied = neopets_sim::hero::busy_state(self.loco.state) && self.loco.state != hero_states::ATTACK || self.held;
+            self.state.hero.occupied = self.hero_busy() || self.held;
             self.state.hero.attack_mote = self.equipment.motes[0][2];
             self.state.hero.hp = self.hero_hp;
             self.state.hero.hp_max = self.hero_max;
@@ -12096,7 +12122,8 @@ impl Play {
         let mut casts: Vec<(u64, u64, u8, i32, [f32; 3], i32)> = Vec::new();
         // SPEC-0038 Behavior 7 step 5e: each enemy's live summons.
         let mut summons: HashMap<u64, u32> = HashMap::new();
-        for c in self.characters.iter().filter(|c| c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead())) {
+        // (SPEC-0038 Lobbed summon: corpses count until released.)
+        for c in &self.characters {
             if let Some(by) = c.summoner {
                 *summons.entry(by).or_insert(0) += 1;
             }
@@ -13242,9 +13269,9 @@ impl Play {
         let Some(i) = self.pools.get(&pack).and_then(|pool| pool.collectable(p, base, contact::HERO_RADIUS, &|id| self.design.item_important(id))) else { return };
         let Some(it) = self.pools.get(&pack).and_then(|pool| pool.slots[i]) else { return };
         let coin = neopets_sim::items::is_coin(it.id);
-        let mote = (160..=173).contains(&it.id);
         let state = self.loco.state;
-        if !coin && (matches!(state, 0x19 | 0x21 | 0x33 | 0x37) || (!mote && (7..=0x3C).contains(&state))) {
+        // SPEC-0021 Auto-collect step 4: only these four states refuse a non-coin.
+        if !coin && matches!(state, 0x19 | 0x21 | 0x33 | 0x37) {
             return;
         }
         if it.id >= 191 && !it.charm {
@@ -15858,16 +15885,39 @@ impl Play {
             world.climb_rest = Some(ClimbRest::of(world));
         }
         let Some(rest) = world.climb_rest.take() else { return };
-        let shift = |q: [f32; 4], d: [f32; 3]| [q[0], q[1], q[2], q[3] - (q[0] * d[0] + q[1] * d[1] + q[2] * d[2])];
-        let delta = |o: usize| world.owner_poses.get(&o).map(|p| [p.current[12] - p.rest[12], p.current[13] - p.rest[13], p.current[14] - p.rest[14]]);
+        // SPEC-0028 section 7.2: an owned record moves and turns with its object, its planes recomputed through its new
+        // start, and is off (LU -200) while the object is not active.
+        let place = |n: [f32; 4], u: [f32; 4], v: [f32; 4], o: usize| {
+            let p = world.owner_poses.get(&o)?;
+            let col = |m: &[f32; 16], k: usize| unit([m[4 * k], m[4 * k + 1], m[4 * k + 2]]);
+            let (r0, c0) = ([col(&p.rest, 0), col(&p.rest, 1), col(&p.rest, 2)], [col(&p.current, 0), col(&p.current, 1), col(&p.current, 2)]);
+            let turn = |a: [f32; 3]| -> [f32; 3] {
+                let s = [dot(a, r0[0]), dot(a, r0[1]), dot(a, r0[2])];
+                std::array::from_fn(|i| s[0] * c0[0][i] + s[1] * c0[1][i] + s[2] * c0[2][i])
+            };
+            let start: [f32; 3] = std::array::from_fn(|i| -n[3] * n[i] - u[3] * u[i] - v[3] * v[i] - p.rest[12 + i]);
+            let moved = turn(start);
+            let at: [f32; 3] = std::array::from_fn(|i| moved[i] + p.current[12 + i]);
+            let plane = |q: [f32; 4]| {
+                let a = turn([q[0], q[1], q[2]]);
+                [a[0], a[1], a[2], -dot(a, at)]
+            };
+            Some((plane(n), plane(u), plane(v)))
+        };
         for (k, r) in rest.rails.iter().enumerate() {
-            if let Some(d) = rest.rail_owner[k].and_then(delta) {
-                world.rails[k] = neopets_sim::ladder::Rail { normal: shift(r.normal, d), u: shift(r.u, d), v: shift(r.v, d), ..*r };
+            if let Some(o) = rest.rail_owner[k] {
+                world.rails[k] = match place(r.normal, r.u, r.v, o) {
+                    Some((normal, u, v)) => neopets_sim::ladder::Rail { normal, u, v, ..*r },
+                    None => neopets_sim::ladder::Rail { lu: -200.0, ..*r },
+                };
             }
         }
         for (k, r) in rest.panels.iter().enumerate() {
-            if let Some(d) = rest.panel_owner[k].and_then(delta) {
-                world.panels[k] = neopets_sim::climb::Panel { normal: shift(r.normal, d), u: shift(r.u, d), v: shift(r.v, d), ..*r };
+            if let Some(o) = rest.panel_owner[k] {
+                world.panels[k] = match place(r.normal, r.u, r.v, o) {
+                    Some((normal, u, v)) => neopets_sim::climb::Panel { normal, u, v, ..*r },
+                    None => neopets_sim::climb::Panel { lu: -200.0, ..*r },
+                };
             }
         }
         world.climb_rest = Some(rest);
@@ -16250,8 +16300,10 @@ impl Play {
             return None;
         }
         let grouped = w.groups.iter().any(|g| g.objects.contains(&(i as i32)) && !(g.kind == 1 && g.objects.first() != Some(&(i as i32))));
-        // NEOPETS_GATE_ALL=1: SPEC-0028's draw gate in every pack (diagnostic, to measure it).
-        let gated = level::objects_scripted(pack) || (pack == 1217 && neopets_sim::burrows::named(i)) || std::env::var_os("NEOPETS_GATE_ALL").is_some();
+        // SPEC-0028 Draw gate (High): in every pack an object in state 3 or 4 is not drawn until a call turns it on; about 70
+        // objects with ground or walls are invisible and passable until a scene first calls them. NEOPETS_NO_GATE_ALL shows
+        // them in the packs outside the old list (diagnostic).
+        let gated = std::env::var_os("NEOPETS_NO_GATE_ALL").is_none() || level::objects_scripted(pack) || (pack == 1217 && neopets_sim::burrows::named(i));
         // The 758 wheel turns even while no script has touched it (its pack's objects are drawn
         // at rest).
         if !a.scripted && (!gated || grouped) && !(pack == 758 && i == 0) {
@@ -18726,10 +18778,8 @@ struct Bolt {
     arrival: i32,
 }
 
-/// The ladders and climb records of a world at rest, and the placed object each stands on: a record
-/// whose face lies along one of the object's own walls, within 1.0 of its plane and along its run.
-/// The spec says such records have an owner but not how it is named (R-0226), so this reads it from
-/// the geometry.
+/// The ladders and climb records of a world at rest, and the placed object that lists each one's group
+/// (SPEC-0028 section 7.2; R-0226).
 struct ClimbRest {
     rails: Vec<neopets_sim::ladder::Rail>,
     panels: Vec<neopets_sim::climb::Panel>,
@@ -18738,32 +18788,10 @@ struct ClimbRest {
 }
 
 impl ClimbRest {
-    fn owner_of(world: &World, normal: [f32; 4], u: [f32; 4], v: [f32; 4], lu: f32, lv: f32) -> Option<usize> {
-        let g = world.ground.as_ref()?;
-        let at: [f32; 3] = std::array::from_fn(|k| -normal[3] * normal[k] - u[3] * u[k] - v[3] * v[k] + 0.5 * lu * u[k] + 0.5 * lv * v[k]);
-        let plane = |q: [f32; 4]| q[0] * at[0] + q[1] * at[1] + q[2] * at[2] + q[3];
-        let mut owners: Vec<usize> = world.owner_poses.keys().copied().collect();
-        owners.sort_unstable();
-        owners.into_iter().find(|&o| {
-            let pose = world.owner_poses[&o];
-            g.object_frames_at(at[0], at[2], &|k| (k == o).then_some(pose)).iter().flat_map(|(_, f)| f).any(|f| {
-                let parallel = f.face[0] * normal[0] + f.face[1] * normal[1] + f.face[2] * normal[2] > 0.99;
-                parallel && plane(f.face).abs() < 1.0 && (-1.0..=f.length + 1.0).contains(&plane(f.run))
-            })
-        })
-    }
-
     fn of(world: &World) -> Self {
-        let rail_owner = world.rails.iter().map(|r| Self::owner_of(world, r.normal, r.u, r.v, r.lu, r.lv)).collect();
-        let mut panel_owner: Vec<Option<usize>> = world.panels.iter().map(|r| Self::owner_of(world, r.normal, r.u, r.v, r.lu, r.lv)).collect();
-        // A ladder face's top record goes with it (its link above).
-        for (k, r) in world.panels.iter().enumerate() {
-            if let (Some(o), -3, Some(top)) = (panel_owner[k], r.kind, r.links[2]) {
-                if let Some(t) = panel_owner.get_mut(top) {
-                    *t = Some(o);
-                }
-            }
-        }
+        let owner = |g: u32| world.objects.iter().position(|o| o.as_ref().is_some_and(|o| o.panel_groups.contains(&g)));
+        let panel_owner: Vec<Option<usize>> = world.panel_groups.iter().map(|&g| owner(g)).collect();
+        let rail_owner = world.panels.iter().zip(&panel_owner).filter(|(p, _)| p.kind == -3).map(|(_, &o)| o).collect();
         Self { rails: world.rails.clone(), panels: world.panels.clone(), rail_owner, panel_owner }
     }
 }

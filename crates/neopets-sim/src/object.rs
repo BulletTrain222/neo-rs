@@ -195,10 +195,12 @@ impl ObjAnim {
         let before = self.time;
         self.time += self.speed / 60.0;
         let mut end = false;
-        if self.time < 0.0 {
+        // SPEC-0028: forward play takes floor(4 (F - 1) / speed) + 1 advances: reaching the end exactly is not yet finished.
+        // Backward play ends on the plain round-up. The margin stands in for the original's truncating float sum.
+        if self.time < 1.0e-5 {
             self.time = 0.0;
             end = self.speed < 0.0;
-        } else if self.time >= d {
+        } else if self.time > d + 1.0e-5 {
             self.time = d;
             end = self.speed > 0.0;
         }
@@ -342,7 +344,7 @@ mod tests {
         assert!((60..=61).contains(&n) && o.finished() && o.time == 0.0, "{n}");
         // A loop wraps to the start.
         o.looped(2.0);
-        for _ in 0..30 {
+        for _ in 0..31 {
             o.tick(&m);
         }
         assert_eq!(o.state, 0);

@@ -1,6 +1,6 @@
 # SPEC-0024: Game design tables (resource 533)
 
-- Answers: proactive (none requested); proactive (open close-out); R-0071 (Book records: body string, style index, page textures and meshes)
+- Answers: proactive (open question sweep, leftovers); proactive (none requested); proactive (open close-out); R-0071 (Book records: body string, style index, page textures and meshes); proactive (spec consistency pass); proactive (design table check)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00. Fingerprint to check: resource 533 of the game data archive is 112,640 bytes (55 sectors), its first chunk is a type-42 IDM chunk with format byte 0xCD, and it holds exactly 20 top-level chunks (17 of type 42, then 3 of type 43).
 - Confidence: per section. Species and villager tables: header layout High (counts read from disc); load check Medium; row fields belong to the enemy specs. Container, table counts and record sizes: High. Pointer relocation and string rules: High. Field meanings: per table, marked in the tables below. Emote tables 7 and 8: record counts, row layout, index ranges, chance and variance bytes: High (from disc). Emote clip lookup (character stride 74, hero shift 183, uniform random step): High; emote id as animation id: High; emote trigger (dialogue control codes): High (SPEC-0022). Villager row voice set (+0x14) and its survey: High. Table 2 progress-flag cues (rising edge, stinger, journal icon, stinger 4 cooldown): High. Table 13 labels: High for content and for the type-40 index field; Medium-High for use. Table 14 stinger identity for indices 0 to 18, and the dropped indices 19 and above: High. Table 4 field roles: High. Tables 11 and 12 (stage flag set and start-point item grant): High. Table 9 colour: Medium-High. Table 15 styles and scroll: High. Table 16 fields, index map and status request words: High; which objects send the requests: Medium-High. Type 43 layout and totals: High; unit use: Medium. Book records (resource 576) layout and values: High; book request (one-slot cache): High; layout chunk field roles: High (font descriptor format of SPEC-0022); text chunk field roles: Medium.
@@ -445,12 +445,14 @@ Confidence: High.
 
 ### Monster row fields (resource 530)
 
-The row fields that the enemy specs read are listed in SPEC-0029 (Layout). Two fields have no confirmed use, so no rule may be built on them yet:
+The row fields that the enemy specs read are listed in SPEC-0029 (Layout). Two fields are worth naming here because they are easy to miss; both are read (High):
 
-- Difficulty Value: u16 at row offset 0x3A. Values 0, 1, 2, 5, 8, 12 and 15 occur, and 65535 on 23 rows. No value is known to be scaled by it.
-- Anger Level: s32 at row offset 0x134. Zero on 257 of the 259 rows and nonzero on 2.
+- Difficulty Value: signed 16-bit at row offset 0x3A. Values 0, 1, 2, 5, 8, 12 and 15 occur, and -1 (65535 as unsigned) on 23 rows. It does not scale the enemy's own stats; it is the enemy's weight in the shared attack manager's per-tick attacker budget (SPEC-0038 Behavior 45). A weight of -1 lowers the running sum.
+- Anger Level: s32 at row offset 0x134. Zero on 257 of the 259 rows and nonzero on 2. When nonzero, every hit the enemy takes raises its anger counter by 1; the counter feeds attack slots that carry flag bit 0x40 (SPEC-0038 Behaviors 7 and 37). No slot on the disc carries that flag, so on the shipped data the field changes nothing a player can see (it is nonzero on rows 143 and 236 only).
 
 Damage Reduction is read on the enemy damage path. It is f32 at row offset 0x114, zero on 255 rows and nonzero on 4 rows. The enemy class getter reads it, and it is subtracted from the product of the damage factors before the status scale is applied. Its use and layout are in SPEC-0029 (Layout) and SPEC-0036 (Damage).
+
+Field coverage (High). Of the 349 fields of a resource-530 row, every one is read by some routine except nine, which no code reads: Draw Distance (0x32), Low Res Distance (0x34), Socialize Talk Distance (0x48), Spawn Number (0x7C), Ambush Invisible (0x7E), Footstep Sound Effect (0xBC), Footstep Visual Effect (0xBE), Tough Hide (0x110) and Agro Strafe Erratic (0x4FC). Damage-special flag bit 0x100 of the attack slots (six used slots) is also read by nothing. A clean build stores these and ignores them. Max Fly Height (0xB4) is used by the flyer goal height (SPEC-0040), Blocking Angle (0x10C) by the hero's hit detection, and the weapon 1 radius word (0x00) by the Black Knight swing ribbon as well as the weapon volume tests (SPEC-0012, SPEC-0029). The companion table (resource 531) is read only at +0x10, +0x14, +0x16 and +0x18.
 
 Row selection by spawn record: a spawn record (layout in SPEC-0006) has a monster type t (u16 at its offset 0xB4) and a variant v (u16 at its offset 0xB2). The row used is the row whose index is first[t] + v, where first[t] is the first row index of type t in the header above. The pair is valid when t is below 112 and v is below the number of rows of type t (the first index of type t+1 minus first[t]). All 3,036 spawn records on disc are valid.
 
@@ -615,7 +617,7 @@ From the disc:
 
 Numbers of removed questions are not reused.
 
-2. **Table 0 +0x1E/+0x1F.** Resolved in part: +0x1F is the important-item flag (SPEC-0021). The flag-gated item-text getter returns +0x1E as a signed byte (disc values 0 to 4), but the item-showcase caller does not use that output; its showcase and world-item callback decisions use the returned text, item id, quiet flag and hero state. Resolved: the getter is the only reader of +0x1E and its one caller discards the byte, so the byte has no effect; its meaning was never encoded. Answered: +0x08, +0x1C, +0x24, +0x28, +0x2C and +0x30 are under Table 0 and Item text by flag. **[High for caller non-use; Low for field meaning]**
+2. **Table 0 +0x1E/+0x1F.** Resolved: +0x1F is the important-item flag (SPEC-0021). The flag-gated item-text getter returns +0x1E as a signed byte (disc values 0 to 4), but the item-showcase caller does not use that output; its showcase and world-item callback decisions use the returned text, item id, quiet flag and hero state. Resolved: the getter is the only reader of +0x1E and its one caller discards the byte, so the byte has no effect; its meaning was never encoded. Answered: +0x08, +0x1C, +0x24, +0x28, +0x2C and +0x30 are under Table 0 and Item text by flag. **[High for caller non-use; Low for field meaning]**
 3. Resolved: table 1 +0x04 and +0x08 are the quest start and done flags, progress-flag ids (SPEC-0049).
 4. Resolved: every design-table control byte belongs to a well-formed SPEC-0022 control code, except the two 0xAE glyph bytes of table 9 record 25 (Strings). **[High]**
 6. Resolved: table 16 holds four fields per hero and Mote: power factor P and the status duration D, amount A and period T (Table 16; Mote status requests).

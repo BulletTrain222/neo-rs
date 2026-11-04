@@ -8,11 +8,11 @@ The run reached the end of the list (exit 0).
 | --- | --- | --- |
 | notrun | 0 | Not reached |
 | fail | 42 | The Done condition never held |
-| gameover | 3 | The hero died and the world was torn down |
+| gameover | 2 | The hero died and the world was torn down |
 | manual | 38 | Kind not automated (minigames, pushes, climbs, shots) |
 | nocheck | 95 | Ran, but its Done condition is not machine-readable |
-| already | 28 | Done already held from earlier goals |
-| pass | 189 | Done condition reached |
+| already | 30 | Done already held from earlier goals |
+| pass | 188 | Done condition reached |
 
 ## Failed goals
 
@@ -31,15 +31,14 @@ The run reached the end of the list (exit 0).
 - Act 3 goal 336 FIGHT (880): Brightvale road guards AI 21, 22 and 23. Walk to the plaza (the treasure seller stands at (1815.6, 166.2, -933 Done: 296 on.
 - Act 3 goal 340 DOOR (1017 to 991): Pack 1017 door 0, centre (31.6, 13.5, -0.2), 10.7 wide (or door 1, centre (-33.3, -0.4, -0.2), 10.2 wide). Done: pack 991 current at locator 8 (door 0) or 7 (door 1).
 - Act 3 goal 347 TALK (1017): Guildmaster Marl, entity 0 (entity 4 is the second placement and works too). On arrival with 298 on and 300 of Done: 299 on; item 23 (Golden Trove of Riches) held.
+- Act 3 goal 354 DOOR (1217 to 909): Take the farm plane of the burrow, the same plane as goal 47: centre (5.5, -3.4, 50.8), facing the farm side.  Done: pack 909 current; the Rope Gun scene runs (hero placed at locator 28 (.
 - Act 3 goal 363 FIGHT (864): The Ixi Chieftain (boss instance 8, 300 HP; SPEC-0014). Hero: either (Tor's sword or Roberta's wand); a fronta Done: death sets level state 0; 293 on.
-- Act 3 goal 370 TALK (1251): The witch (the room's only talker). Done: 460 on.
+- Act 3 goal 370 TALK (1251): The witch (the room's only talker). Optional: nothing later reads what this talk sets. Done: 457 on (the first talk with 460 and 457 clear); 460 is set only by a l.
 - Act 3 goal 375 PICK (1247): The fang necklace, item 29 (a drop placed at the altar; the necklace holder is AI 10). Walk to the altar volum Done: item 29 held.
 - Act 3 goal 383 WALK (1250 to 1244): Walk into the transition volume toward 1255 (script trigger 3: footprint centre (1237.0, 103.2, -1315.7), 96.3 Done: pack 1244 current.
 - Act 3 goal 391 WAIT (1246): Death scene: movie 42 (first time), swap mode 2, entities deactivated, item 14 given, hero moved to locator 9. Done: item 14 held; swap mode 2.
-- Act 3 goal 394 WALK (696 to 909): Legs 696, 1066, 691, 909 (the farm). The farm's story stage 6 plays a cutscene on entry when item 36 is absent Done: item 36 held; 279 on.
-- Act 3 goal 397 WALK (956): Trigger index 11: sphere centre (-702.1, 68.2, -824.9), radius 5.6 (the top of the lift shaft). The lift does  Done: 282 on. Needed and not met: 281.
-- Act 3 goal 400 WAIT (956): Movie 44 and the glade scene (Illusen). The scene takes item 14 (from the Werelupe King) away and gives item 3 Done: 67, 20, 283, 302 on; item 30 held.
-- Act 3 goal 402 WALK (696): Cloud wall: walk toward the town road; the first of the registered cylinders fires movie 48: index 1 at base ( Done: movie 48 plays; 301 on; line 1.
+- Act 3 goal 397 WALK (956): Trigger index 11: sphere centre (-702.1, 68.2, -824.9), radius 11.1 (the top of the lift shaft). The lift does Done: 282 on. Needed and not met: 281.
+- Act 3 goal 400 WAIT (956): Movie 44 and the glade scene (Illusen). Item 30 was given at the end of the pack 985 fight; the hero keeps ite Done: 67, 20, 283, 302 on; item 30 held.
 - Act 3 goal 404 WAIT (1023): With the cloak worn, wait 5 s in town: the watcher plays the cloak scene (lines 20 or 21). Done: 303 on.
 - Act 3 goal 405 TALK (1023): Tattered-cloak seller Rory the Shady Guy, entity 94 at this point of the story (entities 72 and 75 run the sam Done: 13 on (line 884); 1000 Neopoints removed.
 - Act 3 goal 413 WALK (1129 to 1130): Walk to the cell exit toward 1130 (the water channels). Done: pack 1130 current.
@@ -51,6 +50,7 @@ The run reached the end of the list (exit 0).
 - Act 3 goal 444 WALK (1121 to 1122): Cross 1121 (its two floor rectangles at (-43.6, -91.9, -67.2) and (-43.6, -107.3, -7.1) lead down) and take th Done: pack 1122 current (a walk, so no arrival locator; locator 23 (-27.0, -.
 - Act 3 goal 447 WAIT (1122): Wave end: 320 set; hero moved to locator 24 (0.7, -46.7, -162.7); gate objects swap; cameras 4 and 5. Done: 320 on; control back.
 - Act 4 goal 500 WAIT (1122 to 1300): Movie 54 ends and pack 1300 (Fyora's Palace Gardens, world 151) loads. Resolved: the boss end posts value 50 f Done: pack 1300 current; hero at record 1; control back. Needed and not met: 322.
+- Act 4 goal 501 WALK (1300 to 1327 to 1299 to 1335 to 1344):  Done: pack 1344 current, hero at about (0, 7.4, -75).
 - Act 4 goal 528 WALK (1371): Wave gate 3, script trigger 3: rectangle corner (-1.1, 5.8, -1.2), extents 0.8 by 2.2. Hero moved to record 24 Done: 344 on.
 - Act 4 goal 529 WALK (1371 to 1350): Finish cylinder, script trigger 1: base (0.2, -15.6, -144.7), radius 21.3, length 10.9. Walk in: movie 61 play Done: 345, 100 on; back in pack 1350 at record 6 (0.0, 0.5, -338.1).
 - Act 4 goal 556 WALK (1398): Stage 4: walk onto the arm trigger 35: box corner (-43.6, -8.5, 1079.8), 88.4 along x, 72.0 along -z (to z 100 Done: 723 on (count 6); region 1401 (the Whinnies) loads.
@@ -62,7 +62,6 @@ The run reached the end of the list (exit 0).
 ## Hero died
 
 - Act 3 goal 326 WALK (735): Walk to the bridge pad that joins the western island to the arena ring (pad x 3731.8 to 3743.6, z -645.2 to -6 Done: intro starts (level state 8).
-- Act 3 goal 330 PICK (735): Berry item 3 at (3780.6, 111.6, -614.6). Done: items 3, 4 and 5 held.
 - Act 3 goal 361 WALK (864): Fight-start cylinder, trigger index 1: base (-828.5, 40.6, 2292.5), radius 19.1, height 20.1. The loader of gr Done: intro starts (stage bit 0).
 
 ## Not reached

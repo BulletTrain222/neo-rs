@@ -58,12 +58,23 @@ impl Default for PlaybackRecord {
     }
 }
 
+/// The console's float add truncates toward zero (SPEC-0008).
+fn add_truncated(a: f32, b: f32) -> f32 {
+    let exact = a as f64 + b as f64;
+    let near = exact as f32;
+    if (near as f64).abs() > exact.abs() { f32::from_bits(near.to_bits() - 1) } else { near }
+}
+
 /// Frames per tick at play rate `rate`: R × 0.5 ÷ S, or R × 0.5 when S is 0.
 pub fn clip_speed(speed_byte: u8, rate: f32) -> f32 {
     if speed_byte == 0 {
         rate * 0.5
     } else {
-        rate * 0.5 / speed_byte as f32
+        // SPEC-0005 Single-precision caveat: the console's division truncates, so 0.5 / 3 lies just below 1/6 and a clip with
+        // S = 3 reaches its last key one advance late.
+        let exact = rate as f64 * 0.5 / speed_byte as f64;
+        let near = exact as f32;
+        if near as f64 > exact { f32::from_bits(near.to_bits() - 1) } else { near }
     }
 }
 
@@ -177,7 +188,7 @@ impl PlaybackRecord {
             wrapped,
         });
         if !self.finished {
-            self.cursor += self.speed;
+            self.cursor = add_truncated(self.cursor, self.speed);
         }
         sample
     }
@@ -197,12 +208,21 @@ mod tests {
 
     #[test]
     fn speed_rule_matches_spec_vectors() {
-        assert_eq!(clip_speed(3, 1.0), 1.0 / 6.0);
+        assert!(clip_speed(3, 1.0) < 1.0 / 6.0 && (clip_speed(3, 1.0) - 1.0 / 6.0).abs() < 1e-6);
+        // SPEC-0005: at R = 1 a one-shot S = 3 clip takes 6 (F - 1) + 1 advances.
+        for (keys, advances) in [(1.0f32, 7), (10.0, 61)] {
+            let (mut c, mut n) = (0.0f32, 0);
+            while c < keys {
+                c = add_truncated(c, clip_speed(3, 1.0));
+                n += 1;
+            }
+            assert_eq!(n, advances, "{keys}");
+        }
         assert_eq!(clip_speed(2, 1.0), 0.25);
         assert_eq!(clip_speed(1, 1.0), 0.5);
         assert_eq!(clip_speed(0, 1.0), 0.5);
         assert_eq!(clip_speed(4, 1.0), 0.125);
-        assert_eq!(clip_speed(3, 0.5), 1.0 / 12.0);
+        assert!((clip_speed(3, 0.5) - 1.0 / 12.0).abs() < 1e-6);
         assert!(close(clip_speed(2, 0.6), 0.15));
     }
 

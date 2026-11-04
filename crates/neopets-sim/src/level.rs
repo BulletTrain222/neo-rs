@@ -3470,7 +3470,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             out
         }
-        // SPEC-0050 section 4: pack 1140 registers its buy hook only when flag 10 is set.
+        // SPEC-0050 section 4: pack 1140 registers its buy hook whatever flag 10 says (the flag only picks a set).
         // SPEC-0039 1140's threads: set 1 with flag 10, else set 0 (Medium); the normal camera.
         1140 => {
             state.set_word(pack, 0, state.flag(10) as i32);
@@ -9484,12 +9484,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 state.set(69, true);
             }
             out.actions.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::MoveHero { locator: if first { 2 } else { 3 } }]);
-            // The doors stand open from here on, as Init poses them on any load with 252 set: the
-            // spec names the helpers but not this call's place in the routine (R-0226).
-            if !first {
-                out.actions.extend([4, 3, 5, 6, 1, 2].map(|obj| Action::InitObjOn { obj, end: true }));
-            }
             out.actions.push(Action::FadeIn { seconds: 0.5, wait: false });
+            // R-0226: under the fade-in the pairs (3, 4) and (5, 6) swing open, the routine waits for object 6, and the pair
+            // (1, 2) stays shut until the next load.
+            if !first {
+                out.actions.extend([(4, false), (3, false), (5, false), (6, true)].map(|(obj, wait)| Action::PlayAnim { obj, speed: 1.0, wait }));
+            }
         }
         // The library (routine 11, triggers 4 to 8; nothing once 256 is set): the entry plate (4,
         // on contact, once per load while 253 is clear) and the four books (5 to 8: the flag clear
@@ -16489,12 +16489,12 @@ fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
 }
 
 /// SPEC-0050 section 4: the buy hooks. Each shows its line on a buy of its item while its flag
-/// is clear; every hook passes handled 0, so the purchase then completes.
+/// is clear and writes the record's flag word, which cancels the buy (SPEC-0030 row 260).
 pub fn on_buy(pack: u32, item: u16, s: &GameState) -> Vec<Action> {
     let line = match (pack, item) {
         (856, 113) if !s.flag(220) => 19,
         (859, 130) if !s.flag(220) => 34,
-        (1140, 116) if !s.flag(220) && s.word(1140, 0) == 1 => 0,
+        (1140, 116) if !s.flag(220) => 0,
         (1433, 109) if !s.flag(248) => 20,
         _ => return Vec::new(),
     };

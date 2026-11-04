@@ -1,6 +1,6 @@
 # SPEC-0052: In-engine cutscenes
 
-- Answers: none (proposed topic; cross-references SPEC-0027, SPEC-0028, SPEC-0030, SPEC-0033, SPEC-0040); proactive (open close-out)
+- Answers: proactive (open question sweep, round 10); none (proposed topic; cross-references SPEC-0027, SPEC-0028, SPEC-0030, SPEC-0033, SPEC-0040); proactive (open close-out); proactive (open question sweep, script details); proactive (open question sweep, round 6); proactive (spec consistency pass)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00. Check the serial, and check that the level modules named in the worked examples (archive resources 985 and 1217) load as level modules.
 - Confidence: High for the camera track layout, key sampling and play timing, the screen-effect object (fields, per-pass arithmetic, bar geometry, draw order), the request rules, frame counts as game ticks, the locator sample formula, the wait rules and the absence of any scene skip; Medium-High for the exact tick on which fades and bars finish (the add rule of SPEC-0008); Medium for the teleport curtain quirk, the pass on which a camera wait resumes, the look-at orientation of target plays, the tether and the control-lock restore; Low for the locator record fields other than the position. Movies in scenes: High for the fixed indices and for which routine of the final fight plays movies 78, 80 and 85; High for the finale gate; Medium-High for the movie 4 block; Medium for the reach of the other packs; Medium-High for movies 71 and 72 not playing. Per section.
@@ -9,7 +9,7 @@
 
 An in-engine cutscene is not a separate system. It is an ordinary level control thread (SPEC-0030): a script body that runs straight-line host calls in order. Examples are moving the hero to a locator, playing an entity animation, fading the screen, sweeping letterbox bars, playing a camera track, and showing dialogue lines. A blocking call gives up one tick per loop iteration and resumes when its condition holds. There is no timeout. There is no timeline asset. Animated-looking positions come from a locator table sampled when the call runs, and camera motion comes from keyframed camera tracks (SPEC-0027, SPEC-0028).
 
-The clean side can build cutscenes as scripted sequences over these pieces: a per-tick thread runner that honours the wait rules, a locator reader and sampler, a camera track player that interpolates keys, one screen-effect object (fade and letterbox bars) updated and drawn once per pass on top of everything else, and the control-state rules. The original has no player-facing skip of an in-engine scene (section "Skipping"). A scene can also queue a full-screen movie with the play command and a fixed movie index; the game flow plays the queue (SPEC-0026). Section "Movies in scenes" gives the scene movies that matter, including the three of the final fight.
+The clean side can build cutscenes as scripted sequences over these pieces: a per-tick thread runner that honours the wait rules, a locator reader and sampler, a camera track player that interpolates keys, one screen-effect object (fade and letterbox bars) updated and drawn once per pass over the world and under the HUD and menus (SPEC-0046, Per-frame draw order), and the control-state rules. The original has no player-facing skip of an in-engine scene (section "Skipping"). A scene can also queue a full-screen movie with the play command and a fixed movie index; the game flow plays the queue (SPEC-0026). Section "Movies in scenes" gives the scene movies that matter, including the three of the final fight.
 
 ## Where it lives on the disc
 
@@ -38,7 +38,7 @@ Array A record (0x50 bytes, one per locator):
 | +0x30 | 16 bytes | 4 x float32 | position x, y, z, then w | High for position; Low for the meaning of w (seen values 0.625 and 4.76; it is carried into the sample's w, see Locator moves) |
 | other bytes | | | no encoded meaning (unknowable); small integers and 0xFFFFFFFF words occur; ignore | Low |
 
-Array B record (0x50 bytes): byte +0x4F is a runtime flag. The loader clears it to 0 for each record. Its meaning is open.
+Array B record (0x50 bytes, the ambient-sound and adventure-zone volumes of SPEC-0031 and SPEC-0009): byte +0x4F is the start-delay counter of an ambient loop. The loader clears it to 0 for each record. It has no effect on cutscenes (High).
 
 ### Camera track table (type 28 chunk)
 
@@ -184,7 +184,7 @@ Given the track time t in seconds (High):
 
 ### Screen effect: per-pass update and draw
 
-The screen effect is updated and drawn once per main-loop pass, after the HUD and the menus are drawn, so it covers them. Every frame count below is a count of these updates, which is one per game tick. Confidence High; float detail Medium (Test vectors).
+The screen effect is updated and drawn once per main-loop pass, after the world is drawn and before the HUD and the menus, so the HUD and menus are drawn over the fade and the bars (SPEC-0046, steps 11 and 12). Every frame count below is a count of these updates, which is one per game tick. Confidence High; float detail Medium (Test vectors).
 
 1. **Delay.** If the bar delay is 1 or more, it goes down by 1; otherwise bar progress += bar step.
 2. **Bar clamp.** If (step < 0 and progress < target) or (step > 0 and progress > target): progress = target, done flag = 1, step = 0. Equality does not clamp: a sum that lands exactly on the target sets the done flag only on the next update, when the sum overshoots.
@@ -379,7 +379,7 @@ Numbers of removed questions are not reused.
 1. The meaning of the source vector at +0x80 in the locator sample. Answered: the sample rule and the target's second vector (0, 0, 0, 1) are in Locator moves.
 2. Answered: PlayCamera takes (track, WAIT, end mode, speed); see SPEC-0030 (row 34) and Camera track playback.
 3. Resolved: the screen effect draws the bars itself as two full-width rectangles, progress x 32 pixels high in mode 0, progress x 224 in mode 1, and swept from 32 to 225 in mode 2 (Screen effect: per-pass update and draw).
-4. Resolved: the update runs once per main-loop pass, after the HUD (Screen effect: per-pass update and draw).
+4. Resolved: the update runs once per main-loop pass, before the front end draws the HUD, so the HUD is drawn over it (Screen effect: per-pass update and draw).
 5. Resolved: the tether is the target object's locator link (a locator record, plus a host object for the animated form). On every object update the base of the target's position is recomputed from that link: the locator's current position, with the host's pose applied when a host is named, and for the static form the record's position point; the object's root animation is added to the base, and the +0x90 offset as well when the mode byte is 1 or 3 (SPEC-0028, section 7.1, step 5; SPEC-0030 rows 124 and 130). The target therefore follows the locator for as long as the link stays (High).
 7. Locator record bytes other than the position, the w component and the array B flag: no sampled move uses them (Open question 15), so they have no effect on cutscenes; their authored meaning is not encoded (unknowable). The rewrite stores them and ignores them.
 8. Resolved: 0x19 is the talking state, 0x33 the scripted one-shot animation and 0x37 the scripted looped animation (Control states, above). The state-code discrepancy with SPEC-0033 does not exist; SPEC-0033 uses decimal numbers (High). Test vector: PlayHeroAnim sets state 51 (0x33); at progress 0.995 with the flag word +0x3D0 equal to 0 the state becomes 33 (0x21); with the flag word 2 it becomes 1. LoopHeroAnim with a counter of 3 sets state 55 (0x37); after three ticks the state becomes 33 (flag zero) or 1.
@@ -395,6 +395,6 @@ Numbers of removed questions are not reused.
 18. Resolved: the block ends an eight-leg escort thread, started by trigger 17 or by the area thread under flags 10, 11, 127 and 136. Flag 136 has no other setter, so it plays at most once per game (Movies in scenes). **[Medium-High]**
 19. Resolved (Medium-High): fades and bars finish on the update given in Test vectors (round toward zero; SPEC-0008, Platform arithmetic).
 20. The teleport curtain (Edge cases): the arithmetic of the two back-to-back requests is fixed by the screen-effect rules (progress stays 0, so no curtain is drawn; Medium-High), and only the on-screen look is unconfirmed (needs a runtime check). Default if unresolved (rewrite choice): implement the request arithmetic as specified in Edge cases and draw nothing for the curtain. Answers: proactive (open close-out).
-21. The axis signs of the look-at orientation of target plays are a visual outcome. Default if unresolved (rewrite choice): face the target with the entity facing rule of the character spec, yaw = atan2(x, z) (needs a runtime check). The type-28 head byte +0x28 has no encoded meaning (unknowable); ignore it.
+21. Resolved (High for the construction, Medium-High for the sign because the cross-product order was confirmed against the machine code of the vector unit): the look-at orientation of target plays uses the camera frame of SPEC-0027 (rows right, up, forward; the camera looks along its third row). forward = (target anchor - eye) normalised. A first side axis is the cross product (sampled up row x forward), normalised, where the sampled up row is the second row of the orientation the track key gives at that time. When the sum of that axis's |x| and |z| exceeds 0.01, its y is set to 0 (it is not renormalised here); otherwise it is kept as it is. Then up = (forward x side) normalised, and the stored right row = up x forward, so the three rows are orthonormal; the stored rows are right, up, forward, each with fourth lane 0. With a sampled up row of (0, 1, 0) the right row is (forward z, 0, -forward x) normalised, and up has a positive y. The sampled up row is not forced to world up: a key whose orientation is tilted gives a tilted frame. The type-28 head byte +0x28 has no encoded meaning (unknowable); ignore it.
 22. Resolved: every fade site has a fixed colour. Out of 510 sites, 463 are black, 37 white, 8 purple and 2 orange (Screen effect: requests). **[High]**
 23. Resolved: triggers 3 to 5 with the prompt showing (object 12, 14 or 16 inactive), button 0 pressed and the lever word at +1. The first pair tints the camera track dark blue and the second clears it (Screen effect: requests). **[High]**

@@ -161,16 +161,38 @@ impl Effects {
         true
     }
 
-    /// Stop an instance: its voices are released (or killed), and it issues no more records.
+    /// Stop an instance (SPEC-0031 Stopping a cue and its stop records): its voices are released (or killed), then the records
+    /// after the cue's first end record run at once with their delays ignored; voices those start are not released.
     pub fn stop(&mut self, id: usize, kill: bool) {
-        for i in self.instances.iter_mut().filter(|i| i.id == id) {
-            i.done = true;
-            i.stopping = true;
-        }
         if kill {
             self.synth.kill(id);
         } else {
             self.synth.release_child(id);
+        }
+        for k in 0..self.instances.len() {
+            if self.instances[k].id != id || self.instances[k].stopping {
+                continue;
+            }
+            self.instances[k].stopping = true;
+            self.instances[k].done = false;
+            let i = &self.instances[k];
+            let first = i.block.cues[i.cue].first;
+            let end = i.end;
+            let mut pc = (first..end).find(|&j| i.block.commands[j].kind == 43).map_or(end, |j| j + 1);
+            if !kill {
+                for _ in 0..10_000 {
+                    if pc >= end {
+                        break;
+                    }
+                    let cmd = self.instances[k].block.commands[pc];
+                    let (r, next) = self.handle(k, pc, cmd);
+                    if self.instances[k].done || r < 0 {
+                        break;
+                    }
+                    pc = next;
+                }
+            }
+            self.instances[k].done = true;
         }
     }
 
@@ -260,7 +282,15 @@ impl Effects {
                 let past = (next..i.end).find(|&j| i.block.commands[j].kind == 22).map_or(i.end, |j| j + 1);
                 (0, past)
             }
-            24 => (-1, pc),
+            // SPEC-0031 type 24: when it runs, the cue is stopped.
+            24 => {
+                let id = self.instances[k].id;
+                if self.instances[k].stopping {
+                    return (-1, pc);
+                }
+                self.stop(id, false);
+                (-1, pc)
+            }
             25 | 39 => {
                 let (n, m) = (b[0].max(1) as usize, b[1] as usize);
                 let key = (self.instances[k].block.number, pc);
@@ -327,13 +357,14 @@ impl Effects {
             34 => {
                 let v = var(&self.instances[k], b[0]);
                 let x = b[2] as i32;
-                let hold = match b[1] {
+                // SPEC-0031 type 34, a conditional skip: on a failed test the next record is skipped, delay and all.
+                let pass = match b[1] {
                     0 => v < x,
                     1 => v == x,
                     2 => v > x,
-                    _ => false,
+                    _ => true,
                 };
-                if hold { (-1, pc) } else { (0, next) }
+                (0, if pass { next } else { next + 1 })
             }
             36 => {
                 let i = &self.instances[k];
@@ -452,19 +483,32 @@ mod tests {
         }
         assert_eq!(picks, vec![Some(5), Some(9), Some(5)]);
         // Label and goto: the goto skips a variable set.
-        let g = block(vec![cmd(36, [1, 0, 0], 0), cmd(30, [0, 1, 0], 0), cmd(35, [1, 0, 0], 0), cmd(30, [1, 2, 0], 0), cmd(24, [0; 3], 0)], vec![CueDef { volume: 120, count: 5, ..Default::default() }]);
+        let g = block(vec![cmd(36, [1, 0, 0], 0), cmd(30, [0, 1, 0], 0), cmd(35, [1, 0, 0], 0), cmd(30, [1, 2, 0], 0), cmd(20, [0; 3], 10_000)], vec![CueDef { volume: 120, count: 5, ..Default::default() }]);
         let mut e = Effects::default();
         e.play(3, g, 0, 1024, None);
         let i = &e.instances[0];
         assert_eq!((i.vars[0], i.vars[1]), (0, 2));
-        // A hold keeps the instance alive.
+        // A long delay keeps the instance alive.
         e.update();
         assert!(e.playing(3));
     }
 
+    /// SPEC-0031: type 34 skips the next record on a failed test; type 24 stops the cue and runs the stop records.
+    #[test]
+    fn skip_and_stop_records() {
+        let b = block(vec![cmd(34, [0, 1, 5], 0), cmd(30, [1, 9, 0], 0), cmd(30, [2, 7, 0], 0), cmd(20, [0; 3], 10_000)], vec![CueDef { volume: 120, count: 4, ..Default::default() }]);
+        let mut e = Effects::default();
+        e.play(1, b, 0, 1024, None);
+        assert_eq!((e.instances[0].vars[1], e.instances[0].vars[2]), (0, 7));
+        let s = block(vec![cmd(24, [0; 3], 0), cmd(43, [0; 3], 0), cmd(30, [3, 4, 0], 0)], vec![CueDef { volume: 120, count: 3, ..Default::default() }]);
+        let mut e = Effects::default();
+        e.play(2, s, 0, 1024, None);
+        assert!(e.instances.first().is_none_or(|i| i.done && i.vars[3] == 4));
+    }
+
     #[test]
     fn instance_limits() {
-        let one = |flags: u16| block(vec![cmd(24, [0; 3], 0)], vec![CueDef { volume: 120, count: 1, limit: 2, flags, ..Default::default() }]);
+        let one = |flags: u16| block(vec![cmd(20, [0; 3], 10_000)], vec![CueDef { volume: 120, count: 1, limit: 2, flags, ..Default::default() }]);
         // Limit 2 with flag 0x20: a third play stops the oldest.
         let b = one(0x8 | 0x20);
         let mut e = Effects::default();

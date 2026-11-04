@@ -6248,7 +6248,7 @@ fn sync_fade(
             } else {
                 node.bottom = Val::Px(0.0);
             }
-            commands.spawn((node, BackgroundColor(Color::BLACK), Visibility::Hidden, GlobalZIndex(2999), LetterBar));
+            commands.spawn((node, BackgroundColor(Color::BLACK), Visibility::Hidden, GlobalZIndex(4), LetterBar));
         }
     }
     let h = state.play.bars.height() / 448.0 * 100.0;
@@ -6261,7 +6261,8 @@ fn sync_fade(
             Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
             BackgroundColor(Color::NONE),
             Visibility::Hidden,
-            GlobalZIndex(3000),
+            // SPEC-0046 frame steps 11 and 12: the HUD (10) and the menus draw on top of the fade and the bars.
+            GlobalZIndex(5),
             FadeOverlay,
         ));
         return;

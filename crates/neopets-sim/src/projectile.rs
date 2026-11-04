@@ -516,7 +516,8 @@ pub fn spawn(m: &Missile, element: i32, owner: u64, launch: Vec3, hero: Vec3, (o
     let life = |v: f32| if v > 0.0 { (m.range / v) as i32 } else { 0 };
     if lobbed {
         let (vel, l) = ballistic(launch, aim, v);
-        s = Setup { kind: 8, visual: 23, damage: 3.0, radius: 1.0, velocity: vel, lifetime: l, key: m.key as i32, ..s };
+        // SPEC-0038 Lobbed summon: the seed carries its own effect ids, whatever the row's.
+        s = Setup { kind: 8, visual: 23, damage: 3.0, radius: 1.0, velocity: vel, lifetime: l, key: m.key as i32, effects: [2127, -1, 412, -1, 412, 412], ..s };
     } else {
         match m.flight {
             0 => {

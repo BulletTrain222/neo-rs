@@ -1,6 +1,6 @@
 # SPEC-0065: Common enemy build guides, part 2
 
-- Answers: R-0158; R-0184; proactive (weapon box); proactive (common enemy AI); R-0124; proactive (enemy claim check pass 3); proactive (Crokabek freeze); proactive (timing pass); proactive (enemy reach pass); proactive (reach pass 2); proactive (movement pass); proactive (enemy sweep); proactive (enemy sweep); R-0150 (Giant Slorg against the first sword); R-0149 (player's answer per ranged kind); proactive (open close-out); R-0199 (the Crokabek lunge on a hero standing still); R-0200 (when the Park Shrine Harris load); R-0223 (how a Shrine Harris reaches the stage-4 column)
+- Answers: proactive (open question sweep, round 5); R-0158; R-0184; proactive (weapon box); proactive (common enemy AI); R-0124; proactive (enemy claim check pass 3); proactive (Crokabek freeze); proactive (timing pass); proactive (enemy reach pass); proactive (reach pass 2); proactive (movement pass); proactive (enemy sweep); proactive (enemy sweep); R-0150 (Giant Slorg against the first sword); R-0149 (player's answer per ranged kind); proactive (open close-out); R-0199 (the Crokabek lunge on a hero standing still); R-0200 (when the Park Shrine Harris load); R-0223 (how a Shrine Harris reaches the stage-4 column); proactive (open question sweep, round 6); proactive (timeline and reward check); proactive (open question sweep, round 10); proactive (open question sweep, round 12)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: High for the row values, animation tables, clip gate ticks, attack arithmetic and the notice, wake, hidden and alarm rules. Medium-High for the idle states (wander, patrol, sentry), the tick offsets of the sequencer and the grab machine. Medium for weapon contact geometry, hurt-shape geometry and the places a section marks Medium. Each kind states its own confidence.
@@ -304,7 +304,7 @@ Default 8, emerge distance 12, cue word 0, no group; the hero stands still facin
 | Tick | Event |
 |---|---|
 | 0 | Wake test passes (sub-state 1). Until now the Tentacle was hidden and the hero's swings passed through it |
-| 1 | Emerge clip 10 requested (gate 156); visible and hittable from now |
+| 1 | Emerge animation 10 (clip 17) requested (gate 156); visible and hittable from now |
 | 157 | Gate passes: agro. Tick 158: set-up (outer 0). Tick 159: first choice |
 | 159 | d = 8.0: slot 2 49 percent, else slot 1 25, slot 0 6, nothing 20. (With nothing chosen the hide gate cannot fire because d = 8 <= 10.) Call the choice tick c |
 | c | Grab chosen (49 percent a tick): d = 8 > 6, so the Tentacle walks 0.3375 per tick for 6 ticks (2.0 units); s = c + 7 |
@@ -1267,7 +1267,7 @@ Mountain Crokabek in agro, hero standing 12 units away: t = 1 set-up; from t = 2
 #### Open questions
 
 - The two Steppe Plateau placements have no flying mesh. Resolved (High; proactive (open close-out)): they keep navigation index -1 and cannot walk or wander (see the shared edge cases).
-- The named-character ids 0 and 8 of the state-9 records. Resolved in part (Medium-High; proactive (open close-out)): the ids are record ordinals of the flyer's own region. The two Brightvale Outskirts flyers follow record 0, an unnamed Whinny, and hover 10 units from it until they notice the hero; the Crossroads flyer follows record 8, an unnamed Mortog, at 30 units; if the lookup fails they wander. Default if unresolved (rewrite choice): follow the record of the same ordinal in the flyer's own region (needs a runtime check only for an earlier slot region supplying the same id).
+- The named-character ids 0 and 8 of the state-9 records. Resolved (Medium-High): the ids are record ordinals of the flyer's own region, and on the disc that region is always the pack's own embedded region. The lookup compares the id with each character's world-wide id, which is the id base of its region block plus its record ordinal; the embedded block's base is 0 (the word that would set a base is never written), and each created slot region starts at 50 times (its slot number plus 1), that is 50 and up for the first slot, so a stored id of 0 or 8 can only match a record of the embedded block and never a slot region's record. The two Brightvale Outskirts flyers (pack 756, embedded records 1 and 3) follow embedded record 0, an unnamed Whinny, and hover 10 units from it until they notice the hero; the Crossroads flyer (pack 882, embedded record 10) follows embedded record 8, an unnamed Mortog, at 30 units; if the lookup fails they wander. Nothing else is needed: the three Cogham Village Spearmen (pack 843) are embedded too.
 
 ### Swamp Crokabek
 
@@ -2916,9 +2916,9 @@ Records are in the order 0 to 5 as listed; they face the centre.
 
 ### Batch open questions
 
-1. State 9 gait copying: the follower adopts the followed character's gait number and plays the state-9 walk (id 11). Resolved in part (Medium-High; proactive (open close-out)): the follower copies the followed character's locomotion mode each tick, so the three Cogham Village Spearmen move at the villagers' fast-run mode (19.30 units per second, SPEC-0038 Behavior 40) while they are at least the stay distance away, not at a walk of 5.0. Default if unresolved (rewrite choice): copy the mode and move at that mode's speed; the state-9 walk id 11 applies only to mode 0.
+1. State 9 gait copying: the follower adopts the followed character's gait number and plays the state-9 walk (id 11). Resolved (High): the follower stores the followed character's locomotion mode each tick (a ground follower always accepts it), so the three Cogham Village Spearmen use the villagers' fast-run mode while they are at least the stay distance away, not a walk of 5.0. They play the mode-2 run clip (animation 21), whose root travel is 0.3334 units per tick, 20.00 units per second; the villagers themselves run at 19.30 (SPEC-0038 Behavior 40). Copy the mode and move at the speed of that mode's clip; the state-9 walk id 11 applies only to mode 0.
 2. Which character a state-9 follower tracks if two characters share an id. Resolved (High; proactive (open close-out)): the first match in the lookup order, which is the world's embedded block and then its slot regions in order (not necessarily the follower's own region).
-3. The look point for sentries with +0xC4 = 1 (taken from the placed facing). Runtime-only (needs a runtime check): the point is the vector the character keeps in its look-point field, and the routine that writes it for a placed sentry is not established. Default if unresolved (rewrite choice): the home point plus the placed facing times 10.
+3. Resolved: the look target for sentries with +0xC4 = 1 is a direction, not a point. It is the raw placed-facing vector (kept at the character's home-facing field, y lane included; SPEC-0038, the placed-heading rule), and the turn step blends the current facing toward that direction with the row's aim weight, so a Death Knight sentry (weight 1.0) faces along its placed facing at once and keeps it (High: the turn step takes a direction, as for every other aim call).
 4. The ambush camera and sound cue of the Abandoned Mines Dark Ixi Archer (cue word 0). Resolved (High; proactive (open close-out)): the cue is the shared stinger 4 only, played when the group alarm wakes it (see the Swamp Tentacle, Open question 5); no camera is started.
 5. Hurt-capsule geometry for the Archer. Resolved (Medium; proactive (open close-out)): thirteen capsules on bones 0, 3, 4, 7, 10, 13, 16, 20, 23, 28, 31, 37 and 41, with lengths 0.79, 0.53, 0.79, 0.68, 0.93, 0.63, 0.57, 0.63, 0.57, 0.29, 0.29, 0.32 and 0.32 and radii 0.38, 0.23, 0.39, 0.38, 0.38, 0.15, 0.15, 0.15, 0.15, 0.30, 0.30, 0.30 and 0.30 (model units). The Dark Ixi Archer and the Henchman row 157 use the same rig.
 
@@ -3377,7 +3377,7 @@ Melee defence is the Basher's: block 50 / 15 / 5 percent by swing class, dodge n
 
 1. Whether the bone's first contact with a hero standing in front of the camera is a direct hit or needs the aim offset. Resolved (High; proactive (open close-out)): a direct hit; the aim inaccuracy is 0, so inside the camera cone the bone is aimed straight at the hero's feet + (0, 2.5, 0) with no offset, and the projectile step tests the 0.5 sphere against the hero's capsule each tick (SPEC-0029 Behavior 9); the 5.0 offset applies only outside the cone.
 2. Where emit point 0 lies on the model. Resolved (Medium-High; proactive (open close-out)): at the release tick s + 40 it is at (-2.04, 2.80, 0.70) from the Thrower's feet (side, up, forward; Distances and ranged reach table).
-3. Weapon contact geometry for the club: as the Basher (question 1); the distances are in this kind's Weapon reach table.
+3. Resolved (proactive (open question sweep, round 5)): weapon contact geometry for the club is the general rule, as for the Basher (question 1); the distances are in this kind's Weapon reach table.
 
 ### Werelupe Elite in the field (row 242)
 

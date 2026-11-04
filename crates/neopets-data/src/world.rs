@@ -156,6 +156,8 @@ pub struct Object {
     pub model_set: Option<Range<usize>>,
     /// The inline type-11 header (0x1D8): its payload's byte range in the pack.
     pub header: Option<Range<usize>>,
+    /// The type-10 groups the object owns (+0x1BC and +0x1C0; SPEC-0028 section 7.2).
+    pub panel_groups: Vec<u32>,
 }
 
 /// Every placed object of the first type-29 chunk of a world pack's top chain, in table order
@@ -172,6 +174,9 @@ pub fn objects(bytes: &[u8], top: &[Chunk]) -> Vec<Option<Object>> {
             if obj == 0 || obj + 0x1EC > p.len() {
                 return None;
             }
+            let groups = (u32_at(p, obj + 0x1BC).unwrap_or(0) as usize).min(16);
+            let list = u32_at(p, obj + 0x1C0).unwrap_or(0) as usize;
+            let panel_groups: Vec<u32> = (0..groups).filter_map(|n| u32_at(p, list + 4 * n)).collect();
             let rest = matrix_at(p, obj + OBJECT_MATRIX)?;
             let f = |at: usize| u32_at(p, obj + at).map(f32::from_bits).unwrap_or(1.0);
             let tree = u32_at(p, obj + OBJECT_TREE).filter(|&t| t != 0).and_then(|t| inline_chunk(p, t as usize)).map(|r| base + r.start..base + r.end);
@@ -179,7 +184,7 @@ pub fn objects(bytes: &[u8], top: &[Chunk]) -> Vec<Option<Object>> {
             let stream = u32_at(p, obj + 0x1E8).map(|o| o as usize).filter(|&o| o != 0 && o < p.len()).map(|o| base + o..base + p.len());
             let inline = |at: usize| u32_at(p, obj + at).filter(|&t| t != 0).and_then(|t| inline_chunk(p, t as usize)).map(|r| base + r.start..base + r.end);
             let (model_set, header) = (inline(0x1D4), inline(0x1D8));
-            Some(Object { tree, rest, scale: [f(0x140), f(0x144), f(0x148)], state: u32_at(p, obj + 0x1A0).unwrap_or(3) as i32, keys, stream, zone: p.get(obj + 0x1B8).copied().unwrap_or(0), model_set, header })
+            Some(Object { tree, rest, scale: [f(0x140), f(0x144), f(0x148)], state: u32_at(p, obj + 0x1A0).unwrap_or(3) as i32, keys, stream, zone: p.get(obj + 0x1B8).copied().unwrap_or(0), model_set, header, panel_groups })
         })
         .collect()
 }

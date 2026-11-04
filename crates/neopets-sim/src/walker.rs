@@ -90,6 +90,10 @@ pub struct Walker {
     t0: Option<usize>,
     steer_point: Vec3,
     latch: bool,
+    /// The goal locate's misses since it last held, and the last good goal: while the latch holds the goal stays there;
+    /// it clears after ceil(T / 50) misses, the batch that ends at the mesh's last triangle (SPEC-0056 TV-0056-R228a).
+    misses: usize,
+    last_goal: Option<Vec3>,
     pub arrived: bool,
     /// Blocked flag and timer (set to 120 by the confinement).
     pub blocked: bool,
@@ -131,6 +135,8 @@ impl Walker {
             t0: None,
             steer_point: position,
             latch: true,
+            misses: 0,
+            last_goal: None,
             arrived: false,
             blocked: false,
             blocked_timer: 0,
@@ -192,12 +198,21 @@ impl Walker {
         match m.locate_full(w) {
             Some(t) => {
                 self.latch = true;
+                self.misses = 0;
+                self.last_goal = Some(w);
                 (Some(t), w)
             }
-            None if self.latch => match self.last_valid {
-                Some(t) => (Some(t), m.centroid(t)),
-                None => (None, w),
-            },
+            None if self.latch => {
+                self.misses += 1;
+                if self.misses >= m.len().div_ceil(50) {
+                    self.latch = false;
+                }
+                match (self.last_goal, self.last_valid) {
+                    (Some(g), t) => (m.locate_full(g).or(t), g),
+                    (None, Some(t)) => (Some(t), m.centroid(t)),
+                    (None, None) => (None, w),
+                }
+            }
             None => {
                 let j = (self.id % 20) as f32 * 0.2 - 2.0;
                 let q = if self.id % 2 == 0 { [w[0] + j, w[1], w[2]] } else { [w[0], w[1], w[2] + j] };
@@ -434,6 +449,21 @@ mod tests {
         w.latch = true;
         assert!(!w.wander_edge(&meshes));
         w.confine(&meshes, [0.0; 3]);
+    }
+
+    /// TV-0056-R228a's rule: a goal off the mesh keeps the last good goal for ceil(T / 50) misses, then the nearest triangle
+    /// is searched from the goal, not from the walker.
+    #[test]
+    fn an_off_mesh_goal_searches_from_the_goal() {
+        let tri = |x: f32| [[x, 0.0, 0.0], [x + 3.0, 0.0, 0.0], [x, 0.0, 3.0]];
+        let m = NavMesh { neighbours: vec![[-1, -1, -1]; 2], triangles: vec![tri(0.0), tri(100.0)], ..Default::default() };
+        let mut w = Walker::new([101.0, 0.0, 1.0], [0.0, 0.0, 1.0], 1.0, 1.0, 10);
+        let inside = [101.0, 0.0, 1.0];
+        assert_eq!(w.goal(&m, inside).1, inside);
+        // One miss for a mesh of two triangles, with the last good goal kept.
+        assert_eq!(w.goal(&m, [-50.0, 0.0, 1.0]).1, inside);
+        // Then the centroid of the triangle nearest the goal, far from the walker.
+        assert_eq!(w.goal(&m, [-50.0, 0.0, 1.0]).1, m.centroid(0));
     }
 
     /// TV-0056-R194e: a reach needs the next edge too.
