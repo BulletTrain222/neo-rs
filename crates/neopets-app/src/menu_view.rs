@@ -196,6 +196,7 @@ pub fn sync_menu(
     mut cache: Local<MenuCache>,
     mut pool: Local<usize>,
 ) {
+    let in_play = state.as_ref().is_some_and(|s| s.play.spawned);
     let _span = crate::perf::span("sync_menu");
     let (Some(_state), Some(menu), Some(art)) = (state, menu, art) else { return };
     if cache.style != art.style {
@@ -242,8 +243,9 @@ pub fn sync_menu(
         ));
     }
     for mut v in &mut backdrop {
-        // The book reader's page stands over the frozen world (book_view), which the backdrop would hide.
-        *v = if draws.is_empty() || flow.current == menus::BOOK { Visibility::Hidden } else { Visibility::Inherited };
+        // In play the pages stand over the frozen world: SPEC-0035 G.3, the pause and options pictures are mostly transparent,
+        // and the book reader's page is drawn by book_view. Only the front end before a game has black behind it.
+        *v = if draws.is_empty() || in_play || flow.current == menus::BOOK { Visibility::Hidden } else { Visibility::Inherited };
     }
     if *pool < draws.len() {
         for i in *pool..draws.len() + 8 {

@@ -269,7 +269,8 @@ impl HeroAnim {
     /// start, Mirrored clips). Sub-part and face clips are never mirrored (none is on disc).
     pub fn request(&mut self, action: u32, force: bool) {
         self.action = action;
-        let main = self.families.first().and_then(|f| f.data.clip_for(action));
+        // SPEC-0036: an id with no clip is not ignored; it plays clip 0 of the family.
+        let main = self.families.first().filter(|f| !f.data.clips.is_empty()).map(|f| f.data.clip_for(action).unwrap_or(0));
         let mirror = self.families.first().and_then(|f| f.data.actions.get(action as usize)).is_some_and(|&a| a & anim::MIRROR_BIT != 0);
         let restart = main.is_some() && (force || main != self.families[0].current || mirror != self.families[0].mirror);
         if !restart {
@@ -279,7 +280,10 @@ impl HeroAnim {
         for f in &mut self.families {
             // The face clip is the override's when one is set, else the main id's.
             let id = if f.role == 2 { face.unwrap_or(action) } else { action };
-            let Some(c) = f.data.clip_for(id) else { continue };
+            if f.data.clips.is_empty() {
+                continue;
+            }
+            let c = f.data.clip_for(id).unwrap_or(0);
             let clip = &f.data.clips[c];
             f.record.start(
                 ClipInfo {

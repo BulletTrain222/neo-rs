@@ -4875,7 +4875,12 @@ fn enter_interior(pack: u32, s: &mut GameState) -> Vec<Action> {
             turn(s, a, 2)
         }
         859 => say(if f(s, 48) { 0 } else if f(s, 47) { 2 } else if f(s, 507) { 4 } else if f(s, 506) { 6 } else { 8 }),
-        1005 | 1011 | 1020 => say(if f(s, 86) { 0 } else { 3 }),
+        1005 => say(if f(s, 86) { 0 } else { 3 }),
+        // SPEC-0043 1011 and 1020: 86 picks lines 0 to 2 or 3 to 5, in turn.
+        1011 | 1020 => {
+            let line = turn_line(s, pack, 5, f(s, 86) as i32, &if f(s, 86) { [0, 1, 2] } else { [3, 4, 5] });
+            say(line)
+        }
         1008 => {
             let case = f(s, 86) as i32 + 1;
             if s.word(pack, 4) != case {
@@ -14005,9 +14010,11 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
         1423 if state.flag(106) && state.flag(104) => vec![Action::Message { line: if state.flag(102) { 0 } else { 3 } }],
         // SPEC-0043 750 on-enter (Medium): two lines in turn per case, 27/28 (421), 29/30 (420),
         // 31/32 (76) or 33/34, with the routine's shared counter.
-        // SPEC-0043 749 on-enter: with 76 line 0 in the conversation frame, else line 2.
-        749 if state.flag(76) => vec![Action::Talk { line: 0 }],
-        749 => vec![Action::Message { line: 2 }],
+        // SPEC-0043 749 on-enter: marker and counter; 76 picks lines 0 and 1 or 2 and 3, alternating.
+        749 => {
+            let set = state.flag(76);
+            vec![Action::Talk { line: turn_line(state, pack, 5, set as i32, &if set { [0, 1] } else { [2, 3] }) }]
+        }
         750 => {
             let (f421, f420, f76) = (state.flag(421), state.flag(420), state.flag(76));
             let lines = if f421 { [27, 28] } else if f420 { [29, 30] } else if f76 { [31, 32] } else { [33, 34] };
@@ -17317,7 +17324,55 @@ fn cycle(lines: &[u16]) -> Lines {
 
 /// Run a proximity routine: the first branch whose test holds picks a line (with its side
 /// effects); the talk frame (SetConversationTarget, LevelMsg, EndConversation) wraps it.
+/// SPEC-0043 and SPEC-0041 rotating proximity routines: marker plus counter, or one own counter per routine.
+fn talk_rotated(pack: u32, routine: u8, s: &mut GameState) -> Option<Vec<Action>> {
+    let three = |a: u16| [a, a + 1, a + 2];
+    let by = |s: &mut GameState, flag: u16, on: u16, off: u16| {
+        let set = s.flag(flag);
+        cycle_in(s, pack, 0, set as i32, &three(if set { on } else { off }))
+    };
+    Some(match (pack, routine) {
+        (749, _) => by(s, 76, 6, 9),
+        (1008, _) => by(s, 86, 12, 15),
+        (1020, _) => by(s, 86, 10, 13),
+        // 1011 Nisha: with 86 the first line once, then the other two in turn.
+        (1011, _) if s.flag(86) => {
+            if s.word(pack, 10) != 2 {
+                s.set_word(pack, 10, 2);
+                s.set_word(pack, 11, 0);
+            }
+            let c = s.word(pack, 11);
+            s.set_word(pack, 11, if c >= 2 { 1 } else { c + 1 });
+            vec![Action::Talk { line: 10 + c as u16 }]
+        }
+        (1011, _) => cycle_in(s, pack, 0, 0, &three(13)),
+        // 1335: own counters; entity 34 first draws, and a 1 shows nothing and leaves its counter.
+        (1335, 34) if draw(s, pack, 1, 3) == 1 => Vec::new(),
+        (1335, 34) => cycle_shared(s, pack, 34, &three(3)),
+        (1335, 31) => cycle_shared(s, pack, 31, &three(15)),
+        (1335, 32) => cycle_shared(s, pack, 32, &three(9)),
+        (1335, 33) => cycle_shared(s, pack, 33, &three(12)),
+        (1335, 35) => cycle_shared(s, pack, 35, &three(6)),
+        (1335, 13) => cycle_shared(s, pack, 13, &three(24)),
+        (1173, 4) if s.flag(30) => cycle_in(s, pack, 4, 0, &three(1)),
+        (1173, 4) => cycle_in(s, pack, 4, 1, &[4, 5, 6, 7, 8]),
+        // 1414 (registered with 102): Luckett's message 0 once, then a five-message cycle; the others three-line cycles.
+        (1414, 6) if s.flag(102) => {
+            let c = s.word(pack, 11);
+            s.set_word(pack, 11, if c >= 5 { 1 } else { c + 1 });
+            vec![Action::Talk { line: c as u16 }]
+        }
+        (1414, 9) if s.flag(102) => cycle_shared(s, pack, 9, &three(6)),
+        (1414, 8) if s.flag(102) => cycle_shared(s, pack, 8, &three(12)),
+        (1414, 7) if s.flag(102) => cycle_shared(s, pack, 7, &three(9)),
+        _ => return None,
+    })
+}
+
 pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
+    if let Some(v) = talk_rotated(pack, routine, state) {
+        return v;
+    }
     if pack == 722 {
         return talk_722(routine, state);
     }
@@ -17493,18 +17548,17 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     if pack == 749 {
         return if state.flag(76) { vec![Action::Talk { line: 4 }] } else { vec![Action::Talk { line: 6 }, Action::Message { line: 9 }] };
     }
-    // SPEC-0043 752 proximity: 266: line 0 in the frame; 265: line 3; 76: 265 set and line 6;
-    // else line 7.
+    // SPEC-0043 752 proximity (Brendel): one shared counter, no marker; 76 sets 265 with line 6, with no rotation.
     if pack == 752 {
         return if state.flag(266) {
-            vec![Action::Talk { line: 0 }]
+            cycle_shared(state, pack, 0, &[0, 1, 2])
         } else if state.flag(265) {
-            vec![Action::Message { line: 3 }]
+            cycle_shared(state, pack, 0, &[3, 4, 5])
         } else if state.flag(76) {
             state.set(265, true);
-            vec![Action::Message { line: 6 }]
+            vec![Action::Talk { line: 6 }]
         } else {
-            vec![Action::Message { line: 7 }]
+            cycle_shared(state, pack, 0, &[7, 8, 9])
         };
     }
     if pack == 745 {
@@ -18564,13 +18618,15 @@ mod tests {
         let mut s = GameState::default();
         on_init(749, &mut s);
         assert_eq!(s.blackboard.get(&(2, 20)), Some(&40));
-        assert_eq!(on_enter(749, &mut s), vec![Action::Message { line: 2 }]);
-        assert_eq!(on_talk(749, 1, &mut s), vec![Action::Talk { line: 6 }, Action::Message { line: 9 }]);
+        assert_eq!(on_enter(749, &mut s), vec![Action::Talk { line: 2 }]);
+        assert_eq!(on_talk(749, 1, &mut s), vec![Action::Talk { line: 9 }]);
         assert!(entity_setup(749, &mut s).len() <= 1 && s.entity_tables.contains_key(&749));
         // 752: 76 sets 265 with line 6; then line 3.
         s.set(76, true);
-        assert_eq!(on_talk(752, 1, &mut s), vec![Action::Message { line: 6 }]);
-        assert_eq!(on_talk(752, 1, &mut s), vec![Action::Message { line: 3 }]);
+        // SPEC-0043's vector: 6, 3, 4, 5, 3.
+        for line in [6, 3, 4, 5, 3] {
+            assert_eq!(on_talk(752, 1, &mut s), vec![Action::Talk { line }]);
+        }
         assert_eq!(on_enter(749, &mut s), vec![Action::Talk { line: 0 }]);
         // 776: the leave posts 10 for eW 31; the arrival with 10 moves the hero to locator 1.
         assert_eq!(on_teleport(776, 0, &mut s)[0], Action::LeaveInterior { slot: 44 });

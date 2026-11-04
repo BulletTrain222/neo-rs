@@ -4542,6 +4542,15 @@ impl Play {
             }
             None => {
                 self.loco.set_attack(None);
+                // SPEC-0036 End of an air shot or swat: above 0.25 she falls on with her velocity; else it is cleared.
+                if matches!(before, 11 | 12) {
+                    if self.loco.body.gap > 0.25 {
+                        self.loco.state = 7;
+                        self.loco.phase = 5;
+                    } else {
+                        self.loco.body.velocity = [0.0; 3];
+                    }
+                }
                 return;
             }
         }
@@ -4628,12 +4637,9 @@ impl Play {
         let t = if full { mote.and_then(|id| neopets_sim::mote::power_index(1, id)).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0) } else { 1.0 };
         let status = (full && row.reaction != -1)
             .then(|| mote.and_then(|id| neopets_sim::mote::status_request(1, id, |k| self.design.attack_power(k))).map(|r| [row.reaction, r[1], r[2], r[3]]).unwrap_or([row.reaction, -1, -1, -1]));
-        // The shot's visual record (SPEC-0034): kind = the launch class. SPEC-0036 (R-0114): the
-        // step is the main clip's family-position field minus 111, and every shipped Roberta clip
-        // has 0 there, so the lookup fails and no table-backed flight or impact is attached.
-        // This build keeps step 0's ids as a stand-in so the shots are seen (without them a shot
-        // draws only the debug marker); what the original draws for them is asked in R-0120.
-        let visual = self.attack_fx.shot_tables.ids(class, 0, mote);
+        // The shot's visual record (SPEC-0034; R-0114): kind = the launch class, step = the held wand's id minus 111.
+        let step = self.weapon.map_or(0, |id| (id as usize).saturating_sub(111));
+        let visual = self.attack_fx.shot_tables.ids(class, step, mote);
         let mut launched = 0;
         for _ in 0..count {
             if self.hero_shots.len() >= 6 {
@@ -10679,12 +10685,9 @@ impl Play {
                         }
                     }
                 }
-                // On a ladder (state 41) the box primitives are skipped too: the mount's point 0.9
-                // out from a ladder on a wall lies inside the wall's box by the hero radius, so
-                // the push would stop the mount from ever aligning (this build's choice; the
-                // spec skips only the walls and blocks there; R-0108).
+                // SPEC-0033 Behavior 13: the box push does nothing for a hero in state 21, 38 or 41.
                 let before = *p;
-                if !noclip && hero_state != hero_states::LADDER {
+                if !noclip && !matches!(hero_state, 21 | 38 | 41) {
                     contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
                 }
                 // SPEC-0048 Solid for characters: the movable blocks' boxes; a top face sets the
