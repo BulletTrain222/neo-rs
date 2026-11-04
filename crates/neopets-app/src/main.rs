@@ -4,6 +4,7 @@ mod button_style;
 mod controls_page;
 mod character;
 mod controls;
+mod debug_tools;
 mod dev_menu;
 mod dev_spawn;
 mod stage_view;
@@ -964,6 +965,8 @@ fn main() {
     app.init_resource::<book_view::BookView>();
     app.add_systems(Update, book_view::sync_book.after(play_frame));
     app.add_systems(Update, pick_view::pick.after(play_frame));
+    app.init_resource::<debug_tools::DebugState>();
+    app.add_systems(Update, (debug_tools::track_events, debug_tools::save_report, debug_tools::show_panel, debug_tools::hide_hud, debug_tools::show_lines).after(play_frame));
     app.insert_resource(goal_start.map_or_else(story_run::GoalWalk::default, story_run::GoalWalk::open));
     app.add_systems(Startup, story_run::spawn_goal_panel);
     app.add_systems(Update, (story_run::goal_walk_step.before(play_frame), story_run::show_goal_panel));
@@ -4789,6 +4792,7 @@ fn play_trace(
     let mut last_block = String::new();
     let mut moving_before: Vec<bool> = Vec::new();
     let cross_at: Vec<u64> = std::env::var("NEOPETS_TRACE_CROSS").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
+    let mut replay = debug_tools::Replay::from_env();
     let switch_at: Vec<u64> = std::env::var("NEOPETS_TRACE_SWITCH").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     let mut flags_seen = play.state.flags.clone();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
@@ -5754,6 +5758,11 @@ fn play_trace(
                 pad.right_y = 0;
             }
             input.r2_held = (t + 5..t + 15).contains(&play.ticks);
+        }
+        // NEOPETS_REPLAY=dir: a bug report's start state, then its input, tick by tick (debug_tools; close, not exact: enemies
+        // and scripts are not in the snapshot).
+        if let Some(r) = replay.as_mut() {
+            r.apply(&mut play, &mut input);
         }
         play.tick(&input, pad);
         // Loads go through the same background loader as the window; the trace does not wait.

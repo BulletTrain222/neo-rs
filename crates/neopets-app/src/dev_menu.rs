@@ -43,6 +43,8 @@ pub struct DevMenu {
     note: String,
     /// A short message shown at the top of the screen for its frame count (F8 view saves).
     pub toast: Option<(String, u32)>,
+    /// The debug tools' switches.
+    pub debug: crate::debug_tools::Switches,
     /// The weapon list's cursor.
     weapon_at: usize,
     /// The cut and developer teleport's cursor, and where a teleport to a world with no entry puts the hero.
@@ -75,7 +77,9 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { want_picker: false, picking: false, group_at: 0, group: None, extra_at: 0, warp_point: None, haste_drag: None, open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
+        // NEOPETS_DEBUG holding "menu": the menu open from the start, for a picture of it.
+        let open = std::env::var("NEOPETS_DEBUG").is_ok_and(|v| v.contains("menu"));
+        Self { debug: crate::debug_tools::Switches::from_env(), want_picker: false, picking: false, group_at: 0, group: None, extra_at: 0, warp_point: None, haste_drag: None, open, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
     }
 }
 
@@ -162,19 +166,25 @@ enum Entry {
     Spawn,
     CloudBeast,
     BossFight,
+    Report,
+    Inspector,
+    Collision,
+    EventLog,
+    HideHud,
 }
 
 /// The menu's sections and their entries, in display order.
-const SECTIONS: [(&str, &[Entry]); 6] = [
+const SECTIONS: [(&str, &[Entry]); 7] = [
     ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Haste, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
     ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group]),
+    ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Collision, Entry::EventLog, Entry::HideHud]),
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::Spawn, Entry::BossFight, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints]),
     ("STORY", &[Entry::Flag]),
 ];
 
-const ENTRIES: [Entry; 25] = [
+const ENTRIES: [Entry; 30] = [
     Entry::God,
     Entry::Noclip,
     Entry::Haste,
@@ -187,6 +197,11 @@ const ENTRIES: [Entry; 25] = [
     Entry::Start,
     Entry::Extra,
     Entry::Group,
+    Entry::Report,
+    Entry::Inspector,
+    Entry::Collision,
+    Entry::EventLog,
+    Entry::HideHud,
     Entry::Heal,
     Entry::Hero,
     Entry::Kill,
@@ -241,7 +256,7 @@ fn other_column(i: usize) -> usize {
 
 fn kind(e: Entry) -> Kind {
     match e {
-        Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam => Kind::Toggle,
+        Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam | Entry::Inspector | Entry::Collision | Entry::EventLog | Entry::HideHud => Kind::Toggle,
         Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight => Kind::Choice,
         _ => Kind::Action,
     }
@@ -914,6 +929,27 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             }
             None => "Turn the free camera on first".into(),
         },
+        Entry::Report => {
+            dev.debug.report = true;
+            dev.open = false;
+            "Saving a bug report".into()
+        }
+        Entry::Inspector => {
+            dev.debug.inspector = !dev.debug.inspector;
+            format!("Inspector {}", if dev.debug.inspector { "on" } else { "off" })
+        }
+        Entry::Collision => {
+            dev.debug.collision = !dev.debug.collision;
+            format!("Collision view {}", if dev.debug.collision { "on" } else { "off" })
+        }
+        Entry::EventLog => {
+            dev.debug.log = !dev.debug.log;
+            format!("Event log {}", if dev.debug.log { "on" } else { "off" })
+        }
+        Entry::HideHud => {
+            dev.debug.hide_hud = !dev.debug.hide_hud;
+            format!("HUD {}", if dev.debug.hide_hud { "hidden" } else { "shown" })
+        }
         Entry::Maps => {
             for n in 1..=46 {
                 p.map_held(n);
@@ -1020,6 +1056,11 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Drop => ("Drop coins + that item here".into(), String::new()),
         Entry::Motes => ("Give every Mote".into(), String::new()),
         Entry::Maps => ("Give every treasure map".into(), String::new()),
+        Entry::Report => ("Save a bug report (End)".into(), String::new()),
+        Entry::Inspector => ("Inspector".into(), on(dev.debug.inspector)),
+        Entry::Collision => ("Collision view".into(), on(dev.debug.collision)),
+        Entry::EventLog => ("Event log".into(), on(dev.debug.log)),
+        Entry::HideHud => ("Hide HUD".into(), on(dev.debug.hide_hud)),
         Entry::Neopoints => (format!("Add Neopoints ({} now)", p.state.neopoints), format!("+{}", AMOUNTS[dev.amount])),
         Entry::Flag => {
             let q = flag_quests(dev, dev.flag);

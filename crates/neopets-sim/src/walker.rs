@@ -228,6 +228,11 @@ impl Walker {
         }
     }
 
+    /// The debug tools' inspector line.
+    pub fn debug(&self) -> String {
+        format!("mesh {:?} triangle {:?} goal latch {} misses {} last goal {:?} arrived {} blocked {} timer {}", self.mesh, self.current, self.latch, self.misses, self.last_goal, self.arrived, self.blocked, self.blocked_timer)
+    }
+
     /// SPEC-0056 Wander step 3: the walker is settled (its goal in its own triangle) within 2.5 of the
     /// plane of one of that triangle's boundary edges, or the goal latch has cleared.
     pub fn wander_edge(&self, meshes: &[NavMesh]) -> bool {

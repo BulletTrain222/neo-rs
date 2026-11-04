@@ -588,6 +588,71 @@ impl World {
     }
 }
 
+/// The debug tools' input recorder: the last minute of input and a snapshot of the story state every 30 s, enough to
+/// start a replay in a trace from about the same place. Enemies and scripts are not in the snapshot, so a replay is close,
+/// not exact.
+#[derive(Default)]
+pub struct Recorder {
+    inputs: std::collections::VecDeque<(u64, HeroInput)>,
+    snapshots: std::collections::VecDeque<Snapshot>,
+}
+
+struct Snapshot {
+    tick: u64,
+    pack: u32,
+    position: [f32; 3],
+    hp: i32,
+    neopoints: i32,
+    flags: Vec<u16>,
+    items: Vec<(u16, u32)>,
+}
+
+impl Recorder {
+    const KEEP: usize = 3600;
+
+    fn push(&mut self, tick: u64, input: &HeroInput, pack: u32, position: [f32; 3], s: &GameState, hp: i32) {
+        if tick % 1800 == 0 || self.snapshots.is_empty() {
+            self.snapshots.push_back(Snapshot { tick, pack, position, hp, neopoints: s.neopoints, flags: s.flags.iter().copied().collect(), items: s.items.iter().map(|(k, v)| (*k, *v)).collect() });
+            if self.snapshots.len() > 3 {
+                self.snapshots.pop_front();
+            }
+        }
+        self.inputs.push_back((tick, *input));
+        if self.inputs.len() > Self::KEEP {
+            self.inputs.pop_front();
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.inputs.len()
+    }
+
+    fn start(&self) -> Option<&Snapshot> {
+        let first = self.inputs.front().map_or(0, |i| i.0);
+        self.snapshots.iter().find(|s| s.tick >= first)
+    }
+
+    pub fn start_pack(&self, fallback: u32) -> u32 {
+        self.start().map_or(fallback, |s| s.pack)
+    }
+
+    /// The start snapshot's text and the input rows from it on.
+    pub fn export(&self) -> (String, String) {
+        let Some(s) = self.start() else { return (String::new(), String::new()) };
+        let flags: Vec<String> = s.flags.iter().map(u16::to_string).collect();
+        let items: Vec<String> = s.items.iter().map(|(k, v)| format!("{k}:{v}")).collect();
+        let start = format!("tick {}\npack {}\nposition {},{},{}\nhp {}\nneopoints {}\nflags {}\nitems {}\n", s.tick, s.pack, s.position[0], s.position[1], s.position[2], s.hp, s.neopoints, flags.join(","), items.join(","));
+        let b = |x: bool| x as u8;
+        let rows: Vec<String> = self
+            .inputs
+            .iter()
+            .filter(|i| i.0 >= s.tick)
+            .map(|(t, i)| format!("{t},{},{},{},{},{},{},{},{},{},{},{},{},{}", i.side, i.forward, b(i.run), b(i.jump), b(i.attack_held), b(i.attack), b(i.square), b(i.square_held), b(i.guard), b(i.r2_held), b(i.circle_held), b(i.cross_held), b(i.l2)))
+            .collect();
+        (start, rows.join("\n"))
+    }
+}
+
 /// The door touch test of a plane: within `reach` of it, inside its width and height.
 fn plane_touched(pl: &TeleportPlane, p: [f32; 3], reach: f32) -> bool {
     let d = [p[0] - pl.p[0], p[1] + 1.75 - pl.p[1], p[2] - pl.p[2]];
@@ -1266,6 +1331,8 @@ pub struct Play {
     /// The grab-line hang (state 28) and its cooldown (SPEC-0033 Behavior 9).
     line_hang: Option<neopets_sim::grab::Hang>,
     line_cooldown: u32,
+    /// The debug tools' recorder: the last minute of input.
+    pub recorder: Recorder,
     /// The hero's touched flag from the last motion step (see `record_tick`'s contact pass).
     touched: bool,
     /// The characters whose touch latch the hero's push set this tick and on the tick before
@@ -2273,6 +2340,7 @@ impl Play {
             line_hang: None,
             line_cooldown: 0,
             touched: false,
+            recorder: Default::default(),
             hero_touch: Default::default(),
             breakable_hits: Vec::new(),
             held_at: None,
@@ -10110,6 +10178,7 @@ impl Play {
     /// (ground step with the world swap search, root travel, constraint, gravity, contacts,
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
+        self.recorder.push(self.ticks, input, self.world.pack, self.loco.position(), &self.state, self.hero_hp);
         self.l1_held = input.guard;
         self.rope_y = -neopets_sim::camera::converter_a(pad.right_y);
         self.ticks += 1;
@@ -15924,6 +15993,180 @@ impl Play {
             }
         }
         world.climb_rest = Some(rest);
+    }
+
+    /// The debug tools' collision view: (kind, from, to) lines of the resident worlds (kinds: debug_tools::KINDS).
+    pub fn debug_lines(&self) -> Vec<(u8, [f32; 3], [f32; 3])> {
+        let mut out = Vec::new();
+        let hero = self.loco.position();
+        let near = |p: [f32; 3]| (p[0] - hero[0]).hypot(p[2] - hero[2]) < 300.0;
+        let add = |a: [f32; 3], s: f32, b: [f32; 3]| -> [f32; 3] { std::array::from_fn(|k| a[k] + s * b[k]) };
+        let boxed = |out: &mut Vec<(u8, [f32; 3], [f32; 3])>, kind: u8, o: [f32; 3], axes: [[f32; 3]; 3], e: [f32; 3]| {
+            let corner = |i: u8| {
+                let mut p = o;
+                for k in 0..3 {
+                    if i & (1 << k) != 0 {
+                        p = add(p, e[k], axes[k]);
+                    }
+                }
+                p
+            };
+            for i in 0..8u8 {
+                for k in 0..3 {
+                    if i & (1 << k) == 0 {
+                        out.push((kind, corner(i), corner(i | (1 << k))));
+                    }
+                }
+            }
+        };
+        let ring = |out: &mut Vec<(u8, [f32; 3], [f32; 3])>, kind: u8, c: [f32; 3], r: f32, y: f32| {
+            for n in 0..16 {
+                let (a, b) = (n as f32 * std::f32::consts::TAU / 16.0, (n + 1) as f32 * std::f32::consts::TAU / 16.0);
+                out.push((kind, [c[0] + r * a.cos(), c[1] + y, c[2] + r * a.sin()], [c[0] + r * b.cos(), c[1] + y, c[2] + r * b.sin()]));
+            }
+        };
+        for w in [&self.world].into_iter().chain(self.other.as_ref()) {
+            for m in &w.navmeshes {
+                for t in &m.triangles {
+                    for k in 0..3 {
+                        out.push((0, t[k], t[(k + 1) % 3]));
+                    }
+                }
+            }
+            for b in w.boxes.iter().filter(|b| near(b.origin)) {
+                boxed(&mut out, 1, b.origin, b.axes, b.extents);
+            }
+            for (c, r) in w.push_spheres.iter().filter(|s| near(s.0)) {
+                ring(&mut out, 2, *c, *r, 0.0);
+            }
+            for pl in w.planes.iter().filter(|p| near(p.p)) {
+                let (a, b, c, d) = (pl.p, add(pl.p, pl.w, pl.d), add(add(pl.p, pl.w, pl.d), pl.h, pl.q), add(pl.p, pl.h, pl.q));
+                out.extend([(3, a, b), (3, b, c), (3, c, d), (3, d, a), (3, a, c), (3, b, d)]);
+            }
+            let mut quad = |n: [f32; 4], u: [f32; 4], v: [f32; 4], lu: f32, lv: f32| {
+                if lu < 0.0 {
+                    return;
+                }
+                let o: [f32; 3] = std::array::from_fn(|k| -n[3] * n[k] - u[3] * u[k] - v[3] * v[k]);
+                let (ua, va) = ([u[0], u[1], u[2]], [v[0], v[1], v[2]]);
+                let (a, b, c, d) = (o, add(o, lu, ua), add(add(o, lu, ua), lv, va), add(o, lv, va));
+                out.extend([(4u8, a, b), (4, b, c), (4, c, d), (4, d, a)]);
+            };
+            for r in &w.rails {
+                quad(r.normal, r.u, r.v, r.lu, r.lv);
+            }
+            for r in &w.panels {
+                quad(r.normal, r.u, r.v, r.lu, r.lv);
+            }
+            for v in &w.all_volumes {
+                use neopets_sim::trigger::Shape;
+                match v.shape {
+                    Shape::Sphere { centre, radius } => {
+                        if near(centre) {
+                            ring(&mut out, 5, centre, radius, 0.0);
+                        }
+                    }
+                    Shape::Cylinder { base, axis, length, radius } => {
+                        if near(base) {
+                            ring(&mut out, 5, base, radius, 0.0);
+                            ring(&mut out, 5, base, radius, axis[1] * length);
+                        }
+                    }
+                    Shape::Rectangle { origin, axes, extents } => {
+                        if near(origin) {
+                            boxed(&mut out, 5, origin, axes, extents);
+                        }
+                    }
+                }
+            }
+            if let Some(g) = &w.ground {
+                let mut seen = std::collections::HashSet::new();
+                for dx in -4..=4 {
+                    for dz in -4..=4 {
+                        for f in g.frames_at(hero[0] + dx as f32 * 16.0, hero[2] + dz as f32 * 16.0) {
+                            if seen.insert(f.start.map(f32::to_bits)) {
+                                let run = [f.run[0], f.run[1], f.run[2]];
+                                let top = [f.top[0], f.top[1], f.top[2]];
+                                let (a, b) = (f.start, add(f.start, f.length, run));
+                                let (c, d) = (add(b, f.height, top), add(a, f.height, top));
+                                out.extend([(6u8, a, b), (6, b, c), (6, c, d), (6, d, a)]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The debug tools' inspector: the hero, and the character nearest the view's centre.
+    pub fn debug_inspect(&self) -> String {
+        let h = self.loco.position();
+        let mut s = format!(
+            "HERO {} at {:.1}, {:.1}, {:.1}\nstate {} phase {} action {} gap {:.2} hp {}/{} mp {}/{} busy {}\nworld {} other {:?} tick {} fade {:.0}->{:.0}\n",
+            if self.hero_index == 0 { "Tor" } else { "Roberta" },
+            h[0],
+            h[1],
+            h[2],
+            self.loco.state,
+            self.loco.phase,
+            self.hero.action(),
+            self.loco.body.gap,
+            self.hero_hp,
+            self.hero_max,
+            self.hero_mp,
+            self.hero_mp_max,
+            self.hero_busy(),
+            self.world.pack,
+            self.other.as_ref().map(|o| o.pack),
+            self.ticks,
+            self.fade.alpha,
+            self.fade.target,
+        );
+        let (eye, forward, _, _) = self.view();
+        let forward = unit(forward);
+        let score = |c: &Character| {
+            let d: [f32; 3] = std::array::from_fn(|k| c.position[k] - eye[k]);
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(0.01);
+            let along = (d[0] * forward[0] + d[1] * forward[1] + d[2] * forward[2]) / l;
+            // How far off the view's centre, and then how far away: someone in view beats someone across the map.
+            (1.0 - along) * 60.0 + l
+        };
+        let Some(c) = self.characters.iter().filter(|c| !c.inactive).min_by(|a, b| score(a).total_cmp(&score(b))) else {
+            s.push_str("no characters\n");
+            return s;
+        };
+        let clip = c.anim.clip_state();
+        s.push_str(&format!(
+            "\nCHARACTER {} (id {}, pack {}, slot {}, entity {:?}, key {})\nat {:.1}, {:.1}, {:.1}, facing {:.0} deg, {:.1} from hero\nhp {} clip {} at {:.2} held {} dying {:?} summoner {:?}\n",
+            if c.name.is_empty() { "(unnamed)" } else { &c.name },
+            c.id,
+            c.pack,
+            c.slot,
+            c.entity,
+            c.record_key,
+            c.position[0],
+            c.position[1],
+            c.position[2],
+            c.facing[0].atan2(c.facing[2]).to_degrees(),
+            (c.position[0] - h[0]).hypot(c.position[2] - h[2]),
+            c.hp,
+            clip.action,
+            clip.progress,
+            c.held,
+            c.dying,
+            c.summoner,
+        ));
+        if let Some(e) = c.enemy.as_ref() {
+            s.push_str(&format!("enemy state {} outer {} inner {} seq {} dead {}\n", e.state, e.outer, e.inner, e.seq, e.is_dead()));
+        }
+        if let Some(t) = c.townsfolk.as_ref() {
+            s.push_str(&format!("townsfolk code {} mode {} walk to {:?} route {:?}\n", t.code, t.mode, t.walk_to, t.patrol.as_ref().map(|p| p.points().len())));
+        }
+        if let Some(w) = c.walker.as_ref() {
+            s.push_str(&format!("walker {}\n", w.debug()));
+        }
+        s
     }
 
     /// Diagnostic: the ladders (by rail) that stand on a placed object, with that object.
