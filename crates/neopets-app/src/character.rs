@@ -17,6 +17,8 @@ struct FamilyState {
     current: Option<usize>,
     /// The playing clip is mirrored (SPEC-0005 Mirrored clips; main family only).
     mirror: bool,
+    /// The kept root step of a mode 0 or 1 clip.
+    kept: [f32; 3],
     /// The family's role: 0 main, 1 sub-part, 2 face (region characters may lack some).
     role: u8,
 }
@@ -74,7 +76,7 @@ impl HeroAnim {
                     data,
                     record: PlaybackRecord::default(),
                     current: None,
-                    mirror: false,
+                    mirror: false, kept: [0.0; 3],
                     role,
                 };
                 skin_base += n;
@@ -312,7 +314,21 @@ impl HeroAnim {
             if i == 0 {
                 let clip = &f.data.clips[c];
                 let scale = f.record.speed() * if f.record.finished() { 2.0 } else { 1.0 };
-                if let Some(r) = clip.root.get(s.key as usize) {
+                // SPEC-0005 Root step in modes 0 and 1: the next key's root, set only while k < k2; otherwise the step is
+                // kept, and a finished clip doubles it in place each tick (the Flower Monsters' confused clip). The clamp
+                // stands in for the mesh border before the value overflows.
+                if clip.mode != 2 {
+                    if s.key < s.next_key {
+                        f.kept = clip.root.get(s.next_key as usize).map_or([0.0; 3], |r| r.map(|v| v * f.record.speed()));
+                    }
+                    if f.record.finished() {
+                        f.kept = f.kept.map(|v| (v * 2.0).clamp(-1.0e4, 1.0e4));
+                    }
+                    root = f.kept;
+                    if f.mirror {
+                        root[0] = -root[0];
+                    }
+                } else if let Some(r) = clip.root.get(s.key as usize) {
                     root = r.map(|v| v * scale);
                     // A mirrored clip's root step has its x negated (Playback 5).
                     if f.mirror {

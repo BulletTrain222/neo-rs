@@ -4884,17 +4884,10 @@ fn enter_interior(pack: u32, s: &mut GameState) -> Vec<Action> {
             }
             turn(s, if f(s, 86) { 0 } else { 3 }, 3)
         }
+        // SPEC-0043 1014 routine 3: flag 86 picks lines 16 to 18 or 19 to 21, in turn.
         1014 => {
-            let line = if f(s, 580) {
-                22
-            } else if f(s, 578) {
-                25
-            } else if f(s, 86) {
-                28
-            } else {
-                29
-            };
-            vec![Action::Message { line }]
+            let line = turn_line(s, pack, 5, f(s, 86) as i32, &if f(s, 86) { [16, 17, 18] } else { [19, 20, 21] });
+            say(line)
         }
         1131 => {
             if f(s, 301) && s.has_item(124) {
@@ -5010,25 +5003,47 @@ fn talk_interior(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
         // SPEC-0043 1008, 1011 and 1020.
         1008 => talk(if f(s, 86) { 12 } else { 15 }),
         1011 | 1020 => talk(if f(s, 86) { 10 } else { 13 }),
-        // SPEC-0043 1014 routines 1 and 2 (Josh: 86 set with 578 and 580 clear starts the Pink
-        // Posies row).
+        // SPEC-0043 1014 routine 2 (Josh): marker and counter; 86 with 578 and 580 clear starts the Pink Posies row.
         1014 if routine == 1 => {
-            if f(s, 86) && !f(s, 578) && !f(s, 580) {
-                s.set(578, true);
-            }
-            talk(if f(s, 86) { 16 } else { 19 })
-        }
-        1014 => {
             if f(s, 580) {
-                talk(1)
+                cycle_in(s, pack, 1, 3, &three(22))
+            } else if f(s, 578) {
+                cycle_in(s, pack, 1, 4, &three(25))
+            } else if f(s, 86) {
+                s.set(578, true);
+                talk(28)
+            } else {
+                cycle_in(s, pack, 1, 5, &three(29))
+            }
+        }
+        // SPEC-0043 1014 routine 1 (Nina): an extra step before the case moves the counter, so the lines come a, c, b.
+        1014 => {
+            if s.word(pack, 10) == 0 {
+                s.set_word(pack, 10, 1);
+                s.set_word(pack, 11, 0);
+            }
+            s.set_word(pack, 11, (s.word(pack, 11) + 1) % 3);
+            let marked = |s: &mut GameState, m: i32, a: u16| {
+                if s.word(pack, 10) != m {
+                    s.set_word(pack, 10, m);
+                    s.set_word(pack, 11, 0);
+                }
+                let c = s.word(pack, 11);
+                s.set_word(pack, 11, (c + 1) % 3);
+                vec![Action::Talk { line: a + c as u16 }]
+            };
+            if f(s, 580) {
+                marked(s, 1, 0)
             } else if f(s, 578) && f(s, 579) {
                 s.items.remove(&83);
                 s.set(580, true);
                 talk(3)
             } else if f(s, 578) {
-                talk(4)
+                marked(s, 2, 4)
+            } else if f(s, 86) {
+                marked(s, 3, 7)
             } else {
-                talk(if f(s, 86) { 7 } else { 10 })
+                marked(s, 4, 10)
             }
         }
         // SPEC-0039 1131 handler 3.
@@ -6630,6 +6645,11 @@ fn talk_842(routine: u8, s: &mut GameState) -> Vec<Action> {
 /// A routine's line cycling with a case marker (words 10 + 2r and 11 + 2r of the pack): the
 /// position restarts at the case's first line when the case changes.
 fn cycle_in(s: &mut GameState, pack: u32, routine: u8, case: i32, lines: &[u16]) -> Vec<Action> {
+    vec![Action::Talk { line: turn_line(s, pack, routine, case, lines) }]
+}
+
+/// The line a routine's marker and counter pick (words 10 + 2r and 11 + 2r; SPEC-0022 Rotation): a new case restarts it.
+fn turn_line(s: &mut GameState, pack: u32, routine: u8, case: i32, lines: &[u16]) -> u16 {
     let (cw, pw) = (10 + 2 * routine, 11 + 2 * routine);
     let mut pos = s.word(pack, pw);
     if s.word(pack, cw) != case + 1 {
@@ -6637,7 +6657,7 @@ fn cycle_in(s: &mut GameState, pack: u32, routine: u8, case: i32, lines: &[u16])
         pos = 0;
     }
     s.set_word(pack, pw, (pos + 1) % lines.len() as i32);
-    vec![Action::Talk { line: lines[pos as usize % lines.len()] }]
+    lines[pos as usize % lines.len()]
 }
 
 /// SPEC-0043 1066's line cycling: the routine's case and position (words 10 + 2r and 11 + 2r);
@@ -7132,8 +7152,8 @@ fn brightvale_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
         19 => talk(u(s, 105)),
         31 => talk(u(s, 123)),
         // SPEC-0045 758 entities 27 and 30, Cinthia ("Cynthia's Noil"): 540: line 0; 539 clear: 539
-        // and line 12; else by the live petpet: kind 6 sets 540 with line 1; none 2; kinds 1, 3
-        // and 7 lines 3, 4 and 5; any other kind by hero, Tor 6 to 8 and Roberta 9 to 11 in turn.
+        // and line 12; else by the live petpet: kind 6 sets 540 with line 1; kinds 0, 1, 3
+        // and 7 lines 2, 3, 4 and 5; any other kind by hero, Tor 6 to 8 and Roberta 9 to 11 in turn.
         27 => {
             if s.flag(540) {
                 talk(0)
@@ -7146,11 +7166,12 @@ fn brightvale_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
                         s.set(540, true);
                         talk(1)
                     }
-                    None => talk(2),
+                    Some(0) => talk(2),
                     Some(1) => talk(3),
                     Some(3) => talk(4),
                     Some(7) => talk(5),
-                    Some(_) => {
+                    // SPEC-0047: any other value, no pet too, waits.
+                    _ => {
                         let b = if rob { 9 } else { 6 };
                         talk(b + step(s, 3))
                     }
@@ -7610,24 +7631,25 @@ fn town_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
         (732, 3) => talk(Some(4)),
         // 793 entity 0: line 16 with 417. Entities 1 and 2: 0 (417), 3 (416), 6 (414), 9 (412),
         // 12 (410; item 13 taken and 412 set first), else 13.
-        (793, 1) if s.flag(417) => talk(Some(16)),
+        (793, 1) if s.flag(417) => cycle_in(s, 793, 1, 0, &[16, 17, 18]),
         (793, 2) => {
-            let line = if s.flag(417) {
+            let case = if s.flag(417) {
                 0
             } else if s.flag(416) {
-                3
+                1
             } else if s.flag(414) {
-                6
+                2
             } else if s.flag(412) {
-                9
+                3
             } else if s.flag(410) {
                 s.take(13, 1);
                 s.set(412, true);
-                12
+                return talk(Some(12));
             } else {
-                13
+                4
             };
-            talk(Some(line))
+            let a = [0u16, 3, 6, 9, 13][case as usize];
+            cycle_in(s, 793, 2, case, &[a, a + 1, a + 2])
         }
         // 874 entities 6 and 7: the line, a camera, the entity's animation 30 (wait) and walk away,
         // a fade out, flag 291 or 290, the slot reset, the normal camera and a fade in.
@@ -7670,10 +7692,13 @@ fn palace_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
             _ => 9,
         }),
         // 1409 callbacks 1 and 2 (registered with 106): with 102, line 0/3 or 10/13 by 104.
-        1409 if !s.flag(106) || !s.flag(102) => Vec::new(),
+        1409 if !s.flag(106) => Vec::new(),
+        // SPEC-0041 1409: each callback's marker and counter; state 102 clear does not silence it.
         1409 => {
             let base = if routine == 2 { 10 } else { 0 };
-            talk(base + if s.flag(104) { 0 } else { 3 })
+            let both = s.flag(102) && s.flag(104);
+            let a = base + if both { 0 } else { 3 };
+            cycle_in(s, pack, routine, both as i32, &[a, a + 1, a + 2])
         }
         // 1421 CB2 (registered with 102): the Random(1, 3) draw first; 605 with 679 clear takes
         // item 33, sets 679, line 13; then draw 1 line 10; else with 100 line 4 (106) or 7.
@@ -7748,7 +7773,8 @@ fn eastside_interior(pack: u32) -> Option<(i32, usize)> {
 fn eastside_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
     let talk = |line| vec![Action::Talk { line }];
     match pack {
-        788 => talk(4),
+        // SPEC-0037's rotations: marker and counter, or (783, 784) one shared counter, restarted on each entry.
+        788 => cycle_in(s, pack, 0, 0, &[4, 5, 6]),
         // 787: with 447 set, 500 Neopoints buy flag 448 (line 3; 448 is not tested) or line 4;
         // else lines 5 to 10 in turn (module counter, word 0).
         787 if s.flag(447) && s.neopoints >= 500 => {
@@ -7762,29 +7788,36 @@ fn eastside_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
             s.set_word(pack, 0, (c + 1) % 6);
             talk(5 + c as u16)
         }
-        789 if s.hero.selected == 1 => talk(10),
-        789 => talk(if s.flag(86) { 4 } else { 7 }),
-        783 if s.flag(421) => talk(9),
+        789 if s.hero.selected == 1 && draw(s, pack, 1, 3) == 1 => {
+            let c = s.word(pack, 11);
+            s.set_word(pack, 11, (c + 1) % 3);
+            talk(10 + c as u16)
+        }
+        789 => {
+            s.set_word(pack, 11, 1);
+            talk(if s.flag(86) { 4 } else { 7 })
+        }
+        783 if s.flag(421) => cycle_shared(s, pack, 0, &[9, 10, 11]),
         783 if s.flag(420) => {
             s.set(421, true);
             talk(12)
         }
-        783 if s.flag(419) => talk(13),
+        783 if s.flag(419) => cycle_shared(s, pack, 0, &[13, 14, 15]),
         783 => {
             s.set(419, true);
             talk(16)
         }
-        786 if s.flag(425) => talk(10),
+        786 if s.flag(425) => cycle_in(s, pack, 0, 0, &[10, 11, 12]),
         786 if s.flag(424) => {
             s.set(425, true);
             talk(13)
         }
-        786 if s.flag(423) => talk(14),
+        786 if s.flag(423) => cycle_in(s, pack, 0, 1, &[14, 15, 16]),
         786 if s.flag(76) => {
             s.set(423, true);
             talk(17)
         }
-        786 => talk(18),
+        786 => cycle_in(s, pack, 0, 2, &[18, 19, 20, 21]),
         _ => Vec::new(),
     }
 }
@@ -7794,21 +7827,25 @@ fn outskirts_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
     let talk = |line| vec![Action::Talk { line }];
     let f = |s: &GameState, n| s.flag(n);
     match pack {
-        855 if f(s, 463) => talk(10),
+        855 if f(s, 463) => cycle_in(s, pack, 0, 0, &[10, 11, 12]),
         855 if f(s, 462) && s.has_item(22) => {
             s.set(463, true);
             s.take(22, 1);
             s.give(122, 1);
             talk(13)
         }
-        855 if f(s, 462) => talk(14),
+        855 if f(s, 462) => cycle_in(s, pack, 0, 1, &[14, 15, 16]),
         855 if f(s, 59) => {
             s.set(462, true);
             talk(17)
         }
-        855 => talk(if f(s, 56) { 18 } else { 21 }),
-        856 => talk(if f(s, 59) { 10 } else if f(s, 56) { 13 } else { 16 }),
-        857 => talk(if f(s, 59) { 6 } else if f(s, 56) { 9 } else { 12 }),
+        855 if f(s, 56) => cycle_in(s, pack, 0, 2, &[18, 19, 20]),
+        855 => cycle_in(s, pack, 0, 3, &[21, 22, 23]),
+        856 | 857 => {
+            let a = if pack == 856 { 10 } else { 6 };
+            let k = if f(s, 59) { 0 } else if f(s, 56) { 1 } else { 2 };
+            cycle_in(s, pack, 0, k, &[a + 3 * k as u16, a + 3 * k as u16 + 1, a + 3 * k as u16 + 2])
+        }
         858 if f(s, 56) && !f(s, 512) => {
             s.set(512, true);
             talk(6)
@@ -7925,7 +7962,7 @@ fn outskirts_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
             talk(if f(s, 273) { 38 } else if f(s, 270) { 39 } else { 40 })
         }
         // 784: line 0 with 591, else 591 set and line 3.
-        784 if f(s, 591) => talk(0),
+        784 if f(s, 591) => cycle_shared(s, pack, 0, &[0, 1, 2]),
         784 => {
             s.set(591, true);
             talk(3)
@@ -13931,8 +13968,12 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
         748 | 859 | 1005 | 1008 | 1011 | 1014 | 1020 | 1131 | 1172 => enter_interior(pack, state),
         // SPEC-0039 984 on-enter (handler 2): with 67 entity 0's line 0 in the conversation
         // frame; else line 2 (202), 4 (150) or 6.
-        984 if state.flag(67) => vec![Action::Converse { entity: 0, line: 0 }],
-        984 => vec![Action::Message { line: if state.flag(202) { 2 } else if state.flag(150) { 4 } else { 6 } }],
+        // SPEC-0039 984 handler 2: two lines alternate by the case.
+        984 => {
+            let case = if state.flag(67) { 0 } else if state.flag(202) { 1 } else if state.flag(150) { 2 } else { 3 };
+            let a = [0u16, 2, 4, 6][case as usize];
+            vec![Action::Converse { entity: 0, line: turn_line(state, pack, 2, case, &[a, a + 1]) }]
+        }
         // SPEC-0044 745 routine E (on-enter): two lines in turn (word 20) by 569 (0, 1), 567 (2,
         // 3), 76 (4, 5); with 75 set and 264 clear the item exchange when all three are held
         // (else nothing); otherwise 6, 7.
@@ -17532,11 +17573,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     // SPEC-0039 984 entity 0 (handler 1): with 67 line 12 in the conversation frame; else line
     // 15 (202), 18 (150) or 21 alone.
     if (pack, routine) == (984, 1) {
-        return if state.flag(67) {
-            vec![Action::Talk { line: 12 }]
-        } else {
-            vec![Action::Message { line: if state.flag(202) { 15 } else if state.flag(150) { 18 } else { 21 } }]
-        };
+        let case = if state.flag(67) { 0 } else if state.flag(202) { 1 } else if state.flag(150) { 2 } else { 3 };
+        let a = [12u16, 15, 18, 21][case as usize];
+        return cycle_in(state, pack, 1, case, &[a, a + 1, a + 2]);
     }
     let key = (pack, routine);
     let mut rot = state.rotations.get(&key).copied().unwrap_or_default();
@@ -17585,21 +17624,20 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
 /// line with LevelMsg alone, outside the conversation frame.
 fn house_routine(routine: u8, s: &mut GameState) -> Vec<Action> {
     let talk = |line| vec![Action::Talk { line }];
-    let msg = |line| vec![Action::Message { line }];
     match routine {
-        0 if s.flag(147) => talk(0),
-        0 => msg(4),
-        1 if s.flag(147) => talk(119),
-        1 => msg(123),
-        2 if s.flag(147) => talk(55),
+        0 if s.flag(147) => cycle_in(s, 951, 0, 0, &[0, 1, 2]),
+        0 => talk(if s.flag(122) { 3 } else { 4 }),
+        1 if s.flag(147) => cycle_in(s, 951, 1, 0, &[119, 120, 121]),
+        1 => talk(if s.flag(122) { 122 } else { 123 }),
+        2 if s.flag(147) => cycle_in(s, 951, 2, 0, &[55, 56, 57]),
         2 if !s.flag(122) && s.has_item(98) => {
             s.give(32, 1);
             s.set(121, true);
             s.set(122, true);
-            msg(59)
+            talk(59)
         }
-        2 if !s.flag(122) => msg(60),
-        2 => msg(58),
+        2 if !s.flag(122) => cycle_in(s, 951, 2, 1, &[60, 61, 62]),
+        2 => talk(58),
         _ => Vec::new(),
     }
 }
@@ -17847,12 +17885,13 @@ mod tests {
         assert_eq!(proximity_routine(758, 30), Some(r));
         assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 12 }]);
         assert!(s.flag(539));
-        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 2 }], "no petpet");
+        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 6 }], "no petpet: the waiting lines");
         s.hero.pet_kind = Some(3);
         assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 4 }]);
         s.hero.pet_kind = Some(0);
-        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 6 }], "another kind, Tor in turn");
-        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 7 }]);
+        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 2 }]);
+        s.hero.pet_kind = Some(2);
+        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 7 }], "another kind, Tor in turn");
         s.hero.pet_kind = Some(6);
         assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 1 }]);
         assert!(s.flag(540));
@@ -20299,11 +20338,10 @@ mod tests {
 
     #[test]
     fn palace_rooms() {
-        // SPEC-0041 1409 vectors: 102 and 104 set: lines 0 and 10; 104 clear: 3 and 13; 102
-        // clear: nothing.
+        // SPEC-0041 1409 vectors: 102 and 104 set: lines 0 and 10; otherwise 3 and 13.
         let mut s = GameState::default();
         s.set(106, true);
-        assert!(on_talk(1409, 1, &mut s).is_empty());
+        assert_eq!(on_talk(1409, 1, &mut s), vec![Action::Talk { line: 3 }]);
         s.set(102, true);
         s.set(104, true);
         assert_eq!((on_talk(1409, 1, &mut s), on_talk(1409, 2, &mut s)), (vec![Action::Talk { line: 0 }], vec![Action::Talk { line: 10 }]));
@@ -20491,12 +20529,13 @@ mod tests {
         s.set(447, true);
         assert_eq!(on_talk(787, 0, &mut s), vec![Action::Talk { line: 3 }]);
         assert_eq!((s.neopoints, on_talk(787, 0, &mut s)), (100, vec![Action::Talk { line: 4 }]));
-        // 783's ladder: 16 (sets 419), 13, then with 420: 12 (sets 421), then 9.
+        // 783's ladder: 16 (sets 419), 13, then with 420: 12 (sets 421), then the 421 lines.
         assert_eq!(on_talk(783, 0, &mut s), vec![Action::Talk { line: 16 }]);
         assert_eq!(on_talk(783, 0, &mut s), vec![Action::Talk { line: 13 }]);
         s.set(420, true);
         assert_eq!(on_talk(783, 0, &mut s), vec![Action::Talk { line: 12 }]);
-        assert_eq!(on_talk(783, 0, &mut s), vec![Action::Talk { line: 9 }]);
+        // The shared counter stands at 1 from the 13: SPEC-0037's shared counter.
+        assert_eq!(on_talk(783, 0, &mut s), vec![Action::Talk { line: 10 }]);
         // 786 teleport 0 posts 20 for eW 31 and leaves to eW 44; the arrival uses locator 1.
         assert_eq!(on_teleport(786, 0, &mut s)[0], Action::LeaveInterior { slot: 44 });
         assert_eq!(on_activate(786, &mut s)[0], Action::MoveHero { locator: 1 });
@@ -20506,9 +20545,9 @@ mod tests {
     #[test]
     fn module_984_lines() {
         let mut s = GameState::default();
-        assert_eq!(on_enter(984, &mut s), vec![Action::Message { line: 6 }]);
+        assert_eq!(on_enter(984, &mut s), vec![Action::Converse { entity: 0, line: 6 }]);
         s.set(150, true);
-        assert_eq!(on_talk(984, 1, &mut s), vec![Action::Message { line: 18 }]);
+        assert_eq!(on_talk(984, 1, &mut s), vec![Action::Talk { line: 18 }]);
         s.set(67, true);
         assert_eq!(on_enter(984, &mut s), vec![Action::Converse { entity: 0, line: 0 }]);
         assert_eq!(on_talk(984, 1, &mut s), vec![Action::Talk { line: 12 }]);
@@ -21076,12 +21115,12 @@ mod tests {
         assert!(!s.has_item(15));
         assert_eq!(chest_press(&locks, 1, &mut GameState::default()), ChestPress::Open, "no lock entry");
         // SPEC-0041 test vector: callback 3 with 147 and 122 clear and item 98 held.
-        assert_eq!(on_talk(951, 2, &mut s), vec![Action::Message { line: 60 }]);
+        assert_eq!(on_talk(951, 2, &mut s), vec![Action::Talk { line: 60 }]);
         s.give(98, 1);
-        assert_eq!(on_talk(951, 2, &mut s), vec![Action::Message { line: 59 }]);
+        assert_eq!(on_talk(951, 2, &mut s), vec![Action::Talk { line: 59 }]);
         assert!(s.flag(121) && s.flag(122) && s.has_item(32));
-        assert_eq!(on_talk(951, 2, &mut s), vec![Action::Message { line: 58 }]);
-        assert_eq!(on_talk(951, 0, &mut s), vec![Action::Message { line: 4 }]);
+        assert_eq!(on_talk(951, 2, &mut s), vec![Action::Talk { line: 58 }]);
+        assert_eq!(on_talk(951, 0, &mut s), vec![Action::Talk { line: 3 }]);
         assert_eq!(on_teleport(951, 0, &mut s), vec![Action::LeaveInterior { slot: 5 }]);
     }
 

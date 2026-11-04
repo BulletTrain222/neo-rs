@@ -278,7 +278,7 @@ impl StoryRun {
                         play.dev_go_near(&g.name, &g.ids);
                     }
                     // A door: each visit also walks a little in each of four directions from its point.
-                    if g.kind == "DOOR" && !g.spots.is_empty() && t >= 40 {
+                    if g.kind == "DOOR" && !g.spots.is_empty() && t >= 40 && g.pack.is_none_or(|p| p == play.world.pack) {
                         let phase = (t - 40) % 150;
                         if phase % 25 == 0 && phase < 100 {
                             let p = play.loco.position();

@@ -69,6 +69,19 @@ struct Instance {
     start: u64,
 }
 
+/// SPEC-0031 Pan pull (cue flag 0x4): the voice's own angle pulled toward the front by the request volume V (1,024 = 1.0).
+fn pan_pull(a: i32, v: i32) -> i32 {
+    if v >= 854 {
+        a
+    } else if v <= 170 {
+        0
+    } else if a <= 180 {
+        a * (v - 170) / 684
+    } else {
+        360 - (360 - a) * (v - 170) / 684
+    }
+}
+
 /// The driver side of the sound blocks: instances over a 24-voice synth.
 #[derive(Clone, Debug)]
 pub struct Effects {
@@ -264,6 +277,9 @@ impl Effects {
                     let mut def = def;
                     if def.pan < 0 {
                         def.pan = (var(i, (-def.pan - 1) as u8) * 360 / 127) as i16;
+                    }
+                    if i.block.cues[i.cue].flags & 0x4 != 0 {
+                        def.pan = pan_pull(def.pan as i32, i.volume) as i16;
                     }
                     let (id, v, vc, pan, bend) = (i.id, i.volume, i.cue_volume, i.pan, i.bend);
                     self.synth.start_block(id, def, sample, v, vc, lv, pan, bend);
@@ -491,6 +507,14 @@ mod tests {
         // A long delay keeps the instance alive.
         e.update();
         assert!(e.playing(3));
+    }
+
+    /// SPEC-0031 Pan pull's vectors.
+    #[test]
+    fn pan_pull_vectors() {
+        for (v, a, want) in [(512, 90, 45), (512, 270, 315), (500, 100, 48), (853, 181, 182), (854, 181, 181), (170, 90, 0)] {
+            assert_eq!(pan_pull(a, v), want, "{v} {a}");
+        }
     }
 
     /// SPEC-0031: type 34 skips the next record on a failed test; type 24 stops the cue and runs the stop records.

@@ -7,12 +7,12 @@ The run reached the end of the list (exit 0).
 | Result | Goals | Meaning |
 | --- | --- | --- |
 | notrun | 0 | Not reached |
-| fail | 42 | The Done condition never held |
+| fail | 40 | The Done condition never held |
 | gameover | 2 | The hero died and the world was torn down |
 | manual | 38 | Kind not automated (minigames, pushes, climbs, shots) |
 | nocheck | 95 | Ran, but its Done condition is not machine-readable |
 | already | 30 | Done already held from earlier goals |
-| pass | 188 | Done condition reached |
+| pass | 190 | Done condition reached |
 
 ## Failed goals
 
@@ -23,7 +23,6 @@ The run reached the end of the list (exit 0).
 - Act 1 goal 95 WALK (956): Leave the top sphere (script trigger 16, centre (-702.1, 68.2, -824.9), radius 11.1) by more than 11.1 units,  Done: 212 on.
 - Act 2 goal 123 SWING (1327): Lesson 2: after the scene, shoot the target so that it reacts to a hit. Done: 231 on.
 - Act 2 goal 127 SWING (1327): Destroy the respawned target (entity 0). Roberta's health is refilled every tick during the lesson. Done: 234, 235 on; movie 19; pack 1300 current at locator 9 (0.0, 1538.2, -2.
-- Act 3 goal 306 DOOR (758 to 777): Pack 758 teleport 1, centre (2085.3, 81.3, 510.2), 21.4 wide (the library road). Done: pack 777 current (hero placed at start position 8).
 - Act 3 goal 317 WALK (753): Walk out of the sphere (more than 30 from its centre). Done: movie 37 plays on the next tick; 258 on.
 - Act 3 goal 328 FIGHT (735): The Plague Serpent (boss instance 10, AI 73; SPEC-0016). Its only damage route is one strike on the head while Done: 263, 75, 50 and 70 on (set by the victory scene).
 - Act 3 goal 332 DOOR (722 to 745): Door index 3 again. Done: pack 745 current.
@@ -31,7 +30,6 @@ The run reached the end of the list (exit 0).
 - Act 3 goal 336 FIGHT (880): Brightvale road guards AI 21, 22 and 23. Walk to the plaza (the treasure seller stands at (1815.6, 166.2, -933 Done: 296 on.
 - Act 3 goal 340 DOOR (1017 to 991): Pack 1017 door 0, centre (31.6, 13.5, -0.2), 10.7 wide (or door 1, centre (-33.3, -0.4, -0.2), 10.2 wide). Done: pack 991 current at locator 8 (door 0) or 7 (door 1).
 - Act 3 goal 347 TALK (1017): Guildmaster Marl, entity 0 (entity 4 is the second placement and works too). On arrival with 298 on and 300 of Done: 299 on; item 23 (Golden Trove of Riches) held.
-- Act 3 goal 354 DOOR (1217 to 909): Take the farm plane of the burrow, the same plane as goal 47: centre (5.5, -3.4, 50.8), facing the farm side.  Done: pack 909 current; the Rope Gun scene runs (hero placed at locator 28 (.
 - Act 3 goal 363 FIGHT (864): The Ixi Chieftain (boss instance 8, 300 HP; SPEC-0014). Hero: either (Tor's sword or Roberta's wand); a fronta Done: death sets level state 0; 293 on.
 - Act 3 goal 370 TALK (1251): The witch (the room's only talker). Optional: nothing later reads what this talk sets. Done: 457 on (the first talk with 460 and 457 clear); 460 is set only by a l.
 - Act 3 goal 375 PICK (1247): The fang necklace, item 29 (a drop placed at the altar; the necklace holder is AI 10). Walk to the altar volum Done: item 29 held.
