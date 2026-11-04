@@ -178,10 +178,11 @@ pub fn save_report(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, time
 pub fn show_panel(mut commands: Commands, state: Option<Res<PlayState>>, d: Res<DebugState>, dev: Res<DevMenu>, mut panels: Query<(Entity, &mut Text), With<DebugPanel>>) {
     let s = dev.debug;
     let mut out = String::new();
-    if let (true, Some(state)) = (s.inspector, state.as_ref()) {
+    // The menu covers this part of the screen, so the panel waits until it closes.
+    if let (true, false, Some(state)) = (s.inspector, dev.open, state.as_ref()) {
         out.push_str(&state.play.debug_inspect());
     }
-    if s.collision {
+    if s.collision && !dev.open {
         out.push_str("\nCOLLISION VIEW:");
         for (name, _) in KINDS {
             out.push_str(&format!(" {name},"));
@@ -189,7 +190,7 @@ pub fn show_panel(mut commands: Commands, state: Option<Res<PlayState>>, d: Res<
         out.pop();
         out.push_str(" (cyan, red, orange, pink, green, yellow, white)\n");
     }
-    if s.log {
+    if s.log && !dev.open {
         out.push_str("\nEVENTS:\n");
         let n = d.log.len();
         for l in d.log.iter().skip(n.saturating_sub(10)) {
