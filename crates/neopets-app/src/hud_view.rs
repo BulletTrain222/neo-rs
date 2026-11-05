@@ -328,6 +328,25 @@ pub fn sync_hud(
     let (Some(mut state), Some(mut art)) = (state, art) else { return };
     let HudArt { f, mem, images: cache, name: name_image, .. } = &mut *art;
     let f: &Frontend = f;
+    // NEOPETS_TRACE_HUDNODES=1: once, the equipment Mote icon nodes (keys 164, 166, 162) and the
+    // Mote panel cells under node 392 with their subtrees (diagnostic).
+    static DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if std::env::var_os("NEOPETS_TRACE_HUDNODES").is_some() && !DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        let show = |n: usize| { let d = f.nodes[n]; format!("node {n} key {} kind {} handler {} arg {} data {} at ({},{}) {}x{} sprite {:?}", d.key, d.kind, d.handler, d.arg, d.data, d.x, d.y, d.width, d.height, f.sprite(n).map(|s| (s.asset, s.frames, s.frame, s.columns, s.rows))) };
+        for k in [164u32, 166, 162] {
+            if let Some(n) = f.key(k) {
+                let mut sub = Vec::new();
+                subtree(f, n, &mut sub);
+                for m in sub { println!("HUDNODE key{k}: {}", show(m)); }
+                if let Some(p) = f.nodes[n].parent { println!("HUDNODE key{k} parent: {}", show(p)); }
+            }
+        }
+        if f.nodes.len() > 392 {
+            let mut sub = Vec::new();
+            subtree(f, 392, &mut sub);
+            for m in sub.into_iter().take(80) { println!("HUDNODE panel: {}", show(m)); }
+        }
+    }
     // SPEC-0023 section 11.1: the host's tween requests become tweens between two nodes' canvas
     // points: the quick fly-in moves 0xA1 from cross icon k, fading in; a Mote fly-in moves the
     // word's equipment icon (keys 164, 166 and 162 for words 0, 1 and 2) from the panel cell of

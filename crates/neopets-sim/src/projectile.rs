@@ -105,10 +105,11 @@ pub struct Env<'a> {
     pub hero_radius: f32,
     pub hero_height: f32,
     pub hero_gap: f32,
-    /// The hero's forward axis, its guard query, and whether it holds a shield.
+    /// The hero's forward axis, its guard query, and the element kind of the Mote in its
+    /// shield-Mote slot (equipment word 1; None when the slot is empty).
     pub hero_facing: Vec3,
     pub guard: bool,
-    pub shield: bool,
+    pub shield: Option<i32>,
     /// The hero holds the poison status (the poison cloud's gate).
     pub poisoned: bool,
     pub owner_exists: &'a dyn Fn(u64) -> bool,
@@ -352,13 +353,21 @@ impl Pool {
                     let f = env.hero_facing;
                     let blocked = env.guard && d[0] * f[0] + d[1] * f[1] + d[2] * f[2] < 0.0;
                     let visual_ok = matches!(p.s.visual, 0..=5 | 7..=14 | 16 | 23);
-                    // Shields have element kind 0, so the element rule passes for element 0 only.
-                    let reflectable = blocked && matches!(p.s.kind, 0 | 10) && visual_ok && env.shield && p.s.element == 0;
+                    // Behavior 9 rule 2 (R-0034): word 1 holds a Mote, and the shot's element is
+                    // nonzero and equals that Mote's element kind, or the kind is 7. The build had
+                    // it reversed (element 0 only), so a fire shield never sent back the shield
+                    // lesson's fireball (user's report 38).
+                    let reflectable = blocked && matches!(p.s.kind, 0 | 10) && visual_ok && p.s.element != 0 && env.shield.is_some_and(|k| k == p.s.element || k == 7);
                     let owner = p.s.owner.and_then(|o| (env.owner_body)(o));
-                    if let (true, Some((base, _, _))) = (reflectable, owner) {
+                    if reflectable {
                         let speed = len(p.velocity);
-                        let aim = [base[0], base[1] + 2.0, base[2]];
-                        p.velocity = unit(sub(aim, p.position)).map(|c| c * speed);
+                        // At the owner + (0, 2, 0); a shot with no owner (the shield lesson's
+                        // launcher, owner -1) goes straight back the way it came (R-0246; this
+                        // build's choice: the aim with no owner is not given).
+                        p.velocity = match owner {
+                            Some((base, _, _)) => unit(sub([base[0], base[1] + 2.0, base[2]], p.position)).map(|c| c * speed),
+                            None => p.velocity.map(|c| -c),
+                        };
                         if p.s.kind == 10 {
                             p.s.damage = 0.0;
                         }
@@ -566,7 +575,7 @@ mod tests {
             hero_gap: 0.0,
             hero_facing: [0.0, 0.0, -1.0],
             guard: false,
-            shield: false,
+            shield: None,
             poisoned: false,
             owner_exists: owner,
             owner_body: &|_| Some(([0.0; 3], 0.5, 3.0)),
@@ -727,7 +736,7 @@ mod tests {
             hero_gap: 0.0,
             hero_facing: [1.0, 0.0, 0.0],
             guard: false,
-            shield: false,
+            shield: None,
             poisoned: false,
             owner_exists: &o,
             owner_body: &|_| None,
@@ -760,12 +769,30 @@ mod tests {
         let ev: Vec<Event> = (0..10).flat_map(|_| pool.tick(&e)).collect();
         assert_eq!(ev, vec![Event::Hero { damage: 10.0, owner: Some(7), blocked: true, element: 0 }]);
         assert_eq!((taken(10.0, true), taken(2.0, true), taken(10.0, false)), (2.5, 1.0, 10.0));
-        // With a shield, an element-0 straight shot is sent back at its owner (at the origin).
-        e.shield = true;
+        // A fire shield Mote (kind 1): an element-0 shot is only blocked; an element-1 shot is
+        // sent back at its owner (at the origin); an element-4 shot is blocked; a Nova Mote
+        // (kind 7) sends back the element-4 shot (spec vector, Reflect permission).
+        e.shield = Some(1);
         let mut pool = Pool::default();
         pool.submit(s);
+        let ev: Vec<Event> = (0..10).flat_map(|_| pool.tick(&e)).collect();
+        assert_eq!(ev, vec![Event::Hero { damage: 10.0, owner: Some(7), blocked: true, element: 0 }]);
+        let mut fire = s;
+        fire.element = 1;
+        let mut pool = Pool::default();
+        pool.submit(fire);
         let ev: Vec<Event> = (0..30).flat_map(|_| pool.tick(&e)).collect();
-        assert_eq!(ev, vec![Event::Reflected { element: 0 }, Event::Owner { id: 7, damage: 10.0 }]);
+        assert_eq!(ev, vec![Event::Reflected { element: 1 }, Event::Owner { id: 7, damage: 10.0 }]);
+        let mut ice = s;
+        ice.element = 4;
+        let mut pool = Pool::default();
+        pool.submit(ice);
+        assert!(!(0..10).flat_map(|_| pool.tick(&e)).any(|v| matches!(v, Event::Reflected { .. })));
+        e.shield = Some(7);
+        let mut pool = Pool::default();
+        pool.submit(ice);
+        assert!((0..10).flat_map(|_| pool.tick(&e)).any(|v| v == Event::Reflected { element: 4 }));
+        e.shield = Some(1);
         // From behind (facing away from the shot) the guard does not block.
         e.hero_facing = [0.0, 0.0, 1.0];
         let mut pool = Pool::default();

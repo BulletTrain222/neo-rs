@@ -1646,10 +1646,20 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
         1 => fe.key(0xC0),
         _ => None,
     };
-    if let Some(n) = group {
-        let (x, y) = node_xy(fe, n);
-        let mut counter = 0;
-        draw_node(fe, n, (x, y, 1.0, 1.0), false, flow.focus, pc, &mut counter, &mut out);
+    // SPEC-0035 section 14.4, Charms tab draw list: the NeoPoints group (with the equipped-item
+    // strip 0xBE) is drawn before the Mote group, so the Mote group's equipped-Mote overlay and
+    // button hints lie over the sword, armour and shield (the user saw the shield over the Cross
+    // hint). The Items and Quest tabs draw their cell group first.
+    let group_first = tab != 1;
+    let draw_group = |out: &mut Vec<Draw>| {
+        if let Some(n) = group {
+            let (x, y) = node_xy(fe, n);
+            let mut counter = 0;
+            draw_node(fe, n, (x, y, 1.0, 1.0), false, flow.focus, pc, &mut counter, out);
+        }
+    };
+    if group_first {
+        draw_group(&mut out);
     }
     // NEOPETS_TRACE_BE: element 0xBE's subtree (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_BE").is_some() && flow.pass % 120 == 1 {
@@ -1689,6 +1699,65 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
             draw_node(fe, n, (x, y, 1.0, 1.0), false, flow.focus, pc, &mut counter, &mut out);
         }
     }
+    if !group_first {
+        draw_group(&mut out);
+    }
+    // The equipped-Mote overlay (section 14.4, Slot overlay; slots 17, 19 and 20 gate words 2, 0
+    // and 1) draws the Mote in that word. Which art it uses is not given (R-0247); this build
+    // shows the Mote panel's own icon of that Mote: the sprite under the handler-16 node whose
+    // argument is the Mote's index (id - 160). The overlay's own art is the Bubble Mote, so every
+    // slot showed Bubble (user's reports 28 and 37).
+    let mote_icons: std::collections::HashMap<u8, usize> = {
+        let mut m = std::collections::HashMap::new();
+        if let Some(g) = fe.key(0xC0) {
+            let mut sub = Vec::new();
+            fn walk(fe: &Frontend, n: usize, out: &mut Vec<usize>) {
+                out.push(n);
+                for c in fe.children(n) {
+                    walk(fe, c, out);
+                }
+            }
+            walk(fe, g, &mut sub);
+            for &n in &sub {
+                let d = fe.nodes[n];
+                if d.handler == 16 && d.arg < 14 {
+                    let mut s = Vec::new();
+                    walk(fe, n, &mut s);
+                    if let Some(&icon) = s.iter().find(|&&k| fe.sprite(k).is_some() && fe.nodes[k].kind == 1) {
+                        m.entry(d.arg).or_insert(icon);
+                    }
+                }
+            }
+        }
+        m
+    };
+    let overlay_word = |node: usize| -> Option<usize> {
+        let mut at = Some(node);
+        while let Some(i) = at {
+            match fe.nodes[i].handler {
+                17 => return Some(2),
+                19 => return Some(0),
+                20 => return Some(1),
+                _ => {}
+            }
+            at = fe.nodes[i].parent;
+        }
+        None
+    };
+    let motes = pc.items.view.motes;
+    out = out
+        .into_iter()
+        .map(|d| match d {
+            Draw::Sprite { node, x, y, w, h, colour, texels } if fe.nodes[node].kind == 1 => {
+                let art = overlay_word(node)
+                    .and_then(|w| motes.get(w).copied())
+                    .and_then(|id| u8::try_from(id - 160).ok())
+                    .and_then(|a| mote_icons.get(&a).copied());
+                Draw::Sprite { node: art.unwrap_or(node), x, y, w, h, colour, texels }
+            }
+            d => d,
+        })
+        .collect();
     // The art of an item's icon is the child of node 0x9F at the item's id (SPEC-0023 section
     // 11; R-0020). Element 0xBE's three icons show the equipped weapon, body and shield (an
     // empty one is drawn with alpha 0, so it is left out); the Quest-items cells show their

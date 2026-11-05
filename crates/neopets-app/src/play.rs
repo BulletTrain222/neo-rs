@@ -12912,7 +12912,8 @@ impl Play {
         let owners: HashMap<u64, ([f32; 3], f32, f32)> =
             self.characters.iter().map(|c| (c.id, (c.position, c.row.map_or(1.0, |r| r.radius), c.row.map_or(3.0, |r| r.height)))).collect();
         let gap = self.loco.body.gap;
-        let shield = self.shield.is_some();
+        // The shield-Mote slot's element kind (SPEC-0029 Behavior 9 rule 2).
+        let shield = self.equipment.motes[self.hero_index.min(1)][1].map(|m| neopets_sim::mote::element(Some(m)));
         let events = {
             let world = &self.world;
             let owner_exists = |id: u64| owners.contains_key(&id);
