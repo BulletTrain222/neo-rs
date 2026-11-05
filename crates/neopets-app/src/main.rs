@@ -1636,6 +1636,7 @@ fn step_sim(
                     }
                 }
             }
+            debug_tools::window_replay(&mut play.play, &mut input);
             play.play.tick(&input, pad);
             // A save point's Square press opens the save screen (a direct set of record 18).
             if std::mem::take(&mut play.play.save_open) {
@@ -4794,6 +4795,7 @@ fn play_trace(
     let mut moving_before: Vec<bool> = Vec::new();
     let cross_at: Vec<u64> = std::env::var("NEOPETS_TRACE_CROSS").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     let mut replay = debug_tools::Replay::from_env();
+    let mut last_sun = String::new();
     let switch_at: Vec<u64> = std::env::var("NEOPETS_TRACE_SWITCH").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     let mut flags_seen = play.state.flags.clone();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
@@ -4837,6 +4839,25 @@ fn play_trace(
         if let Some((t, k)) = std::env::var("NEOPETS_TRACE_CEILING").ok().and_then(|v| Some((v.split(':').next()?.parse::<u64>().ok()?, v.split(':').nth(1)?.parse::<usize>().ok()?))) {
             if t == play.ticks {
                 play.diag_ceiling(k);
+            }
+        }
+        // NEOPETS_TRACE_SUN: the sun's direction whenever it or the world changes.
+        if std::env::var_os("NEOPETS_TRACE_SUN").is_some() {
+            let now = format!("world {} lights {} sun {:?}", play.world.pack, play.world.lights.len(), play.sun_direction());
+            if last_sun != now {
+                println!("SUN tick {}: {now}", play.ticks);
+                last_sun = now;
+            }
+        }
+        // NEOPETS_TRACE_SETFLAG="tick:flag[,tick:flag...]": a story flag set on those ticks.
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_SETFLAG") {
+            for g in v.split(',') {
+                let n: Vec<u64> = g.split(':').filter_map(|x| x.trim().parse().ok()).collect();
+                if let [t, flag] = n[..] {
+                    if t == play.ticks {
+                        play.state.set(flag as u16, true);
+                    }
+                }
             }
         }
         // NEOPETS_TRACE_GIVE="tick:id:n[,tick:id:n...]": the party add on those ticks.
@@ -6309,6 +6330,14 @@ fn sync_fade(
 /// (on listed ticks) scripts, applied to this tick's input.
 fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     let t = play.ticks;
+    // NEOPETS_TRACE_PLACE="tick:x,z,y[;...]": the hero placed there, as in the trace.
+    for e in std::env::var("NEOPETS_TRACE_PLACE").unwrap_or_default().split(';') {
+        let Some((k, r)) = e.trim().split_once(':') else { continue };
+        let n: Vec<f32> = r.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        if k.parse::<u64>().ok() == Some(t) && n.len() >= 2 {
+            play.place_at(n[0], n[1], n.get(2).copied().unwrap_or(1.0e4));
+        }
+    }
     // NEOPETS_DEV_ATTACK="from:to": the attack pressed on that tick and held to the other, with _CHEATS, _GIVE,
     // _MOTE_AT, _ROBERTA and _CEILING as in the trace, so a move can be pictured (diagnostic).
     if let Some((a, b)) = std::env::var("NEOPETS_DEV_ATTACK").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.parse::<u64>().ok()?, b.parse::<u64>().ok()?))) {

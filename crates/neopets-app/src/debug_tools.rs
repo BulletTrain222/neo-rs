@@ -179,7 +179,19 @@ pub fn track_events(state: Option<Res<PlayState>>, mut d: ResMut<DebugState>) {
 }
 
 /// The End key, and the menu's row: a report in private/reports/NNN/.
-pub fn save_report(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, time: Res<Time<bevy::time::Real>>, mut fired: Local<bool>, state: Option<Res<PlayState>>, d: Res<DebugState>, mut dev: ResMut<DevMenu>) {
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn save_report(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time<bevy::time::Real>>,
+    mut fired: Local<bool>,
+    state: Option<Res<PlayState>>,
+    d: Res<DebugState>,
+    mut dev: ResMut<DevMenu>,
+    settings: Res<crate::display::DisplaySettings>,
+    meshes: Query<(&InheritedVisibility, Has<bevy::light::NotShadowCaster>, Has<crate::shadow_view::FaintCaster>, Has<crate::shadow_view::CasterOff>), With<Mesh3d>>,
+    suns: Query<(&InheritedVisibility, &DirectionalLight, &bevy::light::Cascades), With<crate::shadow_view::Sun>>,
+) {
     // NEOPETS_DEBUG holding "report": one report 9 s in, for checking this tool without a player.
     let elapsed = time.elapsed_secs();
     let auto = !*fired && elapsed > 9.0 && std::env::var("NEOPETS_DEBUG").is_ok_and(|v| v.contains("report"));
@@ -221,6 +233,7 @@ pub fn save_report(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, time
         text.push_str(&part);
         text.push_str("\n\n");
     }
+    text.push_str(&shadow_summary(p, &settings, &meshes, &suns));
     let log: Vec<&str> = d.log.iter().map(String::as_str).collect();
     let (start, inputs) = p.recorder.export();
     let replay = format!("Replay in a trace (no window):\n  python scripts/replay.py {n}\nor by hand:\n  NEOPETS_REPLAY=private/reports/{n:03} target/release/neopets-app.exe --play-trace {} --pack {} --seed 1\n", p.recorder.len() + 30, p.recorder.start_pack(p.world.pack));
@@ -341,6 +354,60 @@ pub struct Replay {
     start: Vec<(String, String)>,
     rows: VecDeque<neopets_sim::hero::HeroInput>,
     begun: bool,
+}
+
+/// What decides the world's shadows at this moment: the settings, the sun, the meshes that cast, and the plant patches the
+/// zone gate has off near the hero (a hidden plant casts nothing).
+#[allow(clippy::type_complexity)]
+fn shadow_summary(
+    p: &crate::play::Play,
+    settings: &crate::display::DisplaySettings,
+    meshes: &Query<(&InheritedVisibility, Has<bevy::light::NotShadowCaster>, Has<crate::shadow_view::FaintCaster>, Has<crate::shadow_view::CasterOff>), With<Mesh3d>>,
+    suns: &Query<(&InheritedVisibility, &DirectionalLight, &bevy::light::Cascades), With<crate::shadow_view::Sun>>,
+) -> String {
+    let mut out = format!("SHADOWS: world {} characters {} quality {} distance {}; sun direction {:?}
+", settings.world_shadows, settings.char_shadows, settings.shadow_quality, settings.shadow_distance, p.sun_direction());
+    for (shown, light, cascades) in suns {
+        let counts: Vec<usize> = cascades.cascades.values().map(Vec::len).collect();
+        out.push_str(&format!("sun shown {} shadow maps {} cascades {counts:?}
+", shown.get(), light.shadow_maps_enabled));
+    }
+    let (mut shown, mut casting, mut faint, mut off) = (0, 0, 0, 0);
+    for (v, no_cast, is_faint, is_off) in meshes {
+        if v.get() {
+            shown += 1;
+            casting += usize::from(!no_cast);
+            faint += usize::from(is_faint);
+            off += usize::from(is_off);
+        }
+    }
+    out.push_str(&format!("meshes shown {shown}, casting {casting}, marked faint {faint}, marked off {off}
+"));
+    let h = p.loco.position();
+    for (pack, patches) in &p.foliage {
+        let on = patches.iter().filter(|q| q.on).count();
+        let mut hidden: Vec<(f32, usize, u16)> = patches
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| !q.on)
+            .map(|(i, q)| ((q.centre[0] - h[0]).hypot(q.centre[2] - h[2]), i, q.model))
+            .collect();
+        hidden.sort_by(|a, b| a.0.total_cmp(&b.0));
+        hidden.truncate(8);
+        let near: Vec<String> = hidden.iter().map(|(d, i, m)| format!("{i} (model {m}) {d:.0} away")).collect();
+        out.push_str(&format!("plants of {pack}: {on} of {} patches on; nearest off: {}
+", patches.len(), near.join(", ")));
+    }
+    out
+}
+
+/// NEOPETS_REPLAY in a window: a report's input plays there too, so its picture can be seen again.
+pub fn window_replay(p: &mut crate::play::Play, input: &mut neopets_sim::hero::HeroInput) {
+    static REPLAY: std::sync::OnceLock<std::sync::Mutex<Option<Replay>>> = std::sync::OnceLock::new();
+    let replay = REPLAY.get_or_init(|| std::sync::Mutex::new(Replay::from_env()));
+    if let Some(r) = replay.lock().unwrap().as_mut() {
+        r.apply(p, input);
+    }
 }
 
 impl Replay {

@@ -13618,34 +13618,33 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             if !state.flag(618) && state.flag(116) && state.has_item(34) {
                 state.set(618, true);
             }
-            // Flag 114 (Hubert sends Tor for the pliers): fade out, slot R with Hubert's region
-            // 927, entity 44 to locator 15, fade in, camera 12, entity 44 walks to locator 16,
-            // fade out, camera returned, fade in. The walk waits (R-0025).
+            // Open question 29 gives the steps of these scenes; their fades in do not wait and
+            // their walks run under the timed waits.
+            let fade_on = || Action::FadeIn { seconds: FADE, wait: false };
+            let walk = |entity, locator| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 0.0 };
+            // Flag 114 (Hubert sends Tor for the pliers).
             if state.flag(114) && !state.flag(115) && !dialog {
                 state.set(115, true);
                 out.extend([Action::HoldHero, fade_out(), Action::LoadRegion { slot: 3, region: Some(927) }, Action::WaitLoads]);
-                out.extend([Action::MoveEntity { entity: 44, locator: 15, face: true }, fade_in(), camera(12)]);
-                out.extend([Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false, stop: 0.0 }, fade_out(), release_camera(), fade_in()]);
+                out.extend([Action::MoveEntity { entity: 44, locator: 15, face: true }, fade_on(), camera(12), wait(0.5)]);
+                out.extend([walk(44, 16), wait(4.0), fade_out(), release_camera(), fade_on()]);
             }
-            // Flag 117 (the pliers handed over): the first scene (hero to locator 17, camera 12,
-            // entity 44 to locator 16, sound 12, back to locator 15, slot R with region 926),
-            // then region 928 for the second (119 set, entity 45 to locator 21, camera 15, its
-            // walk to locator 23), then slot R emptied and the camera returned. The pump word is
-            // cleared by this cutscene.
+            // Flag 117 (the pliers handed over). Part A: Hubert repairs the pump (his animation
+            // 110, object 19 run backward, the leaks' effects 3 and 4 stopped) and walks back.
+            // Part B, with region 928: 119 set, entity 45 to locator 21, camera 15, its walk to
+            // locator 23, object 6 played. The pump word is cleared by this cutscene.
             if state.flag(117) && !state.flag(118) && !dialog {
                 state.set(118, true);
                 state.set_word(pack, 3, 0);
-                out.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 17 }, camera(12), fade_in()]);
-                out.push(Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false, stop: 0.0 });
-                out.push(Action::PlaySound { cue: 12, locator: None });
-                out.extend([Action::PlayAnim { obj: 19, speed: 1.0, wait: false }, Action::StopEffect { slot: 3 }, Action::StopEffect { slot: 4 }]);
-                out.extend([Action::WalkEntity { entity: 44, locator: 15, wait: true, orient: false, stop: 0.0 }, fade_out()]);
+                out.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 17 }, fade_on(), camera(12), walk(44, 16), wait(2.0)]);
+                out.extend([Action::PlaySound { cue: 12, locator: None }, Action::EntityAnim { entity: 44, anim: 110, looped: false, wait: true }, wait(1.0)]);
+                out.extend([Action::PlayAnim { obj: 19, speed: -1.0, wait: false }, wait(0.5), Action::StopEffect { slot: 3 }, Action::StopEffect { slot: 4 }, wait(2.0), Action::Sleep { ticks: 1 }]);
+                out.extend([walk(44, 15), wait(3.0), fade_out()]);
                 out.extend([Action::LoadRegion { slot: 3, region: Some(926) }, Action::LoadRegion { slot: 3, region: Some(928) }, Action::WaitLoads]);
-                state.set(119, true);
-                out.extend([Action::DeactivateObj { obj: 8 }, Action::DeactivateObj { obj: 7 }, Action::InitObjOn { obj: 6, end: false }]);
-                out.extend([Action::MoveEntity { entity: 45, locator: 21, face: true }, camera(15), fade_in()]);
-                out.extend([Action::WalkEntity { entity: 45, locator: 23, wait: true, orient: false, stop: 0.0 }, Action::PlayAnim { obj: 6, speed: 1.0, wait: true }, fade_out()]);
-                out.extend([Action::LoadRegion { slot: 3, region: None }, release_camera(), fade_in(), Action::InitObjOn { obj: 8, end: false }]);
+                out.extend([Action::SetFlag { flag: 119, on: true }, Action::DeactivateObj { obj: 8 }, Action::DeactivateObj { obj: 7 }, Action::InitObjOn { obj: 6, end: false }]);
+                out.extend([Action::MoveEntity { entity: 45, locator: 21, face: true }, wait(0.1), camera(15), fade_on(), walk(45, 23), wait(3.0)]);
+                out.extend([Action::PlayAnim { obj: 6, speed: 1.0, wait: true }, fade_out()]);
+                out.extend([Action::LoadRegion { slot: 3, region: None }, release_camera(), fade_on(), Action::InitObjOn { obj: 8, end: false }]);
             }
             if state.flag(278) {
                 state.set(279, true);
@@ -21138,7 +21137,7 @@ mod tests {
         assert!(scene(on_update(909, &mut s, true)).is_empty(), "the scene waits for the box to close");
         assert_eq!(
             scene(on_update(909, &mut s, false)),
-            vec![Action::LoadRegion { slot: 3, region: Some(927) }, Action::MoveEntity { entity: 44, locator: 15, face: true }, Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false, stop: 0.0 }]
+            vec![Action::LoadRegion { slot: 3, region: Some(927) }, Action::MoveEntity { entity: 44, locator: 15, face: true }, Action::WalkEntity { entity: 44, locator: 16, wait: false, orient: false, stop: 0.0 }]
         );
         // Without the pliers Hubert's line 98 sets 116; picking them up then sets 618.
         assert_eq!(talks(909, 1, &mut s, 1), vec![98]);
@@ -21150,7 +21149,15 @@ mod tests {
         let regions: Vec<Action> = on_update(909, &mut s, false).into_iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect();
         let load = |region| Action::LoadRegion { slot: 3, region };
         assert_eq!(regions, vec![load(Some(926)), load(Some(928)), load(None)]);
-        assert!(s.flag(118) && s.flag(119));
+        // 119 comes with part B, after Hubert's repair in part A.
+        assert!(s.flag(118) && !s.flag(119));
+        s.set(117, false);
+        s.set(118, false);
+        let steps = on_update(909, &mut { let mut t = s.clone(); t.set(117, true); t }, false);
+        let at = |a: &Action| steps.iter().position(|x| x == a).unwrap();
+        assert!(at(&Action::EntityAnim { entity: 44, anim: 110, looped: false, wait: true }) < at(&Action::PlayAnim { obj: 19, speed: -1.0, wait: false }));
+        assert!(at(&Action::PlayAnim { obj: 19, speed: -1.0, wait: false }) < at(&Action::WalkEntity { entity: 44, locator: 15, wait: false, orient: false, stop: 0.0 }));
+        assert!(at(&Action::WalkEntity { entity: 44, locator: 15, wait: false, orient: false, stop: 0.0 }) < at(&Action::SetFlag { flag: 119, on: true }));
     }
 
     #[test]
