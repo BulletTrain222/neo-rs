@@ -2774,7 +2774,8 @@ impl Play {
         // The traversal holds of the world left behind end with the arrival.
         (self.ladder, self.ledge, self.hang, self.climb, self.panel, self.hold) = (None, None, None, None, None, None);
         let f = followed(&self.loco, &self.world);
-        self.camera.place_behind(&f);
+        let world = &self.world;
+        self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| push_eye(world, e));
     }
 
     /// Make the other world current and land on its plane k (teleport landing).
@@ -2811,7 +2812,8 @@ impl Play {
             self.grab_cooldown = 60;
         }
         let f = followed(&self.loco, &self.world);
-        self.camera.place_behind(&f);
+        let world = &self.world;
+        self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| push_eye(world, e));
         self.fade = Default::default();
         self.bars = Default::default();
     }
@@ -3356,7 +3358,8 @@ impl Play {
                     // table places the camera at that locator (SPEC-0030 row 35).
                     self.cut = None;
                     let f = followed(&self.loco, &self.world);
-                    self.camera.place_behind(&f);
+                    let world = &self.world;
+                    self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| push_eye(world, e));
                     if let Some((at, _)) = usize::try_from(preset).ok().and_then(|k| self.locator(pack, k)) {
                         self.camera.eye = at;
                         self.camera.reset();
@@ -10196,6 +10199,21 @@ impl Play {
         self.world.kind == Kind::Interior || matches!(self.world.pack, 1098 | 1163)
     }
 
+    /// Diagnostic: placed objects `a` to `b` of this world: drawn or not, where, their volumes and
+    /// the walls their model sets give at their own cell.
+    pub fn diag_objects(&self, a: usize, b: usize) {
+        let w = &self.world;
+        for i in a..=b.min(w.objects.len().saturating_sub(1)) {
+            let m = self.object_matrix(w.pack, i);
+            let vols = w.headers.get(i).and_then(|o| o.as_ref()).map_or(0, |h| h.volumes.len());
+            let (set, header) = w.objects.get(i).and_then(|o| o.as_ref()).map_or((false, false), |o| (o.model_set.is_some(), o.header.is_some()));
+            match m {
+                Some(m) => println!("OBJ {i} drawn at {:.1},{:.1},{:.1} model set {set} header {header} volumes {vols} walls {}", m[12], m[13], m[14], w.object_wall_count(m[12], m[14])),
+                None => println!("OBJ {i} not drawn, model set {set} header {header} volumes {vols}"),
+            }
+        }
+    }
+
     /// Diagnostic: each ladder, with the grab test's distances from a point.
     pub fn diag_rails(&self, at: [f32; 3]) {
         for (k, r) in self.world.rails.iter().enumerate() {
@@ -10966,7 +10984,7 @@ impl Play {
                 // SPEC-0033 Behavior 13: the box push does nothing for a hero in state 21, 38 or 41.
                 let before = *p;
                 if !noclip && !matches!(hero_state, 21 | 38 | 41) {
-                    contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
+                    contact::resolve_stepping(p, &world.boxes, contact::HERO_RADIUS);
                 }
                 // SPEC-0048 Solid for characters: the movable blocks' boxes; a top face sets the
                 // floor-contact flag and a side face of a block 1 to 5 taller the side-touch latch.

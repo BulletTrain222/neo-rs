@@ -225,13 +225,17 @@ impl FollowCamera {
         self.reset();
     }
 
-    /// The landing placement (SPEC-0006 Hero placement): the eye at the hero position minus
-    /// 5 times the hero's forward, then camera reset.
-    pub fn place_behind(&mut self, hero: &Followed) {
+    /// The world-load attach and the return to normal (SPEC-0027 Placement after a load or
+    /// restart, Pose setter with pull-in): the eye the target distance behind the hero's facing,
+    /// then the pull-in (level with the focus, halved under high ground), the wall push and reset.
+    /// The earlier 5 units at the feet started the camera low and looking up, then it crept back
+    /// for about 200 ticks (user's report 26).
+    pub fn place_behind(&mut self, hero: &Followed, ground: impl Fn(f32, f32, f32) -> f32, push: impl Fn(&mut Vec3)) {
+        self.select_profile(hero);
+        let d = self.target_distance(0.0);
         let f = hero.facing;
-        self.focus = hero.focus();
-        self.eye = sub(hero.position, [5.0 * f[0], 5.0 * f[1], 5.0 * f[2]]);
-        self.reset();
+        let wanted = sub(hero.position, [d * f[0], 0.0, d * f[2]]);
+        self.pull_in(hero, wanted, ground, push);
     }
 
     /// Camera reset: spin cleared, both polars from the eye, t_e and m its elevation.

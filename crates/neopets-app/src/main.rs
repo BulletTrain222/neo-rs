@@ -4941,6 +4941,17 @@ fn play_trace(
                 play.diag_rails(at);
             }
         }
+        // NEOPETS_TRACE_EYE=n: the camera every n ticks.
+        if std::env::var("NEOPETS_TRACE_EYE").ok().and_then(|v| v.trim().parse::<u64>().ok()).is_some_and(|n| play.ticks % n == 0) {
+            let h = play.loco.position();
+            println!("EYE {} pack {} hero {:.2},{:.2},{:.2} state {} facing {:.2},{:.2} eye {:.2},{:.2},{:.2} focus {:.2},{:.2},{:.2} polar {:?}", play.ticks, play.world.pack, h[0], h[1], h[2], play.loco.state, play.loco.facing[0], play.loco.facing[2], play.camera.eye[0], play.camera.eye[1], play.camera.eye[2], play.camera.focus[0], play.camera.focus[1], play.camera.focus[2], play.camera.current);
+        }
+        // NEOPETS_TRACE_OBJS="tick:a-b": placed objects a to b on that tick.
+        if let Some((k, a, b)) = std::env::var("NEOPETS_TRACE_OBJS").ok().and_then(|v| { let (k, r) = v.split_once(':')?; let (a, b) = r.split_once('-')?; Some((k.trim().parse::<u64>().ok()?, a.trim().parse::<usize>().ok()?, b.trim().parse::<usize>().ok()?)) }) {
+            if play.ticks == k {
+                play.diag_objects(a, b);
+            }
+        }
         // NEOPETS_TRACE_BREAKLIST=tick: every breakable's state on that tick.
         if std::env::var("NEOPETS_TRACE_BREAKLIST").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
             play.diag_breakables();
@@ -5394,7 +5405,9 @@ fn play_trace(
         }
         // NEOPETS_TRACE_PUSH="x,z": the stick points straight at the point (no route search),
         // except while climbing onto a block (centred) and on a ladder (pushed up).
-        if let Some((x, z)) = std::env::var("NEOPETS_TRACE_PUSH").ok().and_then(|v| { let (a, b) = v.split_once(',')?; Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?)) }) {
+        // NEOPETS_TRACE_PUSH_PACK=p: the push only while the hero is in pack p.
+        let push_here = std::env::var("NEOPETS_TRACE_PUSH_PACK").ok().and_then(|v| v.trim().parse::<u32>().ok()).is_none_or(|k| k == play.world.pack);
+        if let Some((x, z)) = std::env::var("NEOPETS_TRACE_PUSH").ok().filter(|_| push_here).and_then(|v| { let (a, b) = v.split_once(',')?; Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?)) }) {
             (forward, side) = match play.loco.state {
                 58 => (0.0, 0.0),
                 41 => (1.0, 0.0),

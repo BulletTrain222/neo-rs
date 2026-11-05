@@ -104,6 +104,26 @@ pub fn resolve(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> bool {
     hit
 }
 
+/// The hero's box push with one change of this build's (user's report 27, R-0242): a side push
+/// whose top depth is within 0.25 lifts onto the top instead, even from beyond the 0.5 r of the
+/// spec's top gate. Stairs that rise past a box's top edge otherwise stopped him 0.12 short of
+/// it, at its side, and he had to jump.
+pub fn resolve_stepping(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> bool {
+    let mut hit = false;
+    for b in boxes {
+        if let Some((face, n, dist)) = push(*p, b, r) {
+            let d = [p[0] - b.origin[0], p[1] - b.origin[1], p[2] - b.origin[2]];
+            let top = b.extents[0] - TOP_MARGIN - dot(d, b.axes[0]);
+            let (n, dist) = if face != 1 && (0.0..0.25).contains(&top) { (b.axes[0], top) } else { (n, dist) };
+            for k in 0..3 {
+                p[k] += n[k] * dist;
+            }
+            hit = true;
+        }
+    }
+    hit
+}
+
 /// The finite cylinder test's parallel branch and the slide response's move for an upright owner
 /// body (feet `p`, radius `owner_r`, height `owner_h`) against an upright cylinder (base centre,
 /// length, radius), SPEC-0018 Breakable cylinders against characters and Tree trunks against the
@@ -379,6 +399,22 @@ mod tests {
         let mut p = [9.5, 1.0, -4.0];
         resolve(&mut p, &[b], 1.25);
         assert!((p[0] - (10.0 - 1.25)).abs() < 1e-6, "a becomes -r: {p:?} {dist}");
+    }
+
+    #[test]
+    fn a_step_just_under_the_top_lifts_from_beyond_the_edge() {
+        // Outside the low-B side by 0.9 r, 0.12 under the top: the spec's gate pushes him out
+        // sideways, the stepping push lifts him onto the top.
+        let b = sample();
+        let r = 1.0;
+        let d = b.extents[0] - TOP_MARGIN - 0.12;
+        let mut p: Vec3 = std::array::from_fn(|k| b.origin[k] + d * b.axes[0][k] + 1.0 * b.axes[1][k] - 0.9 * r * b.axes[2][k]);
+        let mut q = p;
+        resolve(&mut q, &[b], r);
+        assert!(dot([q[0] - p[0], q[1] - p[1], q[2] - p[2]], b.axes[0]).abs() < 1e-4, "the spec's push is sideways");
+        resolve_stepping(&mut p, &[b], r);
+        let v = dot([p[0] - b.origin[0], p[1] - b.origin[1], p[2] - b.origin[2]], b.axes[0]);
+        assert!((v - (b.extents[0] - TOP_MARGIN)).abs() < 1e-4, "{v}");
     }
 
     #[test]
