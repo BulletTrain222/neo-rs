@@ -9541,6 +9541,12 @@ impl Play {
                 let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
                 c.facing = neopets_sim::hero::steer(c.facing, to, rate);
             }
+            // SPEC-0023 10.1: the Juppie Monster arms the bar from its own hit code, on its slam, stun and dazed hits.
+            if act.hp_loss > 0 {
+                let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(c.name.as_bytes(), *sp));
+                let max = c.row.map_or(1, |r| r.hit_points as i32);
+                self.monster_bar.arm(c.id, &c.name, width, c.hp, max, &self.monster_words);
+            }
             c.hp -= act.hp_loss;
             if act.death {
                 c.hp = 1;

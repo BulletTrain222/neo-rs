@@ -3145,6 +3145,9 @@ fn sync_shots(
         let at = match m.0.checked_sub(neopets_sim::projectile::SLOTS) {
             Some(_) => None,
             None if state.play.pool_slot_has_fx(m.0) => None,
+            // SPEC-0029 Visual update: a null part pointer draws nothing, so a shot with no effect and no part is unseen (the
+            // Plant Gunner's: user's report of yellow dots; R-0240). NEOPETS_SHOT_MARKERS shows them (diagnostic).
+            None if std::env::var_os("NEOPETS_SHOT_MARKERS").is_none() => None,
             None => state.play.shots.slots.get(m.0).copied().flatten().filter(|s| s.s.visual < 5).map(|s| s.position),
         };
         match at {
@@ -3194,7 +3197,15 @@ fn item_model(
                 *boot = Some((b, c));
             }
             let (b, c) = boot.as_ref().unwrap();
-            neopets_data::model::build_roles(b, c, None, Some(&[(id - 98) as u16]))?
+            let m = neopets_data::model::build_roles(b, c, None, Some(&[(id - 98) as u16]))?;
+            if m.parts.is_empty() {
+                // Not in resource 7: a world pack's type-8 child under this id (SPEC-0021 Item model registry).
+                let bytes = index.read(disc, pack)?;
+                let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
+                neopets_data::model::build_roles(&bytes, &chain.chunks, None, Some(&[id as u16]))?
+            } else {
+                m
+            }
         }
         50..=59 => match archive_view::model(disc, index, 515 + id)? {
             Some(m) => m,
@@ -4898,6 +4909,24 @@ fn play_trace(
             if play.ticks % 30 == 0 || play.ticks == k {
                 let tick = play.ticks;
                 println!("CHESTBODY {tick}: {:?}", play.diag_chest_body(g, tick == k));
+            }
+        }
+        // NEOPETS_TRACE_MODELS=tick: on that tick the live items with no model, and each named character's model parts.
+        if std::env::var("NEOPETS_TRACE_MODELS").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
+            let mut boot = None;
+            let mut ids: Vec<(u32, u16)> = play.pools.iter().flat_map(|(&pk, pool)| pool.slots.iter().flatten().map(move |it| (pk, it.id))).collect();
+            ids.extend([151u16, 154, 174].map(|id| (play.world.pack, id)));
+            ids.sort_unstable();
+            ids.dedup();
+            for (pk, id) in ids {
+                let parts = item_model(&mut archive.disc, &archive.index, &mut boot, id as u32, pk).ok().flatten().map(|m| m.parts.len());
+                println!("MODEL item {id} of {pk}: parts {parts:?}");
+            }
+            let mut seen = std::collections::HashSet::new();
+            for c in &play.characters {
+                if seen.insert(c.name.clone()) {
+                    println!("MODEL {:?}: attachment slots {:?}", c.name, c.model.attachments.iter().map(|(k, _)| *k).collect::<Vec<_>>());
+                }
             }
         }
         // NEOPETS_TRACE_SUN: the sun's direction whenever it or the world changes.
