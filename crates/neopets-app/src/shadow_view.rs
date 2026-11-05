@@ -336,11 +336,13 @@ pub fn mark_faint(
 
 /// With Character shadows Detailed and World shadows off, only the characters (the hero, the
 /// world's characters, their items and attachments) cast: every other mesh is marked
-/// NotShadowCaster; with World shadows on the marks come off again.
+/// NotShadowCaster; with World shadows on the marks come off again. In an interior only the characters cast whatever the
+/// setting: the sun comes from above the roof, which would put the whole room in shadow (user's report 7).
 #[allow(clippy::type_complexity)]
 pub fn sync_casters(
     mut commands: Commands,
     settings: Res<crate::display::DisplaySettings>,
+    state: Option<Res<crate::PlayState>>,
     meshes: Query<(Entity, Has<CasterOff>, Has<bevy::light::NotShadowCaster>), With<Mesh3d>>,
     added: Query<(), Added<Mesh3d>>,
     parents: Query<&ChildOf>,
@@ -349,7 +351,8 @@ pub fn sync_casters(
     faint: Query<(), With<FaintCaster>>,
 ) {
     let _span = crate::perf::span("sync_casters");
-    let characters_only = !settings.world_shadows;
+    let indoors = state.is_some_and(|s| s.play.world.kind == neopets_data::travel::Kind::Interior);
+    let characters_only = !settings.world_shadows || indoors;
     if *last == Some(characters_only) && added.is_empty() {
         return;
     }
