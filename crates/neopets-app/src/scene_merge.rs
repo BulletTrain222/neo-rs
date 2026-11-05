@@ -116,6 +116,9 @@ impl Built {
 }
 
 /// A part that lies flat: its mean normal points up (above 0.9).
+///
+/// The ground casts no sun shadow in this build: with the sun low, grass a little above a road laid straight-edged shadows
+/// along every path, and a hilltop darkened its own cliff (user's report; views 19 and the Farm Road save point).
 fn is_flat(p: &neopets_data::model::MeshPart) -> bool {
     let n = p.normals.len().max(1) as f32;
     p.normals.iter().map(|q| q[1]).sum::<f32>() / n > 0.9
@@ -174,8 +177,6 @@ pub fn spawn(
     let no_merge = std::env::var_os("NEOPETS_NO_MERGE").is_some();
     let mut env_textures: HashMap<usize, Handle<Image>> = HashMap::new();
     let mut groups: HashMap<(AssetId<StandardMaterial>, Option<u8>, i32, i32, bool), (Handle<StandardMaterial>, Vec<usize>)> = HashMap::new();
-    // NEOPETS_FLAT_NOCAST: flat ground parts cast no sun shadow (diagnostic, to measure).
-    let flat_ground = std::env::var_os("NEOPETS_FLAT_NOCAST").is_some();
     let mut count = 0;
     let ranks = crate::draw_order::ranks(m);
     let rank = |i: usize, second: u32| crate::draw_order::DrawRank { pack: Some(pack), rank: ranks[i] + second };
@@ -196,7 +197,7 @@ pub fn spawn(
         if !apart {
             let n = p.positions.len().max(1) as f32;
             let c = p.positions.iter().fold([0.0f32; 2], |a, q| [a[0] + q[0] / n, a[1] + q[2] / n]);
-            let key = (material.id(), p.zone, (c[0] / CELL).floor() as i32, (c[1] / CELL).floor() as i32, flat_ground && is_flat(p));
+            let key = (material.id(), p.zone, (c[0] / CELL).floor() as i32, (c[1] / CELL).floor() as i32, is_flat(p));
             groups.entry(key).or_insert_with(|| (material, Vec::new())).1.push(i);
             continue;
         }
@@ -259,6 +260,8 @@ pub fn spawn(
         e.insert((b.sigs[i], rank(i, 0)));
         if layer {
             e.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+        } else if is_flat(p) {
+            e.insert(bevy::light::NotShadowCaster);
         }
         if let Some((at, d1, _)) = p.cull {
             e.insert(DrawCull(Vec3::from(at), d1));
