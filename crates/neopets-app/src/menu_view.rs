@@ -50,6 +50,13 @@ pub fn stick_bits(gamepads: &Query<&Gamepad>) -> u16 {
     w
 }
 
+/// A menu picture's edge strip: its draw index, and whether it is the right side.
+#[derive(Component)]
+pub struct MenuEdge(usize, bool);
+
+/// The width from which a picture counts as a page or a panel, whose edges carry on: not a button at the frame's side.
+const WIDE: f32 = 256.0;
+
 #[derive(Component)]
 pub struct MenuItem(usize);
 
@@ -121,6 +128,8 @@ fn picture(archive: &mut crate::Archive, resource: u32) -> Option<neopets_data::
 
 #[derive(Default)]
 pub struct MenuCache {
+    /// Each picture's edge strips, by its image and side.
+    edges: HashMap<(AssetId<Image>, bool), Option<Handle<Image>>>,
     /// The HUD art's button-picture count the sprites were made with.
     style: u32,
     sprites: HashMap<(usize, u32, u32), Handle<Image>>,
@@ -191,8 +200,10 @@ pub fn sync_menu(
     mut archive: Option<ResMut<crate::Archive>>,
     mut images: ResMut<Assets<Image>>,
     windows: Query<&Window>,
-    mut items: Query<(&MenuItem, &mut Node, &mut ImageNode, &mut Visibility), Without<MenuBackdrop>>,
-    mut backdrop: Query<&mut Visibility, (With<MenuBackdrop>, Without<MenuItem>)>,
+    mut items: Query<(&MenuItem, &mut Node, &mut ImageNode, &mut Visibility), (Without<MenuBackdrop>, Without<MenuEdge>)>,
+    mut edges: Query<(&MenuEdge, &mut Node, &mut ImageNode, &mut Visibility), (Without<MenuBackdrop>, Without<MenuItem>)>,
+    settings: Res<crate::display::DisplaySettings>,
+    mut backdrop: Query<&mut Visibility, (With<MenuBackdrop>, Without<MenuItem>, Without<MenuEdge>)>,
     mut cache: Local<MenuCache>,
     mut pool: Local<usize>,
 ) {
@@ -251,6 +262,9 @@ pub fn sync_menu(
         for i in *pool..draws.len() + 8 {
             // Each item is stacked by its draw index, so later draws cover earlier ones.
             commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, MenuItem(i), GlobalZIndex(30 + i as i32)));
+            for right in [false, true] {
+                commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default().with_mode(bevy::ui::widget::NodeImageMode::Stretch), Visibility::Hidden, MenuEdge(i, right), GlobalZIndex(30 + i as i32)));
+            }
         }
         *pool = draws.len() + 8;
         return;
@@ -258,6 +272,7 @@ pub fn sync_menu(
     let s = (window.width() / 512.0).min(window.height() / 448.0);
     let (ox, oy) = ((window.width() - 512.0 * s) / 2.0, (window.height() - 448.0 * s) / 2.0);
     let crate::hud_view::HudArtParts { f, mem } = art.parts();
+    let wide_pictures: Vec<bool> = draws.iter().map(|d| matches!(d, Draw::Sprite { w, .. } if *w >= WIDE)).collect();
     // Build what the draws need.
     let mut placed: Vec<Option<(Handle<Image>, f32, f32, f32, f32, Color)>> = Vec::with_capacity(draws.len());
     for d in &draws {
@@ -367,6 +382,52 @@ pub fn sync_menu(
         if p.as_ref().is_some_and(|&(_, x, y, w, h, _)| x >= 512.0 || y >= 448.0 || x + w <= 0.0 || y + h <= 0.0) {
             *p = None;
         }
+    }
+    // A wide window: the edge column of a picture reaching the frame's side is stretched out to the window's side, so its
+    // colours carry on and a see-through picture stays see-through (this build's option, Menu edges in Display).
+    for (edge, mut node, mut image, mut vis) in &mut edges {
+        let shown = placed.get(edge.0).cloned().flatten().filter(|p| settings.menu_edges && ox > 0.5 && wide_pictures.get(edge.0).copied().unwrap_or(false) && if edge.1 { p.1 + p.3 >= 512.0 - 0.5 } else { p.1 <= 0.5 });
+        let Some((handle, x, y, w, h, colour)) = shown else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        if !cache.edges.contains_key(&(handle.id(), edge.1)) {
+            let strip = images.get(&handle).and_then(|img| {
+                let (iw, ih) = (img.width() as usize, img.height() as usize);
+                let data = img.data.as_ref()?;
+                let column = if edge.1 { iw.checked_sub(1)? } else { 0 };
+                let mut edge = Vec::with_capacity(ih);
+                for row in 0..ih {
+                    let at = (row * iw + column) * 4;
+                    let px = data.get(at..at + 4)?;
+                    edge.push([px[0] as u32, px[1] as u32, px[2] as u32, px[3] as u32]);
+                }
+                // Softened along its height: each row alone stretched into a stripe on a textured page (the quest scroll).
+                let radius = (ih / 24).max(1);
+                let mut rgba = Vec::with_capacity(ih * 4);
+                for row in 0..ih {
+                    let near = &edge[row.saturating_sub(radius)..(row + radius + 1).min(ih)];
+                    let n = near.len() as u32;
+                    for k in 0..4 {
+                        rgba.push((near.iter().map(|p| p[k]).sum::<u32>() / n) as u8);
+                    }
+                }
+                Some(crate::rgba_image(1, ih as u32, rgba))
+            });
+            let strip = strip.map(|s| images.add(s));
+            cache.edges.insert((handle.id(), edge.1), strip);
+        }
+        let Some(strip) = cache.edges[&(handle.id(), edge.1)].clone() else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        node.left = Val::Px(if edge.1 { ox + (x + w) * s - 1.0 } else { 0.0 });
+        node.width = Val::Px(if edge.1 { window.width() - (ox + (x + w) * s) + 1.0 } else { ox + x * s + 1.0 });
+        node.top = Val::Px(oy + y * s);
+        node.height = Val::Px(h * s);
+        image.image = strip;
+        image.color = colour;
+        *vis = Visibility::Inherited;
     }
     for (item, mut node, mut image, mut vis) in &mut items {
         match placed.get(item.0).cloned().flatten() {
