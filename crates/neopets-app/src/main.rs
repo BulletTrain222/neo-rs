@@ -6418,6 +6418,12 @@ fn sync_fade(
 /// (on listed ticks) scripts, applied to this tick's input.
 fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     let t = play.ticks;
+    // NEOPETS_DEV_ITEM="tick:id": that item placed ahead of the hero, for a picture.
+    if let Some((k, id)) = std::env::var("NEOPETS_DEV_ITEM").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u16>().ok()?))) {
+        if k == t {
+            play.diag_place_item(id);
+        }
+    }
     // NEOPETS_TRACE_PLACE="tick:x,z,y[;...]": the hero placed there, as in the trace.
     for e in std::env::var("NEOPETS_TRACE_PLACE").unwrap_or_default().split(';') {
         let Some((k, r)) = e.trim().split_once(':') else { continue };

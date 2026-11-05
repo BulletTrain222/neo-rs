@@ -10167,6 +10167,15 @@ impl Play {
         [p[0] + 2.0 * f[0], p[1] + 2.0 * f[1] + 0.8, p[2] + 2.0 * f[2]]
     }
 
+    /// Diagnostic: item `id` placed 5.5 ahead of the hero, a little above the ground.
+    pub fn diag_place_item(&mut self, id: u16) {
+        let (p, f) = (self.loco.position(), unit(self.loco.facing));
+        let pack = self.world.pack;
+        let at = [p[0] + 5.5 * f[0], p[1] + 1.0, p[2] + 5.5 * f[2]];
+        let spawned = self.spawn_item(pack, neopets_sim::items::Spawn { id, point: at, placed: true, charm: false, s0: 1.0, s1: 1.0, delay: 0.0, larg: -1.0, direction: Some(f), flag: 0, map: 0, price: 0 });
+        println!("placed item {id} at {at:?}: {spawned}");
+    }
+
     /// Diagnostic: the state of chest group `g`'s body; with `drop` the hero is put 3 above its top, falling onto it.
     pub fn diag_chest_body(&mut self, g: usize, drop: bool) -> Option<i32> {
         let id = usize::try_from(*self.world.groups.get(g)?.breakables.first()?).ok()?;
