@@ -4868,6 +4868,14 @@ fn play_trace(
                 println!("DROPS {}: {}", play.ticks, play.diag_drops());
             }
         }
+        // NEOPETS_TRACE_PLACED="pack:a-b": how many of those placed effects are active, every 100 ticks.
+        if let Some((pack, range)) = std::env::var("NEOPETS_TRACE_PLACED").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.to_string(), b.to_string())) {
+            if let (Ok(pack), Some((a, b))) = (pack.parse::<u32>(), range.split_once('-')) {
+                if play.ticks % 100 == 0 {
+                    println!("PLACED tick {} world {}: {} active", play.ticks, play.world.pack, play.diag_placed(pack, a.parse().unwrap_or(0), b.parse().unwrap_or(0)));
+                }
+            }
+        }
         // NEOPETS_TRACE_SUN: the sun's direction whenever it or the world changes.
         if std::env::var_os("NEOPETS_TRACE_SUN").is_some() {
             let now = format!("world {} lights {} sun {:?}", play.world.pack, play.world.lights.len(), play.sun_direction());

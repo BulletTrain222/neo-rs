@@ -3523,11 +3523,11 @@ impl Play {
                         }
                     }
                 }
+                // SPEC-0034 section 6: StopEffect clears the record's active word and drains it, so the zone pass leaves it
+                // alone. The load bind comes first, as it does in the original: a world's Init runs after it.
                 Action::StopEffect { slot } => {
-                    let table = self.effect_table.clone();
-                    if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
-                        self.effects.stop(&table, h);
-                    }
+                    self.placed_bind();
+                    self.switch_placed(pack, slot, false);
                 }
                 Action::WalkHero { locator, wait, orient } => {
                     let (t, g) = *self.world.entries.get(locator)?;
@@ -16988,17 +16988,12 @@ impl Play {
         }
     }
 
-    /// World reset of the placed effects (SPEC-0034 section 6): a world no longer resident
-    /// drains and releases its started records.
-    fn placed_release_step(&mut self) {
+    /// SPEC-0034 section 6 (R-0081): the type-39 load bind copies each record's definition,
+    /// whose active word (+0x48) is 1 for every definition, so every placed record with a
+    /// valid id is active from its world's load (the pack 951 fireplace among them); the
+    /// zone pass then updates or stops it, and a switch off or StopEffect clears it.
+    fn placed_bind(&mut self) {
         let table = self.effect_table.clone();
-        let resident: Vec<u32> = [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).collect();
-        self.placed_on.retain(|(p, _)| resident.contains(p));
-        self.placed_bound.retain(|p| resident.contains(p));
-        // SPEC-0034 section 6 (R-0081): the type-39 load bind copies each record's definition,
-        // whose active word (+0x48) is 1 for every definition, so every placed record with a
-        // valid id is active from its world's load (the pack 951 fireplace among them); the
-        // zone pass then updates or stops it, and a switch off clears it.
         for w in [&self.world].into_iter().chain(self.other.as_ref()) {
             if self.placed_bound.insert(w.pack) {
                 for (k, r) in w.placed_effects.iter().enumerate() {
@@ -17008,6 +17003,21 @@ impl Play {
                 }
             }
         }
+    }
+
+    /// Diagnostic: the placed records of `pack` from `a` to `b` that are active.
+    pub fn diag_placed(&self, pack: u32, a: usize, b: usize) -> usize {
+        (a..=b).filter(|&k| self.placed_on.contains(&(pack, k))).count()
+    }
+
+    /// World reset of the placed effects (SPEC-0034 section 6): a world no longer resident
+    /// drains and releases its started records.
+    fn placed_release_step(&mut self) {
+        let table = self.effect_table.clone();
+        let resident: Vec<u32> = [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).collect();
+        self.placed_on.retain(|(p, _)| resident.contains(p));
+        self.placed_bound.retain(|p| resident.contains(p));
+        self.placed_bind();
         // A world gone without a store forgets its kills (SPEC-0006 Kill memory).
         self.killed.retain(|(p, _)| resident.contains(p));
         self.kill_live.retain(|(p, _)| resident.contains(p));

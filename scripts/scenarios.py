@@ -49,6 +49,8 @@ SCENARIOS = [
     ('father repairs the pump after the pliers', 'SPEC-0045 question 29', 1200, 909, ['--flag', '110', '--flag', '114', '--flag', '116', '--flag', '618'], {'NEOPETS_TRACE_FACING': 'Hubert', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_SETFLAG': '500:117'}, has(r'FACING \d+ \S+ \S+ \S+ clip 110')),
     ('a lock chest gives its item', 'R-0234', 200, 947, [], {'NEOPETS_TRACE_CHEST': '60:1', 'NEOPETS_TRACE_GOD': '1'}, has(r'picked up item 55')),
     ('a sealed chest gives its item', 'R-0234', 200, 1083, [], {'NEOPETS_TRACE_CHEST': '60:3', 'NEOPETS_TRACE_GOD': '1'}, has(r'picked up item 55')),
+    ('no cloud wall before the flags (world 696)', 'SPEC-0042 696 Init; SPEC-0034 section 6', 420, 696, ['--start', '-286.86,670.9,45.2'], {'NEOPETS_TRACE_PLACED': '696:0-16', 'NEOPETS_TRACE_GOD': '1'}, has(r'PLACED tick 400 world 696: 0 active')),
+    ('no cloud wall after walking in from 1066', 'SPEC-0042 696 Init; SPEC-0034 section 6', 420, 1066, [], {'NEOPETS_TRACE_PLACED': '696:0-16', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_PLACE': '100:-286.86,670.9,60'}, has(r'PLACED tick 400 world 696: 0 active')),
     ('sound records match the spec', 'SPEC-0031 types 4 and 5', 1, 909, [], {'NEOPETS_TRACE_CUE_RECORDS': '1'}, has(r'CUE RECORDS type 4 81, type 5 24')),
 ]
 
