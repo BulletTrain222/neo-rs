@@ -4950,6 +4950,7 @@ fn play_trace(
         if let Some((k, a, b)) = std::env::var("NEOPETS_TRACE_OBJS").ok().and_then(|v| { let (k, r) = v.split_once(':')?; let (a, b) = r.split_once('-')?; Some((k.trim().parse::<u64>().ok()?, a.trim().parse::<usize>().ok()?, b.trim().parse::<usize>().ok()?)) }) {
             if play.ticks == k {
                 play.diag_objects(a, b);
+                println!("OBJECT SOLIDS {}", play.debug_object_solids());
             }
         }
         // NEOPETS_TRACE_BREAKLIST=tick: every breakable's state on that tick.

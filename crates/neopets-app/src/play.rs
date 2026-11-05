@@ -2896,6 +2896,50 @@ impl Play {
         self.all_object_cylinders().into_iter().filter(|(b, ..)| (b[0] - at[0]).powi(2) + (b[1] - at[1]).powi(2) + (b[2] - at[2]).powi(2) < 2500.0).collect()
     }
 
+    /// SPEC-0028 Character versus moving placed objects: each drawn placed object's own header
+    /// boxes (kinds 4 and 7, by the world boxes' push rule and mask) and pushing spheres, in its
+    /// rest frame, with its pose. The object radius gate (+0xBC) is not read: every box within 60
+    /// of `at` in the rest frame is kept. A lever's gate in 1171 is such an object, with no
+    /// model set, so nothing stopped the hero before (user's report 24).
+    fn object_solids(&self, at: [f32; 3]) -> Vec<(ground::OwnerPose, Vec<BoxShape>, Vec<([f32; 3], f32)>)> {
+        let w = &self.world;
+        let mut out = Vec::new();
+        for (i, h) in w.headers.iter().enumerate() {
+            let Some(h) = h else { continue };
+            let (Some(m), Some(Some(o))) = (self.object_matrix(w.pack, i), w.objects.get(i)) else { continue };
+            let pose = ground::OwnerPose { current: m, rest: o.rest };
+            let local = rest_point(&pose, at);
+            let near = |c: [f32; 3]| (c[0] - local[0]).powi(2) + (c[1] - local[1]).powi(2) + (c[2] - local[2]).powi(2) < 3600.0;
+            let mut boxes = Vec::new();
+            let mut spheres = Vec::new();
+            for v in &h.volumes {
+                match v.shape {
+                    neopets_data::trigger::Shape::Rectangle { origin, axes, extents } if matches!(v.kind, 4 | 7) => {
+                        let pushes = v.flags & 0b1001 != 0
+                            && !(v.flags & 8 != 0 && v.flags & (2 | 4 | 0x20 | 0x80) == 0)
+                            && (v.mask == 0 || v.mask & w.collis_mask != 0)
+                            && extents[2] > 0.0;
+                        if pushes && near(origin) {
+                            boxes.push(BoxShape { origin, axes, extents });
+                        }
+                    }
+                    neopets_data::trigger::Shape::Sphere { centre, radius } if v.kind == 1 && contact::sphere_pushes(v.flags) && near(centre) => spheres.push((centre, radius)),
+                    _ => {}
+                }
+            }
+            if !boxes.is_empty() || !spheres.is_empty() {
+                out.push((pose, boxes, spheres));
+            }
+        }
+        out
+    }
+
+    /// Diagnostic: the object solids near the hero.
+    pub fn debug_object_solids(&self) -> String {
+        let h = self.loco.position();
+        self.object_solids(h).iter().map(|(p, b, s)| format!("pose at {:.1},{:.1},{:.1}: {} boxes {:?}, {} spheres", p.current[12], p.current[13], p.current[14], b.len(), b.first().map(|b| (b.origin, b.extents)), s.len())).collect::<Vec<_>>().join("; ")
+    }
+
     /// All the drawn placed objects' solid upright cylinders.
     fn all_object_cylinders(&self) -> Vec<([f32; 3], f32, f32)> {
         let w = &self.world;
@@ -10925,6 +10969,7 @@ impl Play {
         // chests' object 0), with the hero's own body radius. The other primitives of an
         // object's header and the double turn of a rotated object are not built.
         let object_cylinders: Vec<([f32; 3], f32, f32)> = if noclip { Vec::new() } else { self.object_cylinders(hero_at) };
+        let object_solids = if noclip || matches!(self.loco.state, 21 | 38 | 41) { Vec::new() } else { self.object_solids(hero_at) };
         self.loco.record_tick(
             self.root_step,
             |x, z, c| {
@@ -10985,6 +11030,19 @@ impl Play {
                 let before = *p;
                 if !noclip && !matches!(hero_state, 21 | 38 | 41) {
                     contact::resolve_stepping(p, &world.boxes, contact::HERO_RADIUS);
+                }
+                // SPEC-0028 Character versus moving placed objects: into each object's rest frame,
+                // its boxes and spheres, the push back to world space.
+                for (pose, boxes, spheres) in &object_solids {
+                    let local = rest_point(pose, *p);
+                    let mut q = local;
+                    let hit = contact::resolve(&mut q, boxes, contact::HERO_RADIUS) | contact::resolve_spheres(&mut q, spheres);
+                    if hit {
+                        let d = world_vector(pose, [q[0] - local[0], q[1] - local[1], q[2] - local[2]]);
+                        for k in 0..3 {
+                            p[k] += d[k];
+                        }
+                    }
                 }
                 // SPEC-0048 Solid for characters: the movable blocks' boxes; a top face sets the
                 // floor-contact flag and a side face of a block 1 to 5 taller the side-touch latch.

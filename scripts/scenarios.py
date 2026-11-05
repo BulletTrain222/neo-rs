@@ -70,6 +70,8 @@ SCENARIOS = [
     ('a ladder mounts from the floor and climbs', 'SPEC-0033 Behavior 13', 220, 1171, ['--start', '-374.98,3.12,-9.79'], {'NEOPETS_TRACE_CLIMB': '1'}, has(r'200 pos \( -375\.\d+\s+0\.\d+.* state 41')),
     ('stairs that rise past a box top are walked, not jumped', 'SPEC-0018 Box push, R-0242', 200, 1056, ['--start', '-1,373,29'], {'NEOPETS_TRACE_PUSH': '-8,352', 'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_GOD': '1'}, has(r'200 pos \(\s+-6\.\d+\s+3[23]\.')),
     ('a door into a room puts the camera level behind the hero', 'SPEC-0027 Placement after a load', 400, 1152, ['--start', '79.09,-47,-127.79'], {'NEOPETS_TRACE_EYE': '120', 'NEOPETS_TRACE_PUSH': '79,-70'}, has(r'EYE 120 pack 1152 .* polar \[9\.\d+, [-0-9.]+, 0\.(19|20)')),
+    ('a closed lever gate stops the hero', 'SPEC-0028 Character versus moving placed objects; SPEC-0042 1171', 200, 1171, ['--start', '9.6,34,-0.61'], {'NEOPETS_TRACE_PUSH': '9.6,60', 'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_GOD': '1'}, has(r'200 pos \(\s+[\d.]+\s+-0\.\d+\s+42\.\d')),
+    ('the lever opens the gate', 'SPEC-0042 1171 lever L5', 500, 1171, ['--start', '16,58,-1'], {'NEOPETS_TRACE_SQUARE': '2,4,6,8,10,12', 'NEOPETS_TRACE_PUSH': '9.6,30', 'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_GOD': '1'}, has(r'500 pos \(\s+[\d.]+\s+-0\.\d+\s+(29|30|31)\.')),
     ('sound records match the spec', 'SPEC-0031 types 4 and 5', 1, 909, [], {'NEOPETS_TRACE_CUE_RECORDS': '1'}, has(r'CUE RECORDS type 4 81, type 5 24')),
 ]
 
