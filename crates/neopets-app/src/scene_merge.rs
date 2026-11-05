@@ -19,8 +19,9 @@ use crate::{model_texture, part_signature, pass1, pass1_assets, DrawCull, PartSi
 const CELL: f32 = 64.0;
 
 /// A part lying along the ground: its triangles' area faces mostly up. A soft or fading one is a layer over the ground (a
-/// path's torn grass edge), which almost touches the ground below it, so this build's sun neither shadows the one from
-/// the other nor it from the ground: the layer would draw as a dark band along each path (user's F8 view 17).
+/// path's torn grass edge), which almost touches the ground below it. It casts no sun shadow, which would draw as a dark band
+/// along each path (user's F8 view 17), and it is drawn only blended, outside the depth prepass: ambient occlusion read
+/// the prepass's small step at the layer's sides as a raised edge, with a hard line along each (user's F8 view 20).
 fn lies_flat(p: &neopets_data::model::MeshPart) -> bool {
     let (mut up, mut all) = (0.0, 0.0);
     for t in p.indices.chunks_exact(3) {
@@ -204,8 +205,8 @@ pub fn spawn(
         // SPEC-0003 TEST: a pixel at or above 120 of 128 writes depth, a softer one only blends. A fading part's triangles
         // solid at all three corners draw as solid, so that what lies behind them stays hidden (user's F8 view 16); the rest
         // blend. Done by triangle, as Bevy's prepass does not see vertex alpha (see `vertex_fades`).
-        let split = (fades && !scrolling && env.is_none()).then(|| split_fading(p)).filter(|(solid, _)| !solid.is_empty());
         let layer = (soft || fades) && lies_flat(p);
+        let split = (fades && !layer && !scrolling && env.is_none()).then(|| split_fading(p)).filter(|(solid, _)| !solid.is_empty());
         let mesh = match &split {
             Some((solid, faded)) => {
                 let t = p.texture.unwrap_or(0);
@@ -217,9 +218,6 @@ pub fn spawn(
                 if let Some((at, d1, _)) = p.cull {
                     e.insert(DrawCull(Vec3::from(at), d1));
                 }
-                if layer {
-                    e.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
-                }
                 meshes.add(part_mesh(&neopets_data::model::MeshPart { indices: faded.clone(), ..p.clone() }))
             }
             None => meshes.add(part_mesh(p)),
@@ -229,7 +227,7 @@ pub fn spawn(
             if let Some(m) = b.blend.get(&t) {
                 let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m.clone()), Transform::IDENTITY, part, b.sigs[i], rank(i, 0)));
                 if layer {
-                    e.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+                    e.insert(bevy::light::NotShadowCaster);
                 }
                 count += 1;
                 if let Some(z) = p.zone {
@@ -237,6 +235,10 @@ pub fn spawn(
                 }
                 if let Some((at, d1, _)) = p.cull {
                     e.insert(DrawCull(Vec3::from(at), d1));
+                }
+                // A ground layer has no cut core: the core would enter the depth prepass.
+                if layer {
+                    continue;
                 }
             }
         }
@@ -258,9 +260,7 @@ pub fn spawn(
             e.insert(ZoneGate(pack, z));
         }
         e.insert((b.sigs[i], rank(i, 0)));
-        if layer {
-            e.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
-        } else if is_flat(p) {
+        if layer || is_flat(p) {
             e.insert(bevy::light::NotShadowCaster);
         }
         if let Some((at, d1, _)) = p.cull {
