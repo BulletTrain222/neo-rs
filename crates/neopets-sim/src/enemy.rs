@@ -2132,6 +2132,13 @@ impl Enemy {
     }
 
     /// Behavior 7: the normal attack choice.
+    /// Diagnostic: what the attack choice reads this tick.
+    pub fn debug_choice(&self, v: &View) -> String {
+        let d = hdist(v.hero, v.position);
+        let cos = dot(v.facing, hdir(v.position, v.hero));
+        format!("outer {} inner {} seq {} attackable {} recovery {} cooldown {:?} route {} d {d:.1} cos {cos:.2} airborne {} sight {}", self.outer, self.inner, self.seq, v.hero_attackable, self.recovery, self.cooldown, v.route, self.airborne(), v.sight)
+    }
+
     fn choose(&mut self, v: &View, rng: &mut Rng) {
         if !v.hero_attackable {
             return;

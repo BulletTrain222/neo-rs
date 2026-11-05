@@ -666,6 +666,9 @@ fn plane_touched(pl: &TeleportPlane, p: [f32; 3], reach: f32) -> bool {
     a.abs() <= reach && (0.0..=pl.w).contains(&s) && u + 1.75 >= 0.0 && u - 1.75 <= pl.h
 }
 
+/// The choice trace's count of enemy steps (NEOPETS_TRACE_CHOICE).
+static TRACE_CHOICE_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// One tick of an NPC's walk (SPEC-0056 Navigation step, Travel by root motion, Wall confinement):
 /// the navigation step over its mesh steers it, and the motion tick moves it by the walk clip's
 /// root step, kept on the mesh. A clip with no root travel moves at `speed` instead, so a walk
@@ -12411,6 +12414,13 @@ impl Play {
             let has = |id: u32| anim.has(id);
             let speed = (root_step[0].powi(2) + root_step[2].powi(2)).sqrt();
             let mut v = enemy_view(p, wk, hero, hero_facing, bands, attackable, sight, (route, on_mesh), contact, speed, clip, &has);
+            // NEOPETS_TRACE_CHOICE=n: what each enemy's attack choice reads, every n ticks (diagnostic).
+            if let Some(n) = std::env::var("NEOPETS_TRACE_CHOICE").ok().and_then(|s| s.parse::<u64>().ok()) {
+                let tick = TRACE_CHOICE_TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if tick % n.max(1) == 0 {
+                    println!("CHOICE {tick} mesh {:?} on_mesh {on_mesh}: {}", wk.mesh, e.debug_choice(&v));
+                }
+            }
             v.cloak = cloak;
             v.summons_alive = summons.get(id).copied().unwrap_or(0);
             v.radii = row.radius + contact::HERO_RADIUS;
