@@ -31,6 +31,9 @@ pub struct Switches {
     pub collision: bool,
     /// The collision view on black: nothing else drawn, so objects cannot hide its lines.
     pub lines_only: bool,
+    /// Index into RANGES and LAYERS.
+    pub collision_range: usize,
+    pub collision_layer: usize,
     /// 0 off, 1 over the picture, 2 alone.
     pub wireframe: u8,
     pub log: bool,
@@ -42,7 +45,7 @@ impl Switches {
     /// NEOPETS_DEBUG="inspector,collision,wireframe,wireonly,log,hud": the tools on from the start, for picture runs (diagnostic).
     pub fn from_env() -> Self {
         let v = std::env::var("NEOPETS_DEBUG").unwrap_or_default();
-        Self { inspector: v.contains("inspector"), collision: v.contains("collision") || v.contains("lineonly"), lines_only: v.contains("lineonly"), wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
+        Self { inspector: v.contains("inspector"), collision: v.contains("collision") || v.contains("lineonly"), lines_only: v.contains("lineonly"), collision_range: 0, collision_layer: if v.contains("layersolid") { 1 } else { 0 }, wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
     }
 }
 
@@ -100,7 +103,19 @@ fn wipe_scene(view: ViewQuery<(&ViewTarget, &ViewDepthTexture)>, wipe: Res<WipeS
 }
 
 /// The kinds of collision line, with their colours and names (the panel's legend).
-pub const KINDS: [(&str, [f32; 3]); 8] = [
+/// How far from the hero the collision view reaches; the last is everything resident, at every height.
+pub const RANGES: [f32; 4] = [50.0, 25.0, 100.0, 300.0];
+
+/// What the collision view shows, by KINDS index.
+pub const LAYERS: [(&str, &[u8]); 5] = [
+    ("Everything", &[0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    ("Solids and walls", &[1, 2, 6, 7, 8]),
+    ("Walking maps", &[0, 7]),
+    ("Triggers", &[5, 7]),
+    ("Doors and ladders", &[3, 4, 7]),
+];
+
+pub const KINDS: [(&str, [f32; 3]); 9] = [
     ("walking maps", [0.1, 0.9, 0.9]),
     ("solid boxes", [1.0, 0.15, 0.15]),
     ("solid spheres", [1.0, 0.55, 0.1]),
@@ -109,6 +124,7 @@ pub const KINDS: [(&str, [f32; 3]); 8] = [
     ("triggers", [1.0, 1.0, 0.2]),
     ("walls near you", [1.0, 1.0, 1.0]),
     ("you", [0.3, 0.5, 1.0]),
+    ("solid cylinders", [1.0, 0.45, 0.7]),
 ];
 
 /// The event log's lines kept for a report.
@@ -253,7 +269,8 @@ pub fn save_report(
 }
 
 /// The panel: the inspector, the collision legend and the recent events.
-pub fn show_panel(mut commands: Commands, state: Option<Res<PlayState>>, d: Res<DebugState>, dev: Res<DevMenu>, mut panels: Query<(Entity, &mut Text), With<DebugPanel>>) {
+#[allow(clippy::too_many_arguments)]
+pub fn show_panel(mut commands: Commands, state: Option<Res<PlayState>>, d: Res<DebugState>, dev: Res<DevMenu>, mut panels: Query<(Entity, &mut Text), With<DebugPanel>>, mut near: Local<(u32, String)>) {
     let s = dev.debug;
     let mut out = String::new();
     // The menu covers this part of the screen, so the panel waits until it closes.
@@ -266,7 +283,16 @@ pub fn show_panel(mut commands: Commands, state: Option<Res<PlayState>>, d: Res<
             out.push_str(&format!(" {name},"));
         }
         out.pop();
-        out.push_str(" (cyan, red, orange, pink, green, yellow, white, blue)\n");
+        out.push_str(" (cyan, red, orange, magenta, green, yellow, white, blue, rose)\n");
+        out.push_str(&format!("Range {:.0}, showing {}\n", RANGES[s.collision_range.min(RANGES.len() - 1)], LAYERS[s.collision_layer.min(LAYERS.len() - 1)].0));
+        // The list is rebuilt four times a second.
+        near.0 = near.0.wrapping_add(1);
+        if near.0 % 15 == 1 {
+            if let Some(state) = state.as_ref() {
+                near.1 = state.play.debug_nearby(RANGES[s.collision_range.min(RANGES.len() - 1)].min(100.0));
+            }
+        }
+        out.push_str(&near.1);
     }
     if s.log && !dev.open {
         out.push_str("\nEVENTS:\n");
@@ -317,11 +343,12 @@ pub fn show_lines(
     mut materials: ResMut<Assets<StandardMaterial>>,
     old: Query<Entity, With<DebugLines>>,
     mut frames: Local<u32>,
-    mut was_only: Local<bool>,
+    mut was: Local<(bool, usize, usize)>,
 ) {
     // A change of mode rebuilds at once; lines alone are redrawn more often, as the hero's marker is all there is to follow.
-    if *was_only != dev.debug.lines_only {
-        *was_only = dev.debug.lines_only;
+    let mode = (dev.debug.lines_only, dev.debug.collision_range, dev.debug.collision_layer);
+    if *was != mode {
+        *was = mode;
         *frames = 0;
     }
     if !dev.debug.collision {
@@ -340,7 +367,8 @@ pub fn show_lines(
         commands.entity(e).despawn();
     }
     let mut lists: Vec<Vec<[f32; 3]>> = vec![Vec::new(); KINDS.len()];
-    for (k, a, b) in state.play.debug_lines().into_iter().chain(state.play.debug_hero_cross()) {
+    let kinds = LAYERS[dev.debug.collision_layer.min(LAYERS.len() - 1)].1;
+    for (k, a, b) in state.play.debug_lines(RANGES[dev.debug.collision_range.min(RANGES.len() - 1)], kinds).into_iter().chain(state.play.debug_hero_cross()) {
         if let Some(l) = lists.get_mut(k as usize) {
             l.push(a);
             l.push(b);

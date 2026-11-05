@@ -169,23 +169,26 @@ enum Entry {
     Report,
     Inspector,
     Collision,
+    CollisionRange,
+    CollisionLayer,
     Wireframe,
     EventLog,
     HideHud,
 }
 
 /// The menu's sections and their entries, in display order.
-const SECTIONS: [(&str, &[Entry]); 7] = [
+const SECTIONS: [(&str, &[Entry]); 8] = [
     ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Haste, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
     ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group]),
-    ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Collision, Entry::Wireframe, Entry::EventLog, Entry::HideHud]),
+    ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Wireframe, Entry::EventLog, Entry::HideHud]),
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::Spawn, Entry::BossFight, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints]),
     ("STORY", &[Entry::Flag]),
+    ("COLLISION VIEW", &[Entry::Collision, Entry::CollisionRange, Entry::CollisionLayer]),
 ];
 
-const ENTRIES: [Entry; 31] = [
+const ENTRIES: [Entry; 33] = [
     Entry::God,
     Entry::Noclip,
     Entry::Haste,
@@ -200,7 +203,6 @@ const ENTRIES: [Entry; 31] = [
     Entry::Group,
     Entry::Report,
     Entry::Inspector,
-    Entry::Collision,
     Entry::Wireframe,
     Entry::EventLog,
     Entry::HideHud,
@@ -217,6 +219,9 @@ const ENTRIES: [Entry; 31] = [
     Entry::Maps,
     Entry::Neopoints,
     Entry::Flag,
+    Entry::Collision,
+    Entry::CollisionRange,
+    Entry::CollisionLayer,
 ];
 
 /// How a row behaves: an on/off switch, a value changed with < and >, or a one-shot action.
@@ -259,7 +264,7 @@ fn other_column(i: usize) -> usize {
 fn kind(e: Entry) -> Kind {
     match e {
         Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam | Entry::Inspector | Entry::Collision | Entry::Wireframe | Entry::EventLog | Entry::HideHud => Kind::Toggle,
-        Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight => Kind::Choice,
+        Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight | Entry::CollisionRange | Entry::CollisionLayer => Kind::Choice,
         _ => Kind::Action,
     }
 }
@@ -803,6 +808,8 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
                 dev.weapon_at = (dev.weapon_at as i32 + delta).rem_euclid(n) as usize;
             }
             Entry::Flag => dev.flag = (dev.flag as i32 + delta).clamp(0, u16::MAX as i32) as u16,
+            Entry::CollisionRange => dev.debug.collision_range = (dev.debug.collision_range as i32 + delta.signum()).rem_euclid(crate::debug_tools::RANGES.len() as i32) as usize,
+            Entry::CollisionLayer => dev.debug.collision_layer = (dev.debug.collision_layer as i32 + delta.signum()).rem_euclid(crate::debug_tools::LAYERS.len() as i32) as usize,
             Entry::Warp => {
                 let n = worlds(&play.play).len().max(1) as i32;
                 dev.warp_at = (dev.warp_at as i32 + delta).rem_euclid(n) as usize;
@@ -949,6 +956,14 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             };
             format!("Collision view: {}", if dev.debug.lines_only { "lines only" } else if dev.debug.collision { "on" } else { "off" })
         }
+        Entry::CollisionRange => {
+            dev.debug.collision_range = (dev.debug.collision_range + 1) % crate::debug_tools::RANGES.len();
+            format!("Collision range {:.0}", crate::debug_tools::RANGES[dev.debug.collision_range])
+        }
+        Entry::CollisionLayer => {
+            dev.debug.collision_layer = (dev.debug.collision_layer + 1) % crate::debug_tools::LAYERS.len();
+            format!("Collision shows: {}", crate::debug_tools::LAYERS[dev.debug.collision_layer].0)
+        }
         Entry::Wireframe => {
             dev.debug.wireframe = (dev.debug.wireframe + 1) % 3;
             format!("Wireframe: {}", crate::debug_tools::wireframe_name(dev.debug.wireframe))
@@ -1069,7 +1084,9 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Maps => ("Give every treasure map".into(), String::new()),
         Entry::Report => ("Save a bug report (End)".into(), String::new()),
         Entry::Inspector => ("Inspector".into(), on(dev.debug.inspector)),
-        Entry::Collision => ("Collision view (Enter to change)".into(), if dev.debug.lines_only { "Lines only".into() } else { on(dev.debug.collision) }),
+        Entry::Collision => ("View (Enter to change)".into(), if dev.debug.lines_only { "Lines only".into() } else { on(dev.debug.collision) }),
+        Entry::CollisionRange => ("Range".into(), if dev.debug.collision_range == crate::debug_tools::RANGES.len() - 1 { "All".to_string() } else { format!("{:.0}", crate::debug_tools::RANGES[dev.debug.collision_range]) }),
+        Entry::CollisionLayer => ("Shows".into(), crate::debug_tools::LAYERS[dev.debug.collision_layer].0.to_string()),
         Entry::Wireframe => ("Wireframe (Enter to change)".into(), crate::debug_tools::wireframe_name(dev.debug.wireframe).into()),
         Entry::EventLog => ("Event log".into(), on(dev.debug.log)),
         Entry::HideHud => ("Hide HUD".into(), on(dev.debug.hide_hud)),

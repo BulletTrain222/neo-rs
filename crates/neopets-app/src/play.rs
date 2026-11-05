@@ -16108,7 +16108,7 @@ impl Play {
     }
 
     /// The debug tools' collision view: (kind, from, to) lines of the resident worlds (kinds: debug_tools::KINDS).
-    pub fn debug_lines(&self) -> Vec<(u8, [f32; 3], [f32; 3])> {
+    pub fn debug_lines(&self, range: f32, kinds: &[u8]) -> Vec<(u8, [f32; 3], [f32; 3])> {
         let mut out = Vec::new();
         let hero = self.loco.position();
         let near = |p: [f32; 3]| (p[0] - hero[0]).hypot(p[2] - hero[2]) < 300.0;
@@ -16191,6 +16191,32 @@ impl Play {
                     }
                 }
             }
+            // The solid upright cylinders: the world's own, the breakables' and (below) the placed objects'.
+            let cylinder = |out: &mut Vec<(u8, [f32; 3], [f32; 3])>, base: [f32; 3], length: f32, r: f32| {
+                ring(out, 8, base, r, 0.0);
+                ring(out, 8, base, r, length);
+                for n in 0..4 {
+                    let a = n as f32 * std::f32::consts::FRAC_PI_2;
+                    let (x, z) = (base[0] + r * a.cos(), base[2] + r * a.sin());
+                    out.push((8, [x, base[1], z], [x, base[1] + length, z]));
+                }
+            };
+            for v in w.solids.iter().filter(|v| v.kind == 3 && v.solid(w.collis_mask)) {
+                if let neopets_sim::trigger::Shape::Cylinder { base, axis, length, radius } = v.shape {
+                    if near(base) && axis[1].abs() >= 0.99 {
+                        let low = if axis[1] * length < 0.0 { base[1] - length.abs() } else { base[1] };
+                        cylinder(&mut out, [base[0], low, base[2]], length.abs(), radius);
+                    }
+                }
+            }
+            for (base, length, radius, _) in w.breakable_cylinders(hero, 300.0) {
+                cylinder(&mut out, base, length, radius);
+            }
+            if std::ptr::eq(w, &self.world) {
+                for (base, length, radius) in self.all_object_cylinders().into_iter().filter(|c| near(c.0)) {
+                    cylinder(&mut out, base, length, radius);
+                }
+            }
             if let Some(g) = &w.ground {
                 let mut seen = std::collections::HashSet::new();
                 for dx in -4..=4 {
@@ -16208,7 +16234,118 @@ impl Play {
                 }
             }
         }
-        out
+        // The layer, the distance, and within a limited distance only what lies near the hero's height: walls and doors can
+        // stand 120 tall, which filled the view with lines.
+        let finite = range < 300.0;
+        let (low, high) = (hero[1] - 12.0, hero[1] + 14.0);
+        out.into_iter()
+            .filter(|(k, a, b)| {
+                let mid = [(a[0] + b[0]) / 2.0, 0.0, (a[2] + b[2]) / 2.0];
+                let d = |p: &[f32; 3]| (p[0] - hero[0]).hypot(p[2] - hero[2]);
+                kinds.contains(k) && d(a).min(d(b)).min(d(&mid)) < range
+            })
+            .filter_map(|(k, a, b)| {
+                if !finite {
+                    return Some((k, a, b));
+                }
+                let (mut t0, mut t1) = (0.0f32, 1.0f32);
+                let dy = b[1] - a[1];
+                if dy.abs() < 1e-5 {
+                    if a[1] < low || a[1] > high {
+                        return None;
+                    }
+                } else {
+                    let (p, q) = ((low - a[1]) / dy, (high - a[1]) / dy);
+                    t0 = t0.max(p.min(q));
+                    t1 = t1.min(p.max(q));
+                    if t0 >= t1 {
+                        return None;
+                    }
+                }
+                let at = |t: f32| -> [f32; 3] { std::array::from_fn(|i| a[i] + t * (b[i] - a[i])) };
+                Some((k, at(t0), at(t1)))
+            })
+            .collect()
+    }
+
+    /// The collision view's list: what is nearest the hero within `range`, by name, those touching him first.
+    pub fn debug_nearby(&self, range: f32) -> String {
+        let p = self.loco.position();
+        let w = &self.world;
+        let mut rows: Vec<(bool, f32, String)> = Vec::new();
+        let flat = |q: [f32; 3]| (q[0] - p[0]).hypot(q[2] - p[2]);
+        for b in &w.boxes {
+            // The nearest point of the box, by its own axes.
+            let d: [f32; 3] = std::array::from_fn(|k| p[k] - b.origin[k]);
+            let mut q = b.origin;
+            for k in 0..3 {
+                let along = (d[0] * b.axes[k][0] + d[1] * b.axes[k][1] + d[2] * b.axes[k][2]).clamp(0.0, b.extents[k]);
+                for i in 0..3 {
+                    q[i] += along * b.axes[k][i];
+                }
+            }
+            let mut r = p;
+            contact::resolve(&mut r, std::slice::from_ref(b), contact::HERO_RADIUS + 0.3);
+            rows.push((r != p, flat(q), format!("solid box {:.1} x {:.1}, {:.1} tall, top at height {:.1}", b.extents[1], b.extents[2], b.extents[0], b.origin[1] + b.extents[0])));
+        }
+        let mut cylinder = |base: [f32; 3], length: f32, r: f32, what: &str| {
+            let d = flat(base);
+            let touching = d < r + contact::HERO_RADIUS + 0.3 && p[1] < base[1] + length && p[1] + HERO_HEIGHT > base[1];
+            rows.push((touching, (d - r).max(0.0), format!("{what} cylinder, radius {r:.1}, {length:.1} tall")));
+        };
+        for v in w.solids.iter().filter(|v| v.kind == 3 && v.solid(w.collis_mask)) {
+            if let neopets_sim::trigger::Shape::Cylinder { base, axis, length, radius } = v.shape {
+                if axis[1].abs() >= 0.99 {
+                    cylinder([base[0], if axis[1] * length < 0.0 { base[1] - length.abs() } else { base[1] }, base[2]], length.abs(), radius, "solid");
+                }
+            }
+        }
+        for (base, length, radius, _) in w.breakable_cylinders(p, range) {
+            cylinder(base, length, radius, "breakable");
+        }
+        for (base, length, radius) in self.all_object_cylinders() {
+            cylinder(base, length, radius, "object");
+        }
+        for (c, r) in &w.push_spheres {
+            rows.push((flat(*c) < *r + contact::HERO_RADIUS, (flat(*c) - r).max(0.0), format!("solid sphere, radius {r:.1}")));
+        }
+        for pl in &w.planes {
+            rows.push((false, flat(pl.p), "door or teleport".to_string()));
+        }
+        for v in &w.all_volumes {
+            use neopets_sim::trigger::Shape;
+            let at = match v.shape {
+                Shape::Sphere { centre, .. } => centre,
+                Shape::Cylinder { base, .. } => base,
+                Shape::Rectangle { origin, .. } => origin,
+            };
+            rows.push((false, flat(at), format!("trigger (kind {}, flags {:#x})", v.kind, v.flags)));
+        }
+        if let Some(g) = &w.ground {
+            let mut seen = std::collections::HashSet::new();
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    for f in g.frames_at(p[0] + dx as f32 * 16.0, p[2] + dz as f32 * 16.0) {
+                        if seen.insert(f.start.map(f32::to_bits)) {
+                            let e = WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind };
+                            let (a, s) = ((p[0] - f.start[0]) * f.face[0] + (p[2] - f.start[2]) * f.face[2], (p[0] - f.start[0]) * f.run[0] + (p[2] - f.start[2]) * f.run[2]);
+                            let along = (s - s.clamp(0.0, f.length)).abs();
+                            rows.push((e.push(p, contact::HERO_RADIUS + 0.3).is_some(), a.hypot(along), format!("wall (type {}), {:.1} long, {:.1} tall", f.kind, f.length, f.height)));
+                        }
+                    }
+                }
+            }
+        }
+        rows.retain(|r| r.0 || r.1 < range);
+        rows.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.total_cmp(&b.1)));
+        let mut s = String::from("NEAREST (* touching you):\n");
+        if rows.is_empty() {
+            s.push_str("nothing in range\n");
+        }
+        for (touching, d, what) in rows.iter().take(9) {
+            s.push_str(&format!("{} {d:.1} away: {what}\n", if *touching { "*" } else { " " }));
+        }
+        s
     }
 
     /// The debug tools' inspector: the hero, and the character nearest the view's centre.
