@@ -4887,6 +4887,12 @@ fn play_trace(
                 println!("DROPS {}: {}", play.ticks, play.diag_drops());
             }
         }
+        // NEOPETS_TRACE_WORDS="pack:a,b,...": those module words of the pack, every 30 ticks (diagnostic).
+        if let Some((pk, ws)) = std::env::var("NEOPETS_TRACE_WORDS").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.trim().parse::<u32>().unwrap_or(0), b.split(',').filter_map(|w| w.trim().parse::<usize>().ok()).collect::<Vec<_>>())) {
+            if play.ticks % if std::env::var_os("NEOPETS_TRACE_WORDS_EVERY").is_some() { 1 } else { 30 } == 0 {
+                println!("WORDS tick {} pack {pk}: {:?} shots {} at {:?}", play.ticks, ws.iter().map(|&w| play.state.words.get(&(pk, w as u8)).copied().unwrap_or(0)).collect::<Vec<_>>(), play.shots.slots.iter().flatten().count(), play.shots.slots.iter().flatten().map(|s| s.position.map(|v| v.round() as i32)).collect::<Vec<_>>());
+            }
+        }
         // NEOPETS_TRACE_PLACED="pack:a-b": how many of those placed effects are active, every 100 ticks.
         if let Some((pack, range)) = std::env::var("NEOPETS_TRACE_PLACED").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.to_string(), b.to_string())) {
             if let (Ok(pack), Some((a, b))) = (pack.parse::<u32>(), range.split_once('-')) {

@@ -3281,6 +3281,12 @@ impl Play {
     }
 
     /// Entry (locator) record k of resident world `pack`.
+    /// The first entry record of world `pack` whose tag (+0x1E) is `t` (SPEC-0006 Locator lookup).
+    fn locator_tag(&self, pack: u32, t: usize) -> Option<([f32; 3], [f32; 3])> {
+        let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+        w.tags.iter().position(|&g| g as usize == t).and_then(|i| w.entries.get(i)).copied()
+    }
+
     fn locator(&self, pack: u32, k: usize) -> Option<([f32; 3], [f32; 3])> {
         [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?.entries.get(k).copied()
     }
@@ -3740,10 +3746,14 @@ impl Play {
                     let item = if v > 0 { v as u16 } else { default };
                     self.party_add(item, 1);
                 }
+                // SPEC-0006 Locator lookup: the launcher's 101 and 102 are tags (the u16 at +0x1E of
+                // an entry record; 1056 tags two records 101 and 102 for this one host call), not
+                // indices: by index nothing was found in 1056's 34 entries and no fireball came
+                // (user's report 35).
                 Action::LaunchFireMote { from, to, speed } => {
-                    let Some((start, _)) = self.locator(pack, from) else { return None };
+                    let Some((start, _)) = self.locator_tag(pack, from) else { return None };
                     let hero = self.loco.position();
-                    let target = self.locator(pack, to).map_or([hero[0], hero[1] + 1.5, hero[2]], |(p, _)| p);
+                    let target = self.locator_tag(pack, to).map_or([hero[0], hero[1] + 1.5, hero[2]], |(p, _)| p);
                     self.shots.submit(neopets_sim::projectile::fire_mote(start, target, speed));
                 }
                 Action::RandomLoop7 { entity, anims } => {
