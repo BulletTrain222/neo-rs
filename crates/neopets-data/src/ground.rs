@@ -612,8 +612,11 @@ pub struct Rectangle {
 impl Rectangle {
     /// The box-push gate of SPEC-0018: class 3 or class 0 (flag bits 3 or 0), the mask gate
     /// against the world mask, and a positive B extent (zero or less is a contact plane).
+    ///
+    /// SPEC-0018 Contact pass (R-0237): bit 3 with bits 1, 2, 5 and 7 clear pushes no character (flags 0x8 and 0x9).
     pub fn pushes(&self, world_mask: u16) -> bool {
         self.flags & 0b1001 != 0
+            && !(self.flags & 8 != 0 && self.flags & (2 | 4 | 0x20 | 0x80) == 0)
             && (self.mask == 0 || self.mask & world_mask != 0)
             && self.extents[2] > 0.0
     }

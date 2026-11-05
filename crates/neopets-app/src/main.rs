@@ -3254,7 +3254,9 @@ fn sync_items(
     for (e, m, mut t, mut vis, children) in &mut markers {
         match p.pools.get(&m.0).and_then(|pool| pool.slots.get(m.1).copied().flatten()) {
             Some(it) if p.pack_drawn(m.0) => {
-                set_if(&mut t, Transform::from_translation(Vec3::from(it.position)).with_rotation(Quat::from_rotation_y(it.angle)).with_scale(Vec3::splat(it.drawn_scale().max(0.001))));
+                // SPEC-0021 Spawning step 11 and Per-tick step 5: the axis rows, a non-coin's mirrored ones included, times the scale.
+                let [ax, ay, az] = it.axes().map(Vec3::from);
+                set_if(&mut t, Transform::from_matrix(Mat4::from_cols(ax.extend(0.0), ay.extend(0.0), az.extend(0.0), Vec3::from(it.position).extend(1.0))).with_scale(Vec3::splat(it.drawn_scale().max(0.001)) * Transform::from_matrix(Mat4::from_cols(ax.extend(0.0), ay.extend(0.0), az.extend(0.0), Vec4::W)).scale));
                 set_if(&mut vis, Visibility::Visible);
                 seen.insert((m.0, m.1));
                 let alpha = it.life.clamp(0.0, 1.0);
@@ -3284,11 +3286,11 @@ fn sync_items(
     // scaled by s. A screen-anchored model is a child of the camera, placed in the camera's axes: taken from the camera's
     // GlobalTransform it lagged a frame behind, and shook whenever the camera moved (user's report).
     let camera = cameras.iter().next().map(|(e, ..)| e);
-    let show: Option<(u16, u32, Transform, bool)> = p.showcase_item().map(|(id, pack, at, angle)| (id, pack, Transform::from_translation(Vec3::from(at)).with_rotation(Quat::from_rotation_y(angle)), false)).or_else(|| {
+    let show: Option<(u16, u32, Transform, bool)> = p.showcase_item().map(|(id, pack, at, angle)| (id, pack, Transform::from_translation(Vec3::from(at)).with_rotation(Quat::from_rotation_y(-angle)), false)).or_else(|| {
         let c = p.corner?;
         let k = c.z / 512.0;
         let origin = Vec3::new(640.0 * (c.x - 0.5) * k, 480.0 * (c.y - 0.5) * k, -c.z);
-        Some((c.id, c.pack, Transform { translation: origin, rotation: Quat::from_rotation_y(c.angle + std::f32::consts::PI), scale: Vec3::splat(c.s.max(1e-4)) }, true))
+        Some((c.id, c.pack, Transform { translation: origin, rotation: Quat::from_rotation_y(std::f32::consts::PI - c.angle), scale: Vec3::splat(c.s.max(1e-4)) }, true))
     });
     // SPEC-0035 section 15.2 (R-0155): while price caption line 1 shows (its counter above 0, both
     // quick panels closed) the one-Neopoint coin model (item 135) is drawn centred at canvas

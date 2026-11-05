@@ -476,11 +476,6 @@ impl World {
         world.blocks = blocks;
         world.block_meshes = sources.iter().map(|s| s.mesh.clone()).collect();
         world.all_boxes.retain(|(_, b)| !sources.iter().any(|s| s.corner == b.origin));
-        // Pack 1066's box across the start of the bridge stands 1.7 above the walkway, so by the spec's box push the hero
-        // could only jump onto it; the player remembers walking on. Left out until R-0237 says what the original does.
-        if pack == 1066 {
-            world.all_boxes.retain(|(_, b)| (b.origin[0] + 667.5175).hypot(b.origin[2] - 691.0789) > 0.01);
-        }
         world.set_collis_mask(0);
         Ok((world, bytes))
     }
@@ -4083,7 +4078,7 @@ impl Play {
                     }
                 }
                 Action::AddItem { locator, item } => {
-                    if let Some(&(p, _)) = self.world.entries.get(locator) {
+                    if let Some(&(p, vector)) = self.world.entries.get(locator) {
                         let charm = self.item_kind(item) == 17;
                         let spawn = neopets_sim::items::Spawn {
                             id: item,
@@ -4094,7 +4089,8 @@ impl Play {
                             s1: 1.0,
                             delay: 0.0,
                             larg: -1.0,
-                            direction: None,
+                            // SPEC-0021 Spawning step 11: the locator's vector is the facing.
+                            direction: Some(vector),
                             flag: 0,
                             map: 0,
                             price: 0,
@@ -4411,7 +4407,7 @@ impl Play {
         let Some(pool) = self.pools.get(&pack) else { return false };
         let slots: Vec<(usize, neopets_sim::items::WorldItem)> = pool.slots.iter().enumerate().filter_map(|(i, s)| Some((i, (*s)?))).collect();
         let cands: Vec<neopets_sim::shop::Candidate> = slots.iter().map(|(_, it)| neopets_sim::shop::Candidate { position: it.position, flag: it.flag, ready: it.ready() }).collect();
-        let Some(k) = neopets_sim::shop::buyable(&cands, self.loco.position(), self.loco.facing) else { return false };
+        let Some(k) = neopets_sim::shop::buyable(&cands, self.pickup_point(), self.loco.facing) else { return false };
         let (i, it) = slots[k];
         self.buyable = Some(i);
         if !self.square_now {
@@ -10159,6 +10155,12 @@ impl Play {
         }
     }
 
+    /// SPEC-0021 Pickup step 1: the search point, the feet plus 2.0 along the facing plus 0.8 up (R-0234).
+    fn pickup_point(&self) -> [f32; 3] {
+        let (p, f) = (self.loco.position(), unit(self.loco.facing));
+        [p[0] + 2.0 * f[0], p[1] + 2.0 * f[1] + 0.8, p[2] + 2.0 * f[2]]
+    }
+
     /// Diagnostic: the state of chest group `g`'s body; with `drop` the hero is put 3 above its top, falling onto it.
     pub fn diag_chest_body(&mut self, g: usize, drop: bool) -> Option<i32> {
         let id = usize::try_from(*self.world.groups.get(g)?.breakables.first()?).ok()?;
@@ -10207,9 +10209,8 @@ impl Play {
     /// SPEC-0048 Lock chests step 6: the drop action on reward [0] (a placement id through the
     /// placement id table; the embedded region only) at A = X + 2.4 d + 0.4 up, and the
     /// collected entry (step 7's mark, set here with the reward). An element-sealed chest (kind 2)
-    /// requests it at X + 2.2 d. Both launch along -d. What drops collects itself when ready, whatever the distance: this
-    /// build's rule at the user's word (a chest gives its item), as a hovering item at A stays out of the spec's reach of a
-    /// hero at X when measured from the feet (R-0234).
+    /// requests it at X + 2.2 d. Both launch along -d. The hero at X collects it without moving, once ready: the pickup's
+    /// search point is 2.0 ahead and 0.8 up (step 6a, R-0234).
     fn chest_reward(&mut self, g: usize) {
         let Some(group) = self.world.groups.get(g).cloned() else { return };
         let locator = group.locators.first().and_then(|&k| usize::try_from(k).ok());
@@ -10224,15 +10225,9 @@ impl Play {
             .filter(|(region, _)| *region == 0xFF)
             .and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
         let pack = self.world.pack;
-        let before = self.pools.get(&pack).map_or(0, |pool| pool.slots.iter().flatten().map(|it| it.token).max().unwrap_or(0));
         self.dig_drop = Some([-d[0], -d[1], -d[2]]);
         self.pay_out(pack, a, point);
         self.dig_drop = None;
-        if let Some(pool) = self.pools.get_mut(&pack) {
-            for it in pool.slots.iter_mut().flatten().filter(|it| it.token > before) {
-                it.auto = true;
-            }
-        }
         self.state.collected.insert(group.key);
         self.last_door = format!("chest group {g} opened (key {}), reward {:?}", group.key, point.map(|p| p.key));
     }
@@ -13469,7 +13464,7 @@ impl Play {
             // The slot resets since the last tick (an expired drop's slot reused).
             self.reset_gives(pack);
         }
-        let p = self.loco.position();
+        let p = self.pickup_point();
         let pack = self.world.pack;
         let base = self.items.get(146).map_or(1.5, |i| i.pickup_base);
         let Some(i) = self.pools.get(&pack).and_then(|pool| pool.collectable(p, base, contact::HERO_RADIUS, &|id| self.design.item_important(id))) else { return };

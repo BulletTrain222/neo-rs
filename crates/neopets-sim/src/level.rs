@@ -2359,7 +2359,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if state.flag(220) && !state.flag(301) {
                 v.extend([reg(1, 1), reg(2, 1), reg(3, 1)]);
             }
-            if !state.flag(301) && !state.flag(284) {
+            // SPEC-0042 696 Init, R-0235: the 17 clouds exist exactly while the rings can be solid.
+            if !state.flag(220) || state.flag(284) {
                 v.extend((0..=16).map(|slot| Action::StopEffect { slot }));
             }
             v.extend([reg(4, 4), reg(5, 5), reg(8, 5), reg(6, 6), reg(7, 7)]);
@@ -2934,7 +2935,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if f(220) && !f(301) {
                 v.push(reg(2, 2));
             }
-            if !f(301) && !f(284) {
+            // SPEC-0042 714 Init, R-0235: the seven clouds exist exactly while the ring can be solid.
+            if !f(220) || f(284) {
                 v.extend((9..=15).map(|slot| Action::StopEffect { slot }));
             }
             if !f(395) {

@@ -1,6 +1,6 @@
 # SPEC-0042: Level scripts D
 
-- Answers: proactive (open question sweep, round 10); proactive (open question sweep, round 9); proactive (open question sweep, round 5); proactive (open question sweep, leftovers); proactive (open close-out); proactive (level script behavior; set D of 20 modules, follows SPEC-0030, SPEC-0032, SPEC-0037 and SPEC-0039), R-0053, R-0036 (in part), R-0026 (answered: open question 18 resolved), R-0074 (module 1089 group records, Init moves, locator set 7), R-0078 (module 1381: goal and arm point indices, their routines, inactive blocks 0 to 5), R-0083 (module 1089 timeout target and group time hold; animated-trigger registrations belong to the world group table and supply no placed-object owner; inline-cylinder effects partly unresolved), R-0091, R-0101; proactive (verify pass: module 1397 plate scene and lifts); R-0191 (pack 1174 gate pair times); proactive (open question sweep, route geometry); proactive (open question sweep, Act 3 and Altador routes); proactive (open question sweep, round 6); proactive (spec consistency pass); proactive (story dry run); proactive (flag and walk survey); proactive (open question sweep, round 12)
+- Answers: proactive (open question sweep, round 10); proactive (open question sweep, round 9); proactive (open question sweep, round 5); proactive (open question sweep, leftovers); proactive (open close-out); proactive (level script behavior; set D of 20 modules, follows SPEC-0030, SPEC-0032, SPEC-0037 and SPEC-0039), R-0053, R-0036 (in part), R-0026 (answered: open question 18 resolved), R-0074 (module 1089 group records, Init moves, locator set 7), R-0078 (module 1381: goal and arm point indices, their routines, inactive blocks 0 to 5), R-0083 (module 1089 timeout target and group time hold; animated-trigger registrations belong to the world group table and supply no placed-object owner; inline-cylinder effects partly unresolved), R-0091, R-0101; proactive (verify pass: module 1397 plate scene and lifts); R-0191 (pack 1174 gate pair times); proactive (open question sweep, route geometry); proactive (open question sweep, Act 3 and Altador routes); proactive (open question sweep, round 6); proactive (spec consistency pass); proactive (story dry run); proactive (flag and walk survey); proactive (open question sweep, round 12); R-0235 (answered from the code; not run in the original)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per module (High, Medium or Low) and per section. Host call names, argument values and call order: High unless marked. Branch conditions in words: Medium where flags nest deeply. Modules marked Low overall are loop-heavy or contain values that are not determined; their open items are listed in each section. Routines that a table selects are Medium: which of them run in play is stated in each section.
@@ -96,12 +96,12 @@ Proximity talk and line rotation (High; used by the proximity handlers of 859, 1
 ### 696: Transition, map triggers, button prompt and intro movie
 
 - Family: Transition.
-- Init: all of the following are gated by flag 137 being clear, except where stated:
+- Init: step 5 is not gated by flag 137 or flag 301; the other steps are gated by flag 137 being clear, except where stated:
   1. RegisterScriptTrigger(W, handler T0, index 0).
   2. InitObjOn(object 0, false).
   3. RegisterScriptTrigger(W, handler P9, index 9). This is registered on every path, after the flag 137 branch joins (Medium).
   4. If flag 220 is set and flag 301 is clear: RegisterScriptTrigger(W, handler F, index 1), then index 2, then index 3.
-  5. If flag 301 is clear and flag 284 is clear: StopEffect(W) for effects 0 to 16, in order.
+  5. StopEffect for placed-effect slots 0 to 16 (the pack's 17 cloud records), in order, when flag 220 is clear or flag 284 is set. Flags 301 and 137 do not affect this step (from the code; not run in the original; High). The 17 records are all effect 4019, placed around the three rings (SPEC-0018, Packs 696 and 714; SPEC-0034, section 6).
   6. RegisterScriptTrigger for index 4 (transition map handler M64), index 5 (handler M73), index 8 (handler M73), index 6 (handler M21) and index 7 (handler M37), in that order.
 - Triggers, all on the object pointer test unless stated:
   - Index 0, handler T0: if the state word is 1: LevelMsg(line 4, W, true, WAIT 1).
@@ -124,10 +124,10 @@ Proximity talk and line rotation (High; used by the proximity handlers of 859, 1
 - Exit: empty.
 - Dormant and unreached roots: the two hook roots are not reached from Init, Update or any callback. A debug-only button-check routine is present; it is reached only from a debug-gated path and is dead in play. Helpers with debug queries only are not reached in play.
 - Edge cases:
-  - Flag 137 set skips trigger 0, object 0 setup and the map triggers. Trigger 9 is still registered.
+  - Flag 137 set skips trigger 0 and object 0 setup only. Triggers 1 to 3 are registered only with flag 220 set and flag 301 clear (from the code; not run in the original; High). Trigger 9 is still registered.
   - Movie 48 plays once: flag 301 gates the second run. The Gelert Assassin fight (pack 985) sets 301 together with 284, so after it these triggers are not registered at all and the movie does not play on the fight route; it plays only for a hero who reaches the cloud banks in Act 2 or 3 before that fight (or after the no-fight shortcut of pack 956, which leaves 301 clear).
-  - The Init effect stops and the per-tick masks use the same flag 284 gate, with the masks also needing flag 220.
-- Confidence: High for the call names, arguments and order in the trigger handlers and Update. Medium for the flag 137 and flag 284 gates (joins in the Init branches). High for the map area names. Low for the flag meanings.
+  - The Init effect stops and the per-tick masks use the same gate: the stops run when flag 220 is clear or flag 284 is set, and the masks are set every tick while flag 220 is set and flag 284 is clear. So the clouds exist exactly while the rings can be solid. Init reads the flags once per load, so setting flag 220 while the pack is loaded leaves that visit without clouds, while the wall becomes solid from the next Update tick.
+- Confidence: High for the call names, arguments and order in the trigger handlers and Update. High for the effect-stop condition of Init; Medium for the flag 137 gate on the other steps (joins in the Init branches). High for the map area names. Low for the flag meanings.
 - Open:
   - Meaning of flags 5, 137, 220, 284 and 301.
   - Resolved: the transition map ids are map areas: 64 Shadowglen Woods, 73 Meridell Outskirts, 21 Drackon Ridge, 37 Meridell Plains (SPEC-0051, Map area names).
@@ -141,7 +141,7 @@ Proximity talk and line rotation (High; used by the proximity handlers of 859, 1
 - Init: SlotAllocate(W, 1). SlotCreate(W, 3 entries, slot table in module data). ControlThreadsAllocate(W, 1). ControlThreadStart(W, thread A, W). Then, in this order:
   - Trigger index 0 is registered with prompt handler P. It is registered on every path (Medium).
   - If flag 220 is set and flag 301 is clear: RegisterScriptTrigger(W, handler F, index 2).
-  - If flag 301 is clear and flag 284 is clear: StopEffect(W) for effects 9, 10, 11, 12, 13, 14 and 15, in that order (Medium for the gate).
+  - The same test as in 696 (flag 220 clear or flag 284 set) stops placed-effect slots 9 to 15 (the seven effect-4019 clouds at about x 491, z 562 to 588), in that order; slots 0 to 8 and 16 are never stopped (from the code; not run in the original; High). Flag 301 only gates the trigger registration above.
 - Thread A (runs once): with flags 394 and 395 both clear it loads the stored slot with j 0 (region 715); with flag 394 set and 395 clear it loads j 1 (region 716); otherwise it loads nothing (region = 714 + 1 + j, SPEC-0006). Both loads pass keep true and activate true. The debug-mode query in this thread only guards debug prints, so the loads run in play (High).
 - Trigger index 2, handler F: if the object pointer is non-null, the state word is 1 and flag 301 is clear:
   1. Set flag 301.

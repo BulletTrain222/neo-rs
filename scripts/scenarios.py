@@ -55,8 +55,8 @@ SCENARIOS = [
     ('farm road spore monster grows nothing', 'SPEC-0064 Seed spawn step 8', 1500, 934, [], {'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_PLACE': '30:-1266,977,60'}, count(r'summoned key 619', 0)),
     ('rope gun from the farm plane', 'SPEC-0058 goal 354', 1500, 1217, ['--flag', '6', '--flag', '278', '--start', '5.5,45,-3'], {'NEOPETS_TRACE_PUSH': '5.5,52', 'NEOPETS_TRACE_GOD': '1'}, has(r'Held items at the end: .*\(36, 1\)')),
     ('father repairs the pump after the pliers', 'SPEC-0045 question 29', 1200, 909, ['--flag', '110', '--flag', '114', '--flag', '116', '--flag', '618'], {'NEOPETS_TRACE_FACING': 'Hubert', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_SETFLAG': '500:117'}, has(r'FACING \d+ \S+ \S+ \S+ clip 110')),
-    ('a lock chest gives its item', 'R-0234', 200, 947, [], {'NEOPETS_TRACE_CHEST': '60:1', 'NEOPETS_TRACE_GOD': '1'}, has(r'picked up item 55')),
-    ('a sealed chest gives its item', 'R-0234', 200, 1083, [], {'NEOPETS_TRACE_CHEST': '60:3', 'NEOPETS_TRACE_GOD': '1'}, has(r'picked up item 55')),
+    ('a lock chest gives its item', 'R-0234', 200, 947, [], {'NEOPETS_TRACE_CHEST': '60:1', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_STAND': '1'}, has(r'picked up item 55')),
+    ('a sealed chest gives its item', 'R-0234', 200, 947, [], {'NEOPETS_TRACE_CHEST': '60:0', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_STAND': '1'}, has(r'picked up map 23')),
     ('no cloud wall before the flags (world 696)', 'SPEC-0042 696 Init; SPEC-0034 section 6', 420, 696, ['--start', '-286.86,670.9,45.2'], {'NEOPETS_TRACE_PLACED': '696:0-16', 'NEOPETS_TRACE_GOD': '1'}, has(r'PLACED tick 400 world 696: 0 active')),
     ('no cloud wall after walking in from 1066', 'SPEC-0042 696 Init; SPEC-0034 section 6', 420, 1066, [], {'NEOPETS_TRACE_PLACED': '696:0-16', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_PLACE': '100:-286.86,670.9,60'}, has(r'PLACED tick 400 world 696: 0 active')),
     ('the Meerca resumes his chase along the road', 'SPEC-0045 chase thread, question 27', 1500, 1023, ['--flag', '127', '--flag', '128', '--start', '-5,490,40'], {'NEOPETS_TRACE_FACING': 'Meerouladen', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_PLACE': '500:30,424,40'}, has(r'WALKSTATE 1400 .*mesh Some\(Some\(6\)\)')),
@@ -65,6 +65,7 @@ SCENARIOS = [
     ('a wild petpet eats and joins', 'SPEC-0047 Acquisition', 500, 1066, ['--start', '-759.5,545.5,40'], {'NEOPETS_TRACE_WILD': '100', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_GIVE': '5:150:5'}, has(r'joins with T')),
     ('Tor stands at his place at the pump', 'SPEC-0045 909 routine 11; R-0239', 300, 909, ['--flag', '1', '--flag', '107', '--flag', '108', '--flag', '109', '--flag', '110', '--flag', '111'], {'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GIVE': '5:6:1', 'NEOPETS_TRACE_PLACE': '60:-1949.41,1054.5,48', 'NEOPETS_TRACE_SQUARE': '100,101'}, has(r'28\d pos \(-1949\.\d+\s+45\.\d+\s+1055\.3')),
     ('a chest body survives the hero landing on it', 'SPEC-0048 Lock chests, Set-up', 300, 947, [], {'NEOPETS_TRACE_CHESTDROP': '60:1', 'NEOPETS_TRACE_GOD': '1'}, has(r'CHESTBODY 270: Some\(3\)')),
+    ('the cloud wall shows once Act 2 starts', 'SPEC-0034 section 6, R-0235', 120, 696, ['--flag', '220', '--start', '-286.86,670.9,45.2'], {'NEOPETS_TRACE_PLACED': '696:0-16', 'NEOPETS_TRACE_GOD': '1'}, has(r'PLACED tick 100 world 696: 17 active')),
     ('sound records match the spec', 'SPEC-0031 types 4 and 5', 1, 909, [], {'NEOPETS_TRACE_CUE_RECORDS': '1'}, has(r'CUE RECORDS type 4 81, type 5 24')),
 ]
 

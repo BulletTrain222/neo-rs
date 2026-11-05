@@ -138,8 +138,19 @@ pub struct WorldItem {
     pub price: i16,
     /// Food the hero dropped for a petpet (SPEC-0047 Feeding): reserved, never collected.
     pub reserved: bool,
-    /// A chest's reward: collected once ready at any distance below 25 (this build's rule; R-0234).
-    pub auto: bool,
+}
+
+/// SPEC-0021 Spawning step 11: the rows from a facing f, with n = sqrt(fx^2 + fz^2): right (fz, 0, -fx)/n, up
+/// (-fx fy, n^2, -fy fz)/n, forward f. No facing leaves the model as stored.
+pub fn facing_axes(f: Vec3) -> [Vec3; 3] {
+    let l = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
+    let n = f[0].hypot(f[2]);
+    if l < 1e-6 || n < 1e-6 {
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    }
+    let f = f.map(|v| v / l);
+    let n = f[0].hypot(f[2]);
+    [[f[2] / n, 0.0, -f[0] / n], [-f[0] * f[1] / n, n, -f[1] * f[2] / n], f]
 }
 
 impl WorldItem {
@@ -150,6 +161,18 @@ impl WorldItem {
             0 | 2 => false,
             _ => self.age > if is_coin(self.id) { 0.2 } else { 0.8 },
         }
+    }
+
+    /// The model matrix's axis rows, before the scale (SPEC-0021 Spawning step 11, Per-tick step 5): model x, y and z. A
+    /// placed item keeps the oriented rows of its facing. Otherwise the rows follow the spin angle, and a non-coin's local
+    /// z is mirrored.
+    pub fn axes(&self) -> [Vec3; 3] {
+        if self.state == 1 {
+            return facing_axes(self.direction);
+        }
+        let (s, c) = self.angle.sin_cos();
+        let z = if is_coin(self.id) { [-s, 0.0, c] } else { [s, 0.0, -c] };
+        [[c, 0.0, s], [0.0, 1.0, 0.0], z]
     }
 
     /// The drawn scale: 0 while the delay runs.
@@ -259,7 +282,6 @@ impl ItemPool {
             map: s.map,
             charm: s.charm,
             reserved: false,
-            auto: false,
         });
         true
     }
@@ -316,10 +338,6 @@ impl ItemPool {
             let Some(it) = it else { continue };
             if !it.ready() || it.token == 0 || it.reserved {
                 continue;
-            }
-            // A ready chest reward comes first, so a nearer item out of reach does not hold it back.
-            if it.auto && ((it.position[0] - p[0]).powi(2) + (it.position[1] - p[1]).powi(2) + (it.position[2] - p[2]).powi(2)).sqrt() < 25.0 {
-                return Some(i);
             }
             let d = ((it.position[0] - p[0]).powi(2) + (it.position[1] - p[1]).powi(2) + (it.position[2] - p[2]).powi(2)).sqrt();
             if best.is_none_or(|b| d < b.1) {
