@@ -116,13 +116,26 @@ impl Built {
     }
 }
 
-/// A part that lies flat: its mean normal points up (above 0.9).
-///
-/// The ground casts no sun shadow in this build: with the sun low, grass a little above a road laid straight-edged shadows
-/// along every path, and a hilltop darkened its own cliff (user's report; views 19 and the Farm Road save point).
-fn is_flat(p: &neopets_data::model::MeshPart) -> bool {
-    let n = p.normals.len().max(1) as f32;
-    p.normals.iter().map(|q| q[1]).sum::<f32>() / n > 0.9
+/// A part of the ground, by its shape: mostly facing up, or a low bank that is shallow for its width. The stored normals
+/// cannot tell: they all point straight up in the worlds measured, walls included. The ground casts no sun shadow in this
+/// build: with the sun low, grass a little above a road laid straight-edged shadows along every path (user's F8 views 19
+/// and 20). Walls, cliffs and steep roofs still cast (user's report 5).
+fn is_ground(p: &neopets_data::model::MeshPart) -> bool {
+    let (mut up, mut all) = (0.0, 0.0);
+    for t in p.indices.chunks_exact(3) {
+        let [a, b, c] = [t[0], t[1], t[2]].map(|v| Vec3::from(p.positions[v as usize]));
+        let n = (b - a).cross(c - a);
+        up += n.y.abs();
+        all += n.length();
+    }
+    if all <= 0.0 {
+        return false;
+    }
+    let share = up / all;
+    let lo = p.positions.iter().fold([f32::MAX; 3], |a, q| std::array::from_fn(|k| a[k].min(q[k])));
+    let hi = p.positions.iter().fold([f32::MIN; 3], |a, q| std::array::from_fn(|k| a[k].max(q[k])));
+    let width = (hi[0] - lo[0]).max(hi[2] - lo[2]);
+    share >= 0.8 || (share >= 0.3 && hi[1] - lo[1] < 0.2 * width)
 }
 
 /// One part's mesh, as `part_assets` builds it.
@@ -181,6 +194,23 @@ pub fn spawn(
     let mut count = 0;
     let ranks = crate::draw_order::ranks(m);
     let rank = |i: usize, second: u32| crate::draw_order::DrawRank { pack: Some(pack), rank: ranks[i] + second };
+    // NEOPETS_TRACE_FLAT: each part's mean normal height, flat share of its area and bounds (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_FLAT").is_some() {
+        for (i, p) in m.parts.iter().enumerate() {
+            let n = p.normals.len().max(1) as f32;
+            let mean = p.normals.iter().map(|q| q[1]).sum::<f32>() / n;
+            let (mut up, mut all) = (0.0, 0.0);
+            for t in p.indices.chunks_exact(3) {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|v| Vec3::from(p.positions[v as usize]));
+                let cr = (b - a).cross(c - a);
+                up += cr.y.abs();
+                all += cr.length();
+            }
+            let lo = p.positions.iter().fold([f32::MAX; 3], |a, q| std::array::from_fn(|k| a[k].min(q[k])));
+            let hi = p.positions.iter().fold([f32::MIN; 3], |a, q| std::array::from_fn(|k| a[k].max(q[k])));
+            println!("FLAT {pack} part {i} tex {:?} mean {mean:.3} up {:.3} area {:.0} lo {:.0},{:.0},{:.0} hi {:.0},{:.0},{:.0}", p.texture, up / f32::max(all, 1e-6), all / 2.0, lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+        }
+    }
     for (i, p) in m.parts.iter().enumerate() {
         let env = p.texture.filter(|_| p.env_map && !no_pass1);
         let scrolling = p.scroll.is_some() && p.texture.is_some();
@@ -198,7 +228,7 @@ pub fn spawn(
         if !apart {
             let n = p.positions.len().max(1) as f32;
             let c = p.positions.iter().fold([0.0f32; 2], |a, q| [a[0] + q[0] / n, a[1] + q[2] / n]);
-            let key = (material.id(), p.zone, (c[0] / CELL).floor() as i32, (c[1] / CELL).floor() as i32, is_flat(p));
+            let key = (material.id(), p.zone, (c[0] / CELL).floor() as i32, (c[1] / CELL).floor() as i32, is_ground(p));
             groups.entry(key).or_insert_with(|| (material, Vec::new())).1.push(i);
             continue;
         }
@@ -260,7 +290,7 @@ pub fn spawn(
             e.insert(ZoneGate(pack, z));
         }
         e.insert((b.sigs[i], rank(i, 0)));
-        if layer || is_flat(p) {
+        if layer || is_ground(p) {
             e.insert(bevy::light::NotShadowCaster);
         }
         if let Some((at, d1, _)) = p.cull {
