@@ -253,6 +253,7 @@ pub fn save_report(
         text.push_str("\n\n");
     }
     text.push_str(&shadow_summary(p, &settings, &meshes, &suns));
+    text.push_str(&p.debug_nearby(100.0));
     let log: Vec<&str> = d.log.iter().map(String::as_str).collect();
     let (start, inputs) = p.recorder.export();
     let replay = format!("Replay in a trace (no window):\n  python scripts/replay.py {n}\nor by hand:\n  NEOPETS_REPLAY=private/reports/{n:03} target/release/neopets-app.exe --play-trace {} --pack {} --seed 1\n", p.recorder.len() + 30, p.recorder.start_pack(p.world.pack));
@@ -270,29 +271,12 @@ pub fn save_report(
 
 /// The panel: the inspector, the collision legend and the recent events.
 #[allow(clippy::too_many_arguments)]
-pub fn show_panel(mut commands: Commands, state: Option<Res<PlayState>>, d: Res<DebugState>, dev: Res<DevMenu>, mut panels: Query<(Entity, &mut Text), With<DebugPanel>>, mut near: Local<(u32, String)>) {
+pub fn show_panel(mut commands: Commands, state: Option<Res<PlayState>>, d: Res<DebugState>, dev: Res<DevMenu>, mut panels: Query<(Entity, &mut Text), With<DebugPanel>>) {
     let s = dev.debug;
     let mut out = String::new();
     // The menu covers this part of the screen, so the panel waits until it closes.
     if let (true, false, Some(state)) = (s.inspector, dev.open, state.as_ref()) {
         out.push_str(&state.play.debug_inspect());
-    }
-    if s.collision && !dev.open {
-        out.push_str("\nCOLLISION VIEW:");
-        for (name, _) in KINDS {
-            out.push_str(&format!(" {name},"));
-        }
-        out.pop();
-        out.push_str(" (cyan, red, orange, magenta, green, yellow, white, blue, rose)\n");
-        out.push_str(&format!("Range {:.0}, showing {}\n", RANGES[s.collision_range.min(RANGES.len() - 1)], LAYERS[s.collision_layer.min(LAYERS.len() - 1)].0));
-        // The list is rebuilt four times a second.
-        near.0 = near.0.wrapping_add(1);
-        if near.0 % 15 == 1 {
-            if let Some(state) = state.as_ref() {
-                near.1 = state.play.debug_nearby(RANGES[s.collision_range.min(RANGES.len() - 1)].min(100.0));
-            }
-        }
-        out.push_str(&near.1);
     }
     if s.log && !dev.open {
         out.push_str("\nEVENTS:\n");
