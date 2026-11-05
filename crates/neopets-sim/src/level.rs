@@ -3610,6 +3610,9 @@ fn chase(state: &GameState) -> Vec<Action> {
     let mut v = Vec::new();
     for k in first..=8 {
         let locator = 477 + k as usize;
+        // SPEC-0045 question 27 (4): the chase walks run on navmesh 6, which holds every waypoint; a chase resumed from a save
+        // has had no other assignment.
+        v.push(NavmeshAssign { entity: 0, mesh: 6 });
         v.extend([WalkEntity { entity: 0, locator, wait: true, orient: true, stop: 1.1 }, RandomLoop { entity: 0, anims: [28, 48] }]);
         v.push(WaitHeroNear { locator, distance: 30.0 });
         if k < 8 {

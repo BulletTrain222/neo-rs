@@ -4876,6 +4876,14 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_LOCMESH="tick:a-b": which walking maps hold locators a to b of the current world.
+        if let Some((k, range)) = std::env::var("NEOPETS_TRACE_LOCMESH").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.to_string(), b.to_string())) {
+            if k.parse::<u64>().ok() == Some(play.ticks) {
+                if let Some((a, b)) = range.split_once('-') {
+                    play.diag_locator_meshes(a.parse().unwrap_or(0), b.parse().unwrap_or(0));
+                }
+            }
+        }
         // NEOPETS_TRACE_SUN: the sun's direction whenever it or the world changes.
         if std::env::var_os("NEOPETS_TRACE_SUN").is_some() {
             let now = format!("world {} lights {} sun {:?}", play.world.pack, play.world.lights.len(), play.sun_direction());

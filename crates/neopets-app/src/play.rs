@@ -10108,6 +10108,19 @@ impl Play {
         }
     }
 
+    /// Diagnostic: which walking maps hold locators `a` to `b` of the current world, as stored and on the ground.
+    pub fn diag_locator_meshes(&self, a: usize, b: usize) {
+        println!("LOCMESH {} walking maps: {:?}", self.world.navmeshes.len(), self.world.navmeshes.iter().map(|m| m.len()).collect::<Vec<_>>());
+        for k in a..=b {
+            let Some(&(l, _)) = self.world.entries.get(k) else { continue };
+            let y = self.ground_in(self.world.pack, l[0], l[2], l[1] + 6.0).unwrap_or(l[1]);
+            let at = [l[0], y, l[2]];
+            let full: Vec<(usize, usize)> = self.world.navmeshes.iter().enumerate().filter_map(|(i, m)| m.locate_full(at).map(|t| (i, t))).collect();
+            let near: Vec<(usize, usize)> = self.world.navmeshes.iter().enumerate().filter_map(|(i, m)| m.locate(None, at).map(|t| (i, t))).collect();
+            println!("LOCMESH locator {k} at {:.2},{:.2},{:.2} ground {y:.2}: locate_full {full:?} locate {near:?}", l[0], l[1], l[2]);
+        }
+    }
+
     /// Diagnostic: chest group `g` pays out with the hero stood at its locator 0.
     pub fn diag_chest(&mut self, g: usize) {
         let Some(group) = self.world.groups.get(g).cloned() else {
