@@ -667,10 +667,13 @@ impl Locomotion {
     /// velocity and state 7, with a one-tick hold so the next pass skips its velocity reset.
     /// This build reads the hold as keeping the 8.0 through state 7's own take-off, which then
     /// adds its 8.75 (R-0245, this build's choice): with the 8.0 alone he rose 3.2, below the
-    /// shell's own pop-out of 6.7 (user's report 34).
+    /// shell's own pop-out of 6.7 (user's report 34). The take-off speed is then raised so the
+    /// throw goes 10% higher (height grows with the square of the speed), at the user's request
+    /// after playing it; also this build's choice.
     pub fn launch_up(&mut self, dv: f32) {
         self.enter_air(JUMP);
-        self.launch_bonus = self.body.velocity[1].max(0.0) + dv;
+        let speed = (LAUNCH + self.body.velocity[1].max(0.0) + dv) * 1.1f32.sqrt();
+        self.launch_bonus = speed - LAUNCH;
         self.body.no_gravity = false;
     }
 
