@@ -3328,10 +3328,27 @@ impl Play {
                         w.blocks[block] = b;
                     }
                 }
+                // SPEC-0030 row 156 survey (R-0239): the level modules call MoveHero with the
+                // probe on, except at the listed locators, so the hero lands on the ground found
+                // from the locator's y + 4.0. Not built: the control argument (state 33) and the
+                // probe results kept as they come (0.0 off the grid, a rejected candidate above
+                // the ceiling): with no accepted ground the locator's own y is kept.
                 Action::MoveHero { locator } => {
-                    if let Some(&e) = self.world.entries.get(locator) {
-                        self.arrive(e);
-                        self.last_door = format!("script: hero moved to locator {locator} of {}", self.world.pack);
+                    if let Some(&(l, g)) = self.world.entries.get(locator) {
+                        let p = self.world.pack;
+                        let y = if level::move_hero_unprobed(p, locator) { l[1] } else { self.ground_in(p, l[0], l[2], l[1] + 4.0).unwrap_or(l[1]) };
+                        self.arrive(([l[0], y, l[2]], g));
+                        self.last_door = format!("script: hero moved to locator {locator} of {p}");
+                    }
+                }
+                Action::NormalCamera { distance, angle, release } => {
+                    self.cut = None;
+                    let f = followed(&self.loco, &self.world);
+                    let world = &self.world;
+                    self.camera.place_orbit(&f, distance, angle, |x, z, c| world.probe(x, z, c).height, |e| push_eye(world, e));
+                    if release {
+                        self.held = false;
+                        self.hero_walk = None;
                     }
                 }
                 Action::MoveHeroProbed { locator } => {
@@ -10946,8 +10963,10 @@ impl Play {
         // SPEC-0018 Breakable cylinders against characters (the list B walk; a cell's list only
         // narrows the same set): each state 1 or 3 breakable with an upright cylinder volume.
         let breakable_cylinders = if noclip { Vec::new() } else { self.world.breakable_cylinders(hero_at, 40.0) };
-        // SPEC-0018 Contact pass, list A: the world's own solid upright cylinders (kind 3 with class 0: flag poles and the like).
-        // A character's rule for them is not given apart from the camera's; they take the hero's own radius (R-0238).
+        // SPEC-0018 Cylinders (kind 3) against the hero (R-0238): bit 1 skips the record, bit 0
+        // makes it solid (the trigger group's bits 3, 8 and 6 push only with bit 0, which no
+        // record on disc has with them). Bit 2's world-surface test is not built (no record has
+        // it). The hero body is radius 1.175 and height 3.5 from the feet.
         let mask = self.world.collis_mask;
         let static_cylinders: Vec<([f32; 3], f32, f32)> = if noclip {
             Vec::new()
@@ -10955,7 +10974,7 @@ impl Play {
             self.world
                 .solids
                 .iter()
-                .filter(|v| v.kind == 3 && v.solid(mask))
+                .filter(|v| v.kind == 3 && v.solid(mask) && v.flags & 2 == 0)
                 .filter_map(|v| match v.shape {
                     neopets_sim::trigger::Shape::Cylinder { base, axis, length, radius } if axis[1].abs() >= 0.99 && (base[0] - hero_at[0]).hypot(base[2] - hero_at[2]) < 40.0 => {
                         let low = if axis[1] * length < 0.0 { base[1] - length.abs() } else { base[1] };
@@ -11029,7 +11048,8 @@ impl Play {
                 // SPEC-0033 Behavior 13: the box push does nothing for a hero in state 21, 38 or 41.
                 let before = *p;
                 if !noclip && !matches!(hero_state, 21 | 38 | 41) {
-                    contact::resolve_stepping(p, &world.boxes, contact::HERO_RADIUS);
+                    let ground = world.probe(p[0], p[2], p[1] + 2.5);
+                    contact::resolve_grounded(p, &world.boxes, contact::HERO_RADIUS, ground.found.then_some(ground.height));
                 }
                 // SPEC-0028 Character versus moving placed objects: into each object's rest frame,
                 // its boxes and spheres, the push back to world space.
@@ -11052,17 +11072,9 @@ impl Play {
                 if !noclip {
                     contact::resolve_spheres(p, &world.push_spheres);
                 }
-                let slide = |p: &mut [f32; 3], vel: &mut [f32; 3], (d, n): ([f32; 3], [f32; 3])| {
-                    for k in 0..3 {
-                        p[k] += d[k];
-                    }
-                    let into = vel[0] * n[0] + vel[1] * n[1] + vel[2] * n[2];
-                    if into > 0.0 {
-                        for k in 0..3 {
-                            vel[k] -= into * n[k];
-                        }
-                    }
-                };
+                // SPEC-0018 Cylinders (kind 3) against the hero, Response direction: the normal
+                // points toward the axis, so only motion away from it is clipped.
+                let slide = contact::cylinder_slide;
                 for &(base, length, radius, number) in &breakable_cylinders {
                     let Some(hit) = contact::upright_cylinder_push(*p, 1.0, HERO_HEIGHT, base, length, radius) else { continue };
                     breakable_hits.borrow_mut().push(number);

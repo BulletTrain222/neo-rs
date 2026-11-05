@@ -93,6 +93,8 @@ pub enum Action {
     PlayCamera { track: usize, wait: bool, end: u8, speed: f32 },
     /// ReturnToNormalCamera(preset locator or -1, release) (row 35).
     ReturnCamera { preset: i32, release: bool },
+    /// SetToNormalCamera(distance, angle, release) (row 43): the eye on the orbit about the feet.
+    NormalCamera { distance: f32, angle: f32, release: bool },
     /// GrabHeroControl (row 164): the hero in script hold until a release.
     HoldHero,
     /// WalkHero or WalkHeroAndOrient (rows 158 and 159) to a locator.
@@ -15974,7 +15976,19 @@ fn castle_init(state: &mut GameState) -> Vec<Action> {
 
 /// SPEC-0045 1098 activate-world: the type-2 value for eW 106 picks the return locator.
 fn castle_activate(state: &mut GameState) -> Vec<Action> {
-    let locator = match state.take_message(2, 106) {
+    // Values 90 and 100 set the camera with SetToNormalCamera(5.0 or 2.0, 0.0, true): the eye in
+    // front of the hero, inside the corridor (R-0243, user's report 26: the restart camera behind
+    // him sat outside the door wall).
+    let v = state.take_message(2, 106);
+    if let Some(distance) = match v {
+        90 => Some(5.0),
+        100 => Some(2.0),
+        _ => None,
+    } {
+        let locator = if v == 90 { 1 } else { 10 };
+        return vec![Action::MoveHero { locator }, Action::NormalCamera { distance, angle: 0.0, release: true }];
+    }
+    let locator = match v {
         10 => 6,
         20 => 5,
         30 => 9,
@@ -15990,6 +16004,16 @@ fn castle_activate(state: &mut GameState) -> Vec<Action> {
 }
 
 /// The rest prompt's press (trigger 0).
+/// SPEC-0030 row 156 survey: the MoveHero calls made with the probe off. The two whose locator
+/// comes from data (956 and 970's record field, 1324 and 1392's argument) are listed by the
+/// locators the spec names.
+pub fn move_hero_unprobed(pack: u32, locator: usize) -> bool {
+    matches!(
+        (pack, locator),
+        (732, 4 | 5) | (735, 4) | (956 | 970, 2) | (1077 | 1129 | 1217, 1) | (1220, 25) | (1253, 0..=2) | (1382 | 1392, 0)
+    )
+}
+
 fn castle_rest(state: &mut GameState) -> Vec<Action> {
     let mut v = vec![Action::HoldHero, Action::FadeOut { seconds: 1.5, wait: true }, Action::MoveHero { locator: 12 }];
     if !state.flag(22) && state.flag(152) {

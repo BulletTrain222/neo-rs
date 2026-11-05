@@ -238,6 +238,20 @@ impl FollowCamera {
         self.pull_in(hero, wanted, ground, push);
     }
 
+    /// SetToNormalCamera(distance, angle, release) (SPEC-0027 Return to normal with an angle):
+    /// eye = feet + distance x unit(A cos(angle) + B sin(angle)), A the facing and B its first row
+    /// (0, 1, 0) x A, then the pull-in. Angle 0 is in front of the hero.
+    pub fn place_orbit(&mut self, hero: &Followed, distance: f32, angle: f32, ground: impl Fn(f32, f32, f32) -> f32, push: impl Fn(&mut Vec3)) {
+        self.select_profile(hero);
+        let a = hero.facing;
+        let b = [a[2], 0.0, -a[0]];
+        let (c, s) = (angle.cos(), angle.sin());
+        let w = [a[0] * c + b[0] * s, a[1] * c, a[2] * c + b[2] * s];
+        let l = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt().max(1e-6);
+        let wanted = [hero.position[0] + distance * w[0] / l, hero.position[1] + distance * w[1] / l, hero.position[2] + distance * w[2] / l];
+        self.pull_in(hero, wanted, ground, push);
+    }
+
     /// Camera reset: spin cleared, both polars from the eye, t_e and m its elevation.
     pub fn reset(&mut self) {
         self.spin = 0.0;

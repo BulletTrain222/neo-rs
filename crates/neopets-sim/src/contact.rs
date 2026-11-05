@@ -104,24 +104,49 @@ pub fn resolve(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> bool {
     hit
 }
 
-/// The hero's box push with one change of this build's (user's report 27, R-0242): a side push
-/// whose top depth is within 0.25 lifts onto the top instead, even from beyond the 0.5 r of the
-/// spec's top gate. Stairs that rise past a box's top edge otherwise stopped him 0.12 short of
-/// it, at its side, and he had to jump.
-pub fn resolve_stepping(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> bool {
+/// The hero's box push, with one choice of this build's (R-0244, user's report 27): when the
+/// feet are under the probed ground by less than 0.25 (the top gate's figure) and the same
+/// point on the ground would be outside the box, the feet go onto the ground instead of being
+/// pushed. SPEC-0018 (Pack 1056 stairs) says feet on the ramp never enter the top gate; this
+/// build's ramp normal truncates to flat (SPEC-0018 sample normal), so the feet trail it by 0.08
+/// to 0.16 and the side push held the hero at the box edge for good.
+pub fn resolve_grounded(p: &mut Vec3, boxes: &[BoxShape], r: f32, ground: Option<f32>) -> bool {
     let mut hit = false;
     for b in boxes {
-        if let Some((face, n, dist)) = push(*p, b, r) {
-            let d = [p[0] - b.origin[0], p[1] - b.origin[1], p[2] - b.origin[2]];
-            let top = b.extents[0] - TOP_MARGIN - dot(d, b.axes[0]);
-            let (n, dist) = if face != 1 && (0.0..0.25).contains(&top) { (b.axes[0], top) } else { (n, dist) };
-            for k in 0..3 {
-                p[k] += n[k] * dist;
+        let Some((_, n, dist)) = push(*p, b, r) else { continue };
+        if let Some(h) = ground.filter(|&h| h > p[1] && h - p[1] < 0.25) {
+            if push([p[0], h, p[2]], b, r).is_none() {
+                p[1] = h;
+                hit = true;
+                continue;
             }
-            hit = true;
         }
+        for k in 0..3 {
+            p[k] += n[k] * dist;
+        }
+        hit = true;
     }
     hit
+}
+
+/// The slide response for a cylinder contact (SPEC-0018 Cylinders (kind 3) against the hero,
+/// Response direction; Breakable cylinders; Tree trunks): `d` is the move and `n` the unit normal
+/// toward the axis that `upright_cylinder_push` gives. With motion into the pole (or none) and a
+/// depth of 0.05 or less nothing changes, so the hero may rest that far inside; otherwise the
+/// position moves by `d`, and only motion away from the pole (n . v below 0) is clipped.
+pub fn cylinder_slide(p: &mut Vec3, vel: &mut Vec3, (d, n): (Vec3, Vec3)) {
+    let into = dot(*vel, n);
+    if into >= 0.0 && dot(d, d).sqrt() <= 0.05 {
+        return;
+    }
+    for k in 0..3 {
+        p[k] += d[k];
+    }
+    if into < 0.0 {
+        for k in 0..3 {
+            vel[k] -= into * n[k];
+        }
+    }
 }
 
 /// The finite cylinder test's parallel branch and the slide response's move for an upright owner
@@ -402,19 +427,63 @@ mod tests {
     }
 
     #[test]
-    fn a_step_just_under_the_top_lifts_from_beyond_the_edge() {
-        // Outside the low-B side by 0.9 r, 0.12 under the top: the spec's gate pushes him out
-        // sideways, the stepping push lifts him onto the top.
+    fn a_step_just_under_the_top_is_pushed_out_sideways() {
+        // SPEC-0018 top gate (R-0242): outside the low-B side by 0.9 r, 0.12 under the top, the
+        // side face wins and the hero is never lifted.
         let b = sample();
         let r = 1.0;
         let d = b.extents[0] - TOP_MARGIN - 0.12;
-        let mut p: Vec3 = std::array::from_fn(|k| b.origin[k] + d * b.axes[0][k] + 1.0 * b.axes[1][k] - 0.9 * r * b.axes[2][k]);
+        let p: Vec3 = std::array::from_fn(|k| b.origin[k] + d * b.axes[0][k] + 1.0 * b.axes[1][k] - 0.9 * r * b.axes[2][k]);
         let mut q = p;
         resolve(&mut q, &[b], r);
-        assert!(dot([q[0] - p[0], q[1] - p[1], q[2] - p[2]], b.axes[0]).abs() < 1e-4, "the spec's push is sideways");
-        resolve_stepping(&mut p, &[b], r);
-        let v = dot([p[0] - b.origin[0], p[1] - b.origin[1], p[2] - b.origin[2]], b.axes[0]);
-        assert!((v - (b.extents[0] - TOP_MARGIN)).abs() < 1e-4, "{v}");
+        assert!(dot([q[0] - p[0], q[1] - p[1], q[2] - p[2]], b.axes[0]).abs() < 1e-4, "the push is sideways");
+    }
+
+    #[test]
+    fn pack_1056_stairs_box() {
+        // SPEC-0018 Pack 1056 stairs: the ramp at the grown box's high-B edge is 0.002 above the
+        // gate top, so feet on it are outside; a hero on the floor under it goes out along +z.
+        let b = BoxShape { origin: [-8.3258, 22.0595, 363.2634], axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [5.3261, 10.8802, 3.9309] };
+        assert_eq!(push([0.0, 27.2877, 368.36], &b, HERO_RADIUS), None);
+        let mut p = [-4.0, 22.82, 368.0];
+        resolve_grounded(&mut p, &[b], HERO_RADIUS, Some(22.82));
+        assert!((p[2] - 368.3693).abs() < 1e-3 && p[0] == -4.0 && p[1] == 22.82, "{p:?}");
+        // Feet 0.085 under the ramp (27.288): the spec's push holds him at the edge; the
+        // build's choice puts the feet on the ramp, outside the gate.
+        let mut q = [-3.8, 27.203, 368.30];
+        resolve(&mut q, &[b], HERO_RADIUS);
+        assert!((q[2] - 368.3693).abs() < 1e-3, "{q:?}");
+        let mut q = [-3.8, 27.203, 368.30];
+        resolve_grounded(&mut q, &[b], HERO_RADIUS, Some(27.288));
+        assert_eq!(q, [-3.8, 27.288, 368.30]);
+    }
+
+    #[test]
+    fn pole_slide_rests_and_clips_away_motion() {
+        // SPEC-0018 test vector, pack 696 record 25: R 2.028501, contact 3.203501.
+        let (base, h, r) = ([-526.6364, 42.1532, 623.0201], 25.166477, 2.028501);
+        let hit = |p: Vec3| upright_cylinder_push(p, HERO_RADIUS, 3.5, base, h, r);
+        let mut p = [-529.0, 42.6, 623.0201];
+        let mut v = [0.0; 3];
+        let h = hit(p).unwrap();
+        cylinder_slide(&mut p, &mut v, h);
+        assert!((p[0] + 529.8399).abs() < 1e-3, "{p:?}");
+        let mut p = [-529.0, 42.6, 621.0];
+        let h = hit(p).unwrap();
+        cylinder_slide(&mut p, &mut v, h);
+        assert!((p[0] + 529.0717).abs() < 1e-3 && (p[2] - 620.9387).abs() < 1e-3, "{p:?}");
+        // 0.0399 inside at rest: no change.
+        let mut p = [-529.8, 42.6, 623.0201];
+        let h = hit(p).unwrap();
+        cylinder_slide(&mut p, &mut v, h);
+        assert_eq!(p, [-529.8, 42.6, 623.0201]);
+        assert!(hit([-529.9, 42.6, 623.0201]).is_none() && hit([-529.0, 67.5, 623.0201]).is_none() && hit([-529.0, 38.6, 623.0201]).is_none());
+        // Moving away from the pole while inside: pushed and the away motion clipped.
+        let mut p = [-529.0, 42.6, 623.0201];
+        let mut v = [-1.0, 0.0, 0.5];
+        let h = hit(p).unwrap();
+        cylinder_slide(&mut p, &mut v, h);
+        assert!(v[0].abs() < 1e-6 && v[2] == 0.5, "{v:?}");
     }
 
     #[test]
