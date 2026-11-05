@@ -293,6 +293,8 @@ pub struct Locomotion {
     hurt_from_strafe: bool,
     /// The air attack's sub-state word: 11 the slash, 12 the plunge, 0 none.
     pub air_sub: u8,
+    /// Vertical speed kept through the next jump take-off (the class 20 launch's one-tick hold).
+    pub launch_bonus: f32,
     air_used: bool,
     air_armed: bool,
     air_hold: u32,
@@ -398,6 +400,7 @@ impl Locomotion {
             roberta: false,
             hurt_from_strafe: false,
             air_sub: 0,
+            launch_bonus: 0.0,
             air_used: false,
             air_armed: false,
             air_hold: 0,
@@ -661,15 +664,14 @@ impl Locomotion {
     }
 
     /// SPEC-0047 Class 20 state 1: the creature launches the hero: 8.0 added to the vertical
-    /// velocity and state 7, the next pass keeping the velocity (the one-tick hold), so he rises
-    /// in the standing jump's air phase with no jump take-off of his own.
+    /// velocity and state 7, with a one-tick hold so the next pass skips its velocity reset.
+    /// This build reads the hold as keeping the 8.0 through state 7's own take-off, which then
+    /// adds its 8.75 (R-0245, this build's choice): with the 8.0 alone he rose 3.2, below the
+    /// shell's own pop-out of 6.7 (user's report 34).
     pub fn launch_up(&mut self, dv: f32) {
         self.enter_air(JUMP);
-        self.phase = 0;
-        self.request = ANIM_JUMP_STILL;
-        self.body.velocity[1] += dv;
+        self.launch_bonus = self.body.velocity[1].max(0.0) + dv;
         self.body.no_gravity = false;
-        self.body.gain = 1.0;
     }
 
     /// The climb's Stop Climbing (SPEC-0033 Behavior 51, state 21 exits): state 7 in air phase
@@ -1097,7 +1099,7 @@ impl Locomotion {
             }
             let s = jump_speed(self.state);
             let f = self.facing;
-            self.body.velocity = [f[0] * s, LAUNCH, f[2] * s];
+            self.body.velocity = [f[0] * s, LAUNCH + std::mem::take(&mut self.launch_bonus), f[2] * s];
             (self.phase, self.request) = if s > 0.01 { (1, ANIM_JUMP_MOVE) } else { (0, ANIM_JUMP_STILL) };
             return;
         }

@@ -1021,6 +1021,25 @@ impl Character {
         self.stand_in_body()
     }
 
+    /// The highest point of the character's hurt shapes in its current pose (each a finite
+    /// cylinder from its bone; SPEC-0036 Hit detection), or None with none.
+    pub fn hurt_top(&self) -> Option<f32> {
+        let place = placement(self.position, self.facing);
+        let frames = self.anim.bone_frames();
+        self.anim
+            .bones()
+            .hurt
+            .iter()
+            .zip(&frames)
+            .filter(|(s, _)| s.1 > 0.0)
+            .map(|(&(base, length, _), f)| {
+                let wf = place.mul(f);
+                let b = wf.apply(base);
+                b[1].max(b[1] + wf.cols[1][1] * length)
+            })
+            .reduce(f32::max)
+    }
+
     pub fn stand_in_body(&self) -> Option<neopets_sim::combat::Cylinder> {
         self.cloud.as_ref()?;
         let r = self.row.map_or(3.0, |r| r.radius);
@@ -10980,8 +10999,10 @@ impl Play {
         let breakable_hits = RefCell::new(Vec::new());
         // SPEC-0036 Leap, step 1: in the leap Roberta is left out of the character body contacts.
         let leaping = self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| a.sub == 8);
-        // The class 20 creatures' bodies the hero can stand on (R-0245; this build's choice).
-        let tops: Vec<u64> = self.characters.iter().filter(|c| c.class20.is_some()).map(|c| c.id).collect();
+        // The class 20 creatures' bodies the hero can stand on, with the top of their hurt shapes
+        // in this pose (R-0245; this build's choice). The row's 3.5 body height stood the hero
+        // well above the shell (user's report 34).
+        let tops: Vec<(u64, Option<f32>)> = self.characters.iter().filter(|c| c.class20.is_some()).map(|c| (c.id, c.hurt_top())).collect();
         let bodies: Vec<([f32; 3], f32, f32, u64)> = if noclip || leaping || matches!(hero_state, 33 | 53) {
             Vec::new()
         } else {
@@ -11141,11 +11162,20 @@ impl Play {
                     // stands there while not rising. Its body is 3.5 high (radius 1.17) and a
                     // jump lifts his feet 3.2, so a rule that needed his feet over the top, or
                     // the smaller overlap, pushed a jumping hero off its side (user's report 34).
-                    let up = q[1] + h - p[1];
-                    if tops.contains(&id) && d < contact::HERO_RADIUS + r && up < 1.0 {
-                        p[1] = q[1] + h;
-                        on_top |= vel[1] <= 0.0;
-                        continue;
+                    if let Some(&(_, shell)) = tops.iter().find(|t| t.0 == id) {
+                        let top = shell.unwrap_or(q[1] + h);
+                        let up = top - p[1];
+                        if d < contact::HERO_RADIUS + r && up < 1.0 {
+                            if up > 0.0 {
+                                p[1] = top;
+                            }
+                            on_top |= vel[1] <= 0.0 && up > -0.05;
+                            continue;
+                        }
+                        if up <= 0.0 {
+                            // Above the shell (its hurt shapes are lower than the row's body).
+                            continue;
+                        }
                     }
                     let min = contact::HERO_RADIUS + r;
                     if d < min {
@@ -18878,7 +18908,7 @@ impl Play {
                         r.class.unwrap_or(-1),
                         c.hp,
                         r.hit_points,
-                        c.ixi.as_ref().map_or(String::new(), |k| format!(" ixi {:?}", k.state)) + &c.wild.as_ref().map_or(String::new(), |w| format!(" wild type {} state {} fed {} anim {}", c.pet_type, w.state, w.fed, c.anim.action())) + &c.class20.as_ref().map_or(String::new(), |k| format!(" class20 state {} anim {} body r {:.2} h {:.2}", k.state, c.anim.action(), c.row.map_or(0.0, |r| r.radius), c.row.map_or(0.0, |r| r.height))),
+                        c.ixi.as_ref().map_or(String::new(), |k| format!(" ixi {:?}", k.state)) + &c.wild.as_ref().map_or(String::new(), |w| format!(" wild type {} state {} fed {} anim {}", c.pet_type, w.state, w.fed, c.anim.action())) + &c.class20.as_ref().map_or(String::new(), |k| format!(" class20 state {} anim {} body r {:.2} h {:.2} shell top {:?}", k.state, c.anim.action(), c.row.map_or(0.0, |r| r.radius), c.row.map_or(0.0, |r| r.height), c.hurt_top().map(|t| t - c.position[1]))),
                         c.position[0],
                         c.position[1],
                         c.position[2],
