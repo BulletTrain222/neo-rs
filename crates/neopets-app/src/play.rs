@@ -10167,6 +10167,28 @@ impl Play {
         [p[0] + 2.0 * f[0], p[1] + 2.0 * f[1] + 0.8, p[2] + 2.0 * f[2]]
     }
 
+    /// Whether this world counts as indoors for the sun: an interior pack, or an exterior-family pack that is a building.
+    pub fn indoors(&self) -> bool {
+        self.world.kind == Kind::Interior || matches!(self.world.pack, 1098 | 1163)
+    }
+
+    /// Diagnostic: the hero 3 units from the first Miamouse, facing it.
+    pub fn diag_catch(&mut self) {
+        let pack = self.world.pack;
+        let Some(at) = self.characters.iter().find(|c| c.pack == pack && c.miamouse.is_some()).map(|c| c.position) else {
+            println!("CATCH no Miamouse");
+            return;
+        };
+        let p = [at[0] - 3.0, at[1], at[2]];
+        self.loco.teleport(p, [1.0, 0.0, 0.0]);
+    }
+
+    /// Diagnostic: the carry's state.
+    pub fn debug_carry(&self) -> String {
+        let p = self.loco.position();
+        format!("hero {:.1},{:.1} state {} carry {} carried {:?} on {}", p[0], p[2], self.loco.state, self.loco.carry, self.carried, self.catch.on)
+    }
+
     /// Diagnostic: item `id` placed 5.5 ahead of the hero, a little above the ground.
     pub fn diag_place_item(&mut self, id: u16) {
         let (p, f) = (self.loco.position(), unit(self.loco.facing));
@@ -10804,7 +10826,8 @@ impl Play {
         } else {
             self.characters
                 .iter()
-                .filter(|c| self.pack_drawn(c.pack) && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && Some(c.id) != self.pet_char)
+                // The carried Miamouse sits in his hands: its body pushing him made him wander (user's report 18).
+                .filter(|c| self.pack_drawn(c.pack) && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && Some(c.id) != self.pet_char && Some(c.id) != self.carried)
                 .filter_map(|c| c.row.map(|r| (c.position, r.radius, r.height, c.id)))
                 .filter(|(q, ..)| (q[0] - hero_at[0]).powi(2) + (q[1] - hero_at[1]).powi(2) + (q[2] - hero_at[2]).powi(2) < 400.0)
                 .collect()

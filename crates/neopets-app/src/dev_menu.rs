@@ -98,6 +98,19 @@ impl DevMenu {
         was
     }
 
+    /// A bug report's note opens: the game paused. Returns the speed it found.
+    pub fn note_begin(&mut self) -> usize {
+        let was = self.speed;
+        self.speed = 0;
+        self.open = false;
+        was
+    }
+
+    /// The note closes: the game speed back.
+    pub fn note_end(&mut self, speed: usize) {
+        self.speed = speed;
+    }
+
     /// The item gallery closes: the game speed back and the normal camera.
     pub fn gallery_end(&mut self, speed: usize) {
         self.speed = speed;
@@ -106,7 +119,7 @@ impl DevMenu {
 
     /// The hero and the game menus get no input this frame.
     pub fn blocks_input(&self) -> bool {
-        self.open || self.free.is_some() || self.swallow
+        self.open || self.free.is_some() || self.swallow || self.debug.note_open
     }
 }
 
@@ -185,7 +198,6 @@ enum Entry {
     Inspector,
     Gallery,
     Collision,
-    CollisionRange,
     CollisionLayer,
     Wireframe,
     EventLog,
@@ -201,10 +213,10 @@ const SECTIONS: [(&str, &[Entry]); 8] = [
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::Spawn, Entry::BossFight, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints, Entry::Gallery]),
     ("STORY", &[Entry::Flag]),
-    ("COLLISION VIEW", &[Entry::Collision, Entry::CollisionRange, Entry::CollisionLayer]),
+    ("COLLISION VIEW", &[Entry::Collision, Entry::CollisionLayer]),
 ];
 
-const ENTRIES: [Entry; 34] = [
+const ENTRIES: [Entry; 33] = [
     Entry::God,
     Entry::Noclip,
     Entry::Haste,
@@ -237,7 +249,6 @@ const ENTRIES: [Entry; 34] = [
     Entry::Gallery,
     Entry::Flag,
     Entry::Collision,
-    Entry::CollisionRange,
     Entry::CollisionLayer,
 ];
 
@@ -281,7 +292,7 @@ fn other_column(i: usize) -> usize {
 fn kind(e: Entry) -> Kind {
     match e {
         Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam | Entry::Inspector | Entry::Collision | Entry::Wireframe | Entry::EventLog | Entry::HideHud => Kind::Toggle,
-        Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight | Entry::CollisionRange | Entry::CollisionLayer => Kind::Choice,
+        Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight | Entry::CollisionLayer => Kind::Choice,
         _ => Kind::Action,
     }
 }
@@ -521,7 +532,7 @@ pub fn dev_mouse(sliders: Query<(&Interaction, &bevy::ui::RelativeCursorPosition
 pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bindings: Res<crate::bindings::Bindings>, page: Res<crate::controls_page::ControlsPage>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, mut frames: Local<u32>) {
     let _span = crate::perf::span("dev_input");
     let Some(mut play) = play else { return };
-    if dev.picking {
+    if dev.picking || dev.debug.note_open {
         return;
     }
     if dev.open && dev.quests.is_none() {
@@ -825,7 +836,6 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
                 dev.weapon_at = (dev.weapon_at as i32 + delta).rem_euclid(n) as usize;
             }
             Entry::Flag => dev.flag = (dev.flag as i32 + delta).clamp(0, u16::MAX as i32) as u16,
-            Entry::CollisionRange => dev.debug.collision_range = (dev.debug.collision_range as i32 + delta.signum()).rem_euclid(crate::debug_tools::RANGES.len() as i32) as usize,
             Entry::CollisionLayer => dev.debug.collision_layer = (dev.debug.collision_layer as i32 + delta.signum()).rem_euclid(crate::debug_tools::LAYERS.len() as i32) as usize,
             Entry::Warp => {
                 let n = worlds(&play.play).len().max(1) as i32;
@@ -979,10 +989,6 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             dev.swallow = true;
             "Item gallery: PageUp and PageDown change page, Home closes".into()
         }
-        Entry::CollisionRange => {
-            dev.debug.collision_range = (dev.debug.collision_range + 1) % crate::debug_tools::RANGES.len();
-            format!("Collision range {:.0}", crate::debug_tools::RANGES[dev.debug.collision_range])
-        }
         Entry::CollisionLayer => {
             dev.debug.collision_layer = (dev.debug.collision_layer + 1) % crate::debug_tools::LAYERS.len();
             format!("Collision shows: {}", crate::debug_tools::LAYERS[dev.debug.collision_layer].0)
@@ -1109,7 +1115,6 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Inspector => ("Inspector".into(), on(dev.debug.inspector)),
         Entry::Collision => ("View (Enter to change)".into(), if dev.debug.lines_only { "Lines only".into() } else { on(dev.debug.collision) }),
         Entry::Gallery => ("Item gallery (every item)".into(), String::new()),
-        Entry::CollisionRange => ("Range".into(), if dev.debug.collision_range == crate::debug_tools::RANGES.len() - 1 { "All".to_string() } else { format!("{:.0}", crate::debug_tools::RANGES[dev.debug.collision_range]) }),
         Entry::CollisionLayer => ("Shows".into(), crate::debug_tools::LAYERS[dev.debug.collision_layer].0.to_string()),
         Entry::Wireframe => ("Wireframe (Enter to change)".into(), crate::debug_tools::wireframe_name(dev.debug.wireframe).into()),
         Entry::EventLog => ("Event log".into(), on(dev.debug.log)),

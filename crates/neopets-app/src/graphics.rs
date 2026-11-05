@@ -63,8 +63,8 @@ pub fn sun_illuminance() -> f32 {
 
 /// The ambient brightness while lit: the full matched one, less the sun's share with world
 /// shadows on.
-fn ambient(settings: &DisplaySettings) -> f32 {
-    matched_ambient() * if sun_on(settings) { 1.0 - SUN_SHARE } else { 1.0 }
+fn ambient(settings: &DisplaySettings, indoors: bool) -> f32 {
+    matched_ambient() * if sun_on(settings) && !indoors { 1.0 - SUN_SHARE } else { 1.0 }
 }
 
 /// Whether the shadow sun shines: World shadows, or Character shadows Detailed.
@@ -192,8 +192,9 @@ fn ssao_quality() -> bevy::pbr::ScreenSpaceAmbientOcclusionQualityLevel {
     }
 }
 
-fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras: Query<Entity, With<Camera3d>>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool)>>) {
-    let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows == 1, sun_on(&settings));
+fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, state: Option<Res<crate::PlayState>>, cameras: Query<Entity, With<Camera3d>>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool, bool)>>) {
+    let indoors = state.as_ref().is_some_and(|s| s.play.indoors());
+    let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows == 1, sun_on(&settings), indoors);
     if *last == Some(key) {
         return;
     }
@@ -229,12 +230,12 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras:
         // check the matched colours against the unlit ones).
         if settings.ao && std::env::var_os("NEOPETS_GFX_LIT_ONLY").is_some() {
             c.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass)>();
-            c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true });
+            c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings, indoors), affects_lightmapped_meshes: true });
         } else if settings.ao {
-            c.insert((ScreenSpaceAmbientOcclusion { quality_level: ssao_quality(), ..default() }, AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true }));
+            c.insert((ScreenSpaceAmbientOcclusion { quality_level: ssao_quality(), ..default() }, AmbientLight { color: Color::WHITE, brightness: ambient(&settings, indoors), affects_lightmapped_meshes: true }));
         } else if sun_on(&settings) {
             c.remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
-            c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true });
+            c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings, indoors), affects_lightmapped_meshes: true });
             // No depth prepass: measured at 2560 x 1600 it cost about 1 ms under MSAA and gained
             // nothing under SMAA (NEOPETS_SUN_PREPASS: with one, for comparison).
             if std::env::var_os("NEOPETS_SUN_PREPASS").is_some() {

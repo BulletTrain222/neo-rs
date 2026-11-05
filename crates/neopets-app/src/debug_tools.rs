@@ -33,8 +33,9 @@ pub struct Switches {
     pub lines_only: bool,
     /// The item gallery is open (item_gallery.rs).
     pub gallery: bool,
-    /// Index into RANGES and LAYERS.
-    pub collision_range: usize,
+    /// A bug report's note is being typed.
+    pub note_open: bool,
+    /// Index into LAYERS.
     pub collision_layer: usize,
     /// 0 off, 1 over the picture, 2 alone.
     pub wireframe: u8,
@@ -47,7 +48,7 @@ impl Switches {
     /// NEOPETS_DEBUG="inspector,collision,wireframe,wireonly,log,hud": the tools on from the start, for picture runs (diagnostic).
     pub fn from_env() -> Self {
         let v = std::env::var("NEOPETS_DEBUG").unwrap_or_default();
-        Self { inspector: v.contains("inspector"), collision: v.contains("collision") || v.contains("lineonly"), lines_only: v.contains("lineonly"), gallery: v.contains("gallery"), collision_range: 0, collision_layer: if v.contains("layersolid") { 1 } else { 0 }, wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
+        Self { inspector: v.contains("inspector"), collision: v.contains("collision") || v.contains("lineonly"), lines_only: v.contains("lineonly"), gallery: v.contains("gallery"), note_open: false, collision_layer: if v.contains("layersolid") { 1 } else { 0 }, wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
     }
 }
 
@@ -105,8 +106,8 @@ fn wipe_scene(view: ViewQuery<(&ViewTarget, &ViewDepthTexture)>, wipe: Res<WipeS
 }
 
 /// The kinds of collision line, with their colours and names (the panel's legend).
-/// How far from the hero the collision view reaches; the last is everything resident, at every height.
-pub const RANGES: [f32; 4] = [50.0, 25.0, 100.0, 300.0];
+/// How far from the hero the collision view reaches.
+const RANGE: f32 = 50.0;
 
 /// What the collision view shows, by KINDS index.
 pub const LAYERS: [(&str, &[u8]); 5] = [
@@ -139,6 +140,7 @@ pub struct DebugState {
     items: HashMap<u16, u32>,
     pack: u32,
     notes: [String; 4],
+    note: Note,
     started: bool,
 }
 
@@ -207,7 +209,7 @@ pub fn save_report(
     time: Res<Time<bevy::time::Real>>,
     mut fired: Local<bool>,
     state: Option<Res<PlayState>>,
-    d: Res<DebugState>,
+    mut d: ResMut<DebugState>,
     mut dev: ResMut<DevMenu>,
     settings: Res<crate::display::DisplaySettings>,
     meshes: Query<(&InheritedVisibility, Has<bevy::light::NotShadowCaster>, Has<crate::shadow_view::FaintCaster>, Has<crate::shadow_view::CasterOff>), With<Mesh3d>>,
@@ -217,7 +219,7 @@ pub fn save_report(
     let elapsed = time.elapsed_secs();
     let auto = !*fired && elapsed > 9.0 && std::env::var("NEOPETS_DEBUG").is_ok_and(|v| v.contains("report"));
     *fired |= auto;
-    if !(auto || keys.just_pressed(KeyCode::End) || std::mem::take(&mut dev.debug.report)) {
+    if dev.debug.note_open || !(auto || keys.just_pressed(KeyCode::End) || std::mem::take(&mut dev.debug.report)) {
         return;
     }
     let Some(state) = state else { return };
@@ -268,7 +270,106 @@ pub fn save_report(
     use bevy::render::view::screenshot::{save_to_disk, Screenshot};
     commands.spawn(Screenshot::primary_window()).observe(save_to_disk(dir.join("screen.png")));
     info!("Bug report {n} saved to {}", dir.display());
-    dev.toast = Some((format!("Bug report {n} saved: tell Claude \"report {n}\""), 240));
+    // The note's prompt comes up after the picture has been taken. A trial run with no player has no prompt, unless
+    // NEOPETS_TEST_NOTE gives it the words.
+    if auto && std::env::var_os("NEOPETS_TEST_NOTE").is_none() {
+        dev.toast = Some((format!("Report {n} saved"), 240));
+    } else {
+        d.note = Note { number: n, dir, text: String::new(), frames: 0, speed: dev.note_begin() };
+        dev.debug.note_open = true;
+    }
+}
+
+/// The note of the report just saved: what was typed goes into its note.txt.
+#[derive(Default)]
+pub struct Note {
+    number: usize,
+    dir: std::path::PathBuf,
+    text: String,
+    frames: u32,
+    speed: usize,
+}
+
+#[derive(Component)]
+pub struct NotePanel;
+
+/// Typing a bug report's note: Enter saves it, Esc (or the pad's B) leaves the report with none.
+#[allow(clippy::too_many_arguments)]
+pub fn note_input(
+    mut commands: Commands,
+    mut d: ResMut<DebugState>,
+    mut dev: ResMut<DevMenu>,
+    mut typed: MessageReader<bevy::input::keyboard::KeyboardInput>,
+    gamepads: Query<&Gamepad>,
+    mut panels: Query<(Entity, &mut Text), With<NotePanel>>,
+) {
+    use bevy::input::keyboard::Key;
+    if !dev.debug.note_open {
+        typed.clear();
+        return;
+    }
+    let mut done = None;
+    for k in typed.read().filter(|k| k.state.is_pressed()) {
+        match &k.logical_key {
+            Key::Enter => done = Some(true),
+            Key::Escape => done = Some(false),
+            Key::Backspace => {
+                d.note.text.pop();
+            }
+            Key::Space => d.note.text.push(' '),
+            Key::Character(c) if d.note.text.len() < 600 => d.note.text.push_str(c),
+            _ => {}
+        }
+    }
+    if gamepads.iter().any(|g| g.just_pressed(GamepadButton::East)) {
+        done = Some(false);
+    }
+    d.note.frames += 1;
+    // NEOPETS_TEST_NOTE: those words, entered as if typed (diagnostic).
+    if let Ok(words) = std::env::var("NEOPETS_TEST_NOTE") {
+        d.note.text = words;
+        if d.note.frames == 900 {
+            done = Some(true);
+        }
+    }
+    if let Some(save) = done {
+        let n = d.note.number;
+        let saved = save && !d.note.text.trim().is_empty();
+        if saved {
+            if let Err(e) = std::fs::write(d.note.dir.join("note.txt"), d.note.text.trim()) {
+                error!("Bug report: could not write its note: {e}");
+            }
+        }
+        dev.debug.note_open = false;
+        dev.note_end(d.note.speed);
+        dev.toast = Some((format!("Report {n} saved{}", if saved { " with its note" } else { "" }), 240));
+        for (e, _) in &panels {
+            commands.entity(e).despawn();
+        }
+        return;
+    }
+    if d.note.frames < 4 {
+        return;
+    }
+    let body = format!("Bug report {} saved. Type a note if you like:\n\n{}_\n\nEnter saves it, Esc skips", d.note.number, d.note.text);
+    match panels.iter_mut().next() {
+        Some((_, mut t)) => {
+            if t.0 != body {
+                t.0 = body;
+            }
+        }
+        None => {
+            commands.spawn((
+                Text::new(body),
+                TextFont { font_size: bevy::text::FontSize::Px(14.0), ..default() },
+                TextColor(Color::srgb(1.0, 0.95, 0.75)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
+                Node { position_type: PositionType::Absolute, left: percent(20), right: percent(20), top: percent(30), padding: UiRect::all(px(12)), ..default() },
+                GlobalZIndex(5000),
+                NotePanel,
+            ));
+        }
+    }
 }
 
 /// The panel: the inspector, the collision legend and the recent events.
@@ -329,10 +430,10 @@ pub fn show_lines(
     mut materials: ResMut<Assets<StandardMaterial>>,
     old: Query<Entity, With<DebugLines>>,
     mut frames: Local<u32>,
-    mut was: Local<(bool, usize, usize)>,
+    mut was: Local<(bool, usize)>,
 ) {
     // A change of mode rebuilds at once; lines alone are redrawn more often, as the hero's marker is all there is to follow.
-    let mode = (dev.debug.lines_only, dev.debug.collision_range, dev.debug.collision_layer);
+    let mode = (dev.debug.lines_only, dev.debug.collision_layer);
     if *was != mode {
         *was = mode;
         *frames = 0;
@@ -354,7 +455,7 @@ pub fn show_lines(
     }
     let mut lists: Vec<Vec<[f32; 3]>> = vec![Vec::new(); KINDS.len()];
     let kinds = LAYERS[dev.debug.collision_layer.min(LAYERS.len() - 1)].1;
-    for (k, a, b) in state.play.debug_lines(RANGES[dev.debug.collision_range.min(RANGES.len() - 1)], kinds).into_iter().chain(state.play.debug_hero_cross()) {
+    for (k, a, b) in state.play.debug_lines(RANGE, kinds).into_iter().chain(state.play.debug_hero_cross()) {
         if let Some(l) = lists.get_mut(k as usize) {
             l.push(a);
             l.push(b);

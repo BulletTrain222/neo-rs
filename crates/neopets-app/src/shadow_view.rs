@@ -186,7 +186,8 @@ pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, se
         ));
         return;
     }
-    let on = (settings.world_shadows || settings.char_shadows == 2) && state.is_some();
+    // Indoors there is no sun (user's reports 7, 17 and 19).
+    let on = (settings.world_shadows || settings.char_shadows == 2) && state.as_ref().is_some_and(|s| !s.play.indoors());
     let dir = state.as_ref().map_or([0.35, -1.0, 0.25], |s| s.play.sun_direction());
     let d = Vec3::from(dir).normalize_or(Vec3::NEG_Y);
     for (mut t, mut vis) in &mut suns {
@@ -353,7 +354,7 @@ pub fn sync_casters(
     let _span = crate::perf::span("sync_casters");
     // Pack 1184 and its neighbour are roofed by their canopy in the same way (user's report 16). Other worlds under a
     // canopy are not listed: none has been reported or measured.
-    let indoors = state.is_some_and(|s| s.play.world.kind == neopets_data::travel::Kind::Interior || matches!(s.play.world.pack, 1184 | 1225));
+    let indoors = state.is_some_and(|s| s.play.indoors() || matches!(s.play.world.pack, 1184 | 1225));
     let characters_only = !settings.world_shadows || indoors;
     if *last == Some(characters_only) && added.is_empty() {
         return;

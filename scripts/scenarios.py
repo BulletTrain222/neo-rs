@@ -66,6 +66,7 @@ SCENARIOS = [
     ('Tor stands at his place at the pump', 'SPEC-0045 909 routine 11; R-0239', 300, 909, ['--flag', '1', '--flag', '107', '--flag', '108', '--flag', '109', '--flag', '110', '--flag', '111'], {'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GIVE': '5:6:1', 'NEOPETS_TRACE_PLACE': '60:-1949.41,1054.5,48', 'NEOPETS_TRACE_SQUARE': '100,101'}, has(r'28\d pos \(-1949\.\d+\s+45\.\d+\s+1055\.3')),
     ('a chest body survives the hero landing on it', 'SPEC-0048 Lock chests, Set-up', 300, 947, [], {'NEOPETS_TRACE_CHESTDROP': '60:1', 'NEOPETS_TRACE_GOD': '1'}, has(r'CHESTBODY 270: Some\(3\)')),
     ('the cloud wall shows once Act 2 starts', 'SPEC-0034 section 6, R-0235', 120, 696, ['--flag', '220', '--start', '-286.86,670.9,45.2'], {'NEOPETS_TRACE_PLACED': '696:0-16', 'NEOPETS_TRACE_GOD': '1'}, has(r'PLACED tick 100 world 696: 17 active')),
+    ('carrying a Miamouse goes where the stick says', 'SPEC-0033 Behavior 18', 700, 1163, ['--flag', '156'], {'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_CATCH': '100', 'NEOPETS_TRACE_SQUARE': '102,103,104,105,106,107,108,109,110,111,112', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_PUSH': '-80,70'}, has(r'CATCH 600: hero -(79|80)\.\d,(69|70)\.\d state 57')),
     ('sound records match the spec', 'SPEC-0031 types 4 and 5', 1, 909, [], {'NEOPETS_TRACE_CUE_RECORDS': '1'}, has(r'CUE RECORDS type 4 81, type 5 24')),
 ]
 

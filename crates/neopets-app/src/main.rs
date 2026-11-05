@@ -970,7 +970,7 @@ fn main() {
     app.add_plugins(debug_tools::WireframeTool);
     app.init_resource::<item_gallery::Gallery>();
     app.add_systems(Update, item_gallery::step.after(play_frame));
-    app.add_systems(Update, (debug_tools::track_events, debug_tools::save_report, debug_tools::show_panel, debug_tools::hide_hud, debug_tools::show_lines).after(play_frame));
+    app.add_systems(Update, (debug_tools::track_events, debug_tools::save_report, debug_tools::note_input, debug_tools::show_panel, debug_tools::hide_hud, debug_tools::show_lines).after(play_frame));
     app.insert_resource(goal_start.map_or_else(story_run::GoalWalk::default, story_run::GoalWalk::open));
     app.add_systems(Startup, story_run::spawn_goal_panel);
     app.add_systems(Update, (story_run::goal_walk_step.before(play_frame), story_run::show_goal_panel));
@@ -4930,6 +4930,15 @@ fn play_trace(
                 if seen.insert(c.name.clone()) {
                     println!("MODEL {:?}: attachment slots {:?}", c.name, c.model.attachments.iter().map(|(k, _)| *k).collect::<Vec<_>>());
                 }
+            }
+        }
+        // NEOPETS_TRACE_CATCH=tick: the hero stood beside the first Miamouse on that tick; its carry state every 60 ticks.
+        if let Some(k) = std::env::var("NEOPETS_TRACE_CATCH").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+            if play.ticks == k {
+                play.diag_catch();
+            }
+            if play.ticks % 60 == 0 {
+                println!("CATCH {}: {}", play.ticks, play.debug_carry());
             }
         }
         // NEOPETS_TRACE_SUN: the sun's direction whenever it or the world changes.
