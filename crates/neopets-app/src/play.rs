@@ -17967,19 +17967,23 @@ impl Play {
             let g = self.design.item_category(id).and_then(Group::of_category).unwrap_or(Group::General);
             stash_lists.entry(g).or_default().push((id, n));
         }
-        let family = |e: Option<u16>| e.map(|id| vec![(id, 1u32)]).unwrap_or_default();
+        // The weapon, shield and tail lists are written by hero: entry h is hero h's (SPEC-0025
+        // Item lists, Tails: the tail holds each hero's body outfit). The tail was written empty
+        // and only the active hero's weapon and shield were kept, so a load put the hero back in
+        // his starting outfit (user's report: armour not saved).
+        let family = |f: usize| self.equipment.entries[f].map(|e| e.map(|id| (id, 1u32)));
         for g in Group::ORDER {
-            let list = match g {
-                Group::General => lists.remove("general").unwrap_or_default(),
-                Group::Quest => lists.remove("quest").unwrap_or_default(),
-                Group::Charm => lists.remove("charm").unwrap_or_default(),
-                Group::Weapon => family(self.weapon),
-                Group::Shield => family(self.shield),
-                Group::Tail => Vec::new(),
+            let list: Vec<Option<(u16, u32)>> = match g {
+                Group::General => lists.remove("general").unwrap_or_default().into_iter().map(Some).collect(),
+                Group::Quest => lists.remove("quest").unwrap_or_default().into_iter().map(Some).collect(),
+                Group::Charm => lists.remove("charm").unwrap_or_default().into_iter().map(Some).collect(),
+                Group::Weapon => family(0).to_vec(),
+                Group::Shield => family(1).to_vec(),
+                Group::Tail => family(2).to_vec(),
             };
             for i in 0..g.capacity() {
-                match list.get(i) {
-                    Some(&(id, n)) => s.set_entry(0, g, i, Some(id), n as i32),
+                match list.get(i).copied().flatten() {
+                    Some((id, n)) => s.set_entry(0, g, i, Some(id), n as i32),
                     None => s.set_entry(0, g, i, None, 0),
                 }
                 match stash_lists.get(&g).and_then(|l| l.get(i)) {
@@ -18035,7 +18039,10 @@ impl Play {
         }
         s.set_u32(at::SWAP_MODE, self.swap_mode);
         let cloak = self.state.items.get(&126).is_some_and(|&n| n > 0);
-        s.0[at::CLOAK..at::CLOAK + 3].copy_from_slice(&[cloak as u8, 0, 0]);
+        // 0x3081 + h: hero h wears the cloak (this build keeps one worn flag, the active hero's).
+        let mut worn = [0u8; 2];
+        worn[self.hero_index.min(1)] = (cloak && self.cloak_worn) as u8;
+        s.0[at::CLOAK..at::CLOAK + 3].copy_from_slice(&[cloak as u8, worn[0], worn[1]]);
         // A copy of the live options block (SPEC-0025 Options block).
         s.0[at::OPTIONS..at::OPTIONS + 32].copy_from_slice(&self.options.block.to_bytes());
     }
@@ -18060,10 +18067,12 @@ impl Play {
         self.state.items.clear();
         self.weapon = None;
         self.shield = None;
+        // The family entries start empty, so the new game's outfit does not outrank the saved one.
+        self.equipment.entries = Default::default();
         self.state.neopoints = s.i32(at::WALLET);
         self.state.stash.clear();
         self.state.stash_neopoints = s.i32(at::STASH);
-        for (c, g, i, id, v) in s.adds() {
+        for (c, g, _, id, v) in s.adds() {
             let Ok(id) = u16::try_from(id) else { continue };
             if c != 0 {
                 // Container B, the stash: every entry by its count.
@@ -18071,19 +18080,22 @@ impl Play {
                 continue;
             }
             match g {
-                Group::Weapon | Group::Shield if i == 0 => self.give(id),
+                // Each equipment entry goes to its hero's family by the item's own kind.
+                Group::Weapon | Group::Shield | Group::Tail => self.give(id),
                 Group::General | Group::Quest => {
                     let limit = self.design.carry_limit(id).unwrap_or(0);
                     let n = if limit > 0 { (v as u32).min(limit) } else { v as u32 };
                     *self.state.items.entry(id).or_insert(0) += n;
                 }
                 Group::Charm => *self.state.items.entry(id).or_insert(0) += v as u32,
-                _ => {}
             }
         }
         if s.0[at::CLOAK] != 0 {
             self.state.items.insert(126, 1);
         }
+        let active = s.u32(at::ACTIVE_HERO).min(1) as usize;
+        self.cloak_worn = s.0[at::CLOAK] != 0 && s.0[at::CLOAK + 1 + active] != 0;
+        self.state.cloak_worn = self.cloak_worn;
         self.once.clear();
         for (set, &id) in ONCE_ITEMS.iter().enumerate() {
             for w in 0..sv::WORLDS {
