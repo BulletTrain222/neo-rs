@@ -11136,12 +11136,15 @@ impl Play {
                     // SPEC-0047 Class 20 launches a hero standing on the creature (more than 0.5
                     // above it, within 2.5). The character push of SPEC-0040 moves along the
                     // bodies' overlap direction, which can be up, but how that direction is chosen
-                    // is not given (R-0245). This build's choice: a hero not rising, with his feet
-                    // in the top 1.0 of a class 20 body and his centre over it, stands on its top
-                    // (user's report 34).
-                    if tops.contains(&id) && vel[1] <= 0.0 && p[1] > q[1] + h - 1.0 && d < r {
+                    // is not given (R-0245). This build's choice for a class 20 body: a hero
+                    // touching it with his feet within 1.0 of its top is put on the top, and
+                    // stands there while not rising. Its body is 3.5 high (radius 1.17) and a
+                    // jump lifts his feet 3.2, so a rule that needed his feet over the top, or
+                    // the smaller overlap, pushed a jumping hero off its side (user's report 34).
+                    let up = q[1] + h - p[1];
+                    if tops.contains(&id) && d < contact::HERO_RADIUS + r && up < 1.0 {
                         p[1] = q[1] + h;
-                        on_top = true;
+                        on_top |= vel[1] <= 0.0;
                         continue;
                     }
                     let min = contact::HERO_RADIUS + r;
@@ -18875,7 +18878,7 @@ impl Play {
                         r.class.unwrap_or(-1),
                         c.hp,
                         r.hit_points,
-                        c.ixi.as_ref().map_or(String::new(), |k| format!(" ixi {:?}", k.state)) + &c.wild.as_ref().map_or(String::new(), |w| format!(" wild type {} state {} fed {} anim {}", c.pet_type, w.state, w.fed, c.anim.action())) + &c.class20.as_ref().map_or(String::new(), |k| format!(" class20 state {} anim {}", k.state, c.anim.action())),
+                        c.ixi.as_ref().map_or(String::new(), |k| format!(" ixi {:?}", k.state)) + &c.wild.as_ref().map_or(String::new(), |w| format!(" wild type {} state {} fed {} anim {}", c.pet_type, w.state, w.fed, c.anim.action())) + &c.class20.as_ref().map_or(String::new(), |k| format!(" class20 state {} anim {} body r {:.2} h {:.2}", k.state, c.anim.action(), c.row.map_or(0.0, |r| r.radius), c.row.map_or(0.0, |r| r.height))),
                         c.position[0],
                         c.position[1],
                         c.position[2],
