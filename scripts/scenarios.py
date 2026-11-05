@@ -28,6 +28,14 @@ def brendel(out):
     return None if ok else f'rests at {x}, {z}, clip {r[4]}'
 
 
+def clear_of_pole(out):
+    rows = re.findall(r'pos \(\s*(-?[\d.]+)\s+-?[\d.]+\s+(-?[\d.]+)\)', out)
+    if not rows:
+        return 'no positions in the run'
+    nearest = min(((float(x) + 526.6) ** 2 + (float(z) - 623.0) ** 2) ** 0.5 for x, z in rows)
+    return None if nearest >= 3.1 else f'hero came within {nearest:.2f} of the pole'
+
+
 def count(pattern, want):
     def test(out):
         n = len(re.findall(pattern, out))
@@ -52,6 +60,9 @@ SCENARIOS = [
     ('no cloud wall before the flags (world 696)', 'SPEC-0042 696 Init; SPEC-0034 section 6', 420, 696, ['--start', '-286.86,670.9,45.2'], {'NEOPETS_TRACE_PLACED': '696:0-16', 'NEOPETS_TRACE_GOD': '1'}, has(r'PLACED tick 400 world 696: 0 active')),
     ('no cloud wall after walking in from 1066', 'SPEC-0042 696 Init; SPEC-0034 section 6', 420, 1066, [], {'NEOPETS_TRACE_PLACED': '696:0-16', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_PLACE': '100:-286.86,670.9,60'}, has(r'PLACED tick 400 world 696: 0 active')),
     ('the Meerca resumes his chase along the road', 'SPEC-0045 chase thread, question 27', 1500, 1023, ['--flag', '127', '--flag', '128', '--start', '-5,490,40'], {'NEOPETS_TRACE_FACING': 'Meerouladen', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_PLACE': '500:30,424,40'}, has(r'WALKSTATE 1400 .*mesh Some\(Some\(6\)\)')),
+    ('flag poles stop the hero', 'SPEC-0018 Contact pass; R-0238', 200, 696, ['--start', '-535,615,44'], {'NEOPETS_TRACE_PUSH': '-526.6,623', 'NEOPETS_TRACE_GOD': '1'}, clear_of_pole),
+    ('the hero walks onto the 1066 bridge', 'R-0237', 300, 1066, ['--flag', '17', '--start', '-652,685,44'], {'NEOPETS_TRACE_PUSH': '-705,745', 'NEOPETS_TRACE_GOD': '1'}, has(r'28\d pos \( -69\d')),
+    ('a wild petpet eats and joins', 'SPEC-0047 Acquisition', 500, 1066, ['--start', '-759.5,545.5,40'], {'NEOPETS_TRACE_WILD': '100', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_GIVE': '5:150:5'}, has(r'joins with T')),
     ('sound records match the spec', 'SPEC-0031 types 4 and 5', 1, 909, [], {'NEOPETS_TRACE_CUE_RECORDS': '1'}, has(r'CUE RECORDS type 4 81, type 5 24')),
 ]
 

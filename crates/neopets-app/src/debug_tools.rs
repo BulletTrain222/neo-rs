@@ -29,6 +29,8 @@ use crate::PlayState;
 pub struct Switches {
     pub inspector: bool,
     pub collision: bool,
+    /// The collision view on black: nothing else drawn, so objects cannot hide its lines.
+    pub lines_only: bool,
     /// 0 off, 1 over the picture, 2 alone.
     pub wireframe: u8,
     pub log: bool,
@@ -40,7 +42,7 @@ impl Switches {
     /// NEOPETS_DEBUG="inspector,collision,wireframe,wireonly,log,hud": the tools on from the start, for picture runs (diagnostic).
     pub fn from_env() -> Self {
         let v = std::env::var("NEOPETS_DEBUG").unwrap_or_default();
-        Self { inspector: v.contains("inspector"), collision: v.contains("collision"), wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
+        Self { inspector: v.contains("inspector"), collision: v.contains("collision") || v.contains("lineonly"), lines_only: v.contains("lineonly"), wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
     }
 }
 
@@ -80,7 +82,7 @@ fn apply_wireframe(dev: Res<DevMenu>, mut config: ResMut<WireframeConfig>) {
 struct WipeScene(bool);
 
 fn extract_wipe(dev: Extract<Res<DevMenu>>, mut wipe: ResMut<WipeScene>) {
-    wipe.0 = dev.debug.wireframe == 2;
+    wipe.0 = dev.debug.wireframe == 2 || dev.debug.lines_only;
 }
 
 /// Lines only: clears the colour and depth the main pass drew, so the wireframe pass draws on black and nothing hides it but
@@ -98,7 +100,7 @@ fn wipe_scene(view: ViewQuery<(&ViewTarget, &ViewDepthTexture)>, wipe: Res<WipeS
 }
 
 /// The kinds of collision line, with their colours and names (the panel's legend).
-pub const KINDS: [(&str, [f32; 3]); 7] = [
+pub const KINDS: [(&str, [f32; 3]); 8] = [
     ("walking maps", [0.1, 0.9, 0.9]),
     ("solid boxes", [1.0, 0.15, 0.15]),
     ("solid spheres", [1.0, 0.55, 0.1]),
@@ -106,6 +108,7 @@ pub const KINDS: [(&str, [f32; 3]); 7] = [
     ("ladders and climb panels", [0.2, 1.0, 0.2]),
     ("triggers", [1.0, 1.0, 0.2]),
     ("walls near you", [1.0, 1.0, 1.0]),
+    ("you", [0.3, 0.5, 1.0]),
 ];
 
 /// The event log's lines kept for a report.
@@ -263,7 +266,7 @@ pub fn show_panel(mut commands: Commands, state: Option<Res<PlayState>>, d: Res<
             out.push_str(&format!(" {name},"));
         }
         out.pop();
-        out.push_str(" (cyan, red, orange, pink, green, yellow, white)\n");
+        out.push_str(" (cyan, red, orange, pink, green, yellow, white, blue)\n");
     }
     if s.log && !dev.open {
         out.push_str("\nEVENTS:\n");
@@ -314,7 +317,13 @@ pub fn show_lines(
     mut materials: ResMut<Assets<StandardMaterial>>,
     old: Query<Entity, With<DebugLines>>,
     mut frames: Local<u32>,
+    mut was_only: Local<bool>,
 ) {
+    // A change of mode rebuilds at once; lines alone are redrawn more often, as the hero's marker is all there is to follow.
+    if *was_only != dev.debug.lines_only {
+        *was_only = dev.debug.lines_only;
+        *frames = 0;
+    }
     if !dev.debug.collision {
         for e in &old {
             commands.entity(e).despawn();
@@ -323,7 +332,7 @@ pub fn show_lines(
         return;
     }
     *frames += 1;
-    if *frames % 60 != 1 {
+    if *frames % if dev.debug.lines_only { 10 } else { 60 } != 1 {
         return;
     }
     let Some(state) = state else { return };
@@ -331,7 +340,7 @@ pub fn show_lines(
         commands.entity(e).despawn();
     }
     let mut lists: Vec<Vec<[f32; 3]>> = vec![Vec::new(); KINDS.len()];
-    for (k, a, b) in state.play.debug_lines() {
+    for (k, a, b) in state.play.debug_lines().into_iter().chain(state.play.debug_hero_cross()) {
         if let Some(l) = lists.get_mut(k as usize) {
             l.push(a);
             l.push(b);
@@ -345,7 +354,11 @@ pub fn show_lines(
         let mut mesh = Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default());
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         let material = materials.add(StandardMaterial { base_color: Color::srgb(c[0], c[1], c[2]), unlit: true, cull_mode: None, ..default() });
-        commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material), Transform::IDENTITY, bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver, WireframeColor { color: Color::srgb(c[0], c[1], c[2]) }, DebugLines));
+        let mut e = commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material), Transform::IDENTITY, bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver, WireframeColor { color: Color::srgb(c[0], c[1], c[2]) }, DebugLines));
+        // The wipe clears the main pass, so lines alone are drawn by the wireframe pass.
+        if dev.debug.lines_only {
+            e.insert(bevy::pbr::wireframe::Wireframe);
+        }
     }
 }
 

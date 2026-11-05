@@ -351,7 +351,9 @@ pub fn sync_casters(
     faint: Query<(), With<FaintCaster>>,
 ) {
     let _span = crate::perf::span("sync_casters");
-    let indoors = state.is_some_and(|s| s.play.world.kind == neopets_data::travel::Kind::Interior);
+    // Pack 1184 and its neighbour are roofed by their canopy in the same way (user's report 16). Other worlds under a
+    // canopy are not listed: none has been reported or measured.
+    let indoors = state.is_some_and(|s| s.play.world.kind == neopets_data::travel::Kind::Interior || matches!(s.play.world.pack, 1184 | 1225));
     let characters_only = !settings.world_shadows || indoors;
     if *last == Some(characters_only) && added.is_empty() {
         return;

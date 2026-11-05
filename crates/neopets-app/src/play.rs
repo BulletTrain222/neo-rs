@@ -476,6 +476,11 @@ impl World {
         world.blocks = blocks;
         world.block_meshes = sources.iter().map(|s| s.mesh.clone()).collect();
         world.all_boxes.retain(|(_, b)| !sources.iter().any(|s| s.corner == b.origin));
+        // Pack 1066's box across the start of the bridge stands 1.7 above the walkway, so by the spec's box push the hero
+        // could only jump onto it; the player remembers walking on. Left out until R-0237 says what the original does.
+        if pack == 1066 {
+            world.all_boxes.retain(|(_, b)| (b.origin[0] + 667.5175).hypot(b.origin[2] - 691.0789) > 0.01);
+        }
         world.set_collis_mask(0);
         Ok((world, bytes))
     }
@@ -9385,6 +9390,12 @@ impl Play {
             let world = &self.world;
             let c = &mut self.characters[i];
             let clip = c.anim.clip_state();
+            // The pet's navmesh (SPEC-0029 Behavior 2): the first ground mesh holding it. Without one no food could ever be
+            // reached, so a fed pet stood still (user's report 15).
+            if let Some(wk) = c.walker.as_mut().filter(|w| w.mesh.is_none()) {
+                let pick = world.navmeshes.iter().position(|m| m.kind == 1 && m.first_holding(at).is_some());
+                wk.assign_mesh(pick, &world.navmeshes);
+            }
             // The food's reach (SPEC-0047 Food reach): its point located in the pet's current
             // navmesh; no line of sight, and the next-nearest food is not tried.
             let reachable = food.is_some_and(|f| c.walker.as_ref().and_then(|w| w.mesh).and_then(|m| world.navmeshes.get(m)).is_some_and(|m| m.first_holding(f.0).is_some()));
@@ -10108,6 +10119,17 @@ impl Play {
         }
     }
 
+    /// Diagnostic: the wild petpets and the hero's feed gates; with `place` the hero stands 3 units from the first, facing it.
+    pub fn diag_wild(&mut self, place: bool) -> String {
+        let pack = self.world.pack;
+        let wild: Vec<(u64, [f32; 3], Option<u32>)> = self.characters.iter().filter(|c| c.pack == pack && c.wild.is_some() && !c.inactive).map(|c| (c.id, c.position, c.anim.clip_state().action.into())).collect();
+        if let (true, Some(&(_, at, _))) = (place, wild.first()) {
+            self.loco.teleport([at[0] + 3.0, at[1], at[2]], [-1.0, 0.0, 0.0]);
+        }
+        let h = self.loco.position();
+        format!("hero {:.1},{:.1},{:.1} state {} busy {} prompt {:?} feeding {:?} pet {:?} last {:?}; wild {:?}", h[0], h[1], h[2], self.loco.state, self.hero_busy(), self.door_prompt, self.feeding, self.pet_char, self.last_pet, wild.iter().map(|w| (w.0, w.1[0] as i32, w.1[2] as i32, w.2)).collect::<Vec<_>>())
+    }
+
     /// Diagnostic: which walking maps hold locators `a` to `b` of the current world, as stored and on the ground.
     pub fn diag_locator_meshes(&self, a: usize, b: usize) {
         println!("LOCMESH {} walking maps: {:?}", self.world.navmeshes.len(), self.world.navmeshes.iter().map(|m| m.len()).collect::<Vec<_>>());
@@ -10752,6 +10774,25 @@ impl Play {
         // SPEC-0018 Breakable cylinders against characters (the list B walk; a cell's list only
         // narrows the same set): each state 1 or 3 breakable with an upright cylinder volume.
         let breakable_cylinders = if noclip { Vec::new() } else { self.world.breakable_cylinders(hero_at, 40.0) };
+        // SPEC-0018 Contact pass, list A: the world's own solid upright cylinders (kind 3 with class 0: flag poles and the like).
+        // A character's rule for them is not given apart from the camera's; they take the hero's own radius (R-0238).
+        let mask = self.world.collis_mask;
+        let static_cylinders: Vec<([f32; 3], f32, f32)> = if noclip {
+            Vec::new()
+        } else {
+            self.world
+                .solids
+                .iter()
+                .filter(|v| v.kind == 3 && v.solid(mask))
+                .filter_map(|v| match v.shape {
+                    neopets_sim::trigger::Shape::Cylinder { base, axis, length, radius } if axis[1].abs() >= 0.99 && (base[0] - hero_at[0]).hypot(base[2] - hero_at[2]) < 40.0 => {
+                        let low = if axis[1] * length < 0.0 { base[1] - length.abs() } else { base[1] };
+                        Some(([base[0], low, base[2]], length.abs(), radius))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
         // SPEC-0033 Behavior 43 for the placed objects' solid upright cylinders (the sealed
         // chests' object 0), with the hero's own body radius. The other primitives of an
         // object's header and the double turn of a rotated object are not built.
@@ -10847,7 +10888,7 @@ impl Play {
                     }
                     slide(p, vel, hit);
                 }
-                for &(base, length, radius) in &object_cylinders {
+                for &(base, length, radius) in object_cylinders.iter().chain(&static_cylinders) {
                     if let Some(hit) = contact::upright_cylinder_push(*p, contact::HERO_RADIUS, HERO_HEIGHT, base, length, radius) {
                         slide(p, vel, hit);
                     }
@@ -16051,6 +16092,19 @@ impl Play {
             }
         }
         world.climb_rest = Some(rest);
+    }
+
+    /// The hero's marker in the lines-only collision view: three crossed lines at his body's middle.
+    pub fn debug_hero_cross(&self) -> Vec<(u8, [f32; 3], [f32; 3])> {
+        let p = self.loco.position();
+        let c = [p[0], p[1] + 1.75, p[2]];
+        let line = |k: usize, s: f32| {
+            let (mut a, mut b) = (c, c);
+            a[k] -= s;
+            b[k] += s;
+            (7u8, a, b)
+        };
+        vec![line(0, 1.5), line(1, 1.75), line(2, 1.5)]
     }
 
     /// The debug tools' collision view: (kind, from, to) lines of the resident worlds (kinds: debug_tools::KINDS).

@@ -941,8 +941,13 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             format!("Inspector {}", if dev.debug.inspector { "on" } else { "off" })
         }
         Entry::Collision => {
-            dev.debug.collision = !dev.debug.collision;
-            format!("Collision view {}", if dev.debug.collision { "on" } else { "off" })
+            // Off, on, then lines alone on black.
+            (dev.debug.collision, dev.debug.lines_only) = match (dev.debug.collision, dev.debug.lines_only) {
+                (false, _) => (true, false),
+                (true, false) => (true, true),
+                (true, true) => (false, false),
+            };
+            format!("Collision view: {}", if dev.debug.lines_only { "lines only" } else if dev.debug.collision { "on" } else { "off" })
         }
         Entry::Wireframe => {
             dev.debug.wireframe = (dev.debug.wireframe + 1) % 3;
@@ -1064,7 +1069,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Maps => ("Give every treasure map".into(), String::new()),
         Entry::Report => ("Save a bug report (End)".into(), String::new()),
         Entry::Inspector => ("Inspector".into(), on(dev.debug.inspector)),
-        Entry::Collision => ("Collision view".into(), on(dev.debug.collision)),
+        Entry::Collision => ("Collision view (Enter to change)".into(), if dev.debug.lines_only { "Lines only".into() } else { on(dev.debug.collision) }),
         Entry::Wireframe => ("Wireframe (Enter to change)".into(), crate::debug_tools::wireframe_name(dev.debug.wireframe).into()),
         Entry::EventLog => ("Event log".into(), on(dev.debug.log)),
         Entry::HideHud => ("Hide HUD".into(), on(dev.debug.hide_hud)),

@@ -4884,6 +4884,13 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_WILD=tick: the hero placed beside the first wild petpet on that tick; the petpets every 60 ticks.
+        if let Some(k) = std::env::var("NEOPETS_TRACE_WILD").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+            if play.ticks == k || play.ticks % 60 == 0 {
+                let tick = play.ticks;
+                println!("WILD {}: {}", tick, play.diag_wild(tick == k));
+            }
+        }
         // NEOPETS_TRACE_SUN: the sun's direction whenever it or the world changes.
         if std::env::var_os("NEOPETS_TRACE_SUN").is_some() {
             let now = format!("world {} lights {} sun {:?}", play.world.pack, play.world.lights.len(), play.sun_direction());
