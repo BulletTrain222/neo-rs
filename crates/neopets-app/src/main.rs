@@ -6461,6 +6461,14 @@ fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     if std::env::var("NEOPETS_DEV_CARRY").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(t) {
         play.diag_pick_up();
     }
+    // NEOPETS_DEV_HP="tick:hp:max": the hero's health and maximum on that tick, for a picture of the bar.
+    if let Some(v) = std::env::var("NEOPETS_DEV_HP").ok() {
+        let n: Vec<i32> = v.split(':').filter_map(|s| s.trim().parse().ok()).collect();
+        if n.len() == 3 && n[0] as u64 == t {
+            play.hero_max = n[2];
+            play.hero_hp = n[1];
+        }
+    }
     // NEOPETS_DEV_ITEM="tick:id": that item placed ahead of the hero, for a picture.
     if let Some((k, id)) = std::env::var("NEOPETS_DEV_ITEM").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u16>().ok()?))) {
         if k == t {

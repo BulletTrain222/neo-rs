@@ -696,6 +696,18 @@ pub fn sync_hud(
         // hint, the journal icon and the monster bar go to the bottom edge, the other named
         // groups to the top.
         // On the item screens the bars belong to the centred page and do not move.
+        // A piece under the bars group moves with the child of that group it belongs to, placed
+        // by where that child starts: each piece placed by its own x split the health bar once
+        // its maximum passed 155 (the right cap and the dividers crossed the canvas third at
+        // x 170 and went toward the middle; user's report 20).
+        let (gx, gy) = {
+            let mut a = n;
+            while let Some(par) = f.nodes[a].parent.filter(|&par| par != bars) {
+                a = par;
+            }
+            let (ax, ay, ..) = place(f, a, &xs, &ws, &ov);
+            if a == n || !in_bars(n) { (x, y) } else { (ax, ay) }
+        };
         let shift = if items_open || in_mote || top == prompts.unwrap_or(usize::MAX) {
             0.0
         } else if in_swing {
@@ -703,7 +715,7 @@ pub fn sync_hud(
         } else if top != bars {
             -ox
         } else {
-            edge_shift(x, 512.0, ox)
+            edge_shift(gx, 512.0, ox)
         };
         let shift_y = if items_open || in_mote {
             0.0
@@ -712,7 +724,7 @@ pub fn sync_hud(
         } else if top != bars {
             -oy
         } else {
-            edge_shift(y, 448.0, oy)
+            edge_shift(gy, 448.0, oy)
         };
         // The health and pool fills' right edge and vertical centre, for the loss effects
         // (SPEC-0023 section 3), as fractions of the window.
