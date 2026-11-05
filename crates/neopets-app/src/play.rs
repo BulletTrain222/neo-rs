@@ -16139,6 +16139,11 @@ impl Play {
         world.climb_rest = Some(rest);
     }
 
+    /// The item gallery's label: an item's name from the design tables.
+    pub fn debug_item_name(&self, id: u16) -> Option<String> {
+        self.design.item_name(id).map(|n| String::from_utf8_lossy(&n).into_owned())
+    }
+
     /// The hero's marker in the lines-only collision view: three crossed lines at his body's middle.
     pub fn debug_hero_cross(&self) -> Vec<(u8, [f32; 3], [f32; 3])> {
         let p = self.loco.position();

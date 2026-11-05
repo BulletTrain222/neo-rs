@@ -89,6 +89,21 @@ impl DevMenu {
         SPEEDS[self.speed]
     }
 
+    /// The item gallery opens: the game paused and the free camera at `pos`, looking along +Z. Returns the speed it found.
+    pub fn gallery_begin(&mut self, pos: Vec3) -> usize {
+        let was = self.speed;
+        self.speed = 0;
+        self.open = false;
+        self.free = Some(FreeCam { pos, yaw: 0.0, pitch: 0.0 });
+        was
+    }
+
+    /// The item gallery closes: the game speed back and the normal camera.
+    pub fn gallery_end(&mut self, speed: usize) {
+        self.speed = speed;
+        self.free = None;
+    }
+
     /// The hero and the game menus get no input this frame.
     pub fn blocks_input(&self) -> bool {
         self.open || self.free.is_some() || self.swallow
@@ -168,6 +183,7 @@ enum Entry {
     BossFight,
     Report,
     Inspector,
+    Gallery,
     Collision,
     CollisionRange,
     CollisionLayer,
@@ -183,12 +199,12 @@ const SECTIONS: [(&str, &[Entry]); 8] = [
     ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group]),
     ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Wireframe, Entry::EventLog, Entry::HideHud]),
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::Spawn, Entry::BossFight, Entry::CloudBeast]),
-    ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints]),
+    ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints, Entry::Gallery]),
     ("STORY", &[Entry::Flag]),
     ("COLLISION VIEW", &[Entry::Collision, Entry::CollisionRange, Entry::CollisionLayer]),
 ];
 
-const ENTRIES: [Entry; 33] = [
+const ENTRIES: [Entry; 34] = [
     Entry::God,
     Entry::Noclip,
     Entry::Haste,
@@ -218,6 +234,7 @@ const ENTRIES: [Entry; 33] = [
     Entry::Motes,
     Entry::Maps,
     Entry::Neopoints,
+    Entry::Gallery,
     Entry::Flag,
     Entry::Collision,
     Entry::CollisionRange,
@@ -956,6 +973,12 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             };
             format!("Collision view: {}", if dev.debug.lines_only { "lines only" } else if dev.debug.collision { "on" } else { "off" })
         }
+        Entry::Gallery => {
+            dev.debug.gallery = true;
+            dev.open = false;
+            dev.swallow = true;
+            "Item gallery: PageUp and PageDown change page, Home closes".into()
+        }
         Entry::CollisionRange => {
             dev.debug.collision_range = (dev.debug.collision_range + 1) % crate::debug_tools::RANGES.len();
             format!("Collision range {:.0}", crate::debug_tools::RANGES[dev.debug.collision_range])
@@ -1085,6 +1108,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Report => ("Save a bug report (End)".into(), String::new()),
         Entry::Inspector => ("Inspector".into(), on(dev.debug.inspector)),
         Entry::Collision => ("View (Enter to change)".into(), if dev.debug.lines_only { "Lines only".into() } else { on(dev.debug.collision) }),
+        Entry::Gallery => ("Item gallery (every item)".into(), String::new()),
         Entry::CollisionRange => ("Range".into(), if dev.debug.collision_range == crate::debug_tools::RANGES.len() - 1 { "All".to_string() } else { format!("{:.0}", crate::debug_tools::RANGES[dev.debug.collision_range]) }),
         Entry::CollisionLayer => ("Shows".into(), crate::debug_tools::LAYERS[dev.debug.collision_layer].0.to_string()),
         Entry::Wireframe => ("Wireframe (Enter to change)".into(), crate::debug_tools::wireframe_name(dev.debug.wireframe).into()),
@@ -1254,10 +1278,10 @@ pub fn show_panel(
     }
     if status {
         let mut s = String::new();
-        if dev.speed != NORMAL {
+        if dev.speed != NORMAL && !dev.debug.gallery {
             s.push_str(&format!("GAME SPEED {} (F4 pause/resume, F5 step)\n", speed_label(dev.speed)));
         }
-        if let Some(fc) = dev.free {
+        if let Some(fc) = dev.free.filter(|_| !dev.debug.gallery) {
             s.push_str(&format!(
                 "FREE CAMERA (F2 or B ends; T or Y moves Tor here) at ({:.1}, {:.1}, {:.1}): WASD or left stick move, E/Q or RT/LT up/down, J/L I/K, right stick or right-drag look, Shift or A fast; F12 names what the screen centre is on",
                 fc.pos.x, fc.pos.y, fc.pos.z

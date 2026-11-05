@@ -31,6 +31,8 @@ pub struct Switches {
     pub collision: bool,
     /// The collision view on black: nothing else drawn, so objects cannot hide its lines.
     pub lines_only: bool,
+    /// The item gallery is open (item_gallery.rs).
+    pub gallery: bool,
     /// Index into RANGES and LAYERS.
     pub collision_range: usize,
     pub collision_layer: usize,
@@ -45,7 +47,7 @@ impl Switches {
     /// NEOPETS_DEBUG="inspector,collision,wireframe,wireonly,log,hud": the tools on from the start, for picture runs (diagnostic).
     pub fn from_env() -> Self {
         let v = std::env::var("NEOPETS_DEBUG").unwrap_or_default();
-        Self { inspector: v.contains("inspector"), collision: v.contains("collision") || v.contains("lineonly"), lines_only: v.contains("lineonly"), collision_range: 0, collision_layer: if v.contains("layersolid") { 1 } else { 0 }, wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
+        Self { inspector: v.contains("inspector"), collision: v.contains("collision") || v.contains("lineonly"), lines_only: v.contains("lineonly"), gallery: v.contains("gallery"), collision_range: 0, collision_layer: if v.contains("layersolid") { 1 } else { 0 }, wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
     }
 }
 
