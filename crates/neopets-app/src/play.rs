@@ -874,6 +874,8 @@ pub enum Job {
 /// A region character standing in a world (SPEC-0006 kind-3 placement): drawn at its
 /// placement and playing its idle action. No AI, talk, streaming by distance or kill memory.
 pub struct Character {
+    /// While carried: its basis rows, drawn in place of the upright facing (SPEC-0040 Behavior 8c).
+    pub carry_rows: Option<[[f32; 3]; 3]>,
     pub id: u64,
     pub pack: u32,
     pub slot: u8,
@@ -6054,6 +6056,7 @@ impl Play {
     fn leave_ladder(&mut self) {
         self.ladder = None;
         self.loco.body.no_gravity = false;
+        self.loco.body.no_snap = false;
         self.loco.enter_state(hero_states::STANCE, 0);
     }
 
@@ -6092,6 +6095,10 @@ impl Play {
         }
         self.ladder = Some(l);
         self.loco.body.no_gravity = true;
+        // SPEC-0033 Behavior 13: on the ladder nothing but the state's own steps and the clips move
+        // him. A rung just under the floor stalled the mount when the ground lifted him back each
+        // tick (user's reports 23 and 25).
+        self.loco.body.no_snap = true;
         self.loco.body.velocity = [0.0; 3];
         self.loco.steer_toward(step.facing, 1.0);
         if let Some(p) = step.place {
@@ -6584,7 +6591,7 @@ impl Play {
 
     /// Diagnostic: the release point (the held point + 1.0 forward) is in the cage zone.
     pub fn hero_in_cage(&self) -> bool {
-        let (h, f) = (self.held_point(), self.loco.facing);
+        let (h, f) = (self.held_place().0, self.loco.facing);
         neopets_sim::miamouse::Catch::in_mesh(&self.world.navmeshes, self.catch.cage, [h[0] + f[0], h[1], h[2] + f[2]])
     }
 
@@ -6811,15 +6818,26 @@ impl Play {
     /// The point a carried Miamouse is held at: the hero's attach point 0 (SPEC-0005 Attach
     /// points and carrying; the damage-bit choice of points 1 to 4 and the Miamouse's optional
     /// offset are not applied).
-    fn held_point(&self) -> [f32; 3] {
+    /// Where the carried Miamouse's origin goes and which way it faces (SPEC-0005 Attach points and
+    /// carrying: attach point 0, moved back 1.0 along the frame's third axis; SPEC-0040 Behavior
+    /// 8c: then 1.25 along the second basis row). Leaving those out stood it on the attach point,
+    /// with its head in the hero's (user's report 21). The third value is the basis rows, which
+    /// the 1.25 is measured along: the second row is the Miamouse's up.
+    fn held_place(&self) -> ([f32; 3], [f32; 3], Option<[[f32; 3]; 3]>) {
         let (p, f) = (self.loco.position(), self.loco.facing);
         let frames = self.hero.bone_frames();
         self.hero
             .bones()
             .attach
             .first()
-            .and_then(|&(bone, angles, offset)| Some(placement(p, f).mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)).t))
-            .unwrap_or([p[0] + 0.8 * f[0], p[1] + 1.2, p[2] + 0.8 * f[2]])
+            .and_then(|&(bone, angles, offset)| {
+                let m = placement(p, f).mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles));
+                let z = m.cols[2];
+                let origin = [m.t[0] - z[0], m.t[1] - z[1], m.t[2] - z[2]];
+                let (rows, at) = enemy::carry_place(z.map(|v| -v), m.cols[1], origin);
+                Some((at, rows[2], Some(rows)))
+            })
+            .unwrap_or(([p[0] + 0.8 * f[0], p[1] + 1.2, p[2] + 0.8 * f[2]], f, None))
     }
 
     /// The Miamice per tick: the carry hold (from the pick-up clip's second tick, through the put
@@ -6828,7 +6846,7 @@ impl Play {
     /// step on the level states.
     fn mice_step(&mut self) {
         let hclip = self.hero.clip_state();
-        let held_at = self.held_point();
+        let (held_at, held_facing, held_rows) = self.held_place();
         let forward = self.loco.facing;
         let carrying = self.loco.state == hero_states::CARRY;
         if let Some(id) = self.carried {
@@ -6839,11 +6857,15 @@ impl Play {
                         m.release(wk, &self.world.navmeshes, &self.catch, held_at, forward);
                         c.anim.play(neopets_sim::miamouse::CLIP_RELEASED);
                         c.position = wk.position();
+                        c.carry_rows = None;
                         self.carried = None;
                     } else if !(self.loco.carry == 0 && hclip.action != 178) {
                         wk.place(held_at);
                         c.position = held_at;
-                        c.facing = forward;
+                        c.carry_rows = held_rows;
+                        if held_facing[0].hypot(held_facing[2]) > 1e-4 {
+                            c.facing = [held_facing[0], 0.0, held_facing[2]];
+                        }
                         if c.anim.clip_state().action != neopets_sim::miamouse::CLIP_HELD {
                             c.anim.play(neopets_sim::miamouse::CLIP_HELD);
                         }
@@ -8818,6 +8840,7 @@ impl Play {
                 drop,
                 carried_np: 0,
                 carried_item: None,
+            carry_rows: None,
                 colour: pl.colour,
                 ordinal: pl.ordinal,
                 walk_hold: None,
@@ -8988,6 +9011,7 @@ impl Play {
             drop: None,
             carried_np: 0,
             carried_item: None,
+            carry_rows: None,
             colour: pl.colour,
             ordinal: pl.ordinal,
             walk_hold: None,
@@ -10172,6 +10196,22 @@ impl Play {
         self.world.kind == Kind::Interior || matches!(self.world.pack, 1098 | 1163)
     }
 
+    /// Diagnostic: each ladder, with the grab test's distances from a point.
+    pub fn diag_rails(&self, at: [f32; 3]) {
+        for (k, r) in self.world.rails.iter().enumerate() {
+            let side = |a: [f32; 4]| a[0] * at[0] + a[1] * at[1] + a[2] * at[2] + a[3];
+            println!("RAIL {k} normal {:.2},{:.2},{:.2} d {:.2} x {:.2} of {:.2} y {:.2} of {:.2}", r.normal[0], r.normal[1], r.normal[2], side(r.normal), side(r.u), r.lu, side(r.v), r.lv);
+        }
+    }
+
+    /// Diagnostic: each breakable's list index, script index, state and position.
+    pub fn diag_breakables(&self) {
+        for (i, b) in self.world.breakables.iter().enumerate() {
+            let p = b.position();
+            println!("BREAKABLE {i} script {} state {} element {} at {:.1},{:.1},{:.1} volume {} debris {}", b.script, b.state, b.element, p[0], p[1], p[2], b.volume.is_some(), b.debris.len());
+        }
+    }
+
     /// Diagnostic: the hero 3 units from the first Miamouse, facing it.
     pub fn diag_catch(&mut self) {
         let pack = self.world.pack;
@@ -10181,6 +10221,15 @@ impl Play {
         };
         let p = [at[0] - 3.0, at[1], at[2]];
         self.loco.teleport(p, [1.0, 0.0, 0.0]);
+    }
+
+    /// Diagnostic: the hero picks up the first Miamouse where he stands.
+    pub fn diag_pick_up(&mut self) {
+        let pack = self.world.pack;
+        if let Some(id) = self.characters.iter().find(|c| c.pack == pack && c.miamouse.is_some()).map(|c| c.id) {
+            self.loco.start_carry();
+            self.carried = Some(id);
+        }
     }
 
     /// Diagnostic: the carry's state.
@@ -16625,7 +16674,7 @@ impl Play {
             }
             // SPEC-0048 Break routes step 1: a script hook takes the hit: no break and no cue. 1081's
             // handler B (flag 41 clear) on breakable group 0 has no calls.
-            if let Some(mut out) = level::on_breakable(pack, b.script, i, &mut self.state) {
+            if let Some(mut out) = level::on_breakable(pack, b.script, i, b.state == 1, &mut self.state) {
                 hooks.append(&mut out);
                 continue;
             }

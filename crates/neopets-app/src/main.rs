@@ -3835,6 +3835,9 @@ fn sync_characters(
             }
             Some(c) => {
                 let mut want = Transform::from_translation(Vec3::from(c.position)).with_rotation(Quat::from_rotation_y(c.facing[0].atan2(c.facing[2])));
+                if let Some([x, y, z]) = c.carry_rows {
+                    want.rotation = Quat::from_mat3(&Mat3::from_cols(Vec3::from(x), Vec3::from(y), Vec3::from(z)));
+                }
                 // The Cloud Beast stand-ins move by pose, not by clips (the disc has none).
                 if let Some((bob, lean, s)) = p.cloud_pose(c) {
                     want.translation.y += bob;
@@ -4931,6 +4934,16 @@ fn play_trace(
                     println!("MODEL {:?}: attachment slots {:?}", c.name, c.model.attachments.iter().map(|(k, _)| *k).collect::<Vec<_>>());
                 }
             }
+        }
+        // NEOPETS_TRACE_RAILS=x,y,z: every ladder's grab distances from that point, on tick 10.
+        if play.ticks == 10 {
+            if let Some(at) = std::env::var("NEOPETS_TRACE_RAILS").ok().and_then(|v| { let n: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect(); (n.len() == 3).then(|| [n[0], n[1], n[2]]) }) {
+                play.diag_rails(at);
+            }
+        }
+        // NEOPETS_TRACE_BREAKLIST=tick: every breakable's state on that tick.
+        if std::env::var("NEOPETS_TRACE_BREAKLIST").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
+            play.diag_breakables();
         }
         // NEOPETS_TRACE_CATCH=tick: the hero stood beside the first Miamouse on that tick; its carry state every 60 ticks.
         if let Some(k) = std::env::var("NEOPETS_TRACE_CATCH").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
@@ -6430,6 +6443,10 @@ fn sync_fade(
 /// (on listed ticks) scripts, applied to this tick's input.
 fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     let t = play.ticks;
+    // NEOPETS_DEV_CARRY=tick: the hero picks up the first Miamouse, for a picture.
+    if std::env::var("NEOPETS_DEV_CARRY").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(t) {
+        play.diag_pick_up();
+    }
     // NEOPETS_DEV_ITEM="tick:id": that item placed ahead of the hero, for a picture.
     if let Some((k, id)) = std::env::var("NEOPETS_DEV_ITEM").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u16>().ok()?))) {
         if k == t {

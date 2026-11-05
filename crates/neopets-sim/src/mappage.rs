@@ -112,14 +112,16 @@ pub fn marker_angle(area: i32, facing: f32) -> f32 {
 }
 
 /// The hero facing as an angle from +Z: the arc cosine of the dot product, negated when the
-/// facing's x is negative (the side is Medium in the spec).
+/// facing's x is positive. The spec leaves the side at Medium; the screen settles it: world +X is
+/// screen right and the marker turns clockwise, so a hero facing +X needs pi / 2 after the pi term
+/// (user's report 22: the pointer showed the opposite way).
 pub fn facing_angle(f: [f32; 3]) -> f32 {
     let l = (f[0] * f[0] + f[2] * f[2]).sqrt();
     if l == 0.0 {
         return 0.0;
     }
     let a = (f[2] / l).clamp(-1.0, 1.0).acos();
-    if f[0] < 0.0 { -a } else { a }
+    if f[0] > 0.0 { -a } else { a }
 }
 
 /// The marker's colour channel: 128 times the float pulse, rounded half away from zero.

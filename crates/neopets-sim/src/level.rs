@@ -16574,13 +16574,23 @@ pub fn block_sound(pack: u32) -> Option<i32> {
 /// `id` is its index in the world's list. 735's shared routine for 4 to 31 is empty, so only its
 /// breaker scenes break them. SPEC-0044 1056's Crokabek nests: with 174 set and 179 clear a nest
 /// whose flag is clear marks it, breaks and advances the count (175: line 72; 176 to 178: lines 73
-/// to 75; else 179 and line 76).
-pub fn on_breakable(pack: u32, script: i16, id: usize, s: &mut GameState) -> Option<Vec<Action>> {
+/// to 75; else 179 and line 76). `open` is false while the entry is invulnerable (state 3): each
+/// nest is a chain whose last stage waits 24 ticks, the swing that broke the stage before reaches
+/// it in that wait, and the routine must not run then (it marked the nest and could not break it,
+/// user's reports 31 and 32). A nest already marked but still standing (a save from that fault)
+/// breaks on its next hit, with nothing else marked: this build's choice for those saves.
+pub fn on_breakable(pack: u32, script: i16, id: usize, open: bool, s: &mut GameState) -> Option<Vec<Action>> {
     match (pack, script) {
         (735, 4..=31) | (1174, 3..=10) => Some(Vec::new()),
         (1056, 24 | 27 | 30 | 33 | 36) => {
             let flag = 625 + (script as u16 - 24) / 3;
-            if !s.flag(174) || s.flag(179) || s.flag(flag) {
+            if !open || !s.flag(174) {
+                return Some(Vec::new());
+            }
+            if s.flag(flag) {
+                return Some(vec![Action::Break { id }]);
+            }
+            if s.flag(179) {
                 return Some(Vec::new());
             }
             s.set(flag, true);
@@ -19454,15 +19464,20 @@ mod tests {
     fn module_1056_nests_and_knights() {
         let mut s = GameState::default();
         // Before 174, and not the listed nests: a hook with no effect, or none.
-        assert_eq!(on_breakable(1056, 24, 3, &mut s), Some(Vec::new()));
-        assert_eq!(on_breakable(1056, 25, 3, &mut s), None);
-        assert!(on_breakable(735, 4, 1, &mut s).is_some() && on_breakable(735, 3, 1, &mut s).is_none());
+        assert_eq!(on_breakable(1056, 24, 3, true, &mut s), Some(Vec::new()));
+        assert_eq!(on_breakable(1056, 25, 3, true, &mut s), None);
+        assert!(on_breakable(735, 4, 1, true, &mut s).is_some() && on_breakable(735, 3, 1, true, &mut s).is_none());
         s.set(174, true);
+        // In its 24-tick wait the last stage takes the hit and nothing is marked.
+        assert_eq!(on_breakable(1056, 24, 9, false, &mut s), Some(Vec::new()));
+        assert!(!s.flag(625) && !s.flag(175));
         for (script, flag, line) in [(24, 625, 72), (27, 626, 73), (30, 627, 74), (33, 628, 75), (36, 629, 76)] {
-            assert_eq!(on_breakable(1056, script, 9, &mut s), Some(vec![Action::Break { id: 9 }, Action::Message { line }]));
+            assert_eq!(on_breakable(1056, script, 9, true, &mut s), Some(vec![Action::Break { id: 9 }, Action::Message { line }]));
             assert!(s.flag(flag));
         }
         assert!(s.flag(179));
+        // A nest marked but still standing breaks on the next hit.
+        assert_eq!(on_breakable(1056, 24, 9, true, &mut s), Some(vec![Action::Break { id: 9 }]));
         // Prunella then sets 501, once.
         assert_eq!(on_talk(1056, proximity_routine(1056, 0).unwrap(), &mut s), vec![Action::Talk { line: 155 }]);
         assert!(s.flag(501));

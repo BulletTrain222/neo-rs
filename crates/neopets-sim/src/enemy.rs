@@ -681,7 +681,6 @@ pub struct Enemy {
     /// State 2's alert animation was requested (a notice pass or the group alarm).
     alerting: bool,
     through: Option<u32>,
-    through_seen: bool,
     force: bool,
     /// The 14 status timers in ticks (0x808 to 0x83C) and the poison and fire (amount, period)
     /// words (0xCB4 to 0xCC0; -1 the defaults).
@@ -803,7 +802,6 @@ impl Enemy {
             looking: true,
             alerting: false,
             through: None,
-            through_seen: false,
             force: false,
             retarget: -1,
             ambush: -1,
@@ -1124,7 +1122,10 @@ impl Enemy {
     /// Play an animation to its end: true once it has finished (at once when the table lacks it).
     /// The table test and the end test read the id that actually plays (a flyer's flying form:
     /// a flying dodge requested as 55 plays 140, and comparing with 55 never ended it, so the
-    /// flyer hung in the dodge, unhittable).
+    /// flyer hung in the dodge, unhittable). The clip counts as finished from the tick after the
+    /// request, even if it was never seen unfinished: an id that shares the playing clip does not
+    /// restart it, so a follow-through asked for on a strike's last frames read as ended at once,
+    /// and waiting to see it playing froze the Crokabek in the air (user's report 30).
     fn through(&mut self, id: u32, v: &View, a: &mut Act) -> bool {
         let shown = self.shown(id);
         if !(v.has)(shown) {
@@ -1133,13 +1134,9 @@ impl Enemy {
         a.anim = Some(id);
         if self.through != Some(id) {
             self.through = Some(id);
-            self.through_seen = false;
             return false;
         }
-        if v.clip.action == shown && !v.clip.ended() {
-            self.through_seen = true;
-        }
-        v.clip.action == shown && v.clip.ended() && self.through_seen
+        v.clip.action == shown && v.clip.ended()
     }
 
     /// Gait n of the current set (gaits 5 and 6 are swapped in the lookup).
@@ -3726,6 +3723,21 @@ mod tests {
         let v = view([12.5, 0.0, 0.0], &has);
         assert_eq!(e.tick(&v, &mut rng).grab, None);
         assert_eq!(e.tick(&v, &mut rng).anim, Some(ke));
+    }
+
+    #[test]
+    fn a_clip_that_reads_ended_at_once_still_ends() {
+        // The follow-through on a strike's last frames shares the clip, which does not restart:
+        // the tick after the request it already reads as ended (user's report 30).
+        let has = |_: u32| true;
+        let mut rng = Rng::seeded(1);
+        let mut e = Enemy::new(skeleton(), Spawn::default(), &mut rng);
+        let mut v = view([2.0, 0.0, 0.0], &has);
+        v.clip = Clip { action: 39, progress: 1.0, finished: true };
+        let mut a = Act::default();
+        assert!(!e.through(40, &v, &mut a));
+        v.clip = Clip { action: 40, progress: 1.0, finished: true };
+        assert!(e.through(40, &v, &mut a));
     }
 
     #[test]
