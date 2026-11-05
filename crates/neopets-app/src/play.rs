@@ -1455,6 +1455,8 @@ pub struct Play {
     feeding: Option<u16>,
     /// The class 20 waits (4 to 5 s) in ticks.
     class20_waits: (i32, i32),
+    /// The class 20 creatures a hero swing touched this tick (SPEC-0047 Class 20 item test).
+    class20_hits: Vec<u64>,
     /// The Black Knight's tuning block (SPEC-0012, 0x2DA3E8).
     knight_words: Option<neopets_sim::knight::Words>,
     /// The Gelert Assassin's tuning words and data constants (SPEC-0013).
@@ -2396,6 +2398,7 @@ impl Play {
             pet_reserve: Default::default(),
             feeding: None,
             class20_waits,
+            class20_hits: Vec::new(),
             knight_words,
             gelert_words,
             hit_list: Vec::new(),
@@ -7460,7 +7463,7 @@ impl Play {
         // Factor E: the live petpet of kind 0 or 7 (SPEC-0047 Passive bonuses).
         let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
         let mut hits = Vec::new();
-        for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && !c.unhittable()) {
+        for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && (!c.unhittable() || c.class20.is_some())) {
             if self.hit_list.contains(&c.id) {
                 continue;
             }
@@ -7504,6 +7507,14 @@ impl Play {
                     })
             });
             if !hit {
+                continue;
+            }
+            // SPEC-0047 Class 20 item test: the hero's attack touching the creature (the reach and
+            // contact test) starts its reaction; it takes no damage (user's report 34: it did
+            // nothing when hit).
+            if c.class20.is_some() {
+                self.hit_list.push(c.id);
+                self.class20_hits.push(c.id);
                 continue;
             }
             // SPEC-0036 Hit detection step 4: a guarding target never takes damage from a swing
@@ -8623,6 +8634,12 @@ impl Play {
     }
 
     /// Diagnostic: put the hero at (x, z) on the current world's ground, probed from height c.
+    /// Diagnostic: the hero put at a point as it is (no ground probe).
+    pub fn place_exact(&mut self, p: [f32; 3]) {
+        let f = self.loco.facing;
+        self.arrive((p, f));
+    }
+
     pub fn place_at(&mut self, x: f32, z: f32, c: f32) {
         let y = self.world.ground_at(x, z, c).unwrap_or(self.loco.position()[1]);
         let f = self.loco.facing;
@@ -9444,11 +9461,25 @@ impl Play {
                     .map(|(p, t, _)| (p, t))
             });
             let world = &self.world;
+            let (hero, hero_state) = (self.loco.position(), self.loco.state);
+            let hit = self.class20_hits.contains(&id);
             let c = &mut self.characters[i];
             let clip = c.anim.clip_state();
-            let v = neopets_sim::petpet::Class20View { position: c.position, object, clip_action: clip.action, clip_done: clip.progress >= 0.99 };
+            // Its navmesh (SPEC-0047 Class 20 State 3): the first ground mesh holding it, once. With
+            // none its wander had no bound and it walked out of its pen (user's report 34).
+            if let Some(wk) = c.walker.as_mut().filter(|w| w.mesh.is_none()) {
+                let pick = world.navmeshes.iter().position(|m| m.kind == 1 && m.first_holding(at).is_some());
+                wk.assign_mesh(pick, &world.navmeshes);
+            }
+            let mesh = c.walker.as_ref().and_then(|w| w.mesh).and_then(|m| world.navmeshes.get(m));
+            let on_mesh = |p: [f32; 3]| mesh.map_or(true, |m| m.locate_full(p).is_some());
+            let v = neopets_sim::petpet::Class20View { position: c.position, object, clip_action: clip.action, clip_done: clip.progress >= 0.99, hit, hero, hero_state };
             let Some(k) = c.class20.as_mut() else { continue };
-            let act = k.tick(&v, self.class20_waits, &mut self.rng);
+            let act = k.tick_on(&v, self.class20_waits, &mut self.rng, &on_mesh);
+            if act.launch {
+                self.loco.launch_up(neopets_sim::petpet::CLASS20_LAUNCH);
+                self.last_pet = format!("class 20 creature {id} launched the hero on tick {}", self.ticks);
+            }
             if let Some(a) = act.anim {
                 if clip.action != a {
                     c.anim.play(a);
@@ -10949,6 +10980,8 @@ impl Play {
         let breakable_hits = RefCell::new(Vec::new());
         // SPEC-0036 Leap, step 1: in the leap Roberta is left out of the character body contacts.
         let leaping = self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| a.sub == 8);
+        // The class 20 creatures' bodies the hero can stand on (R-0245; this build's choice).
+        let tops: Vec<u64> = self.characters.iter().filter(|c| c.class20.is_some()).map(|c| c.id).collect();
         let bodies: Vec<([f32; 3], f32, f32, u64)> = if noclip || leaping || matches!(hero_state, 33 | 53) {
             Vec::new()
         } else {
@@ -11092,6 +11125,7 @@ impl Play {
                     }
                 }
                 let mut pushed = false;
+                let mut on_top = false;
                 let mut latch = (0..3).any(|k| (p[k] - entry[k]).abs() > 1e-5) || matches!(hero_state, 50 | 52 | 21 | 41);
                 for &(q, r, h, id) in &bodies {
                     if p[1] >= q[1] + h || q[1] >= p[1] + HERO_HEIGHT {
@@ -11099,6 +11133,17 @@ impl Play {
                     }
                     let (dx, dz) = (p[0] - q[0], p[2] - q[2]);
                     let d = dx.hypot(dz);
+                    // SPEC-0047 Class 20 launches a hero standing on the creature (more than 0.5
+                    // above it, within 2.5). The character push of SPEC-0040 moves along the
+                    // bodies' overlap direction, which can be up, but how that direction is chosen
+                    // is not given (R-0245). This build's choice: a hero not rising, with his feet
+                    // in the top 1.0 of a class 20 body and his centre over it, stands on its top
+                    // (user's report 34).
+                    if tops.contains(&id) && vel[1] <= 0.0 && p[1] > q[1] + h - 1.0 && d < r {
+                        p[1] = q[1] + h;
+                        on_top = true;
+                        continue;
+                    }
                     let min = contact::HERO_RADIUS + r;
                     if d < min {
                         let (ux, uz) = if d > 1e-4 { (dx / d, dz / d) } else { (1.0, 0.0) };
@@ -11124,7 +11169,7 @@ impl Play {
                 if moved || c.floor || c.side_touch {
                     touched.set(true);
                 }
-                c.floor
+                c.floor || on_top
             },
         );
         self.touched = touched.get();
@@ -11559,6 +11604,7 @@ impl Play {
         self.debris.retain_packs(|p| p == a || Some(p) == b);
         self.ghost_step();
         self.class20_step();
+        self.class20_hits.clear();
         self.dummy_step();
         self.pet_step();
         self.food_fallback();

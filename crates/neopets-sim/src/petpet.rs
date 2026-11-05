@@ -7,7 +7,9 @@
 //!
 //! Class 20 (the second petpet behaviour) has its idle, approach-and-consume and wander states.
 //!
-//! Not covered: class 20's state 1 (its item test is open), the bumped recovery of class 34
+//! Class 20's state 1 (the hero reaction and launch) takes its item test as the hero's swing
+//! touching the creature (the host's melee test); its shot-slot branch is not built.
+//! Not covered: the bumped recovery of class 34
 //! state 3 (it holds animation 0) and the nearby-character response of state 1 (its filter is
 //! open).
 
@@ -283,6 +285,26 @@ pub struct Live {
 /// The low-time mark: the word 0x2DB1D8 (0.5 minute) x 60 x 60.
 pub const LOW_TIME_WORD: u32 = 0x002D_B1D8;
 
+/// SPEC-0047 Roam point rule (class 33 State 3 and class 20 State 3): the home point plus a
+/// whole-number offset of -20 to 19 on X and on Z (a square of side 40), Y the home point's. A
+/// candidate off the pet's navmesh (`on_mesh`) moves half way toward the pet and is tested again,
+/// up to 10 times; then the home point itself.
+pub fn roam_point(home: Vec3, pet: Vec3, rng: &mut Rng, on_mesh: &dyn Fn(Vec3) -> bool) -> Vec3 {
+    let dx = (rng.range(0, 39) - 20) as f32;
+    let dz = (rng.range(0, 39) - 20) as f32;
+    let mut c = [home[0] + dx, home[1], home[2] + dz];
+    if on_mesh(c) {
+        return c;
+    }
+    for _ in 0..10 {
+        c = [c[0] + 0.5 * (pet[0] - c[0]), c[1], c[2] + 0.5 * (pet[2] - c[2])];
+        if on_mesh(c) {
+            return c;
+        }
+    }
+    home
+}
+
 fn hdist(a: Vec3, b: Vec3) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
@@ -493,6 +515,11 @@ pub struct Wild {
 impl Wild {
     /// One tick: the state choice, then the state body.
     pub fn tick(&mut self, v: &WildView, rng: &mut Rng) -> Act {
+        self.tick_on(v, rng, &|_| true)
+    }
+
+    /// The tick with the navmesh point test of the roam picker.
+    pub fn tick_on(&mut self, v: &WildView, rng: &mut Rng, on_mesh: &dyn Fn(Vec3) -> bool) -> Act {
         let near_food = v.food.filter(|&(p, id, _)| id != BAGGUSS && self.fed && v.reachable && hdist(p, v.position) <= 10.0);
         if hdist(v.position, v.hero) >= 10.0 {
             // Rule 1 (the test for state 2 on this branch always fails).
@@ -520,7 +547,7 @@ impl Wild {
                     a.anim = Some(0);
                 }
             }
-            3 => self.roam(v, rng, &mut a),
+            3 => self.roam(v, rng, &mut a, on_mesh),
             4 => self.strike(v, &mut a),
             5 => {
                 // Hold about 10 units from the anchor (the point after arrival is not
@@ -548,13 +575,11 @@ impl Wild {
     /// State 3: a point within 40 units of the roam centre (the configured reference object)
     /// and a wait of 1 to 5 s (60 to 300 ticks); idle while the wait runs, then walk to the
     /// point; on arrival a new point and wait (SPEC-0047 Class 33 roaming).
-    fn roam(&mut self, v: &WildView, rng: &mut Rng, a: &mut Act) {
+    fn roam(&mut self, v: &WildView, rng: &mut Rng, a: &mut Act, on_mesh: &dyn Fn(Vec3) -> bool) {
         let point = match self.point {
             Some(p) => p,
             None => {
-                let ang = rng.frange(0.0, std::f32::consts::TAU);
-                let r = rng.frange(0.0, 40.0);
-                let p = [v.centre[0] + r * ang.cos(), v.centre[1], v.centre[2] + r * ang.sin()];
+                let p = roam_point(v.centre, v.position, rng, on_mesh);
                 self.point = Some(p);
                 self.wait = Some(rng.range(60, 300));
                 p
@@ -633,6 +658,10 @@ pub struct Class20View {
     pub object: Option<(Vec3, u32)>,
     pub clip_action: u32,
     pub clip_done: bool,
+    /// The item test passed this tick (the hero's swing touched it).
+    pub hit: bool,
+    pub hero: Vec3,
+    pub hero_state: u8,
 }
 
 /// What class 20 asks for this tick.
@@ -644,10 +673,17 @@ pub struct Class20Act {
     pub consume: Option<u32>,
     /// It is seeking an object (the reservation's slow flag).
     pub seeking: bool,
+    /// State 1 sub-step 2's check passed: the hero gets 8.0 up, state 7 and the one-tick hold.
+    pub launch: bool,
 }
 
-/// Class 20 (SPEC-0047, Class 20): states 0 (idle), 2 (approach and consume) and 3 (wander).
-/// State 1 needs the item test, which is open, so it is never chosen.
+/// SPEC-0047 Class 20 constants: the state 1 wait (3.0 to 4.0 s, in ticks) and the launch.
+pub const CLASS20_REACT_WAIT: (i32, i32) = (180, 240);
+pub const CLASS20_LAUNCH: f32 = 8.0;
+
+/// Class 20 (SPEC-0047, Class 20): states 0 (idle), 1 (hero reaction: animation 14, a 3 to 4 s
+/// wait in animation 15, then animation 16 with the launch check), 2 (approach and consume) and
+/// 3 (wander).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Class20 {
     pub state: u8,
@@ -667,7 +703,17 @@ impl Class20 {
 
     /// One tick. `waits` is the 4 to 5 s range in ticks.
     pub fn tick(&mut self, v: &Class20View, waits: (i32, i32), rng: &mut Rng) -> Class20Act {
-        if self.state != 2 {
+        self.tick_on(v, waits, rng, &|_| true)
+    }
+
+    /// The tick with the navmesh point test of the roam picker.
+    pub fn tick_on(&mut self, v: &Class20View, waits: (i32, i32), rng: &mut Rng, on_mesh: &dyn Fn(Vec3) -> bool) -> Class20Act {
+        // State 1 runs to its end; otherwise the item test comes first.
+        if self.state != 1 && v.hit {
+            self.state = 1;
+            self.sub = 0;
+            self.latched = false;
+        } else if self.state != 2 && self.state != 1 {
             if v.object.is_some() {
                 self.state = 2;
                 self.latched = false;
@@ -707,10 +753,49 @@ impl Class20 {
                     }
                 }
             }
-            3 => self.wander(v, waits, rng, &mut a),
+            1 => self.react(v, rng, &mut a),
+            3 => self.wander(v, waits, rng, &mut a, on_mesh),
             _ => a.anim = Some(0),
         }
         a
+    }
+
+    /// State 1: animation 14 once, then the wait in animation 15, then animation 16 once with
+    /// the hero check on its first tick (within 2.5 across the ground, more than 0.5 apart vertically, the hero
+    /// not in state 7); at its end, state 0.
+    fn react(&mut self, v: &Class20View, rng: &mut Rng, a: &mut Class20Act) {
+        match self.sub {
+            0 => {
+                a.anim = Some(14);
+                if v.clip_action == 14 && v.clip_done {
+                    self.wait = rng.range(CLASS20_REACT_WAIT.0, CLASS20_REACT_WAIT.1);
+                    self.sub = 1;
+                }
+            }
+            1 => {
+                a.anim = Some(15);
+                self.wait -= 1;
+                if self.wait <= 0 {
+                    self.sub = 2;
+                    self.latched = false;
+                }
+            }
+            _ => {
+                a.anim = Some(16);
+                if !self.latched {
+                    self.latched = true;
+                    let d = [v.hero[0] - v.position[0], v.hero[1] - v.position[1], v.hero[2] - v.position[2]];
+                    // The 2.5 is taken across the ground: a hero on its 3.5-high shell is more than 2.5
+                    // away in three dimensions (R-0245; this build's reading).
+                    let near = d[0].hypot(d[2]) <= 2.5;
+                    a.launch = near && d[1].abs() > 0.5 && v.hero_state != 7;
+                } else if v.clip_action == 16 && v.clip_done {
+                    self.state = 0;
+                    self.latched = false;
+                    a.anim = Some(0);
+                }
+            }
+        }
     }
 
     fn to_wander(&mut self, waits: (i32, i32), rng: &mut Rng, a: &mut Class20Act) {
@@ -722,14 +807,12 @@ impl Class20 {
 
     /// State 3: sub-step 0 counts the wait down with animation 0, then picks a point within 40
     /// units of the reference object; sub-step 1 walks to it and within 5.0 draws a new wait.
-    fn wander(&mut self, v: &Class20View, waits: (i32, i32), rng: &mut Rng, a: &mut Class20Act) {
+    fn wander(&mut self, v: &Class20View, waits: (i32, i32), rng: &mut Rng, a: &mut Class20Act, on_mesh: &dyn Fn(Vec3) -> bool) {
         if self.sub == 0 {
             a.anim = Some(0);
             self.wait -= 1;
             if self.wait <= 0 {
-                let ang = rng.frange(0.0, std::f32::consts::TAU);
-                let r = rng.frange(0.0, 40.0);
-                self.point = Some([self.home[0] + r * ang.cos(), self.home[1], self.home[2] + r * ang.sin()]);
+                self.point = Some(roam_point(self.home, v.position, rng, on_mesh));
                 self.sub = 1;
             }
             return;
@@ -1003,7 +1086,7 @@ mod tests {
         // tick plays animation 4; when it ends, state 3 sub-step 0 with a 240 to 300 wait.
         let mut rng = Rng::seeded(2);
         let w = (240, 300);
-        let v = Class20View { position: [0.0; 3], object: Some(([2.5, 0.0, 0.0], 4)), clip_action: 0, clip_done: false };
+        let v = Class20View { position: [0.0; 3], object: Some(([2.5, 0.0, 0.0], 4)), clip_action: 0, clip_done: false, hit: false, hero: [0.0, 0.0, 9.0], hero_state: 1 };
         let mut c = Class20::new([0.0; 3]);
         let a = c.tick(&v, w, &mut rng);
         assert_eq!((c.state, a.toward, a.consume), (2, Some([2.5, 0.0, 0.0]), None));
@@ -1023,6 +1106,60 @@ mod tests {
         c.point = Some([4.0, 0.0, 0.0]);
         c.tick(&Class20View { object: None, ..v }, w, &mut rng);
         assert_eq!(c.sub, 0);
+    }
+
+    #[test]
+    fn class_20_reaction_launches_a_hero_on_top() {
+        // A hit: animation 14; at its end a 180 to 240 tick wait in 15; then 16 with the check
+        // on its first tick: the hero 1.5 above (within 2.5, more than 0.5 apart) is launched.
+        let mut rng = Rng::seeded(3);
+        let w = (240, 300);
+        let v = Class20View { position: [0.0; 3], object: None, clip_action: 0, clip_done: false, hit: true, hero: [0.0, 1.5, 0.0], hero_state: 1 };
+        let mut c = Class20::new([0.0; 3]);
+        let a = c.tick(&v, w, &mut rng);
+        assert_eq!((c.state, a.anim), (1, Some(14)));
+        let v = Class20View { hit: false, ..v };
+        c.tick(&Class20View { clip_action: 14, clip_done: true, ..v }, w, &mut rng);
+        assert!(c.sub == 1 && (180..=240).contains(&c.wait));
+        let mut n = 0;
+        while c.sub == 1 {
+            assert_eq!(c.tick(&v, w, &mut rng).anim, Some(15));
+            n += 1;
+        }
+        assert!((180..=240).contains(&n));
+        let a = c.tick(&v, w, &mut rng);
+        assert_eq!((a.anim, a.launch), (Some(16), true));
+        assert!(!c.tick(&v, w, &mut rng).launch, "one check only");
+        c.tick(&Class20View { clip_action: 16, clip_done: true, ..v }, w, &mut rng);
+        assert_eq!(c.state, 0);
+        // A hero beside it on the ground (0.0 apart vertically) or in state 7 is not launched.
+        for (hero, state) in [([1.0, 0.0, 0.0], 1), ([0.0, 1.5, 0.0], 7)] {
+            let mut c = Class20::new([0.0; 3]);
+            c.state = 1;
+            c.sub = 2;
+            assert!(!c.tick(&Class20View { hero, hero_state: state, ..v }, w, &mut rng).launch);
+        }
+    }
+
+    #[test]
+    fn roam_point_rule() {
+        // Every candidate is a whole-number offset of -20 to 19; off the mesh it halves toward the pet.
+        let mut rng = Rng::seeded(5);
+        for _ in 0..200 {
+            let p = roam_point([100.0, 5.0, 200.0], [100.0, 5.0, 200.0], &mut rng, &|_| true);
+            let (dx, dz) = (p[0] - 100.0, p[2] - 200.0);
+            assert!((-20.0..=19.0).contains(&dx) && (-20.0..=19.0).contains(&dz) && dx.fract() == 0.0 && p[1] == 5.0);
+        }
+        // Off the mesh once: the first retry is half way toward the pet (the spec's vector has
+        // candidate (119, 5, 180) and the pet at (110, 5, 190): (114.5, 5, 185)).
+        let tried = std::cell::RefCell::new(Vec::new());
+        let p = roam_point([100.0, 5.0, 200.0], [110.0, 5.0, 190.0], &mut rng, &|c| {
+            tried.borrow_mut().push(c);
+            tried.borrow().len() == 2
+        });
+        let first = tried.borrow()[0];
+        assert_eq!(p, [first[0] + 0.5 * (110.0 - first[0]), 5.0, first[2] + 0.5 * (190.0 - first[2])]);
+        assert_eq!(roam_point([100.0, 5.0, 200.0], [110.0, 5.0, 190.0], &mut rng, &|_| false), [100.0, 5.0, 200.0]);
     }
 
     #[test]

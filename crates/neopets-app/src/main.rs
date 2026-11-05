@@ -5667,14 +5667,19 @@ fn play_trace(
                 println!("      HELD {id}: {now} on tick {} in {}", play.ticks, play.world.pack);
             }
         }
-        // NEOPETS_TRACE_PLACE="tick:x,z[,probe];...": the hero placed there on that tick
+        // NEOPETS_TRACE_PLACE="tick:x,z[,probe[,y]];...": the hero placed there on that tick
         // (diagnostic).
         if let Ok(v) = std::env::var("NEOPETS_TRACE_PLACE") {
             for e in v.split(';') {
                 let Some((k, r)) = e.trim().split_once(':') else { continue };
                 let n: Vec<f32> = r.split(',').filter_map(|t| t.trim().parse().ok()).collect();
                 if k.parse::<u64>().ok() == Some(play.ticks) && n.len() >= 2 {
-                    play.place_at(n[0], n[1], n.get(2).copied().unwrap_or(1.0e4));
+                    if n.len() >= 4 {
+                        // A fourth value: the height itself, with no probe (in the air).
+                        play.place_exact([n[0], n[3], n[1]]);
+                    } else {
+                            play.place_at(n[0], n[1], n.get(2).copied().unwrap_or(1.0e4));
+                    }
                 }
             }
         }
@@ -5868,6 +5873,10 @@ fn play_trace(
         }
         if std::env::var("NEOPETS_TRACE_SQUARE").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {
             input.square = true;
+        }
+        // NEOPETS_TRACE_ATTACK=t,t,...: the attack pressed on those ticks (diagnostic).
+        if std::env::var("NEOPETS_TRACE_ATTACK").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {
+            input.attack = true;
         }
         input.square |= story_order.square;
         input.jump |= story_order.jump;

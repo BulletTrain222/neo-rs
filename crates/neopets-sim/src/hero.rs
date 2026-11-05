@@ -660,6 +660,18 @@ impl Locomotion {
         self.body.gain = GAIN_FALL;
     }
 
+    /// SPEC-0047 Class 20 state 1: the creature launches the hero: 8.0 added to the vertical
+    /// velocity and state 7, the next pass keeping the velocity (the one-tick hold), so he rises
+    /// in the standing jump's air phase with no jump take-off of his own.
+    pub fn launch_up(&mut self, dv: f32) {
+        self.enter_air(JUMP);
+        self.phase = 0;
+        self.request = ANIM_JUMP_STILL;
+        self.body.velocity[1] += dv;
+        self.body.no_gravity = false;
+        self.body.gain = 1.0;
+    }
+
     /// The climb's Stop Climbing (SPEC-0033 Behavior 51, state 21 exits): state 7 in air phase
     /// 5 with request 67, falling from rest.
     pub fn drop_off(&mut self) {
