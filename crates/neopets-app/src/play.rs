@@ -7024,6 +7024,11 @@ impl Play {
     /// dropped by its player anyway. Without text, or with the hero busy, the screen-anchored
     /// showcase of mode 1 starts instead.
     /// Diagnostic: the showcase started for item `id` in the current world.
+    pub fn diag_popup(&mut self, id: u16) {
+        let pack = self.world.pack;
+        self.item_popup(id, pack);
+    }
+
     pub fn diag_showcase(&mut self, id: u16) {
         let pack = self.world.pack;
         self.start_showcase(id, pack);
@@ -7108,9 +7113,12 @@ impl Play {
             let (eye, forward, up, _) = self.view();
             let l = (forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]).sqrt().max(1e-6);
             let fw = forward.map(|v| v / l);
-            let right = [fw[1] * up[2] - fw[2] * up[1], fw[2] * up[0] - fw[0] * up[2], fw[0] * up[1] - fw[1] * up[0]];
+            let right = unit([fw[1] * up[2] - fw[2] * up[1], fw[2] * up[0] - fw[0] * up[2], fw[0] * up[1] - fw[1] * up[0]]);
+            // The camera's true up, and the same signs as the model's draw (sync_items): the spec's rows point left and
+            // down, so its minus signs are plus along these axes (user's report: a Mote's effect off its model).
+            let true_up = [right[1] * fw[2] - right[2] * fw[1], right[2] * fw[0] - right[0] * fw[2], right[0] * fw[1] - right[1] * fw[0]];
             let (dx, dy) = (640.0 * (c.x - 0.5) * c.z / 512.0, 480.0 * (c.y - 0.5) * c.z / 512.0);
-            std::array::from_fn(|k| eye[k] + c.z * fw[k] - dx * right[k] - dy * up[k])
+            std::array::from_fn(|k| eye[k] + c.z * fw[k] + dx * right[k] + dy * true_up[k])
         } else {
             self.showcase_effect_stop();
             return;
@@ -10100,10 +10108,45 @@ impl Play {
         }
     }
 
+    /// Diagnostic: chest group `g` pays out with the hero stood at its locator 0.
+    pub fn diag_chest(&mut self, g: usize) {
+        let Some(group) = self.world.groups.get(g).cloned() else {
+            println!("CHEST no group {g}; {} groups", self.world.groups.len());
+            return;
+        };
+        let (x, d) = group.locators.first().and_then(|&k| usize::try_from(k).ok()).and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.loco.position(), self.loco.facing));
+        let point = group.drops.first().and_then(|&id| usize::try_from(id).ok()).and_then(|id| self.world.placements.get(id)).filter(|(region, _)| *region == 0xFF).and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
+        println!("CHEST group {g} kind {} key {} at {x:?} facing {d:?} drops {:?} placement {:?}", group.kind, group.key, group.drops, group.drops.first().and_then(|&id| usize::try_from(id).ok()).and_then(|id| self.world.placements.get(id)));
+        if let Some(p) = point {
+            println!("CHEST point key {} group {} count {} flags {} map {}", p.key, p.group, p.count, p.flags, p.map);
+        }
+        self.loco.teleport(x, d);
+        self.chest_reward(g);
+    }
+
+    /// Diagnostic: the live dropped items of the current world and their distances from the hero.
+    pub fn diag_drops(&self) -> String {
+        let h = self.loco.position();
+        let Some(pool) = self.pools.get(&self.world.pack) else { return String::new() };
+        let list: Vec<String> = pool
+            .slots
+            .iter()
+            .flatten()
+            .filter(|it| it.lifetime.is_finite())
+            .map(|it| {
+                let d: f32 = (0..3).map(|k| (it.position[k] - h[k]).powi(2)).sum::<f32>().sqrt();
+                format!("{} state {} ready {} delay {:.1} at {:.1},{:.1},{:.1} d {d:.2}", it.id, it.state, it.ready(), it.delay, it.position[0], it.position[1], it.position[2])
+            })
+            .collect();
+        format!("hero {:.1},{:.1},{:.1} state {} NP {} last {}: {}", h[0], h[1], h[2], self.loco.state, self.state.neopoints, self.last_pickup, list.join("; "))
+    }
+
     /// SPEC-0048 Lock chests step 6: the drop action on reward [0] (a placement id through the
     /// placement id table; the embedded region only) at A = X + 2.4 d + 0.4 up, and the
     /// collected entry (step 7's mark, set here with the reward). An element-sealed chest (kind 2)
-    /// requests it at X + 2.2 d, launched along -d.
+    /// requests it at X + 2.2 d. Both launch along -d. What drops collects itself when ready, whatever the distance: this
+    /// build's rule at the user's word (a chest gives its item), as a hovering item at A stays out of the spec's reach of a
+    /// hero at X when measured from the feet (R-0234).
     fn chest_reward(&mut self, g: usize) {
         let Some(group) = self.world.groups.get(g).cloned() else { return };
         let locator = group.locators.first().and_then(|&k| usize::try_from(k).ok());
@@ -10118,12 +10161,14 @@ impl Play {
             .filter(|(region, _)| *region == 0xFF)
             .and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
         let pack = self.world.pack;
-        if sealed {
-            self.dig_drop = Some([-d[0], -d[1], -d[2]]);
-        }
+        let before = self.pools.get(&pack).map_or(0, |pool| pool.slots.iter().flatten().map(|it| it.token).max().unwrap_or(0));
+        self.dig_drop = Some([-d[0], -d[1], -d[2]]);
         self.pay_out(pack, a, point);
-        if sealed {
-            self.dig_drop = None;
+        self.dig_drop = None;
+        if let Some(pool) = self.pools.get_mut(&pack) {
+            for it in pool.slots.iter_mut().flatten().filter(|it| it.token > before) {
+                it.auto = true;
+            }
         }
         self.state.collected.insert(group.key);
         self.last_door = format!("chest group {g} opened (key {}), reward {:?}", group.key, point.map(|p| p.key));

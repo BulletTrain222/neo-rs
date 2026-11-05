@@ -1329,6 +1329,12 @@ fn step_sim(
                 play.play.state.timer.activate(start, 0.0, false);
             }
         }
+        // NEOPETS_TRACE_POPUP=id: the small pickup popup started every 150 ticks (diagnostic, for pictures).
+        if let Some(id) = std::env::var("NEOPETS_TRACE_POPUP").ok().and_then(|v| v.trim().parse::<u16>().ok()) {
+            if play.play.ticks % 150 == 1 {
+                play.play.diag_popup(id);
+            }
+        }
         // NEOPETS_TRACE_SHOWCASE="tick:id" in the window too: the item showcase started once.
         if let Some((k, id)) = std::env::var("NEOPETS_TRACE_SHOWCASE").ok().and_then(|v| {
             let (a, b) = v.split_once(':')?;
@@ -3221,8 +3227,8 @@ fn sync_items(
     state: Option<Res<PlayState>>,
     archive: Option<ResMut<Archive>>,
     mut markers: Query<(Entity, &ItemMarker, &mut Transform, &mut Visibility, Option<&Children>), Without<ShowcaseMarker>>,
-    mut showcases: Query<(Entity, &ShowcaseMarker, &mut Transform, &mut Visibility), Without<ItemMarker>>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    mut showcases: Query<(Entity, &ShowcaseMarker, &mut Transform, &mut Visibility, Option<&ChildOf>), Without<ItemMarker>>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
     windows: Query<&Window>,
     parts: Query<&MeshMaterial3d<StandardMaterial>, With<ItemPart>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -3275,14 +3281,14 @@ fn sync_items(
     // (Medium): anchored to the screen, at E + z F + 640 (x - 0.5)(z / 512) R + 480 (y - 0.5)
     // (z / 512) U (the camera's forward, right and up; the PS2 rows point left and down, so the
     // spec's minus signs become plus here), turned by the angle, then the camera's orientation,
-    // scaled by s.
-    let show: Option<(u16, u32, Transform)> = p.showcase_item().map(|(id, pack, at, angle)| (id, pack, Transform::from_translation(Vec3::from(at)).with_rotation(Quat::from_rotation_y(angle)))).or_else(|| {
+    // scaled by s. A screen-anchored model is a child of the camera, placed in the camera's axes: taken from the camera's
+    // GlobalTransform it lagged a frame behind, and shook whenever the camera moved (user's report).
+    let camera = cameras.iter().next().map(|(e, ..)| e);
+    let show: Option<(u16, u32, Transform, bool)> = p.showcase_item().map(|(id, pack, at, angle)| (id, pack, Transform::from_translation(Vec3::from(at)).with_rotation(Quat::from_rotation_y(angle)), false)).or_else(|| {
         let c = p.corner?;
-        let (_, g) = cameras.iter().next()?;
         let k = c.z / 512.0;
-        let origin = g.translation() + g.forward() * c.z + g.right() * (640.0 * (c.x - 0.5) * k) + g.up() * (480.0 * (c.y - 0.5) * k);
-        let rot = g.to_scale_rotation_translation().1 * Quat::from_rotation_y(c.angle + std::f32::consts::PI);
-        Some((c.id, c.pack, Transform { translation: origin, rotation: rot, scale: Vec3::splat(c.s.max(1e-4)) }))
+        let origin = Vec3::new(640.0 * (c.x - 0.5) * k, 480.0 * (c.y - 0.5) * k, -c.z);
+        Some((c.id, c.pack, Transform { translation: origin, rotation: Quat::from_rotation_y(c.angle + std::f32::consts::PI), scale: Vec3::splat(c.s.max(1e-4)) }, true))
     });
     // SPEC-0035 section 15.2 (R-0155): while price caption line 1 shows (its counter above 0, both
     // quick panels closed) the one-Neopoint coin model (item 135) is drawn centred at canvas
@@ -3292,7 +3298,7 @@ fn sync_items(
     // this build's choice, the canvas being the PS2's whole screen).
     let caption_coin: Option<Transform> = (p.price_lines[0].1 > 0 && !p.quick.open && !p.mote_panel.open && !p.menu_open)
         .then(|| {
-            let (cam, g) = cameras.iter().next()?;
+            let (_, cam, g) = cameras.iter().next()?;
             let w = windows.iter().next()?;
             let (ww, wh) = (w.width(), w.height());
             let sc = (ww / 512.0).min(wh / 448.0);
@@ -3303,22 +3309,30 @@ fn sync_items(
             let ray = cam.viewport_to_world(g, at).ok()?;
             let depth = 6.0 / ray.direction.dot(g.forward().into()).max(1e-3);
             *coin_time = (*coin_time - time.delta_secs()) % std::f32::consts::TAU;
-            let rot = g.to_scale_rotation_translation().1 * Quat::from_rotation_y(*coin_time);
-            Some(Transform { translation: ray.get_point(depth), rotation: rot, scale: Vec3::splat(0.5886) })
+            Some(Transform { translation: g.affine().inverse().transform_point3(ray.get_point(depth)), rotation: Quat::from_rotation_y(*coin_time), scale: Vec3::splat(0.5886) })
         })
         .flatten();
     // (marker key, item model id, pack, transform); the caption coin's key is not an item id.
-    let wanted: Vec<(u16, u16, u32, Transform)> = show.map(|(id, pack, t)| (id, id, pack, t)).into_iter().chain(caption_coin.map(|t| (CAPTION_COIN, 135, 0, t))).collect();
-    for (e, s, mut t, mut vis) in &mut showcases {
+    let wanted: Vec<(u16, u16, u32, Transform, bool)> = show.map(|(id, pack, t, anchored)| (id, id, pack, t, anchored)).into_iter().chain(caption_coin.map(|t| (CAPTION_COIN, 135, 0, t, true))).collect();
+    for (e, s, mut t, mut vis, parent) in &mut showcases {
         match wanted.iter().find(|w| w.0 == s.0) {
-            Some(&(_, _, _, tr)) => {
+            Some(&(_, _, _, tr, anchored)) => {
                 set_if(&mut t, tr);
                 set_if(&mut vis, Visibility::Visible);
+                match (anchored, parent, camera) {
+                    (true, None, Some(c)) => {
+                        commands.entity(e).insert(ChildOf(c));
+                    }
+                    (false, Some(_), _) => {
+                        commands.entity(e).remove::<ChildOf>();
+                    }
+                    _ => {}
+                }
             }
             None => commands.entity(e).despawn(),
         }
     }
-    for &(marker, id, pack, at) in wanted.iter().filter(|w| !showcases.iter().any(|(_, s, ..)| s.0 == w.0)) {
+    for &(marker, id, pack, at, anchored) in wanted.iter().filter(|w| !showcases.iter().any(|(_, s, ..)| s.0 == w.0)) {
         let id = id as u32;
         let key = (id, if matches!(id, 50..=59 | 98..=190) { 0 } else { pack });
         if !models.contains_key(&key) {
@@ -3335,7 +3349,11 @@ fn sync_items(
             models.insert(key, list);
         }
         if let Some(list) = &models[&key] {
-            commands.spawn((ShowcaseMarker(marker), at, Visibility::Visible)).with_children(|c| {
+            let mut root = commands.spawn((ShowcaseMarker(marker), at, Visibility::Visible));
+            if let (true, Some(c)) = (anchored, camera) {
+                root.insert(ChildOf(c));
+            }
+            root.with_children(|c| {
                 for (mesh, mat, flip) in list {
                     let mut e = c.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(materials.add(mat.clone())), Transform::IDENTITY));
                     if let Some(f) = flip {
@@ -4839,6 +4857,15 @@ fn play_trace(
         if let Some((t, k)) = std::env::var("NEOPETS_TRACE_CEILING").ok().and_then(|v| Some((v.split(':').next()?.parse::<u64>().ok()?, v.split(':').nth(1)?.parse::<usize>().ok()?))) {
             if t == play.ticks {
                 play.diag_ceiling(k);
+            }
+        }
+        // NEOPETS_TRACE_CHEST="tick:group": chest group pays out with the hero at its locator; its drops every 30 ticks.
+        if let Some((k, g)) = std::env::var("NEOPETS_TRACE_CHEST").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<usize>().ok()?))) {
+            if play.ticks == k {
+                play.diag_chest(g);
+            }
+            if play.ticks >= k && (play.ticks - k) % 30 == 0 {
+                println!("DROPS {}: {}", play.ticks, play.diag_drops());
             }
         }
         // NEOPETS_TRACE_SUN: the sun's direction whenever it or the world changes.

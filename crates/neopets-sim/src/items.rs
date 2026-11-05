@@ -138,6 +138,8 @@ pub struct WorldItem {
     pub price: i16,
     /// Food the hero dropped for a petpet (SPEC-0047 Feeding): reserved, never collected.
     pub reserved: bool,
+    /// A chest's reward: collected once ready at any distance below 25 (this build's rule; R-0234).
+    pub auto: bool,
 }
 
 impl WorldItem {
@@ -257,6 +259,7 @@ impl ItemPool {
             map: s.map,
             charm: s.charm,
             reserved: false,
+            auto: false,
         });
         true
     }
@@ -313,6 +316,10 @@ impl ItemPool {
             let Some(it) = it else { continue };
             if !it.ready() || it.token == 0 || it.reserved {
                 continue;
+            }
+            // A ready chest reward comes first, so a nearer item out of reach does not hold it back.
+            if it.auto && ((it.position[0] - p[0]).powi(2) + (it.position[1] - p[1]).powi(2) + (it.position[2] - p[2]).powi(2)).sqrt() < 25.0 {
+                return Some(i);
             }
             let d = ((it.position[0] - p[0]).powi(2) + (it.position[1] - p[1]).powi(2) + (it.position[2] - p[2]).powi(2)).sqrt();
             if best.is_none_or(|b| d < b.1) {
