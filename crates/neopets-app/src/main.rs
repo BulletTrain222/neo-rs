@@ -4891,6 +4891,13 @@ fn play_trace(
                 println!("WILD {}: {}", tick, play.diag_wild(tick == k));
             }
         }
+        // NEOPETS_TRACE_CHESTDROP="tick:group": the hero dropped onto the chest's body; its state every 30 ticks.
+        if let Some((k, g)) = std::env::var("NEOPETS_TRACE_CHESTDROP").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<usize>().ok()?))) {
+            if play.ticks % 30 == 0 || play.ticks == k {
+                let tick = play.ticks;
+                println!("CHESTBODY {tick}: {:?}", play.diag_chest_body(g, tick == k));
+            }
+        }
         // NEOPETS_TRACE_SUN: the sun's direction whenever it or the world changes.
         if std::env::var_os("NEOPETS_TRACE_SUN").is_some() {
             let now = format!("world {} lights {} sun {:?}", play.world.pack, play.world.lights.len(), play.sun_direction());

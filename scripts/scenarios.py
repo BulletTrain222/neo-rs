@@ -63,6 +63,8 @@ SCENARIOS = [
     ('flag poles stop the hero', 'SPEC-0018 Contact pass; R-0238', 200, 696, ['--start', '-535,615,44'], {'NEOPETS_TRACE_PUSH': '-526.6,623', 'NEOPETS_TRACE_GOD': '1'}, clear_of_pole),
     ('the hero walks onto the 1066 bridge', 'R-0237', 300, 1066, ['--flag', '17', '--start', '-652,685,44'], {'NEOPETS_TRACE_PUSH': '-705,745', 'NEOPETS_TRACE_GOD': '1'}, has(r'28\d pos \( -69\d')),
     ('a wild petpet eats and joins', 'SPEC-0047 Acquisition', 500, 1066, ['--start', '-759.5,545.5,40'], {'NEOPETS_TRACE_WILD': '100', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_GIVE': '5:150:5'}, has(r'joins with T')),
+    ('Tor stands at his place at the pump', 'SPEC-0045 909 routine 11; R-0239', 300, 909, ['--flag', '1', '--flag', '107', '--flag', '108', '--flag', '109', '--flag', '110', '--flag', '111'], {'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GIVE': '5:6:1', 'NEOPETS_TRACE_PLACE': '60:-1949.41,1054.5,48', 'NEOPETS_TRACE_SQUARE': '100,101'}, has(r'28\d pos \(-1949\.\d+\s+45\.\d+\s+1055\.3')),
+    ('a chest body survives the hero landing on it', 'SPEC-0048 Lock chests, Set-up', 300, 947, [], {'NEOPETS_TRACE_CHESTDROP': '60:1', 'NEOPETS_TRACE_GOD': '1'}, has(r'CHESTBODY 270: Some\(3\)')),
     ('sound records match the spec', 'SPEC-0031 types 4 and 5', 1, 909, [], {'NEOPETS_TRACE_CUE_RECORDS': '1'}, has(r'CUE RECORDS type 4 81, type 5 24')),
 ]
 

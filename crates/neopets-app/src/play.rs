@@ -2964,7 +2964,13 @@ impl Play {
         if let Some(g) = self.world.groups.get(i) {
             let Some(obj) = g.objects.first().and_then(|&o| usize::try_from(o).ok()) else { return out };
             match g.kind {
-                1 => out.push(Action::InitObjOn { obj, end: self.state.collected.contains(&g.key) }),
+                // SPEC-0048 Lock chests, Set-up: breakable 0, the chest body, is active and not breakable (state 3).
+                1 => {
+                    if let Some(id) = g.breakables.first().and_then(|&b| usize::try_from(b).ok()) {
+                        out.extend([Action::SetBreakableActive { id, on: true }, Action::MakeBreakable { id, on: false }]);
+                    }
+                    out.push(Action::InitObjOn { obj, end: self.state.collected.contains(&g.key) });
+                }
                 // Kind 2 (the element-sealed chest, SPEC-0048 Element gate on hits, Set-up): object
                 // 0 drawn, object 1 drawn stopped; once opened (its key row set) both breakables
                 // disabled, object 1 hidden and effect 0 stopped.
@@ -3280,6 +3286,13 @@ impl Play {
                     if let Some(&e) = self.world.entries.get(locator) {
                         self.arrive(e);
                         self.last_door = format!("script: hero moved to locator {locator} of {}", self.world.pack);
+                    }
+                }
+                Action::MoveHeroProbed { locator } => {
+                    if let Some(&(l, g)) = self.world.entries.get(locator) {
+                        let y = self.ground_in(pack, l[0], l[2], l[1] + 4.0).unwrap_or(l[1]);
+                        self.arrive(([l[0], y, l[2]], g));
+                        self.last_door = format!("script: hero moved to locator {locator} of {} on the ground", self.world.pack);
                     }
                 }
                 Action::Message { line } => {
@@ -10143,6 +10156,18 @@ impl Play {
         }
     }
 
+    /// Diagnostic: the state of chest group `g`'s body; with `drop` the hero is put 3 above its top, falling onto it.
+    pub fn diag_chest_body(&mut self, g: usize, drop: bool) -> Option<i32> {
+        let id = usize::try_from(*self.world.groups.get(g)?.breakables.first()?).ok()?;
+        let b = self.world.breakables.get(id)?;
+        let state = b.state;
+        if let (true, Some(v)) = (drop, b.volume) {
+            let f = self.loco.facing;
+            self.loco.teleport([v.centre[0], v.centre[1] + v.height.abs() + 3.0, v.centre[2]], f);
+        }
+        Some(state)
+    }
+
     /// Diagnostic: chest group `g` pays out with the hero stood at its locator 0.
     pub fn diag_chest(&mut self, g: usize) {
         let Some(group) = self.world.groups.get(g).cloned() else {
@@ -16534,6 +16559,8 @@ impl Play {
             .filter(|(_, g)| g.kind == 2)
             .filter_map(|(gi, g)| Some((gi, usize::try_from(*g.breakables.first()?).ok()?, usize::try_from(*g.breakables.get(1)?).ok()?)))
             .collect();
+        // The lock chests' bodies (kind 1).
+        let chest_bodies: Vec<usize> = self.world.groups.iter().filter(|g| g.kind == 1).filter_map(|g| usize::try_from(*g.breakables.first()?).ok()).collect();
         // The chain hook: members 0 to n-2 of a kind-4 group (the group's index with it).
         let hooked: Vec<(usize, usize)> = self
             .world
@@ -16555,6 +16582,11 @@ impl Play {
                 continue;
             }
             if pack == 1081 && !self.state.flag(41) && first_group.contains(&(i as i32)) {
+                continue;
+            }
+            // SPEC-0048 Lock chests, Set-up: the body's hook only recoils Tor, and it never breaks.
+            if chest_bodies.contains(&i) {
+                recoil |= family.is_none();
                 continue;
             }
             // SPEC-0048 Element gate on hits: the chest body's hook only recoils Tor; the seal's

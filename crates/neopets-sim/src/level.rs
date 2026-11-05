@@ -44,6 +44,8 @@ pub enum Action {
     LeaveInterior { slot: usize },
     /// MoveHero to entry record (locator) i of the current world.
     MoveHero { locator: usize },
+    /// MoveHero with its probe on (SPEC-0030 row 156): the height is the ground's, probed from the record's height + 4.0.
+    MoveHeroProbed { locator: usize },
     /// LevelMsg: show dialogue line n of the current world.
     Message { line: u16 },
     /// LevelMsg with no wait: the thread goes on with the box open.
@@ -11982,7 +11984,9 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             } else if state.flag(111) && !state.flag(112) && state.has_item(6) {
                 state.remove_all(6);
                 state.set_word(pack, 3, 1);
-                out.actions.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 29 }, Action::InitObjOn { obj: 9, end: false }, camera(27), fade_in(), wait(1.0)]);
+                // Locator 29 stands 4.7 above the ground; unprobed, the hero fell and his landing carried him 1.8 into the pump
+                // (user's report). The spec does not give this call's probe argument (R-0239).
+                out.actions.extend([Action::HoldHero, fade_out(), Action::MoveHeroProbed { locator: 29 }, Action::InitObjOn { obj: 9, end: false }, camera(27), fade_in(), wait(1.0)]);
                 out.actions.push(Action::PlaySound { cue: 9, locator: None });
                 out.actions.extend([Action::PlayAnim { obj: 18, speed: 1.0, wait: false }, Action::PlayAnim { obj: 20, speed: 1.0, wait: false }, Action::PlayAnim { obj: 17, speed: 1.0, wait: true }]);
                 out.actions.extend([Action::StopAnim { obj: 20 }, Action::DeactivateObj { obj: 20 }, Action::PlayAnim { obj: 19, speed: 1.0, wait: false }]);
@@ -21122,8 +21126,8 @@ mod tests {
         on_update(909, &mut s, false);
         assert!(s.flag(111));
         let out = fire(&mut s, 11, 5, true);
-        let lines: Vec<&Action> = out.actions.iter().filter(|a| matches!(a, Action::Message { .. } | Action::MoveHero { .. })).collect();
-        assert_eq!(lines, vec![&Action::MoveHero { locator: 29 }, &Action::Message { line: 166 }, &Action::Message { line: 162 }]);
+        let lines: Vec<&Action> = out.actions.iter().filter(|a| matches!(a, Action::Message { .. } | Action::MoveHeroProbed { .. })).collect();
+        assert_eq!(lines, vec![&Action::MoveHeroProbed { locator: 29 }, &Action::Message { line: 166 }, &Action::Message { line: 162 }]);
         assert_eq!(out.actions.first(), Some(&Action::HoldHero));
         assert_eq!(out.actions.last(), Some(&Action::ReturnCamera { preset: -1, release: true }));
         // Item 6 is removed at once; item 7 and flag 112 come by the exchange's actions.
