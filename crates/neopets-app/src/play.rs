@@ -14175,6 +14175,13 @@ impl Play {
                 }
             }
             c.hp -= act.hp_loss;
+            // SPEC-0023 10.1: this boss arms the monster health bar from its own hit code (user's
+            // report 67: the bosses showed no bar).
+            if act.hp_loss > 0 {
+                let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(c.name.as_bytes(), *sp));
+                let max = c.row.map_or(c.hp.max(1), |r| r.hit_points as i32);
+                self.monster_bar.arm(c.id, &c.name, width, c.hp.max(0), max, &self.monster_words);
+            }
             if before != after && std::mem::discriminant(&before) != std::mem::discriminant(&after) {
                 self.last_boss = format!("Gnarfas {:?} -> {:?} (hp {}, strikes {}) on tick {}", before, after, c.hp, g.strikes, self.ticks);
             }
@@ -14710,7 +14717,15 @@ impl Play {
                 wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
                 c.position = wk.position();
             }
+            let was = c.hp;
             c.hp = kn::display_hp(&k.parts);
+            // SPEC-0023 10.1: the Black Knight arms the monster health bar after a part loses HP
+            // (user's report 67).
+            if c.hp < was {
+                let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(c.name.as_bytes(), *sp));
+                let max = c.row.map_or(was.max(1), |r| r.hit_points as i32);
+                self.monster_bar.arm(c.id, &c.name, width, c.hp.max(0), max, &self.monster_words);
+            }
             if before != after {
                 let centres: Vec<[i32; 3]> = (0..6).filter_map(|p| part_shape(p)).map(|c| c.center.map(|x| x.round() as i32)).collect();
                 self.last_boss = format!("Black Knight {:?} -> {:?} (parts {:?}, part centres {:?}, hero at {:?}) on tick {}", before, after, k.parts, centres, hero.map(|x| x.round() as i32), self.ticks);
@@ -14880,6 +14895,13 @@ impl Play {
             // G7: damage only when the hit makes the boss flinch, times the time factor.
             let act = g.tick(&v, &words, &mut self.rng);
             c.hp = (c.hp - act.hp_loss).max(0);
+            // SPEC-0023 10.1: this boss arms the monster health bar from its own hit code (user's
+            // report 67: the bosses showed no bar).
+            if act.hp_loss > 0 {
+                let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(c.name.as_bytes(), *sp));
+                let max = c.row.map_or(c.hp.max(1), |r| r.hit_points as i32);
+                self.monster_bar.arm(c.id, &c.name, width, c.hp.max(0), max, &self.monster_words);
+            }
             let after = g.state;
             let is_clone = g.clone;
             c.anim.set_rate(act.rate);
@@ -15172,6 +15194,13 @@ impl Play {
                 }
             }
             c.hp -= act.hp_loss;
+            // SPEC-0023 10.1: this boss arms the monster health bar from its own hit code (user's
+            // report 67: the bosses showed no bar).
+            if act.hp_loss > 0 {
+                let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(c.name.as_bytes(), *sp));
+                let max = c.row.map_or(c.hp.max(1), |r| r.hit_points as i32);
+                self.monster_bar.arm(c.id, &c.name, width, c.hp.max(0), max, &self.monster_words);
+            }
             // A dead sister is not removed (SPEC-0011 item 10): at the end of her death clip she
             // stays on its last frame and her loop keeps running (stepping the drain).
             let _ = act.remove;
@@ -15836,6 +15865,13 @@ impl Play {
                 c.position = p;
             }
             c.hp = (c.hp - act.hp_loss).max(0);
+            // SPEC-0023 10.1: this boss arms the monster health bar from its own hit code (user's
+            // report 67: the bosses showed no bar).
+            if act.hp_loss > 0 {
+                let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(c.name.as_bytes(), *sp));
+                let max = c.row.map_or(c.hp.max(1), |r| r.hit_points as i32);
+                self.monster_bar.arm(c.id, &c.name, width, c.hp.max(0), max, &self.monster_words);
+            }
             if std::mem::discriminant(&before) != std::mem::discriminant(&after) || before != after && matches!(after, neopets_sim::serpent::State::Bite(_)) {
                 self.last_boss = format!("Plague Serpent {:?} -> {:?} (hp {}, phase {}, slot {}) on tick {}", before, after, c.hp, sp.phase, sp.slot, self.ticks);
             }

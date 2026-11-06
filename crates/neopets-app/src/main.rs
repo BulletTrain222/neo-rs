@@ -4293,10 +4293,15 @@ pub(crate) fn part_assets(
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
             // The GS modulates in gamma space; Bevy blends vertex colour in linear space.
             let g = gs_unit(part);
+            // An additive part's colour is capped at 1.0: the GS clamps the modulated colour at
+            // 255 and the frame at full white (public GS documentation, TFX modulate and the
+            // colour clamp), so in the original added light never passes white; uncapped, the
+            // 2x vertex colours and the bloom made the save point's rays glare (user's report 66).
+            let cap = if part.texture.is_some() && part.alpha.is_some() && crate::pass1::blend_of(part.alpha).0 < 2 { 1.0 } else { f32::MAX };
             let colors: Vec<[f32; 4]> = part
                 .colors
                 .iter()
-                .map(|c| [(c[0] * g).powf(2.2), (c[1] * g).powf(2.2), (c[2] * g).powf(2.2), c[3].min(1.0)])
+                .map(|c| [(c[0] * g).min(cap).powf(2.2), (c[1] * g).min(cap).powf(2.2), (c[2] * g).min(cap).powf(2.2), c[3].min(1.0)])
                 .collect();
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, part.positions.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
