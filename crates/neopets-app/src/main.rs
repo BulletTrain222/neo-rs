@@ -3729,7 +3729,9 @@ fn sync_atmos_overlay(mut commands: Commands, state: Option<Res<PlayState>>, mut
     // far less (a bright roof lost a third, not half: user's report 73). Over a dark overlay
     // colour, out = (1 - w) x Cd in gamma is (1 - w)^2.2 x Cd in linear, so the linear alpha is
     // 1 - (1 - w)^2.2 (about 0.78 for w = 0.5).
-    let wl = 1.0 - (1.0 - (w * gate).clamp(0.0, 1.0)).powf(2.2);
+    // The user found the full gamma-space weight (0.78) too strong and 0.5 too weak; this build
+    // uses the exponent 1.4 (about 0.62), between the two (R-0260).
+    let wl = 1.0 - (1.0 - (w * gate).clamp(0.0, 1.0)).powf(1.4);
     let colour = out.map(|o| Color::srgba(o.b[0].clamp(0.0, 255.0) / 255.0, o.b[1].clamp(0.0, 255.0) / 255.0, o.b[2].clamp(0.0, 255.0) / 255.0, wl));
     match overlays.iter_mut().next() {
         Some((mut bg, mut vis)) => {
