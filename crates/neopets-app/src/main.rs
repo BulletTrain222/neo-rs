@@ -3725,7 +3725,12 @@ fn sync_atmos_overlay(mut commands: Commands, state: Option<Res<PlayState>>, mut
     // (diagnostic). The alpha-byte / 128 weight (0.22) left the land with no haze (user's report 72).
     let w = std::env::var("NEOPETS_ATMOS_WEIGHT").ok().and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(1.0 - 128.0 / 255.0);
     let gate = out.map_or(0.0, |o| o.blend.min(1.0));
-    let colour = out.map(|o| Color::srgba(o.b[0].clamp(0.0, 255.0) / 255.0, o.b[1].clamp(0.0, 255.0) / 255.0, o.b[2].clamp(0.0, 255.0) / 255.0, w * gate));
+    // The GS blends in gamma space; the UI blends in linear light, where the same weight darkens
+    // far less (a bright roof lost a third, not half: user's report 73). Over a dark overlay
+    // colour, out = (1 - w) x Cd in gamma is (1 - w)^2.2 x Cd in linear, so the linear alpha is
+    // 1 - (1 - w)^2.2 (about 0.78 for w = 0.5).
+    let wl = 1.0 - (1.0 - (w * gate).clamp(0.0, 1.0)).powf(2.2);
+    let colour = out.map(|o| Color::srgba(o.b[0].clamp(0.0, 255.0) / 255.0, o.b[1].clamp(0.0, 255.0) / 255.0, o.b[2].clamp(0.0, 255.0) / 255.0, wl));
     match overlays.iter_mut().next() {
         Some((mut bg, mut vis)) => {
             set_if(&mut vis, if byte > 0.0 && std::env::var_os("NEOPETS_NO_ATMOS").is_none() { Visibility::Visible } else { Visibility::Hidden });
