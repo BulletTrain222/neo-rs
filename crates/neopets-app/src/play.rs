@@ -602,6 +602,27 @@ impl World {
         neopets_sim::block::Floor { height: h.found.then_some(h.height), patch: h.patch.map(|p| (p.owner, p.index)) }
     }
 
+    /// The height of an active plank over (x, z), its footprint widened by `margin` across.
+    fn plank_height(&self, x: f32, z: f32, margin: f32) -> Option<f32> {
+        let mut best: Option<f32> = None;
+        for b in &self.planks {
+            let ([a0, a1, _], [e0, e1, _]) = (b.axes, b.extents);
+            let det = a0[0] * a1[2] - a0[2] * a1[0];
+            if det.abs() < 1e-6 {
+                continue;
+            }
+            let (dx, dz) = (x - b.origin[0], z - b.origin[2]);
+            let s = (dx * a1[2] - dz * a1[0]) / det;
+            let t = (a0[0] * dz - a0[2] * dx) / det;
+            if !(0.0..=e0).contains(&s) || !(-margin..=e1 + margin).contains(&t) {
+                continue;
+            }
+            let y = b.origin[1] + s * a0[1] + t.clamp(0.0, e1) * a1[1];
+            best = Some(best.map_or(y, |h: f32| h.max(y)));
+        }
+        best
+    }
+
     fn probe(&self, x: f32, z: f32, c: f32) -> ProbeHit {
         // The test stage: one level floor everywhere, found from at or above it.
         if let Some(h) = self.flat.filter(|&h| c >= h - 0.5) {
@@ -619,10 +640,12 @@ impl World {
             let (dx, dz) = (x - b.origin[0], z - b.origin[2]);
             let s = (dx * a1[2] - dz * a1[0]) / det;
             let t = (a0[0] * dz - a0[2] * dx) / det;
-            if !(0.0..=e0).contains(&s) || !(0.0..=e1).contains(&t) {
+            // Widened by 1.0 across (this build's choice, R-0261): the drawn column is wider than
+            // the 3-unit record, and the hero walked off its edge.
+            if !(0.0..=e0).contains(&s) || !(-1.0..=e1 + 1.0).contains(&t) {
                 continue;
             }
-            let y = b.origin[1] + s * a0[1] + t * a1[1];
+            let y = b.origin[1] + s * a0[1] + t.clamp(0.0, e1) * a1[1];
             if y <= c && (!best.found || y > best.height) {
                 let up = if n[1] < 0.0 { [-n[0], -n[1], -n[2]] } else { n };
                 best = ProbeHit { height: y, normal: up, kind: None, found: true, respawn: None, surface: None, zone: None, patch: None };
@@ -8776,6 +8799,33 @@ impl Play {
     /// this a moving platform slid out from under him (user's report 45). The climb and hang
     /// records' owners are not built.
     fn ride_step(&mut self) {
+        // This build's pull-up onto a gated plank (R-0261, the user's request): a jumping hero
+        // whose feet are below an active plank's surface by no more than his height, with his
+        // position over it (its width widened by 1.0), is lifted onto it, as the original's pull-up
+        // onto pack 1174's fallen column puts him there; the record it uses is not known.
+        if matches!(self.loco.state, 7..=10) && !self.world.planks.is_empty() {
+            let p = self.loco.position();
+            if let Some(y) = self.world.plank_height(p[0], p[2], 1.0) {
+                if y > p[1] + 0.25 && y - p[1] <= 3.5 {
+                    self.loco.body.position[1] = y + 0.05;
+                    self.loco.body.velocity = [0.0; 3];
+                    self.last_door = format!("pulled up onto a plank at {y:.2} on tick {}", self.ticks);
+                }
+            }
+        }
+        // On foot on a plank, the feet follow its surface when it is within 0.3 below or 0.6 above
+        // them: walking up the 30-degree column he lagged behind its rise and dropped through it.
+        if matches!(self.loco.state, 1..=6) && !self.world.planks.is_empty() {
+            let p = self.loco.position();
+            if let Some(y) = self.world.plank_height(p[0], p[2], 1.0) {
+                if (p[1] - 0.3..=p[1] + 0.6).contains(&y) && (y - p[1]).abs() > 1e-3 {
+                    self.loco.body.position[1] = y;
+                    if self.loco.body.velocity[1] < 0.0 {
+                        self.loco.body.velocity[1] = 0.0;
+                    }
+                }
+            }
+        }
         // NEOPETS_TRACE_RIDE=obj: that object's pose and drawn heights and the ride lock, every 25 ticks (diagnostic).
         if let Some(o) = std::env::var("NEOPETS_TRACE_RIDE").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
             if self.ticks % 25 == 0 {
