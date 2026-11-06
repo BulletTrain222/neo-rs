@@ -4749,7 +4749,7 @@ fn play_trace(
     println!("Script triggers of {} (index, kind, middle): {:?}", play.world.pack, play.trigger_points());
     if std::env::var_os("NEOPETS_TRACE_LOCATORS").is_some() {
         for (k, e) in play.world.entries.iter().enumerate() {
-            println!("      locator {k}: tag {:?} at {:?} facing {:?}", play.world.tags.get(k), e.0.map(|x| x.round() as i32), e.1.map(|x| (x * 100.0).round() / 100.0));
+            println!("      locator {k}: tag {:?} at {:?} facing {:?}", play.world.tags.get(k), e.0.map(|x| (x * 100.0).round() / 100.0), e.1.map(|x| (x * 100.0).round() / 100.0));
         }
     }
     // NEOPETS_TRACE_NEAR="x,z,r": the placed objects whose rest origin is within r of (x, z).

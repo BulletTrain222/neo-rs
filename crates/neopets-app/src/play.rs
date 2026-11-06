@@ -1244,6 +1244,11 @@ pub struct Play {
     /// Door prompt id posted by this tick's door step, and the one the chooser shows (posted on
     /// the previous tick); the door-confirm flag (SPEC-0006 Door prompt and confirm).
     door_prompt: Option<u16>,
+    /// This build's guard (R-0257): false after the hero is placed (a load, a landing, a
+    /// MoveHero) until a tick finds him touching no door. A contact door (context 0) does not
+    /// start while it is false, so a return locator inside a door's touch zone does not send him
+    /// straight back through it (pack 1098 locator 3 and door 1, user's report 60).
+    door_armed: bool,
     pub prompt_shown: Option<u16>,
     confirm: bool,
     /// A Square press waiting for the next tick.
@@ -2214,6 +2219,7 @@ impl Play {
             ticks: 0,
             swaps: 0,
             door_prompt: None,
+            door_armed: true,
             prompt_shown: None,
             confirm: false,
             square_latch: false,
@@ -2800,6 +2806,7 @@ impl Play {
     /// Move the hero to a landing in the current world and put the camera behind it.
     fn arrive(&mut self, (l, g): ([f32; 3], [f32; 3])) {
         self.loco.teleport(l, g);
+        self.door_armed = false;
         // The traversal holds of the world left behind end with the arrival.
         (self.ladder, self.ledge, self.hang, self.climb, self.panel, self.hold) = (None, None, None, None, None, None);
         let f = followed(&self.loco, &self.world);
@@ -2837,6 +2844,7 @@ impl Play {
             }
             let (at, facing) = (self.loco.position(), self.loco.facing);
             self.loco.teleport(at, facing);
+            self.door_armed = false;
             self.loco.state = hero_states::STANCE;
             self.grab_cooldown = 60;
         }
@@ -10584,13 +10592,17 @@ impl Play {
             return;
         }
         let p = self.loco.position();
-        let Some(n) = self.world.touched_door(p) else { return };
+        let Some(n) = self.world.touched_door(p) else {
+            self.door_armed = true;
+            return;
+        };
         if self.world.scripted_doors {
             // SPEC-0006 Doors, item 5: the registered callback decides. Context 0 starts on
             // contact; otherwise the door posts the context as its prompt and the callback starts
             // on a Square press edge with the confirm flag set, which it never clears.
             match level::teleport_context(self.world.pack, n) {
                 None => self.last_door = format!("door {n}: script door of {} not described yet", self.world.pack),
+                Some(0) if !self.door_armed => self.last_door = format!("door {n}: contact door waits until the hero leaves it (placed inside it)"),
                 Some(0) => {
                     let actions = level::on_teleport(self.world.pack, n, &mut self.state);
                     self.apply(&actions);
@@ -17180,6 +17192,7 @@ impl Play {
             let f = self.loco.facing;
             let at = [p[0] - 8.0 * f[0], p[1] + 1.0, p[2] - 8.0 * f[2]];
             self.loco.teleport(at, f);
+            self.door_armed = false;
             self.diag_break_attack(i);
         }
     }
@@ -18643,6 +18656,7 @@ impl Play {
         let offset = state.1.accumulator;
         if let Some((at, f, dy)) = warp {
             self.loco.teleport(at, f);
+            self.door_armed = false;
             self.camera.eye[1] += dy;
             self.camera.focus[1] += dy;
         }

@@ -19,6 +19,14 @@ def last_facing(out):
     return rows[-1] if rows else None
 
 
+def one_return_to_1098(out):
+    entered = len(set(re.findall(r'entered interior 1156 at entry record \d+ on tick (\d+)', out)))
+    back = re.search(r'hero moved to locator 3 of 1098', out)
+    if not back:
+        return 'the hero never left 1156'
+    return None if entered == 1 else f'entered 1156 {entered} times (the door at locator 3 sent him back)'
+
+
 def brendel(out):
     r = last_facing(out)
     if not r:
@@ -72,6 +80,7 @@ SCENARIOS = [
     ('stairs that rise past a box top are walked, not jumped', 'SPEC-0018 Box push, R-0242; build choice R-0244', 200, 1056, ['--start', '-1,373,29'], {'NEOPETS_TRACE_PUSH': '-8,352', 'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_GOD': '1'}, has(r'200 pos \(\s+-6\.\d+\s+3[23]\.')),
     ('a door into a room puts the camera level behind the hero', 'SPEC-0027 Placement after a load', 400, 1152, ['--start', '79.09,-47,-127.79'], {'NEOPETS_TRACE_EYE': '120', 'NEOPETS_TRACE_PUSH': '79,-70'}, has(r'EYE 120 pack 1152 .* polar \[9\.\d+, [-0-9.]+, 0\.(19|20)')),
     ('a plain 1098 arrival camera comes inside the hall after the line-of-sight timer', 'SPEC-0027 Line-of-sight timer, R-0256', 200, 1098, [], {'NEOPETS_TRACE_EYE': '10', 'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_STAND': '1'}, has(r'EYE 190 pack 1098 hero \S+ state \d+ facing 0\.00,1\.00 eye [-\d.]+,-12\d\.\d+,-8\d\.')),
+    ('leaving 1156 lands at 1098 locator 3 and stays out while standing in the door zone', 'SPEC-0006 Doors, R-0257', 700, 1098, ['--start', '88.1,-61,-121'], {'NEOPETS_TRACE_PUSH': '88,-75', 'NEOPETS_TRACE_PUSH_PACK': '1098', 'NEOPETS_TRACE_TOWARD': '250:89,-60', 'NEOPETS_TRACE_STICK': '250:-;330:0,0'}, one_return_to_1098),
     ('arriving in 1098 by the 1152 door puts the eye in front of the hero', 'SPEC-0027 Arrival through a scripted door, R-0243', 300, 1152, ['--start', '79.09,-47,-127.79'], {'NEOPETS_TRACE_EYE': '10', 'NEOPETS_TRACE_PUSH': '79,-140'}, has(r'EYE \d+ pack 1098 hero \S+ state \d+ facing 0\.00,-1\.00 eye [\d.]+,-12[345]\.\d+,-6[3-7]\.')),
     ('a closed lever gate stops the hero', 'SPEC-0028 Character versus moving placed objects; SPEC-0042 1171', 200, 1171, ['--start', '9.6,34,-0.61'], {'NEOPETS_TRACE_PUSH': '9.6,60', 'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_GOD': '1'}, has(r'200 pos \(\s+[\d.]+\s+-0\.\d+\s+42\.\d')),
     ('the lever opens the gate', 'SPEC-0042 1171 lever L5', 500, 1171, ['--start', '16,58,-1'], {'NEOPETS_TRACE_SQUARE': '2,4,6,8,10,12', 'NEOPETS_TRACE_PUSH': '9.6,30', 'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_GOD': '1'}, has(r'500 pos \(\s+[\d.]+\s+-0\.\d+\s+(29|30|31)\.')),
