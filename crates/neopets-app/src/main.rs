@@ -4258,6 +4258,7 @@ pub(crate) fn part_assets(
         ..default()
     });
     let mut opaque: std::collections::HashMap<usize, Handle<StandardMaterial>> = std::collections::HashMap::new();
+    let mut additive: std::collections::HashMap<usize, Handle<StandardMaterial>> = std::collections::HashMap::new();
     m.parts
         .iter()
         .enumerate()
@@ -4302,8 +4303,21 @@ pub(crate) fn part_assets(
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
             // A blended (scrolling) part keeps every triangle; a masked one drops the cut ones.
-            mesh.insert_indices(Indices::U32(if scrolling.is_some() { part.indices.clone() } else { drawn_indices(part) }));
+            mesh.insert_indices(Indices::U32(if scrolling.is_some() || (part.texture.is_some() && part.alpha.is_some() && crate::pass1::blend_of(part.alpha).0 < 2) { part.indices.clone() } else { drawn_indices(part) }));
+            // SPEC-0003 How a pass is drawn: a pass-0 ALPHA of the additive family (Cs x As + Cd,
+            // or Cs x FIX + Cd) adds the texture to the frame; drawn with the 0.5 mask it was a
+            // grey panel (the sealed chest's light rays, user's report 62). The FIX scale is not
+            // applied.
+            let adds = part.texture.is_some() && crate::pass1::blend_of(part.alpha).0 < 2 && part.alpha.is_some();
             let material = scrolling.unwrap_or_else(|| match part.texture {
+                Some(t) if adds => additive
+                    .entry(t)
+                    .or_insert_with(|| {
+                        let mut own = materials.get(&handles[t]).cloned().unwrap_or_default();
+                        own.alpha_mode = AlphaMode::Add;
+                        materials.add(own)
+                    })
+                    .clone(),
                 None => untextured.clone(),
                 Some(t) if part.flipbook.is_none() && mask_never_cuts(&m.textures[t], part) => opaque.entry(t).or_insert_with(|| opaque_twin(materials, &handles[t])).clone(),
                 Some(t) => handles[t].clone(),

@@ -10434,7 +10434,11 @@ impl Play {
             let (set, header) = w.objects.get(i).and_then(|o| o.as_ref()).map_or((false, false), |o| (o.model_set.is_some(), o.header.is_some()));
             match m {
                 Some(m) => println!("OBJ {i} drawn at {:.1},{:.1},{:.1} model set {set} header {header} volumes {vols} walls {}", m[12], m[13], m[14], w.object_wall_count(m[12], m[14])),
-                None => println!("OBJ {i} not drawn, model set {set} header {header} volumes {vols}"),
+                None => {
+                    let rest = w.objects.get(i).and_then(|o| o.as_ref()).map(|o| [o.rest[12], o.rest[13], o.rest[14]]);
+                    let state = w.object_anims.get(i).map(|o| (o.state, o.scripted));
+                    println!("OBJ {i} not drawn, model set {set} header {header} volumes {vols} rest at {rest:?} state {state:?} zone {}", w.objects.get(i).and_then(|o| o.as_ref()).is_some_and(|o| self.zone_visible(w.pack, o.zone)));
+                }
             }
         }
     }
@@ -11413,6 +11417,17 @@ impl Play {
                 self.other = Some(std::mem::replace(&mut self.world, o));
                 self.swaps += 1;
                 self.activated();
+            }
+        }
+        // NEOPETS_DEV_SEAL="tick:group" (diagnostic, window or trace): on that tick the hero is
+        // put at the group's locator and its sealed chest opening runs, so the scene can be seen.
+        if let Some((k, g)) = std::env::var("NEOPETS_DEV_SEAL").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<usize>().ok()?))) {
+            if self.ticks == k {
+                let at = self.world.groups.get(g).and_then(|gr| gr.locators.first()).and_then(|&l| usize::try_from(l).ok()).and_then(|l| self.world.entries.get(l).copied());
+                if let Some(pose) = at {
+                    self.arrive(pose);
+                }
+                self.seal_open(g);
             }
         }
         // The interaction chooser: a talk candidate claims Square before the doors.

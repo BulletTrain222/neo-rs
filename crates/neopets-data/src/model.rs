@@ -147,6 +147,9 @@ pub struct MeshPart {
     /// The second render pass of a two-pass group (SPEC-0003 How a pass is drawn; SPEC-0004
     /// Two-pass batches): the same positions, colours and normals with its own texture and UVs.
     pub pass1: Option<Pass1>,
+    /// Pass 0's ALPHA register (fields A, B, C, D in bits 0 to 7, FIX in 32 to 39; SPEC-0003
+    /// How a pass is drawn): 0x44 ordinary alpha blending, 0x48 additive.
+    pub alpha: Option<u64>,
     /// A type-20 instance's cull: its translation, draw distance D1 and fade length F
     /// (SPEC-0046 Instanced meshes); None for every other part.
     pub cull: Option<([f32; 3], f32, f32)>,
@@ -417,6 +420,7 @@ impl Builder {
                 weights: Vec::new(),
                 bones: Vec::new(),
                 pass1: None,
+                alpha: group.and_then(|g| g.alpha),
                 cull: self.cull,
                 raw_colors: Vec::new(),
                 lit: group.is_some_and(|g| matches!(g.program, 1 | 2 | 6)),

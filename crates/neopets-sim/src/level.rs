@@ -9483,11 +9483,16 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 }
             }
         }
-        // The lift (trigger 8 at the top calls it up, 9 at the bottom down; object 9 idle and the
-        // lift ready): object 17 and entity 6's loop, object 9 played, sound 8 going up.
+        // The lift (object 9 idle and the lift ready): trigger 8, a sphere at the foot of the
+        // lift (centre y 4.4, beside locator 43), runs while the lift is at the top and brings it
+        // down; trigger 9, at the top (centre y 68.2, beside locator 44), runs while it is at the
+        // bottom and sends it up (SPEC-0043 956 Lift: "trigger 8 (lift at the top) and the plain
+        // trigger 9 (lift at the bottom)"). The build had them the other way round, so the
+        // hero standing at the foot sent the lift up without him (user's report 63). Object 17
+        // and entity 6's loop, object 9 played, sound 8 going up.
         (956, 8 | 9) if call.object && call.state == 1 && !state.animating.contains(&9) && lift_ready_956(state) => {
             let up = state.word(pack, 2) == 0;
-            if (routine == 8) == up {
+            if (routine == 9) == up {
                 state.set_word(pack, 2, up as i32);
                 let s = if up { 1.0 } else { -1.0 };
                 out.actions.extend([Action::LoopAnim { obj: 17, speed: -s }, Action::EntityAnim { entity: 6, anim: 64, looped: true, wait: false }]);
@@ -16037,6 +16042,13 @@ fn castle_init(state: &mut GameState) -> Vec<Action> {
     } else if state.flag(501) && !state.has_item(72) && !state.flag(504) && !state.flag(503) {
         out.push(Action::LoadRegion { slot: 3, region: Some(1098 + 1 + 21) });
     }
+    // This build's choice (R-0258, user's report 61): the throne room's double doors, objects
+    // 10 and 11 at x -9.1 and 9.2, z 52.5, are drawn from the load, closed (start pose) while flag
+    // 622 is clear and open (end pose) once trigger 9 has played them. On disc they are in state
+    // 3 and no call of the module turns them on before trigger 9, so under SPEC-0028's draw gate
+    // the doorway stood empty. Objects 12 and 13, at the same places, are left as they are.
+    let open = state.flag(622);
+    out.extend([Action::InitObjOn { obj: 10, end: open }, Action::InitObjOn { obj: 11, end: open }]);
     out
 }
 
@@ -19851,8 +19863,12 @@ mod tests {
         for f in [208, 209, 210, 623] {
             s.set(f, true);
         }
-        assert!(on_trigger(956, 8, enter(8), &mut s).actions.contains(&Action::PlayAnim { obj: 9, speed: 1.0, wait: false }));
+        // Trigger 8 is at the foot: with the lift down it does nothing (it would have sent the
+        // lift up without the hero); trigger 9 at the top sends it up, then 8 brings it down.
+        assert!(on_trigger(956, 8, enter(8), &mut s).actions.is_empty());
         assert!(s.flag(211));
+        assert!(on_trigger(956, 9, enter(9), &mut s).actions.contains(&Action::PlayAnim { obj: 9, speed: 1.0, wait: false }));
+        assert!(on_trigger(956, 8, enter(8), &mut s).actions.contains(&Action::PlayAnim { obj: 9, speed: -1.0, wait: false }));
         // The aftermath (214 set): flags 216 and 64, set 8 into S (region 965).
         s.set(214, true);
         let out = on_update(956, &mut s, false);
