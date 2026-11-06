@@ -4311,8 +4311,8 @@ pub(crate) fn pass1_assets(
     out
 }
 
-/// The Shiny armour layer: each armour-metal part (`is_metal`) drawn again with the sword's
-/// environment-mapped reflection texture and blend.
+/// The Shiny armour layer: the chest of each armour-metal part (`is_metal`) drawn again with
+/// the sword's environment-mapped reflection texture and blend.
 fn armour_shine(
     m: &neopets_data::model::ModelData,
     env: Handle<Image>,
@@ -4337,7 +4337,24 @@ fn armour_shine(
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32, 0.0]; part.positions.len()]);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-        mesh.insert_indices(Indices::U32(part.indices.clone()));
+        // Only the chest shines (the user's choice): a triangle is kept when each of its vertices'
+        // main bone is a torso bone, one whose vertices of this part sit, on average, between
+        // 0.9 and 2.2 above the feet and within 0.45 of the middle (not the head, arms or legs).
+        let mut sums: std::collections::HashMap<u16, (f32, [f32; 3])> = std::collections::HashMap::new();
+        for (v, b) in part.positions.iter().zip(&part.bones) {
+            let e = sums.entry(b[0]).or_default();
+            e.0 += 1.0;
+            for k in 0..3 {
+                e.1[k] += v[k];
+            }
+        }
+        let torso: std::collections::HashSet<u16> = sums.into_iter().filter(|(_, (n, s))| (0.9..2.2).contains(&(s[1] / n)) && (s[0] / n).abs() < 0.45).map(|(b, _)| b).collect();
+        let on = |v: u32| part.bones.get(v as usize).is_some_and(|b| torso.contains(&b[0]));
+        let indices: Vec<u32> = part.indices.chunks_exact(3).filter(|tri| tri.iter().all(|&v| on(v))).flatten().copied().collect();
+        if indices.is_empty() {
+            continue;
+        }
+        mesh.insert_indices(Indices::U32(indices));
         out.push((i, meshes.add(mesh), material.clone(), None));
     }
     out
@@ -6428,6 +6445,19 @@ fn play_frame(
             for (i, q) in state.play.model.parts.iter().enumerate() {
                 let stats = q.texture.and_then(|k| state.play.model.textures.get(k)).map(|t| texture_tone(&t.image.rgba));
                 println!("hero part {i}: texture {:?} env pass 0 {} pass1 {:?} pass1 env {:?} verts {} tone {:?} metal {}", q.texture, q.env_map, q.pass1.as_ref().map(|s| s.texture), q.pass1.as_ref().map(|s| s.uv_mode), q.positions.len(), stats, is_metal(&state.play.model, i));
+                if is_metal(&state.play.model, i) {
+                    let mut by: std::collections::BTreeMap<u16, (usize, [f32; 3])> = Default::default();
+                    for (v, b) in q.positions.iter().zip(&q.bones) {
+                        let e = by.entry(b[0]).or_default();
+                        e.0 += 1;
+                        for k in 0..3 {
+                            e.1[k] += v[k];
+                        }
+                    }
+                    for (b, (n, s)) in by {
+                        println!("  bone {b}: {n} vertices, mean ({:.2}, {:.2}, {:.2})", s[0] / n as f32, s[1] / n as f32, s[2] / n as f32);
+                    }
+                }
             }
         }
         let parts = part_assets(&state.play.model, &mut meshes, &mut materials, &mut images);
