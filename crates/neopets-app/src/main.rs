@@ -3720,7 +3720,12 @@ fn sync_atmos_overlay(mut commands: Commands, state: Option<Res<PlayState>>, mut
     // Only while a gated zone gives a blend factor above 0 (the story's haze): an ungated zone's
     // overlay, such as Meridell's warm one, is not drawn (the user's choice).
     let byte = out.map_or(0.0, |o| if o.blend > 0.0 { o.b[3].round().clamp(0.0, 255.0) * o.blend.min(1.0) } else { 0.0 });
-    let colour = out.map(|o| Color::srgba(o.b[0].clamp(0.0, 255.0) / 255.0, o.b[1].clamp(0.0, 255.0) / 255.0, o.b[2].clamp(0.0, 255.0) / 255.0, (byte / 128.0).min(1.0)));
+    // The weight is 1 - Ad with Ad the frame alpha an opaque draw leaves, 0x80, normalized over
+    // 255: about 0.5 (the source alpha byte is only the gate). NEOPETS_ATMOS_WEIGHT overrides it
+    // (diagnostic). The alpha-byte / 128 weight (0.22) left the land with no haze (user's report 72).
+    let w = std::env::var("NEOPETS_ATMOS_WEIGHT").ok().and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(1.0 - 128.0 / 255.0);
+    let gate = out.map_or(0.0, |o| o.blend.min(1.0));
+    let colour = out.map(|o| Color::srgba(o.b[0].clamp(0.0, 255.0) / 255.0, o.b[1].clamp(0.0, 255.0) / 255.0, o.b[2].clamp(0.0, 255.0) / 255.0, w * gate));
     match overlays.iter_mut().next() {
         Some((mut bg, mut vis)) => {
             set_if(&mut vis, if byte > 0.0 && std::env::var_os("NEOPETS_NO_ATMOS").is_none() { Visibility::Visible } else { Visibility::Hidden });
