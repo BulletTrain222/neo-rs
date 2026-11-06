@@ -3717,7 +3717,9 @@ struct AtmosOverlay;
 /// the purple haze of the gated zones was missing).
 fn sync_atmos_overlay(mut commands: Commands, state: Option<Res<PlayState>>, mut overlays: Query<(&mut BackgroundColor, &mut Visibility), With<AtmosOverlay>>) {
     let out = state.as_ref().map(|s| s.play.atmos_out);
-    let byte = out.map_or(0.0, |o| o.b[3].round().clamp(0.0, 255.0));
+    // Only while a gated zone gives a blend factor above 0 (the story's haze): an ungated zone's
+    // overlay, such as Meridell's warm one, is not drawn (the user's choice).
+    let byte = out.map_or(0.0, |o| if o.blend > 0.0 { o.b[3].round().clamp(0.0, 255.0) * o.blend.min(1.0) } else { 0.0 });
     let colour = out.map(|o| Color::srgba(o.b[0].clamp(0.0, 255.0) / 255.0, o.b[1].clamp(0.0, 255.0) / 255.0, o.b[2].clamp(0.0, 255.0) / 255.0, (byte / 128.0).min(1.0)));
     match overlays.iter_mut().next() {
         Some((mut bg, mut vis)) => {
