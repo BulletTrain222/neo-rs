@@ -345,6 +345,9 @@ pub enum Action {
     GroupEffects { group: usize },
     /// Wait, one tick at a time, while an object of the thread's world animates.
     WaitObj { obj: usize },
+    /// This build's scripted ride (R-0259): the hero keeps his height above object `obj` each
+    /// tick until `None`; for a lift whose platform owns no ground patch the carry can follow.
+    RideObj { obj: Option<usize> },
     /// StopTimer (running off; SPEC-0030 row 248).
     StopTimer,
     /// StartHeroLongFall (SPEC-0030 row 280): the active hero to state 48.
@@ -2529,6 +2532,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.set_word(pack, 2, 0);
             state.set_word(pack, 3, -1);
             v.extend([reg(8, 8), reg(9, 9), reg(1, 1), reg(0, 1), reg(2, 1), reg(14, 14), reg(15, 15), reg(16, 16), reg(10, 10), reg(11, 11), reg(12, 12)]);
+            v.push(Action::RegisterAnimTrigger { host: 9, index: 0, routine: 30 });
             v.extend((3..=6).map(|i| reg(i, 3)));
             for k in &KNIGHTS_956 {
                 if state.flag(211) {
@@ -4355,6 +4359,26 @@ const KNIGHTS_956: [Knight956; 4] = [
 /// SPEC-0048 breakable states 1 and 3: intact (IsBreakableIntact).
 fn breakable_intact(s: &GameState, id: usize) -> bool {
     matches!(s.breakables.get(&id), Some(1 | 3))
+}
+
+/// SPEC-0043 956's lift move: going up (word 2 is 0, the lift down) LoopAnim(17, -1), entity
+/// 6's loop of animation 64, sound 8, object 9 played forward and waited for, the sound killed,
+/// entity 6 released and object 17 stopped; going down the same with the speeds reversed and no
+/// sound. Word 2 records where the lift ends.
+fn lift_move_956(state: &mut GameState) -> Vec<Action> {
+    let up = state.word(956, 2) == 0;
+    state.set_word(956, 2, up as i32);
+    let s = if up { 1.0 } else { -1.0 };
+    let mut v = vec![Action::LoopAnim { obj: 17, speed: -s }, Action::EntityAnim { entity: 6, anim: 64, looped: true, wait: false }];
+    if up {
+        v.push(Action::PlaySound { cue: 8, locator: None });
+    }
+    v.extend([Action::PlayAnim { obj: 9, speed: s, wait: false }, Action::WaitObj { obj: 9 }]);
+    if up {
+        v.push(Action::KillSound { cue: 8, locator: None });
+    }
+    v.extend([Action::ReleaseEntity { entity: 6 }, Action::StopAnim { obj: 17 }]);
+    v
 }
 
 /// SPEC-0043 956's lift readiness: 64 clear and 211 set, or all four knights free (then 211).
@@ -9490,20 +9514,38 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // trigger 9 (lift at the bottom)"). The build had them the other way round, so the
         // hero standing at the foot sent the lift up without him (user's report 63). Object 17
         // and entity 6's loop, object 9 played, sound 8 going up.
-        (956, 8 | 9) if call.object && call.state == 1 && !state.animating.contains(&9) && lift_ready_956(state) => {
+        (956, 8 | 9) if call.object && call.state == 1 && !state.animating.contains(&9) && state.word(pack, 5) == 0 && lift_ready_956(state) => {
             let up = state.word(pack, 2) == 0;
             if (routine == 9) == up {
-                state.set_word(pack, 2, up as i32);
-                let s = if up { 1.0 } else { -1.0 };
-                out.actions.extend([Action::LoopAnim { obj: 17, speed: -s }, Action::EntityAnim { entity: 6, anim: 64, looped: true, wait: false }]);
-                if up {
-                    out.actions.push(Action::PlaySound { cue: 8, locator: None });
+                out.actions.extend(lift_move_956(state));
+            }
+        }
+        // SPEC-0043 956 Lift, animated trigger 9 (object 9's record 0, routine 30): the ride.
+        // Not ready: a line (none with 211 set; 70 with 208 clear; else 66, 67 or 68 by the
+        // number of flags 209, 210 and 623 still clear). Ready: both heroes held, the walk to
+        // locator 44 at the top or 43 at the bottom, 2 s, the hero placed there, the lift move,
+        // the camera returned. The record fires again only once the hero has left it (state 1
+        // is its first tick inside), which is the spec's wait until he leaves (user's report 64:
+        // the ride was not built and the lift would not take him up).
+        (956, 30) if call.object && call.state == 1 && !state.animating.contains(&9) && state.word(pack, 5) == 0 => {
+            if lift_ready_956(state) {
+                // Word 5 (this build's): a ride is under way, from now until its move has ended,
+                // so the plain calls 8 and 9 stay out while the walk and the 2 s wait run (the
+                // lift word had already changed, and trigger 8 sent the lift away under him).
+                state.set_word(pack, 5, 1);
+                let at = if state.word(pack, 2) == 0 { 43 } else { 44 };
+                out.actions.extend([Action::HoldHero, Action::WalkHero { locator: at, wait: true, orient: true }, wait(2.0), Action::MoveHero { locator: at }]);
+                // Object 9 owns no ground patch, so the platform carry has nothing to follow;
+                // the hero is held at his height over it for the move (R-0259).
+                out.actions.push(Action::RideObj { obj: Some(9) });
+                out.actions.extend(lift_move_956(state));
+                out.actions.extend([Action::RideObj { obj: None }, Action::Bits { word: 5, set: 0, clear: 1 }, Action::ReturnCamera { preset: -1, release: true }]);
+            } else if !state.flag(211) {
+                let left = [209, 210, 623].iter().filter(|&&f| !state.flag(f)).count();
+                let line = if !state.flag(208) { 70 } else { [0, 66, 67, 68][left] };
+                if line != 0 {
+                    out.actions.push(Action::Message { line });
                 }
-                out.actions.extend([Action::PlayAnim { obj: 9, speed: s, wait: false }, Action::WaitObj { obj: 9 }]);
-                if up {
-                    out.actions.push(Action::KillSound { cue: 8, locator: None });
-                }
-                out.actions.extend([Action::ReleaseEntity { entity: 6 }, Action::StopAnim { obj: 17 }]);
             }
         }
         // Trigger 16 (212 clear): 212 once the hero leaves.
@@ -19869,6 +19911,13 @@ mod tests {
         assert!(s.flag(211));
         assert!(on_trigger(956, 9, enter(9), &mut s).actions.contains(&Action::PlayAnim { obj: 9, speed: 1.0, wait: false }));
         assert!(on_trigger(956, 8, enter(8), &mut s).actions.contains(&Action::PlayAnim { obj: 9, speed: -1.0, wait: false }));
+        // The ride (animated trigger 9, routine 30) from the bottom: walk to 43, held over
+        // object 9 for the move up; the plain calls stay out until its end clears word 5.
+        let ride = on_trigger(956, 30, enter(0), &mut s).actions;
+        assert!(ride.contains(&Action::WalkHero { locator: 43, wait: true, orient: true }) && ride.contains(&Action::RideObj { obj: Some(9) }) && ride.contains(&Action::PlayAnim { obj: 9, speed: 1.0, wait: false }));
+        assert!(on_trigger(956, 8, enter(8), &mut s).actions.is_empty() && on_trigger(956, 30, enter(0), &mut s).actions.is_empty());
+        s.set_word(956, 5, 0);
+        assert!(on_trigger(956, 30, enter(0), &mut s).actions.contains(&Action::WalkHero { locator: 44, wait: true, orient: true }));
         // The aftermath (214 set): flags 216 and 64, set 8 into S (region 965).
         s.set(214, true);
         let out = on_update(956, &mut s, false);

@@ -1486,6 +1486,8 @@ pub struct Play {
     /// The hero's ground object on the last tick (SPEC-0018 riding): world, object index, its
     /// rotation and translation then.
     ride: Option<(u32, usize, neopets_sim::ride::Quat, [f32; 3])>,
+    /// A script's ride (RideObj, R-0259): the object and the hero's height above its origin.
+    ride_lock: Option<(usize, f32)>,
     /// The Black Knight's tuning block (SPEC-0012, 0x2DA3E8).
     knight_words: Option<neopets_sim::knight::Words>,
     /// The Gelert Assassin's tuning words and data constants (SPEC-0013).
@@ -2431,6 +2433,7 @@ impl Play {
             class20_hits: Vec::new(),
             quiet_slots: std::collections::HashSet::new(),
             ride: None,
+            ride_lock: None,
             knight_words,
             gelert_words,
             hit_list: Vec::new(),
@@ -4149,6 +4152,9 @@ impl Play {
                     }
                 }
                 Action::WaitObj { obj } => return Some(Wait::ObjAnim(pack, obj)),
+                Action::RideObj { obj } => {
+                    self.ride_lock = obj.and_then(|o| self.object_pose(pack, o, 0).map(|m| (o, self.loco.position()[1] - m[13])));
+                }
                 Action::GroupEffects { group } => {
                     let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
                     let fx: Vec<usize> = w.and_then(|w| w.groups.get(group)).map(|g| g.effects.iter().filter_map(|&e| usize::try_from(e).ok()).collect()).unwrap_or_default();
@@ -8713,6 +8719,30 @@ impl Play {
     /// this a moving platform slid out from under him (user's report 45). The climb and hang
     /// records' owners are not built.
     fn ride_step(&mut self) {
+        // NEOPETS_TRACE_RIDE=obj: that object's pose and drawn heights and the ride lock, every 25 ticks (diagnostic).
+        if let Some(o) = std::env::var("NEOPETS_TRACE_RIDE").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+            if self.ticks % 25 == 0 {
+                let pack = self.world.pack;
+                println!("      RIDE tick {} pose {:?} drawn {:?} lock {:?} anim {:?}", self.ticks, self.object_pose(pack, o, 0).map(|m| m[13]), self.object_matrix(pack, o).map(|m| m[13]), self.ride_lock, self.world.object_anims.get(o).map(|a| (a.state, a.time)));
+            }
+        }
+        // A script's ride: the hero's height follows the object, with no gravity or ground snap.
+        if let Some((o, dy)) = self.ride_lock {
+            match self.object_pose(self.world.pack, o, 0) {
+                Some(m) => {
+                    self.loco.body.position[1] = m[13] + dy;
+                    self.loco.body.velocity = [0.0; 3];
+                    self.loco.body.no_gravity = true;
+                    self.loco.body.no_snap = true;
+                    // The carry starts afresh after the ride: its last pose of the platform is
+                    // from before the move, and its jump threw the hero into the sky.
+                    self.ride = None;
+                    self.loco.body.platform_dy = None;
+                    return;
+                }
+                None => self.ride_lock = None,
+            }
+        }
         // The probe of an object's patch uses the object's pose of this tick, as the carry does;
         // the poses saved at the end of the last tick put the platform one move behind, and the
         // hero hovered 0.15 over it while it sank (user's report 49).
@@ -10433,7 +10463,10 @@ impl Play {
             let vols = w.headers.get(i).and_then(|o| o.as_ref()).map_or(0, |h| h.volumes.len());
             let (set, header) = w.objects.get(i).and_then(|o| o.as_ref()).map_or((false, false), |o| (o.model_set.is_some(), o.header.is_some()));
             match m {
-                Some(m) => println!("OBJ {i} drawn at {:.1},{:.1},{:.1} model set {set} header {header} volumes {vols} walls {}", m[12], m[13], m[14], w.object_wall_count(m[12], m[14])),
+                Some(m) => {
+                    let list: Vec<String> = w.headers.get(i).and_then(|o| o.as_ref()).map(|h| h.volumes.iter().map(|v| format!("index {} kind {} flags {:#x} {:?}", v.index, v.kind, v.flags, v.shape)).collect()).unwrap_or_default();
+                    println!("OBJ {i} drawn at {:.1},{:.1},{:.1} model set {set} header {header} volumes {vols} walls {} records {list:?} routines {:?}", m[12], m[13], m[14], w.object_wall_count(m[12], m[14]), w.anim_routines.iter().filter(|(k, _)| k.0 == i).collect::<Vec<_>>());
+                }
                 None => {
                     let rest = w.objects.get(i).and_then(|o| o.as_ref()).map(|o| [o.rest[12], o.rest[13], o.rest[14]]);
                     let state = w.object_anims.get(i).map(|o| (o.state, o.scripted));
@@ -11124,7 +11157,9 @@ impl Play {
         }
         let (world, other) = (&self.world, self.other.as_ref());
         let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
-        let noclip = self.cheats.noclip;
+        // A script's ride (R-0259) moves the hero with its object: no wall, box or ceiling push
+        // takes him off it (pack 956's lift shaft held him at 46.6 while the platform went on).
+        let noclip = self.cheats.noclip || self.ride_lock.is_some();
         let hero_state = self.loco.state;
         let block_contact = !noclip && !matches!(self.loco.state, 18 | 19 | 30 | 41 | 58);
         let wall_contact = !noclip && !matches!(self.loco.state, 21 | 23 | 30 | 35 | 37 | 38 | 41 | 47);
