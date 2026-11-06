@@ -221,7 +221,12 @@ pub fn region_character(
     let mut roles: Vec<u16> = trees.iter().map(|t| t.role_id).collect();
     roles.sort_unstable();
     roles.dedup();
-    let body: Vec<u16> = roles.iter().copied().filter(|r| !(10..=20).contains(r)).collect();
+    // SPEC-0004 (edge case of the layout-C batches, Resolved): the loader makes the container's
+    // main mesh the role-1 child and keeps later children only with roles 10 to 20; a role-0
+    // child (the 76-vertex unskinned mesh in sets of resources 697, 698, 865, 903, 904, 948,
+    // 1216 and 1265) is never drawn. Drawing it put a black ball on every Spyder (user's report
+    // 50). A set with no role-1 child keeps its other children as before.
+    let body: Vec<u16> = if roles.contains(&1) { vec![1] } else { roles.iter().copied().filter(|r| !(10..=20).contains(r)).collect() };
     let mut model = model::build_masked(bytes, &chain, None, Some(&body), Some(model::REGION_MASK))?;
     for r in roles.iter().copied().filter(|r| (10..=20).contains(r)) {
         let m = model::build_masked(bytes, &chain, None, Some(&[r]), Some(model::REGION_MASK))?;
