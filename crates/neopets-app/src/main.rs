@@ -2715,13 +2715,24 @@ fn sync_worlds(
             if std::env::var_os("NEOPETS_TRACE_ATMOS").is_some() {
                 eprintln!("ATMOS dome {d} role-10 layer: {:?}", haze.as_ref().map(|m| m.as_ref().map(|m| (m.parts.len(), m.min, m.max))));
             }
-            if let Ok(Some(m)) = haze {
+            if let Ok(Some(mut m)) = haze {
+                // The dome draws first (SPEC-0046 Frame order); Bevy sorts the blended draws by
+                // their origin's distance, and the layer's origin at the world origin tied with
+                // the scene's, so it drew over the blended road parts of Meridell (user's report
+                // 74). Its origin goes far above the world with the mesh moved back, so it always
+                // sorts farthest and draws first.
+                const FAR: [f32; 3] = [0.0, 100_000.0, 0.0];
+                for part in &mut m.parts {
+                    for p in &mut part.positions {
+                        p[1] -= FAR[1];
+                    }
+                }
                 for (_, mesh, material) in part_assets(&m, &mut meshes, &mut materials, &mut images) {
                     let mut own = materials.get(&material).cloned().unwrap_or_default();
                     own.alpha_mode = AlphaMode::Blend;
                     own.unlit = true;
                     let h = materials.add(own);
-                    commands.spawn((Mesh3d(mesh), MeshMaterial3d(h.clone()), Transform::IDENTITY, *part, Visibility::Hidden, HazeLayer(h), bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+                    commands.spawn((Mesh3d(mesh), MeshMaterial3d(h.clone()), Transform::from_translation(Vec3::from(FAR)), *part, Visibility::Hidden, HazeLayer(h), bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver, draw_order::DrawRank { pack: None, rank: 150_000 }));
                 }
             }
         }
