@@ -4572,6 +4572,12 @@ fn play_trace(
             println!("      ceiling {k}: middle {mid:?} U {:?} LU {} LV {} links {:?}", r.u, r.lu, r.lv, r.links);
         }
     }
+    // NEOPETS_TRACE_ITEMLIST=1: every item of the item table with its type and label (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_ITEMLIST").is_some() {
+        for i in &play.items.items {
+            println!("ITEM {} kind {} {}", i.id, i.kind, play.item_label(i.id));
+        }
+    }
     // NEOPETS_TRACE_OBJAUDIT=1: objects still in their disc state 3 or 4 that this build treats as drawn, with their wall counts (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_OBJAUDIT").is_some() {
         println!("OBJAUDIT {} {:?}", play.world.pack, play.undrawn_but_shown());

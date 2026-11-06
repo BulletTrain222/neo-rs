@@ -10084,6 +10084,9 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 state.take(9, 1);
             }
             out.actions.push(Action::Message { line: 168 });
+            // This build's choice (the user's account, R-0255): the chief gives a Red Negg
+            // (item 174, a stat-up) for the eye patch. SPEC-0045 842 trigger 2 lists no gift.
+            out.actions.push(Action::GiveItem { item: 174, count: 1 });
             out.actions.extend((21..=26).map(|e| Action::WalkEntity { entity: e, locator: e - 4, wait: false, orient: false, stop: 1.1 }));
             out.actions.extend(slot(3));
             out.actions.extend([Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::ReturnCamera { preset: -1, release: true }]);

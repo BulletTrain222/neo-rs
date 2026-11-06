@@ -7158,6 +7158,8 @@ impl Play {
             }
             self.luck = neopets_sim::items::clamp_luck(self.luck + up.luck);
             self.cue(159);
+            // A stat-up is never stored, so the report's item log would not show it.
+            self.last_pickup = format!("stat-up item {id} on tick {}: hp max {}, mp max {}", self.ticks, self.hero_max, self.hero_mp_max);
             return true;
         }
         self.state.give(id, n as u32);
