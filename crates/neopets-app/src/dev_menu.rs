@@ -47,6 +47,8 @@ pub struct DevMenu {
     pub debug: crate::debug_tools::Switches,
     /// The weapon list's cursor.
     weapon_at: usize,
+    /// The armour list's cursor.
+    armour_at: usize,
     /// The cut and developer teleport's cursor, and where a teleport to a world with no entry puts the hero.
     extra_at: usize,
     pub warp_point: Option<[f32; 3]>,
@@ -79,7 +81,7 @@ impl Default for DevMenu {
     fn default() -> Self {
         // NEOPETS_DEBUG holding "menu": the menu open from the start, for a picture of it.
         let open = std::env::var("NEOPETS_DEBUG").is_ok_and(|v| v.contains("menu"));
-        Self { debug: crate::debug_tools::Switches::from_env(), want_picker: false, picking: false, group_at: 0, group: None, extra_at: 0, warp_point: None, haste_drag: None, open, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
+        Self { debug: crate::debug_tools::Switches::from_env(), want_picker: false, picking: false, group_at: 0, group: None, extra_at: 0, warp_point: None, haste_drag: None, open, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, armour_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
     }
 }
 
@@ -187,6 +189,7 @@ enum Entry {
     ToCamera,
     Maps,
     Weapon,
+    Armour,
     Noclip,
     Haste,
     Extra,
@@ -211,12 +214,12 @@ const SECTIONS: [(&str, &[Entry]); 8] = [
     ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group]),
     ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Wireframe, Entry::EventLog, Entry::HideHud]),
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::Spawn, Entry::BossFight, Entry::CloudBeast]),
-    ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints, Entry::Gallery]),
+    ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Armour, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints, Entry::Gallery]),
     ("STORY", &[Entry::Flag]),
     ("COLLISION VIEW", &[Entry::Collision, Entry::CollisionLayer]),
 ];
 
-const ENTRIES: [Entry; 33] = [
+const ENTRIES: [Entry; 34] = [
     Entry::God,
     Entry::Noclip,
     Entry::Haste,
@@ -241,6 +244,7 @@ const ENTRIES: [Entry; 33] = [
     Entry::BossFight,
     Entry::CloudBeast,
     Entry::Weapon,
+    Entry::Armour,
     Entry::Item,
     Entry::Drop,
     Entry::Motes,
@@ -292,9 +296,14 @@ fn other_column(i: usize) -> usize {
 fn kind(e: Entry) -> Kind {
     match e {
         Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam | Entry::Inspector | Entry::Collision | Entry::Wireframe | Entry::EventLog | Entry::HideHud => Kind::Toggle,
-        Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight | Entry::CollisionLayer => Kind::Choice,
+        Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Armour | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight | Entry::CollisionLayer => Kind::Choice,
         _ => Kind::Action,
     }
+}
+
+/// The body items of the item table (types 4, Tor's, and 1, Roberta's: armour and outfits), by id.
+fn armours(p: &crate::play::Play) -> Vec<u16> {
+    p.items.items.iter().filter(|i| matches!(i.kind, 4 | 1)).map(|i| i.id).collect()
 }
 
 /// The weapons of the item table (types 3, Tor's, and 6, Roberta's), by id.
@@ -835,6 +844,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
                 let n = weapons(&play.play).len().max(1) as i32;
                 dev.weapon_at = (dev.weapon_at as i32 + delta).rem_euclid(n) as usize;
             }
+            Entry::Armour => {
+                let n = armours(&play.play).len().max(1) as i32;
+                dev.armour_at = (dev.armour_at as i32 + delta).rem_euclid(n) as usize;
+            }
             Entry::Flag => dev.flag = (dev.flag as i32 + delta).clamp(0, u16::MAX as i32) as u16,
             Entry::CollisionLayer => dev.debug.collision_layer = (dev.debug.collision_layer as i32 + delta.signum()).rem_euclid(crate::debug_tools::LAYERS.len() as i32) as usize,
             Entry::Warp => {
@@ -904,6 +917,13 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
                 format!("Gave weapon {id} ({}); a higher id already held stays equipped", p.item_label(id))
             }
             None => "No weapons in the item table".into(),
+        },
+        Entry::Armour => match armours(p).get(dev.armour_at).copied() {
+            Some(id) => {
+                p.dev_wear(id);
+                format!("Wearing {id} ({})", p.item_label(id))
+            }
+            None => "No armour in the item table".into(),
         },
         Entry::Item => {
             p.give(dev.item);
@@ -1107,6 +1127,10 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
                 None => ("Give weapon".into(), "-".into()),
             }
         }
+        Entry::Armour => match armours(p).get(dev.armour_at) {
+            Some(&id) => (format!("Armour: {}", p.item_label(id)), format!("{} {}", if p.items.get(id).is_some_and(|i| i.kind == 4) { "Tor" } else { "Rob" }, dev.armour_at + 1)),
+            None => ("Wear armour".into(), "-".into()),
+        },
         Entry::Item => (format!("Item: {}", p.item_label(dev.item)), dev.item.to_string()),
         Entry::Drop => ("Drop coins + that item here".into(), String::new()),
         Entry::Motes => ("Give every Mote".into(), String::new()),

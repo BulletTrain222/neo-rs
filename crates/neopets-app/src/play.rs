@@ -8719,6 +8719,21 @@ impl Play {
         self.ride = now.map(|(o, m)| (pack, o, neopets_sim::ride::rotation_of(&m), [m[12], m[13], m[14]]));
     }
 
+    /// Developer menu: wear body item `id` (its hero's body entry), whatever its id: the other
+    /// held body items of that hero are put away, so the add rule (a greater id replaces) does
+    /// not keep the old one.
+    pub fn dev_wear(&mut self, id: u16) {
+        let kind = self.items.get(id).map_or(-1, |i| i.kind);
+        let Some((f, h)) = neopets_sim::inventory::family(kind) else { return };
+        let same: Vec<u16> = self.state.items.keys().copied().filter(|&o| o != id && self.items.get(o).is_some_and(|i| neopets_sim::inventory::family(i.kind) == Some((f, h)))).collect();
+        for o in same {
+            self.state.items.remove(&o);
+        }
+        self.equipment.entries[f][h] = None;
+        self.state.items.insert(id, 1);
+        self.equipment_step();
+    }
+
     /// Diagnostic: the hero put at a point as it is (no ground probe).
     pub fn place_exact(&mut self, p: [f32; 3]) {
         let f = self.loco.facing;
