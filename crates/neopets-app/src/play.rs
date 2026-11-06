@@ -10734,7 +10734,7 @@ impl Play {
             pad,
             |x, z, c| w.probe(x, z, c).height,
             |e| push_eye(w, e),
-            |a, c| w.ground.as_ref().is_none_or(|g| g.segment_clear(a, c, true)),
+            |a, c| eye_line_clear(w, a, c),
         );
         }
         // SPEC-0027 Scripted cameras: the play is sampled and its end mode acts.
@@ -19456,6 +19456,21 @@ fn followed(loco: &Locomotion, world: &World) -> Followed {
 /// box primitives, each with the eye radius 1.25. The frame records use the characters'
 /// two-sided correction; the camera's single-margin plane test is only partly specified
 /// (Medium). Moving objects, cylinders, planes and characters are not pushed against yet.
+/// SPEC-0027 Line-of-sight timer: the line from the eye to the focus is blocked by "the world
+/// segment test or the camera visibility test". The segment test is the frame-record query of
+/// SPEC-0018; the visibility test is not described past its flag, so this build's reading is
+/// that it also sees the push boxes the eye pass uses (cell list A kinds 4 and 7), skipping a box
+/// that holds either end (R-0256). Without the boxes a camera dropped behind the door pillars of
+/// pack 1098's entrance by the arrival placement never counted as blocked and stayed outside
+/// (user's report 59).
+fn eye_line_clear(world: &World, a: [f32; 3], c: [f32; 3]) -> bool {
+    if world.ground.as_ref().is_some_and(|g| !g.segment_clear(a, c, true)) {
+        return false;
+    }
+    let inside = |p: [f32; 3], b: &BoxShape| segment_box(p, p, b.origin, b.axes, b.extents);
+    !world.boxes.iter().any(|b| !inside(a, b) && !inside(c, b) && segment_box(a, c, b.origin, b.axes, b.extents))
+}
+
 fn push_eye(world: &World, e: &mut [f32; 3]) {
     if let Some(g) = &world.ground {
         let walls: Vec<WallEdge> = g
