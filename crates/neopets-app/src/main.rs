@@ -5958,6 +5958,15 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_FRAMES="tick:x,z,r": the frame records of the cell at (x, z) within r of it, with
+        // their type, gate, start, face, top, length and height (diagnostic).
+        if let Some((k, v)) = std::env::var("NEOPETS_TRACE_FRAMES").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.trim().parse::<u64>().unwrap_or(0), b.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect::<Vec<_>>())) {
+            if k == play.ticks && v.len() == 3 {
+                for line in play.frames_near(v[0], v[1], v[2]) {
+                    println!("      {line}");
+                }
+            }
+        }
         // NEOPETS_TRACE_COLLIS="tick:mask": SetWorldCollisMask(mask) on that tick (diagnostic).
         if let Some((k, m)) = std::env::var("NEOPETS_TRACE_COLLIS").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u16>().ok()?))) {
             if play.ticks == k {

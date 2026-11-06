@@ -17023,6 +17023,27 @@ impl Play {
         self.world.climb_rest.as_ref().map_or(Vec::new(), |r| r.panel_owner.iter().enumerate().filter_map(|(k, o)| o.map(|o| (k, o, self.world.panels[k].kind, self.world.panels[k].lu <= -200.0))).collect())
     }
 
+    /// Diagnostic: the frame records of the cell at (x, z) whose plane lies within r of the point.
+    pub fn frames_near(&self, x: f32, z: f32, r: f32) -> Vec<String> {
+        let Some(g) = self.world.ground.as_ref() else { return Vec::new() };
+        g.frames_at(x, z)
+            .into_iter()
+            .filter_map(|f| {
+                let d = (f.face[0] * x + f.face[2] * z + f.face[3]).abs();
+                (d <= r).then(|| format!("FRAME type {} gate {:#x} start {:.1?} face {:.2?} top {:.2?} length {:.1} height {:.1} (plane distance {d:.2})", f.kind, f.gate, f.start, f.face, f.top, f.length, f.height))
+            })
+            .chain(self.world.solids.iter().filter(|v| {
+                let c = match v.shape {
+                    neopets_sim::trigger::Shape::Sphere { centre, .. } => centre,
+                    neopets_sim::trigger::Shape::Cylinder { base, .. } => base,
+                    neopets_sim::trigger::Shape::Rectangle { origin, .. } => origin,
+
+                };
+                (c[0] - x).hypot(c[2] - z) < r + 6.0
+            }).map(|v| format!("SOLID kind {} flags {:#x} mask {:#x} {:?}", v.kind, v.flags, v.mask, v.shape)))
+            .collect()
+    }
+
     /// Diagnostic: the gated solid boxes (gate mask, origin, axes, extents) and the current mask.
     pub fn gated_boxes(&self) -> String {
         let list: Vec<String> = self.world.all_boxes.iter().filter(|(m, _)| *m != 0).map(|(m, b)| format!("mask {m:#x} origin {:?} axes {:?} extents {:?}", b.origin, b.axes, b.extents)).collect();
