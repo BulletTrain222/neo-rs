@@ -4344,14 +4344,14 @@ impl Play {
         None
     }
 
-    /// This build's quick save (F9): allowed only in free play, with no camera play, fade,
+    /// This build's save states (F9, `states_menu`): saving is allowed only in free play, with no camera play, fade,
     /// letterbox, hold or scripted hero walk under way, so a scene is never cut in half.
-    pub fn quick_ready(&self) -> bool {
+    pub fn state_ready(&self) -> bool {
         self.cut.is_none() && self.fade.target == 0.0 && self.bars.target == 0.0 && !self.held && self.hero_walk.is_none() && self.loco.state != hero_states::LADDER
     }
 
-    /// The hero at the quick save's place and facing (F10).
-    pub fn quick_place(&mut self, p: [f32; 3], f: [f32; 3]) {
+    /// The hero at a save state's place and facing.
+    pub fn state_place(&mut self, p: [f32; 3], f: [f32; 3]) {
         self.arrive((p, f));
     }
 

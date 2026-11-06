@@ -10,6 +10,7 @@ mod dev_menu;
 mod dev_spawn;
 mod stage_view;
 mod story_run;
+mod states_menu;
 mod ui_fit;
 mod display;
 mod draw_order;
@@ -926,6 +927,7 @@ fn main() {
             ..default()
         }))
         .init_resource::<dev_menu::DevMenu>()
+        .init_resource::<states_menu::StatesMenu>()
         .init_resource::<dev_spawn::SpawnPicker>()
         .insert_resource(bindings::Bindings::load())
         .init_resource::<bindings::Pad>()
@@ -947,7 +949,7 @@ fn main() {
             Update,
             (
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
-                (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot, quick_save_load),
+                (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot),
                 (show_sim, show_browser),
                 (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
             )
@@ -970,7 +972,7 @@ fn main() {
     app.add_plugins(debug_tools::WireframeTool);
     app.init_resource::<item_gallery::Gallery>();
     app.add_systems(Update, item_gallery::step.after(play_frame));
-    app.add_systems(Update, (debug_tools::track_events, debug_tools::save_report, debug_tools::note_input, debug_tools::show_panel, debug_tools::hide_hud, debug_tools::show_lines).after(play_frame));
+    app.add_systems(Update, (debug_tools::track_events, debug_tools::save_report, debug_tools::note_input, states_menu::states_menu, debug_tools::show_panel, debug_tools::hide_hud, debug_tools::show_lines).after(play_frame));
     app.insert_resource(goal_start.map_or_else(story_run::GoalWalk::default, story_run::GoalWalk::open));
     app.add_systems(Startup, story_run::spawn_goal_panel);
     app.add_systems(Update, (story_run::goal_walk_step.before(play_frame), story_run::show_goal_panel));
@@ -1908,75 +1910,46 @@ fn orbit_camera(
     }
 }
 
-/// The quick save's files (this build's tool): a one-slot save file, and the hero's world,
-/// place and facing beside it.
-/// NEOPETS_QUICK_DIR moves them (diagnostic, so a trace never touches the player's).
-fn quick_paths() -> (String, String) {
-    let dir = std::env::var("NEOPETS_QUICK_DIR").unwrap_or_else(|_| "private/saves".to_string());
-    (format!("{dir}/quick.bin"), format!("{dir}/quick.txt"))
+/// The save states' folder (this build's tool): each state is `<id>.bin`, a one-slot save
+/// file written as a save point would, and `<id>.txt` beside it: the world, place and facing
+/// of the hero, then the player's name for it, then the date. NEOPETS_STATES_DIR moves it
+/// (diagnostic, so a trace never touches the player's states).
+fn states_dir() -> String {
+    std::env::var("NEOPETS_STATES_DIR").unwrap_or_else(|_| "private/saves/states".to_string())
 }
 
-/// F9 quick save and F10 quick load (this build's tool; the original has only save points).
-/// F9 writes the game as a save point would, plus where the hero stands; F10 loads it as the
-/// menu's Load does and puts the hero back there. Not while the story walk (--goal) owns F9
-/// and F10, and F9 not in a scene.
-fn quick_save_load(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, play: Option<ResMut<PlayState>>, archive: Option<ResMut<Archive>>, walk: Option<Res<story_run::GoalWalk>>, mut dev: ResMut<dev_menu::DevMenu>) {
-    let (save, load) = (keys.just_pressed(KeyCode::F9), keys.just_pressed(KeyCode::F10));
-    if !(save || load) || walk.is_some_and(|w| !w.goals.is_empty()) {
-        return;
+/// A save state under a new id, named `name`; returns its id.
+fn save_state(play: &play::Play, name: &str) -> Result<String, String> {
+    let dir = states_dir();
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let mut id = format!("s{secs}");
+    let mut k = 1;
+    while std::path::Path::new(&format!("{dir}/{id}.bin")).exists() {
+        k += 1;
+        id = format!("s{secs}-{k}");
     }
-    let Some(mut play) = play else { return };
-    if save {
-        if !play.play.quick_ready() {
-            dev.toast = Some(("Quick save waits until the scene ends".into(), 120));
-            return;
-        }
-        let done = quick_save(&play.play);
-        dev.toast = Some((match done {
-            Ok(()) => "Quick saved (F10 loads)".into(),
-            Err(e) => format!("Quick save failed: {e}"),
-        }, 120));
-        return;
-    }
-    let Some(mut archive) = archive else { return };
-    let Archive { disc, index } = &mut *archive;
-    match quick_load(disc, index, &play.play) {
-        None => dev.toast = Some(("No quick save yet (F9 saves)".into(), 120)),
-        Some(Err(e)) => dev.toast = Some((format!("Quick load failed: {e}"), 180)),
-        Some(Ok(new)) => {
-            play.play = new;
-            match archive.disc.reopen() {
-                Ok(second) => commands.insert_resource(Streamer::start(second, archive.index.clone(), play.play.boot.clone())),
-                Err(e) => error!("No loader thread, streaming is off: {e}"),
-            }
-            dev.toast = Some(("Quick loaded".into(), 120));
-        }
-    }
-}
-
-/// The quick save (F9): a one-slot save file written as a save point would, and the hero's
-/// world, place and facing beside it.
-fn quick_save(play: &play::Play) -> Result<(), String> {
     let mut file = neopets_sim::save::SaveFile::default();
-    play.write_slot(&mut file.slots[0], &save_date());
+    let date = save_date();
+    play.write_slot(&mut file.slots[0], &date);
     let (p, f) = (play.loco.position(), play.loco.facing);
-    let place = format!("{} {} {} {} {} {} {}
-", play.world.pack, p[0], p[1], p[2], f[0], f[1], f[2]);
-    let (bin, txt) = quick_paths();
-    write_save(&bin, &file)?;
-    std::fs::write(txt, place).map_err(|e| e.to_string())
+    let name = name.replace(['\n', '\r'], " ");
+    let place = format!("{} {} {} {} {} {} {}\n{}\n{}\n", play.world.pack, p[0], p[1], p[2], f[0], f[1], f[2], name.trim(), String::from_utf8_lossy(&date));
+    write_save(&format!("{dir}/{id}.bin"), &file)?;
+    std::fs::write(format!("{dir}/{id}.txt"), place).map_err(|e| e.to_string())?;
+    Ok(id)
 }
 
-/// The quick load (F10): the slot loaded as the menu's Load does, then the hero put back at
-/// the saved place when the loaded world is the saved one. None without a quick save.
-fn quick_load(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play) -> Option<Result<play::Play, String>> {
-    let (bin, txt) = quick_paths();
-    let file = read_save(&bin)?;
-    let place: Vec<f32> = std::fs::read_to_string(txt).unwrap_or_default().split_whitespace().filter_map(|v| v.parse().ok()).collect();
+/// Save state `id` loaded as the menu's Load loads a slot, then the hero put back at its
+/// place when the loaded world is the saved one. None when the state is missing.
+fn load_state(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play, id: &str) -> Option<Result<play::Play, String>> {
+    let dir = states_dir();
+    let file = read_save(&format!("{dir}/{id}.bin"))?;
+    let text = std::fs::read_to_string(format!("{dir}/{id}.txt")).unwrap_or_default();
+    let place: Vec<f32> = text.lines().next().unwrap_or("").split_whitespace().filter_map(|v| v.parse().ok()).collect();
     Some(load_game_from(disc, index, old, &file.slots[0]).map(|mut new| {
         if let [pack, x, y, z, fx, fy, fz] = place[..] {
             if new.world.pack == pack as u32 {
-                new.quick_place([x, y, z], [fx, fy, fz]);
+                new.state_place([x, y, z], [fx, fy, fz]);
             }
         }
         new
@@ -5837,23 +5810,23 @@ fn play_trace(
                 }
             }
         }
-        // NEOPETS_TRACE_QUICK="save@t,load@t": the F9 quick save and F10 quick load on those
-        // ticks (diagnostic; use NEOPETS_QUICK_DIR to keep the player's quick save).
-        if let Ok(v) = std::env::var("NEOPETS_TRACE_QUICK") {
+        // NEOPETS_TRACE_STATE="save:name@t,load:id@t": a save state named `name`, or the load of
+        // state `id`, on those ticks (diagnostic; use NEOPETS_STATES_DIR to keep the player's).
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_STATE") {
             for e in v.split(',') {
                 let Some((what, k)) = e.trim().split_once('@') else { continue };
                 if k.trim().parse::<u64>().ok() != Some(play.ticks) {
                     continue;
                 }
-                if what == "save" {
-                    println!("      quick save on tick {}: ready {} {:?} at {:?}", play.ticks, play.quick_ready(), quick_save(&play), play.loco.position());
-                } else if let Some(r) = quick_load(&mut archive.disc, &archive.index, &play) {
+                if let Some(name) = what.strip_prefix("save:") {
+                    println!("      save state on tick {}: ready {} {:?} at {:?}", play.ticks, play.state_ready(), save_state(&play, name), play.loco.position());
+                } else if let Some(r) = what.strip_prefix("load:").and_then(|id| load_state(&mut archive.disc, &archive.index, &play, id)) {
                     match r {
                         Ok(p) => {
                             play = p;
-                            println!("      quick load on tick {}: world {} hero at {:?} hp {}/{}", play.ticks, play.world.pack, play.loco.position(), play.hero_hp, play.hero_max);
+                            println!("      state load on tick {}: world {} hero at {:?} hp {}/{}", play.ticks, play.world.pack, play.loco.position(), play.hero_hp, play.hero_max);
                         }
-                        Err(e) => println!("      quick load failed: {e}"),
+                        Err(e) => println!("      state load failed: {e}"),
                     }
                 }
             }

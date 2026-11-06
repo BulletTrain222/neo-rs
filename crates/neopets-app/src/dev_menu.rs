@@ -25,6 +25,8 @@ use crate::PlayState;
 #[derive(Resource)]
 pub struct DevMenu {
     pub open: bool,
+    /// The save-state list (F9, `states_menu`) is up and has the keys.
+    pub states_open: bool,
     cursor: usize,
     amount: usize,
     item: u16,
@@ -81,7 +83,7 @@ impl Default for DevMenu {
     fn default() -> Self {
         // NEOPETS_DEBUG holding "menu": the menu open from the start, for a picture of it.
         let open = std::env::var("NEOPETS_DEBUG").is_ok_and(|v| v.contains("menu"));
-        Self { debug: crate::debug_tools::Switches::from_env(), want_picker: false, picking: false, group_at: 0, group: None, extra_at: 0, warp_point: None, haste_drag: None, open, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, armour_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
+        Self { debug: crate::debug_tools::Switches::from_env(), want_picker: false, picking: false, group_at: 0, group: None, extra_at: 0, warp_point: None, haste_drag: None, open, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, armour_at: 0, states_open: false, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
     }
 }
 
@@ -121,7 +123,7 @@ impl DevMenu {
 
     /// The hero and the game menus get no input this frame.
     pub fn blocks_input(&self) -> bool {
-        self.open || self.free.is_some() || self.swallow || self.debug.note_open
+        self.open || self.free.is_some() || self.swallow || self.debug.note_open || self.states_open
     }
 }
 
@@ -444,7 +446,7 @@ pub fn spawn_panel(mut commands: Commands) {
             ui.spawn((Text::new("Developer menu"), font(22.0), TextColor(GOLD)));
             ui.spawn((Text::new("A test tool of this build, not part of the game"), font(13.0), TextColor(DIM)));
             ui.spawn((
-                Text::new("Keys: arrows pick and change (Shift x10), Tab other column, Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step, F9 quick save, F10 quick load
+                Text::new("Keys: arrows pick and change (Shift x10), Tab other column, Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step, F9 save states
 Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), LT/RT other column, A apply, B close | Mouse: click rows and < >, drag the slider"),
                 font(12.0),
                 TextColor(DIM),
