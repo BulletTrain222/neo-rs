@@ -4769,6 +4769,7 @@ fn play_trace(
         println!("RAILOWNERS {} {:?}", play.world.pack, play.rail_owners());
         println!("PANELOWNERS {} {:?} rails {}", play.world.pack, play.panel_owners(), play.world.rails.len());
         println!("CLIMBDEBUG {}", play.climb_debug());
+        println!("GATED {}", play.gated_boxes());
     }
     // NEOPETS_TRACE_CUE_RECORDS=1: the type-4 and type-5 records of all sound blocks, against SPEC-0031's counts (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_CUE_RECORDS").is_some() {
@@ -5955,6 +5956,12 @@ fn play_trace(
                     }
                     faerie_code = code;
                 }
+            }
+        }
+        // NEOPETS_TRACE_COLLIS="tick:mask": SetWorldCollisMask(mask) on that tick (diagnostic).
+        if let Some((k, m)) = std::env::var("NEOPETS_TRACE_COLLIS").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u16>().ok()?))) {
+            if play.ticks == k {
+                play.world.set_collis_mask(m);
             }
         }
         // NEOPETS_TRACE_STATE="save:name@t,load:id@t": a save state named `name`, or the load of

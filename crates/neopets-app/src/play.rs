@@ -111,6 +111,12 @@ pub struct World {
     /// collision mask, and all of them with their gate masks.
     boxes: Vec<BoxShape>,
     all_boxes: Vec<(u16, BoxShape)>,
+    /// The flat kind-4 and kind-7 rectangles (third extent 0 or less) whose face is near
+    /// horizontal (|normal y| above 0.85): the zero-radius contact's floor route (SPEC-0018
+    /// Primitive class routing; SPEC-0027 Eye pass, the separate floor push), stood on by the
+    /// ground probe while their gate passes (pack 1174's gate-4 plank, user's report 76).
+    all_planks: Vec<(u16, BoxShape)>,
+    planks: Vec<BoxShape>,
     /// The pushing collision spheres (SPEC-0018 Sphere contact): those whose mask passes, and
     /// all of them with their masks.
     push_spheres: Vec<([f32; 3], f32)>,
@@ -192,6 +198,7 @@ impl World {
         self.volumes = self.all_volumes.iter().filter(|v| v.fires_on_contact(mask)).copied().collect();
         self.shot_volumes = self.all_volumes.iter().filter(|v| v.fires_on_shot(mask)).copied().collect();
         self.boxes = self.all_boxes.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect();
+        self.planks = self.all_planks.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect();
         self.push_spheres = self.all_spheres.iter().filter(|(m, ..)| *m == 0 || m & mask != 0).map(|&(_, c, r)| (c, r)).collect();
     }
 
@@ -250,6 +257,8 @@ impl World {
             flat: Some(0.0),
             boxes: crate::stage_view::wall_boxes(),
             all_boxes: crate::stage_view::wall_boxes().into_iter().map(|b| (0, b)).collect(),
+            all_planks: Vec::new(),
+            planks: Vec::new(),
             push_spheres: crate::stage_view::rock_spheres(),
             all_spheres: crate::stage_view::rock_spheres().into_iter().map(|(c, r)| (0, c, r)).collect(),
             collis_mask: 0,
@@ -346,6 +355,12 @@ impl World {
                 .filter(|r| r.pushes(0xFFFF))
                 .map(|r| (r.mask, BoxShape { origin: r.origin, axes: r.axes, extents: r.extents }))
                 .collect(),
+            all_planks: ground::rectangles(&bytes, &chain.chunks)
+                .into_iter()
+                .filter(|r| r.flags & 0b1001 != 0 && r.extents[2] <= 0.0 && r.axes[2][1].abs() > 0.85 && r.extents[0] > 0.0 && r.extents[1] > 0.0)
+                .map(|r| (r.mask, BoxShape { origin: r.origin, axes: r.axes, extents: r.extents }))
+                .collect(),
+            planks: Vec::new(),
             collis_mask: 0,
             neighbours: Neighbours::of(&bytes, &chain.chunks),
             planes: ground::teleport_planes(&bytes, &chain.chunks),
@@ -592,7 +607,28 @@ impl World {
         if let Some(h) = self.flat.filter(|&h| c >= h - 0.5) {
             return ProbeHit { height: h, normal: UP, kind: None, found: true, respawn: None, surface: None, zone: None, patch: None };
         }
-        self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None, patch: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()))
+        let hit = self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None, patch: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()));
+        // A gated plank above the ground found and at or below the ceiling is stood on.
+        let mut best = hit;
+        for b in &self.planks {
+            let ([a0, a1, n], [e0, e1, _]) = (b.axes, b.extents);
+            let det = a0[0] * a1[2] - a0[2] * a1[0];
+            if det.abs() < 1e-6 {
+                continue;
+            }
+            let (dx, dz) = (x - b.origin[0], z - b.origin[2]);
+            let s = (dx * a1[2] - dz * a1[0]) / det;
+            let t = (a0[0] * dz - a0[2] * dx) / det;
+            if !(0.0..=e0).contains(&s) || !(0.0..=e1).contains(&t) {
+                continue;
+            }
+            let y = b.origin[1] + s * a0[1] + t * a1[1];
+            if y <= c && (!best.found || y > best.height) {
+                let up = if n[1] < 0.0 { [-n[0], -n[1], -n[2]] } else { n };
+                best = ProbeHit { height: y, normal: up, kind: None, found: true, respawn: None, surface: None, zone: None, patch: None };
+            }
+        }
+        best
     }
 }
 
@@ -16985,6 +17021,13 @@ impl Play {
     /// each panel's kind and whether it is off (LU -200).
     pub fn panel_owners(&self) -> Vec<(usize, usize, i8, bool)> {
         self.world.climb_rest.as_ref().map_or(Vec::new(), |r| r.panel_owner.iter().enumerate().filter_map(|(k, o)| o.map(|o| (k, o, self.world.panels[k].kind, self.world.panels[k].lu <= -200.0))).collect())
+    }
+
+    /// Diagnostic: the gated solid boxes (gate mask, origin, axes, extents) and the current mask.
+    pub fn gated_boxes(&self) -> String {
+        let list: Vec<String> = self.world.all_boxes.iter().filter(|(m, _)| *m != 0).map(|(m, b)| format!("mask {m:#x} origin {:?} axes {:?} extents {:?}", b.origin, b.axes, b.extents)).collect();
+        let vols: Vec<String> = self.world.solids.iter().filter(|v| v.kind == 7 || v.mask != 0).map(|v| format!("kind {} flags {:#x} mask {:#x} index {} {:?}", v.kind, v.flags, v.mask, v.index, v.shape)).collect();
+        format!("collis mask {:#x}; gated boxes: {list:?}; gated volumes: {vols:?}", self.world.collis_mask)
     }
 
     /// Diagnostic: the objects that list type-10 groups, the groups of the type-10 records, and
