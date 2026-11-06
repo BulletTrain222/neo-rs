@@ -8461,7 +8461,10 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 // stopped with 621 clear), so the canal fills now and not only at the next load
                 // (user's report 44).
                 state.set_word(pack, 1, 1);
-                out.actions.extend([Action::InitObjOn { obj: 5, end: false }, Action::InitObjOn { obj: 4, end: false }]);
+                // Their animations raise the water (object 5 from -1.7 to -0.1, object 4 by 1.3), so
+                // they are played: switched on at the start pose the canal stayed low (user's report
+                // 48).
+                out.actions.extend([Action::InitObjOn { obj: 5, end: false }, Action::InitObjOn { obj: 4, end: false }, Action::PlayAnim { obj: 5, speed: 1.0, wait: false }, Action::PlayAnim { obj: 4, speed: 1.0, wait: false }]);
                 out.actions.extend((55..=60).map(|slot| Action::StartEffect { slot, camera: false }));
                 out.actions.extend([
                     Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },

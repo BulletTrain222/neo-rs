@@ -4964,6 +4964,13 @@ fn play_trace(
             let h = play.loco.position();
             println!("EYE {} pack {} hero {:.2},{:.2},{:.2} state {} facing {:.2},{:.2} eye {:.2},{:.2},{:.2} focus {:.2},{:.2},{:.2} polar {:?}", play.ticks, play.world.pack, h[0], h[1], h[2], play.loco.state, play.loco.facing[0], play.loco.facing[2], play.camera.eye[0], play.camera.eye[1], play.camera.eye[2], play.camera.focus[0], play.camera.focus[1], play.camera.focus[2], play.camera.current);
         }
+        // NEOPETS_DEV_OBJEND="tick:a,b": as in the window, in the trace (diagnostic).
+        if let Some((k, objs)) = std::env::var("NEOPETS_DEV_OBJEND").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.trim().parse::<u64>().unwrap_or(0), b.split(',').filter_map(|s| s.trim().parse::<usize>().ok()).collect::<Vec<_>>())) {
+            if k == play.ticks {
+                let acts: Vec<neopets_sim::level::Action> = objs.into_iter().map(|obj| neopets_sim::level::Action::InitObjOn { obj, end: true }).collect();
+                play.apply(&acts);
+            }
+        }
         // NEOPETS_TRACE_OBJS="tick:a-b": placed objects a to b on that tick.
         if let Some((k, a, b)) = std::env::var("NEOPETS_TRACE_OBJS").ok().and_then(|v| { let (k, r) = v.split_once(':')?; let (a, b) = r.split_once('-')?; Some((k.trim().parse::<u64>().ok()?, a.trim().parse::<usize>().ok()?, b.trim().parse::<usize>().ok()?)) }) {
             if play.ticks == k {
@@ -6487,6 +6494,13 @@ fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     // NEOPETS_DEV_CARRY=tick: the hero picks up the first Miamouse, for a picture.
     if std::env::var("NEOPETS_DEV_CARRY").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(t) {
         play.diag_pick_up();
+    }
+    // NEOPETS_DEV_OBJEND="tick:a,b,...": those objects of the current world put at the end of their animation (diagnostic).
+    if let Some((k, objs)) = std::env::var("NEOPETS_DEV_OBJEND").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.trim().parse::<u64>().unwrap_or(0), b.split(',').filter_map(|s| s.trim().parse::<usize>().ok()).collect::<Vec<_>>())) {
+        if k == t {
+            let acts: Vec<neopets_sim::level::Action> = objs.into_iter().map(|obj| neopets_sim::level::Action::InitObjOn { obj, end: true }).collect();
+            play.apply(&acts);
+        }
     }
     // NEOPETS_DEV_HP="tick:hp:max": the hero's health and maximum on that tick, for a picture of the bar.
     if let Some(v) = std::env::var("NEOPETS_DEV_HP").ok() {

@@ -3146,7 +3146,7 @@ impl Play {
     /// Carry out a level handler's actions (SPEC-0030 host calls), in order.
     /// Start a handler's calls as a script thread and run it until it waits (SPEC-0030 section
     /// 4): calls without a wait take effect at once.
-    fn apply(&mut self, actions: &[Action]) {
+    pub fn apply(&mut self, actions: &[Action]) {
         if actions.is_empty() {
             return;
         }
@@ -8682,6 +8682,10 @@ impl Play {
     /// this a moving platform slid out from under him (user's report 45). The climb and hang
     /// records' owners are not built.
     fn ride_step(&mut self) {
+        // The probe of an object's patch uses the object's pose of this tick, as the carry does;
+        // the poses saved at the end of the last tick put the platform one move behind, and the
+        // hero hovered 0.15 over it while it sank (user's report 49).
+        self.refresh_owner_poses();
         let pack = self.world.pack;
         let p = self.loco.position();
         let hit = self.world.probe(p[0], p[2], p[1] + 2.5);
@@ -8690,6 +8694,13 @@ impl Play {
             .filter(|pt| pt.owner != 0 && hit.kind != Some(2))
             .and_then(|pt| self.world.ground.as_ref()?.object_sets().into_iter().find(|s| s.0 == pt.owner).map(|s| s.1));
         let now = owner.and_then(|o| self.object_matrix(pack, o).map(|m| (o, m)));
+        // SPEC-0040 item 6b: the platform pointer is set every tick the ground is an object's
+        // patch; its vertical displacement this tick (0 on the first tick on it) drives the
+        // constraint, so the hero sinks and rises with the platform (user's report 49: he bobbed).
+        self.loco.body.platform_dy = now.map(|(o, m)| match self.ride {
+            Some((wp, po, _, t_prev)) if wp == pack && po == o => m[13] - t_prev[1],
+            _ => 0.0,
+        });
         if let (Some((o, m)), Some((wp, po, q_prev, t_prev))) = (now, self.ride) {
             if wp == pack && po == o && self.loco.body.gap <= 0.25 {
                 let (d, f) = neopets_sim::ride::carry(p, self.loco.facing, &m, q_prev, t_prev, false);
@@ -16800,6 +16811,16 @@ impl Play {
     /// The drawn placed objects that own ground patches, with their current and rest frames,
     /// for each resident world's probe (an object that is not drawn gives no patches).
     fn owner_pose_step(&mut self) {
+        self.refresh_owner_poses();
+        for other in [false, true] {
+            if let Some(w) = if other { self.other.as_mut() } else { Some(&mut self.world) } {
+                Self::climb_follow_step(w);
+            }
+        }
+    }
+
+    /// The placed objects' current poses for the ground probe of their inline patches.
+    fn refresh_owner_poses(&mut self) {
         for other in [false, true] {
             let Some(w) = (if other { self.other.as_ref() } else { Some(&self.world) }) else { continue };
             let pack = w.pack;
@@ -16813,7 +16834,6 @@ impl Play {
                 .collect();
             if let Some(w) = if other { self.other.as_mut() } else { Some(&mut self.world) } {
                 w.owner_poses = poses;
-                Self::climb_follow_step(w);
             }
         }
     }
