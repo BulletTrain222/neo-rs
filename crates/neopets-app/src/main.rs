@@ -4311,6 +4311,62 @@ pub(crate) fn pass1_assets(
     out
 }
 
+/// The Shiny armour layer: each armour-metal part (`is_metal`) drawn again with the sword's
+/// environment-mapped reflection texture and blend.
+fn armour_shine(
+    m: &neopets_data::model::ModelData,
+    env: Handle<Image>,
+    kind: u32,
+    fix: f32,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<pass1::Pass1Material>,
+) -> Vec<(usize, Handle<Mesh>, Handle<pass1::Pass1Material>, Option<[f32; 2]>)> {
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let material = materials.add(pass1::Pass1Material {
+        params: pass1::Pass1Params { mode: Vec4::new(1.0, kind as f32, fix, 0.0), offset: Vec4::ZERO },
+        texture: env,
+        blend: kind == 2,
+        mask: false,
+    });
+    let mut out = Vec::new();
+    for (i, part) in m.parts.iter().enumerate().filter(|(i, _)| is_metal(m, *i)) {
+        let g = gs_unit(part);
+        let colors: Vec<[f32; 4]> = part.colors.iter().map(|c| [(c[0] * g).powf(2.2), (c[1] * g).powf(2.2), (c[2] * g).powf(2.2), c[3].min(1.0)]).collect();
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, part.positions.clone());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32, 0.0]; part.positions.len()]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        mesh.insert_indices(Indices::U32(part.indices.clone()));
+        out.push((i, meshes.add(mesh), material.clone(), None));
+    }
+    out
+}
+
+/// A texture's mean saturation and mean value (0 to 1) over its opaque texels.
+fn texture_tone(rgba: &[u8]) -> (f32, f32) {
+    let (mut s, mut v, mut n) = (0.0f32, 0.0f32, 0.0f32);
+    for px in rgba.chunks_exact(4).filter(|p| p[3] > 64) {
+        let (r, g, b) = (px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0);
+        let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+        s += if mx > 0.0 { (mx - mn) / mx } else { 0.0 };
+        v += mx;
+        n += 1.0;
+    }
+    if n == 0.0 { (1.0, 0.0) } else { (s / n, v / n) }
+}
+
+/// The Shiny armour option (this build's addition, not the original's look): a hero part is
+/// armour metal when it is textured, has 100 vertices or more, and its texture is grey and light
+/// (mean saturation below 0.2, mean value above 0.35). Cloth, skin and the eyes are left out.
+fn is_metal(m: &neopets_data::model::ModelData, i: usize) -> bool {
+    let p = &m.parts[i];
+    p.positions.len() >= 100 && p.texture.and_then(|k| m.textures.get(k)).is_some_and(|t| {
+        let (s, v) = texture_tone(&t.image.rgba);
+        s < 0.2 && v > 0.35
+    })
+}
+
 /// The vertex colours are kept as GS output / 128, the unit a texture is modulated by (128
 /// leaves it unchanged). A part with no texture shows its output itself, on the GS's 0 to 255
 /// scale, so its scale is 128 / 255: an untextured NPC part whose lit output is 248 is nearly
@@ -6335,9 +6391,17 @@ fn play_frame(
     mut pass1_materials: ResMut<Assets<pass1::Pass1Material>>,
     mut images: ResMut<Assets<Image>>,
     mut hero_stamp: Local<Option<(u64, bool, usize, usize)>>,
+    settings: Res<display::DisplaySettings>,
+    mut archive: Option<ResMut<Archive>>,
+    mut shine: Local<(Option<(Handle<Image>, u32, f32)>, Option<bool>)>,
 ) {
     let _span = crate::perf::span("play_frame");
     let Some(mut state) = play else { return };
+    // The Shiny armour option re-spawns the hero when it changes.
+    if shine.1.is_some_and(|was| was != settings.shiny_armour) {
+        state.play.spawned = false;
+    }
+    shine.1 = Some(settings.shiny_armour);
     let p = state.play.loco.position();
     let f = state.play.loco.facing;
     // Characters face +Z in model space (SPEC-0004); turn that onto the facing.
@@ -6359,9 +6423,34 @@ fn play_frame(
                 }
             }
         }
+        // NEOPETS_TRACE_PASS1: the hero model's parts with their shine layers (diagnostic).
+        if std::env::var_os("NEOPETS_TRACE_PASS1").is_some() {
+            for (i, q) in state.play.model.parts.iter().enumerate() {
+                let stats = q.texture.and_then(|k| state.play.model.textures.get(k)).map(|t| texture_tone(&t.image.rgba));
+                println!("hero part {i}: texture {:?} env pass 0 {} pass1 {:?} pass1 env {:?} verts {} tone {:?} metal {}", q.texture, q.env_map, q.pass1.as_ref().map(|s| s.texture), q.pass1.as_ref().map(|s| s.uv_mode), q.positions.len(), stats, is_metal(&state.play.model, i));
+            }
+        }
         let parts = part_assets(&state.play.model, &mut meshes, &mut materials, &mut images);
         // SPEC-0003 How a pass is drawn: two-pass parts' second layer, skinned with pass 0.
-        let second = pass1_assets(&state.play.model, &mut meshes, &mut pass1_materials, &mut images);
+        let mut second = pass1_assets(&state.play.model, &mut meshes, &mut pass1_materials, &mut images);
+        // Shiny armour (this build's option): the armour-metal parts get the Squire's Sword's
+        // reflection layer (model 545's environment-mapped pass 1: its texture and blend).
+        if settings.shiny_armour {
+            if shine.0.is_none() {
+                if let Some(Archive { disc, index }) = archive.as_deref_mut() {
+                    if let Ok(Some(sword)) = archive_view::model(disc, index, 545) {
+                        shine.0 = sword.parts.iter().filter_map(|q| q.pass1.as_ref()).find(|q| q.uv_mode == 1).and_then(|q| {
+                            let t = sword.textures.get(q.texture)?;
+                            let (kind, fix) = pass1::blend_of(q.alpha);
+                            Some((images.add(model_texture(t)), kind, fix))
+                        });
+                    }
+                }
+            }
+            if let Some((env, kind, fix)) = shine.0.clone() {
+                second.extend(armour_shine(&state.play.model, env, kind, fix, &mut meshes, &mut pass1_materials));
+            }
+        }
         let mut skinned = Vec::new();
         commands
             .spawn((Transform::from_translation(Vec3::from(p)).with_rotation(rotation), Visibility::Visible, HeroRoot))
@@ -6375,9 +6464,14 @@ fn play_frame(
                         e.insert(pass1::Pass1Scroll(s));
                     }
                 }
+                // NEOPETS_HIDE_HEROPART=k: hero model part k is not drawn (diagnostic).
+                let hide = std::env::var("NEOPETS_HIDE_HEROPART").ok().and_then(|v| v.trim().parse::<usize>().ok());
                 for (i, mesh, material) in parts {
                     if !state.play.model.parts[i].weights.is_empty() {
                         skinned.push((mesh.clone(), i));
+                    }
+                    if Some(i) == hide {
+                        continue;
                     }
                     c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
                 }
