@@ -12402,17 +12402,29 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             let w = |s: &GameState, k| s.word(800, k);
             if w(state, 1) == 1 && w(state, 2) == 0 && state.ai_dead.contains(&10) && state.ai_dead.contains(&11) {
                 state.set_word(pack, 2, 1);
-                state.set_level(0, true);
+                // SPEC-0041 800 stage B in the spec's order: the idle loops on entity 9 (animation 8)
+                // around lines 7 and 8, the one-shot animation 4 at the end, the return to idle,
+                // then level state 0 (the Chieftain released), the letterbox off and the camera
+                // back. The build left out the animations and set level state 0 at the start
+                // (user's report 52).
                 out.extend([
                     Action::FadeOut { seconds: 0.5, wait: true },
                     Action::LetterBox { on: true, seconds: 1.0, wait: false },
                     Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
                     Action::FadeIn { seconds: 0.5, wait: true },
+                    Action::EntityAnim { entity: 9, anim: 8, looped: true, wait: false },
                     Action::Converse { entity: 9, line: 7 },
                     Action::FadeOut { seconds: 0.7, wait: true },
                     Action::PlayCamera { track: 14, wait: false, end: 1, speed: 1.0 },
                     Action::FadeIn { seconds: 0.4, wait: true },
+                    Action::EntityAnim { entity: 9, anim: 8, looped: true, wait: false },
                     Action::Converse { entity: 9, line: 8 },
+                    Action::EntityAnim { entity: 9, anim: 4, looped: false, wait: true },
+                    Action::EntityAnim { entity: 9, anim: 8, looped: true, wait: false },
+                    // SPEC-0014 (arena end-to-end, step 2): released into stage 1; the
+                    // animation calls above put him under script control in this build.
+                    Action::ReleaseEntity { entity: 9 },
+                    Action::LevelState { flag: 0, on: true },
                     Action::LetterBox { on: false, seconds: 1.0, wait: false },
                     Action::ReturnCamera { preset: -1, release: true },
                 ]);
@@ -18871,7 +18883,11 @@ mod tests {
         assert!(on_trigger(800, 5, enter, &mut s).actions.contains(&Action::Converse { entity: 9, line: 6 }));
         assert!(on_trigger(800, 5, enter, &mut s).actions.is_empty());
         s.ai_dead.extend([10, 11]);
-        assert!(on_update(800, &mut s, false).contains(&Action::Converse { entity: 9, line: 8 }) && s.level(0));
+        let b = on_update(800, &mut s, false);
+        // Stage B: line 8, animation 4, then the release and level state 0 at the end of the scene.
+        assert!(b.contains(&Action::Converse { entity: 9, line: 8 }) && b.contains(&Action::EntityAnim { entity: 9, anim: 4, looped: false, wait: true }));
+        assert!(b.ends_with(&[Action::ReleaseEntity { entity: 9 }, Action::LevelState { flag: 0, on: true }, Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::ReturnCamera { preset: -1, release: true }]));
+        s.set_level(0, true);
         s.set_level(1, true);
         assert!(on_update(800, &mut s, false).contains(&Action::Agro { entity: 14 }));
         s.set_level(3, true);

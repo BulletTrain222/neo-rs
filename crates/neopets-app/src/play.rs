@@ -12771,7 +12771,11 @@ impl Play {
             });
             let clip = anim.clip_state();
             let has = |id: u32| anim.has(id);
-            let speed = (root_step[0].powi(2) + root_step[2].powi(2)).sqrt();
+            // The enemy's speed (SPEC-0038 sequencer state 7's stuck test): how far it actually
+            // moved last tick, after the navmesh confinement (R-0252; this build's reading). The
+            // clip's root step kept a charge pressed against the basin wall "moving" for good
+            // (user's report 51).
+            let speed = wk.last_step;
             let mut v = enemy_view(p, wk, hero, hero_facing, bands, attackable, sight, (route, on_mesh), contact, speed, clip, &has);
             // NEOPETS_TRACE_CHOICE=n: what each enemy's attack choice reads, every n ticks (diagnostic).
             if let Some(n) = std::env::var("NEOPETS_TRACE_CHOICE").ok().and_then(|s| s.parse::<u64>().ok()) {

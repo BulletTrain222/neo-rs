@@ -76,6 +76,9 @@ pub enum Gait {
 pub struct Walker {
     /// The body: position, velocity and the physics of SPEC-0040 Behavior 14A.
     pub body: Body,
+    /// How far the last motion tick moved the character across the ground (after the navmesh
+    /// confinement): the enemy's speed of SPEC-0038 sequencer state 7 (R-0252).
+    pub last_step: f32,
     /// Facing (B3) and the move direction the steering writes (the facing follows it).
     pub facing: Vec3,
     pub radius: f32,
@@ -129,6 +132,7 @@ impl Walker {
             facing,
             radius,
             mesh: None,
+            last_step: 0.0,
             current: None,
             last_valid: None,
             c0: None,
@@ -357,6 +361,8 @@ impl Walker {
         self.confine(meshes, d);
         self.body.integrate();
         self.lock = false;
+        let q = self.body.position;
+        self.last_step = (q[0] - p0[0]).hypot(q[2] - p0[2]);
     }
 
     /// SPEC-0056 navmesh confinement: the blocked timer; boundary edges of the current triangle
