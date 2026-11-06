@@ -12458,6 +12458,10 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.extend([Action::MoveEntity { entity: 9, locator: 17, face: true }, Action::MoveHero { locator: 14 }, Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 }, Action::FadeIn { seconds: FADE, wait: true }, Action::Converse { entity: 9, line: 11 }, Action::PlayCamera { track: 19, wait: false, end: 1, speed: 1.0 }, wait(1.0)]);
                 out.extend((12..=16).zip(27..=31).map(|(entity, locator)| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 }));
                 out.extend([wait(1.5), Action::LoadRegion { slot: 3, region: None }, Action::Converse { entity: 9, line: 12 }, Action::EntityAnim { entity: 9, anim: 2, looped: false, wait: false }, Action::Sleep { ticks: 55 }, Action::ItemActivate { slot: 1, ordinal: 0, snap: true, placed: true }, Action::InitObjOn { obj: 0, end: false }, Action::ReturnCamera { preset: -1, release: true }]);
+                // This build's choice (the user's account, R-0254): the Chieftain is removed once
+                // his fall (animation 2, about 110 ticks from its start) has ended, about 60 ticks
+                // after the scene's 55-tick sleep; SPEC-0014 leaves him in the basin.
+                out.extend([Action::Sleep { ticks: 60 }, Action::DeactivateEntity { entity: 9 }]);
             }
         }
         // SPEC-0041 985 Update: the thread of the load's branch.
@@ -18916,6 +18920,7 @@ mod tests {
         assert!(at(&Action::WalkEntity { entity: 16, locator: 31, wait: false, orient: false, stop: 1.1 }) < reset);
         assert!(reset < at(&Action::EntityAnim { entity: 9, anim: 2, looped: false, wait: false }));
         assert!(d.contains(&Action::MoveHero { locator: 14 }));
+        assert!(d.ends_with(&[Action::Sleep { ticks: 60 }, Action::DeactivateEntity { entity: 9 }]));
         on_exit(800, &mut s, &|_| false);
         assert!(s.has_item(9));
     }
