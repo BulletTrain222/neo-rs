@@ -4153,6 +4153,13 @@ impl Play {
                 }
                 Action::WaitObj { obj } => return Some(Wait::ObjAnim(pack, obj)),
                 Action::RideObj { obj } => {
+                    // The ride's end gives gravity and the ground snap back, as leaving a ladder
+                    // does; they stayed off and a jump after the lift never came down (user's
+                    // report 65).
+                    if self.ride_lock.is_some() {
+                        self.loco.body.no_gravity = false;
+                        self.loco.body.no_snap = false;
+                    }
                     self.ride_lock = obj.and_then(|o| self.object_pose(pack, o, 0).map(|m| (o, self.loco.position()[1] - m[13])));
                 }
                 Action::GroupEffects { group } => {
@@ -8740,7 +8747,11 @@ impl Play {
                     self.loco.body.platform_dy = None;
                     return;
                 }
-                None => self.ride_lock = None,
+                None => {
+                    self.ride_lock = None;
+                    self.loco.body.no_gravity = false;
+                    self.loco.body.no_snap = false;
+                }
             }
         }
         // The probe of an object's patch uses the object's pose of this tick, as the carry does;
