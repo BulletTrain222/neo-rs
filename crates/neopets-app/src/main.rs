@@ -949,7 +949,7 @@ fn main() {
             Update,
             (
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
-                (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot),
+                (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot, sync_haze, sync_atmos_overlay),
                 (show_sim, show_browser),
                 (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
             )
@@ -2707,6 +2707,24 @@ fn sync_worlds(
             }
             continue;
         }
+        // SPEC-0046 Sky domes, step 6: the dome's role-10 layer, drawn while the atmosphere
+        // blend factor b is above 0 with b as its opacity (sync_haze); play had none, so a gated
+        // purple zone such as pack 1230's showed no haze (user's report 71).
+        if let WorldPart::Dome(d) = *part {
+            let haze = archive_view::dome_haze(disc, index, d);
+            if std::env::var_os("NEOPETS_TRACE_ATMOS").is_some() {
+                eprintln!("ATMOS dome {d} role-10 layer: {:?}", haze.as_ref().map(|m| m.as_ref().map(|m| (m.parts.len(), m.min, m.max))));
+            }
+            if let Ok(Some(m)) = haze {
+                for (_, mesh, material) in part_assets(&m, &mut meshes, &mut materials, &mut images) {
+                    let mut own = materials.get(&material).cloned().unwrap_or_default();
+                    own.alpha_mode = AlphaMode::Blend;
+                    own.unlit = true;
+                    let h = materials.add(own);
+                    commands.spawn((Mesh3d(mesh), MeshMaterial3d(h.clone()), Transform::IDENTITY, *part, Visibility::Hidden, HazeLayer(h), bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+                }
+            }
+        }
         let streamed = match (*part, streamer.as_deref_mut()) {
             // The streamed scene is built with mask 0.
             (WorldPart::Scene(pack, 0), Some(s)) => s.scenes.remove(&pack),
@@ -3688,6 +3706,59 @@ fn sync_hero_glows(
     }
 }
 
+/// The atmosphere overlay (SPEC-0046 step 10, SPEC-0028 section 11 vector B).
+#[derive(Component)]
+struct AtmosOverlay;
+
+/// SPEC-0046 step 10: when vector B's alpha byte is nonzero, its RGB is drawn over the frame.
+/// The spec's blend is (1 - Ad) x Cs + Ad x Cd with the destination alpha Ad, which this build
+/// has no frame alpha for; this build's choice (R-0260) weights the colour by the alpha byte /
+/// 128 (the gated zones carry 28, Meridell's ungated one 10), under the HUD (user's report 71:
+/// the purple haze of the gated zones was missing).
+fn sync_atmos_overlay(mut commands: Commands, state: Option<Res<PlayState>>, mut overlays: Query<(&mut BackgroundColor, &mut Visibility), With<AtmosOverlay>>) {
+    let out = state.as_ref().map(|s| s.play.atmos_out);
+    let byte = out.map_or(0.0, |o| o.b[3].round().clamp(0.0, 255.0));
+    let colour = out.map(|o| Color::srgba(o.b[0].clamp(0.0, 255.0) / 255.0, o.b[1].clamp(0.0, 255.0) / 255.0, o.b[2].clamp(0.0, 255.0) / 255.0, (byte / 128.0).min(1.0)));
+    match overlays.iter_mut().next() {
+        Some((mut bg, mut vis)) => {
+            set_if(&mut vis, if byte > 0.0 && std::env::var_os("NEOPETS_NO_ATMOS").is_none() { Visibility::Visible } else { Visibility::Hidden });
+            if let Some(c) = colour {
+                if bg.0 != c {
+                    bg.0 = c;
+                }
+            }
+        }
+        None if state.is_some() => {
+            commands.spawn((
+                Node { position_type: PositionType::Absolute, left: px(0), right: px(0), top: px(0), bottom: px(0), ..default() },
+                BackgroundColor(colour.unwrap_or(Color::NONE)),
+                Visibility::Hidden,
+                GlobalZIndex(1),
+                AtmosOverlay,
+            ));
+        }
+        None => {}
+    }
+}
+
+/// A part of the sky dome's role-10 layer and its own material (SPEC-0046 Sky domes).
+#[derive(Component)]
+struct HazeLayer(Handle<StandardMaterial>);
+
+/// SPEC-0046 Sky domes, step 6: the role-10 layer shows while the atmosphere blend factor b is
+/// above 0, with b as its master opacity.
+fn sync_haze(state: Option<Res<PlayState>>, mut layers: Query<(&HazeLayer, &mut Visibility)>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let b = state.map_or(0.0, |s| s.play.atmos_out.blend).clamp(0.0, 1.0);
+    for (layer, mut vis) in &mut layers {
+        set_if(&mut vis, if b > 0.0 { Visibility::Visible } else { Visibility::Hidden });
+        if materials.get(&layer.0).is_some_and(|m| (m.base_color.alpha() - b).abs() > 1e-3) {
+            if let Some(mut m) = materials.get_mut(&layer.0) {
+                m.base_color.set_alpha(b);
+            }
+        }
+    }
+}
+
 /// One pooled model particle's drawn root: (resource-9 model, pool slot) and its materials.
 #[derive(Component)]
 struct EffectModelRoot(u16, usize, Vec<Handle<StandardMaterial>>);
@@ -3718,6 +3789,12 @@ fn sync_effect_models(
         let v = |r: [f32; 3], w: f32| Vec4::new(r[0], r[1], r[2], w);
         shown.insert((model, *slot), (Mat4::from_cols(v(rows[0], 0.0), v(rows[1], 0.0), v(rows[2], 0.0), v(at, 1.0)), colour));
         *slot += 1;
+    }
+    // NEOPETS_TRACE_FXMODELS: the live model particles, by model, with their colours, every 120 ticks (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_FXMODELS").is_some() && play.ticks % 120 == 0 && !shown.is_empty() {
+        let mut list: Vec<String> = shown.iter().map(|(k, v)| format!("{}:{} {:.2?}", k.0, k.1, v.1)).collect();
+        list.sort();
+        println!("fx models on tick {}: {} live: {}", play.ticks, list.len(), list.join("; "));
     }
     for &(model, slot) in shown.keys() {
         if made.contains(&(model, slot)) {
@@ -3762,7 +3839,12 @@ fn sync_effect_models(
         };
         set_if(&mut t, Transform::from_matrix(m));
         set_if(&mut vis, Visibility::Visible);
-        let colour = Color::linear_rgba(c[0], c[1], c[2], c[3]);
+        // SPEC-0034 4.7 and step 7: colour channel 1 is a GS modulation in gamma space (1.0 is
+        // neutral, trunc(c x 127) as a byte), so its RGB goes to linear like the vertex colours;
+        // taken as linear it drew every effect model about twice as bright, and the save point's
+        // overlapping ray copies glared (user's reports 66 and 69).
+        let g = |v: f32| v.clamp(0.0, 2.0).powf(2.2);
+        let colour = Color::linear_rgba(g(c[0]), g(c[1]), g(c[2]), c[3]);
         for h in &root.2 {
             if materials.get(h).is_some_and(|mat| mat.base_color != colour) {
                 if let Some(mut mat) = materials.get_mut(h) {
@@ -4298,11 +4380,22 @@ pub(crate) fn part_assets(
             // colour clamp), so in the original added light never passes white; uncapped, the
             // 2x vertex colours and the bloom made the save point's rays glare (user's report 66).
             let cap = if part.texture.is_some() && part.alpha.is_some() && crate::pass1::blend_of(part.alpha).0 < 2 { 1.0 } else { f32::MAX };
+            // The add-by-FIX form (Cs x FIX + Cd) scales the added colour by FIX / 128; it was
+            // drawn at full strength and the save point's rays stayed too strong (user's report 69).
+            let fix = match crate::pass1::blend_of(part.alpha) {
+                (1, f) if part.alpha.is_some() && part.texture.is_some() => f.min(1.0),
+                _ => 1.0,
+            };
             let colors: Vec<[f32; 4]> = part
                 .colors
                 .iter()
-                .map(|c| [(c[0] * g).min(cap).powf(2.2), (c[1] * g).min(cap).powf(2.2), (c[2] * g).min(cap).powf(2.2), c[3].min(1.0)])
+                .map(|c| [((c[0] * g).min(cap) * fix).powf(2.2), ((c[1] * g).min(cap) * fix).powf(2.2), ((c[2] * g).min(cap) * fix).powf(2.2), c[3].min(1.0)])
                 .collect();
+            // NEOPETS_TRACE_ADDITIVE: each additive part's blend register and colour range (diagnostic).
+            if cap == 1.0 && std::env::var_os("NEOPETS_TRACE_ADDITIVE").is_some() {
+                let (lo, hi) = part.colors.iter().fold((f32::MAX, 0.0f32), |(l, h), c| (l.min(c[3]), h.max(c[0].max(c[1]).max(c[2]))));
+                println!("additive part {i}: alpha {:#x} fix {fix} vertex alpha min {lo:.2} colour max {hi:.2} vertices {}", part.alpha.unwrap_or(0), part.positions.len());
+            }
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, part.positions.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
@@ -4795,6 +4888,16 @@ fn play_trace(
     if std::env::var_os("NEOPETS_TRACE_PATCHES").is_some() {
         for p in &play.world.patches {
             println!("      PATCH key {} area {:?} height {} ground {:?}", p.key, p.area, p.height, play.world.ground_at((p.area[0] + p.area[1]) / 2.0, (p.area[2] + p.area[3]) / 2.0, 1.0e4));
+        }
+    }
+    // NEOPETS_TRACE_ATMOS=1: the type-41 atmosphere zones of the pack (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_ATMOS").is_some() {
+        if let Ok(bytes) = archive.index.read(&mut archive.disc, play.world.pack) {
+            if let Ok(chain) = neopets_data::resource::walk_chunks(&bytes, None) {
+                for (k, z) in neopets_data::atmosphere::zones(&bytes, &chain.chunks).iter().enumerate() {
+                    println!("ATMOS {} zone {k}: key {} A {:?} B {:?} depth {} centre {:?} radius {} points {} closed {}", play.world.pack, z.key, z.a, z.b, z.depth, z.centre, z.radius, z.points.len(), z.closed);
+                }
+            }
         }
     }
     // NEOPETS_TRACE_INSTANCES=1: the type-20 instances of this world: tree, translation, axis lengths, zone, D1, the ground under it (diagnostic).
@@ -5849,6 +5952,10 @@ fn play_trace(
                     }
                 }
             }
+        }
+        // NEOPETS_TRACE_ATMOS: the atmosphere zone output every 120 ticks (diagnostic).
+        if std::env::var_os("NEOPETS_TRACE_ATMOS").is_some() && play.ticks % 120 == 0 {
+            println!("      ATMOS out tick {}: {:?} ({} zones)", play.ticks, play.atmos_out, play.world.atmos.len());
         }
         // NEOPETS_TRACE_FACE="tick:x,z;...": the hero turned to face (x, z) on that tick
         // (diagnostic).

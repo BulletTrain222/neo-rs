@@ -74,6 +74,8 @@ pub struct World {
     pub owner_poses: std::collections::HashMap<usize, neopets_data::ground::OwnerPose>,
     /// The ladders of the type-10 groups (SPEC-0006 Type 10, records of type -3).
     pub rails: Vec<neopets_sim::ladder::Rail>,
+    /// The type-41 atmosphere zones (SPEC-0028 section 11).
+    pub atmos: Vec<neopets_sim::atmosphere::Zone>,
     /// Each type-10 record's group, for the groups a placed object owns.
     panel_groups: Vec<u32>,
     /// The ladders and climb records at rest, each with the placed object it stands on (R-0226).
@@ -229,6 +231,7 @@ impl World {
             owner_poses: Default::default(),
             panel_groups: Vec::new(),
             rails: Vec::new(),
+            atmos: Vec::new(),
             climb_rest: None,
             grab_lines: Vec::new(),
             panels: Vec::new(),
@@ -322,6 +325,7 @@ impl World {
             owner_poses: Default::default(),
             panel_groups: Vec::new(),
             rails: Vec::new(),
+            atmos: Vec::new(),
             climb_rest: None,
             grab_lines: Vec::new(),
             panels: Vec::new(),
@@ -411,6 +415,10 @@ impl World {
                 }
             }
         }
+        world.atmos = neopets_data::atmosphere::zones(&bytes, &chain.chunks)
+            .into_iter()
+            .map(|z| neopets_sim::atmosphere::Zone { a: z.a, b: z.b, depth: z.depth, key: z.key, centre: z.centre, radius: z.radius, points: z.points, closed: z.closed })
+            .collect();
         let records = neopets_data::trigger::panels(&bytes, &chain.chunks);
         world.panel_groups = records.iter().map(|p| p.group).collect();
         world.rails = records.iter().filter(|p| p.kind == -3).map(|p| neopets_sim::ladder::Rail { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv }).collect();
@@ -1218,6 +1226,10 @@ enum Wait {
 pub struct Play {
     pub loco: Locomotion,
     pub camera: FollowCamera,
+    /// SPEC-0028 section 11: the atmosphere zone selection and this frame's output (the blend
+    /// factor b is the sky dome's role-10 opacity).
+    atmos_sel: neopets_sim::atmosphere::Selector,
+    pub atmos_out: neopets_sim::atmosphere::Output,
     pub hero: HeroAnim,
     pub model: ModelData,
     pub boot: BootTravel,
@@ -2206,6 +2218,8 @@ impl Play {
         let mut play = Self {
             loco,
             camera,
+            atmos_sel: Default::default(),
+            atmos_out: Default::default(),
             hero,
             model,
             boot,
@@ -10796,6 +10810,11 @@ impl Play {
             |e| push_eye(w, e),
             |a, c| eye_line_clear(w, a, c),
         );
+        }
+        // SPEC-0028 section 11: the atmosphere zones of the current world, picked from the eye.
+        {
+            let flags = &self.state.flags;
+            self.atmos_out = self.atmos_sel.select(self.world.pack, &self.world.atmos, self.camera.eye, &|f| flags.contains(&f));
         }
         // SPEC-0027 Scripted cameras: the play is sampled and its end mode acts.
         if let Some(cut) = self.cut.as_mut() {

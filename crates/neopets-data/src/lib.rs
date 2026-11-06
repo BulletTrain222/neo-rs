@@ -1,6 +1,7 @@
 //! Read-only access to a user-supplied disc. No emulator or executable interpreter.
 pub mod anim;
 pub mod area;
+pub mod atmosphere;
 pub mod archive;
 pub mod audio;
 pub mod bank;

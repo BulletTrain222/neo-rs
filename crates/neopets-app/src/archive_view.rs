@@ -152,6 +152,19 @@ pub fn dome(disc: &mut Disc, index: &ArchiveIndex, d: u32) -> Result<Option<Mode
     Ok((!data.parts.is_empty()).then_some(data))
 }
 
+/// A sky dome resource's layer D (role 10, the purple cap), drawn with the atmosphere blend
+/// factor as its master opacity (SPEC-0046 Sky domes, step 6).
+pub fn dome_haze(disc: &mut Disc, index: &ArchiveIndex, d: u32) -> Result<Option<ModelData>, String> {
+    if index.get(d)?.is_empty() {
+        return Ok(None);
+    }
+    let bytes = index.read(disc, d)?;
+    let family = resource::classify(&bytes);
+    let chain = resource::walk_chunks(&bytes, resource::chunk_limit(d, family))?;
+    let data = model::build_roles(&bytes, &chain.chunks, None, Some(&[10]))?;
+    Ok((!data.parts.is_empty()).then_some(data))
+}
+
 /// A world pack's placed static scene with the world layer mask `layers` (SPEC-0046 Culling: the
 /// display word and the visible story layers' bits), with its sky dome's layer A when `dome`
 /// is set (only the current world's dome is drawn in play).
