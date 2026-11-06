@@ -16089,7 +16089,8 @@ fn castle_init(state: &mut GameState) -> Vec<Action> {
     // 622 is clear and open (end pose) once trigger 9 has played them. On disc they are in state
     // 3 and no call of the module turns them on before trigger 9, so under SPEC-0028's draw gate
     // the doorway stood empty. Objects 12 and 13, at the same places, are left as they are.
-    let open = state.flag(622);
+    // Closed again from castle stage 30 (the user's report 75: open there was wrong).
+    let open = state.flag(622) && castle_stage(state) < 30;
     out.extend([Action::InitObjOn { obj: 10, end: open }, Action::InitObjOn { obj: 11, end: open }]);
     out
 }
