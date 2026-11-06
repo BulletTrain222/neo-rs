@@ -947,7 +947,7 @@ fn main() {
             Update,
             (
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
-                (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot),
+                (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot, quick_save_load),
                 (show_sim, show_browser),
                 (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
             )
@@ -1906,6 +1906,81 @@ fn orbit_camera(
         orbit.fly(fly * step);
         *transform = orbit.transform();
     }
+}
+
+/// The quick save's files (this build's tool): a one-slot save file, and the hero's world,
+/// place and facing beside it.
+/// NEOPETS_QUICK_DIR moves them (diagnostic, so a trace never touches the player's).
+fn quick_paths() -> (String, String) {
+    let dir = std::env::var("NEOPETS_QUICK_DIR").unwrap_or_else(|_| "private/saves".to_string());
+    (format!("{dir}/quick.bin"), format!("{dir}/quick.txt"))
+}
+
+/// F9 quick save and F10 quick load (this build's tool; the original has only save points).
+/// F9 writes the game as a save point would, plus where the hero stands; F10 loads it as the
+/// menu's Load does and puts the hero back there. Not while the story walk (--goal) owns F9
+/// and F10, and F9 not in a scene.
+fn quick_save_load(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, play: Option<ResMut<PlayState>>, archive: Option<ResMut<Archive>>, walk: Option<Res<story_run::GoalWalk>>, mut dev: ResMut<dev_menu::DevMenu>) {
+    let (save, load) = (keys.just_pressed(KeyCode::F9), keys.just_pressed(KeyCode::F10));
+    if !(save || load) || walk.is_some_and(|w| !w.goals.is_empty()) {
+        return;
+    }
+    let Some(mut play) = play else { return };
+    if save {
+        if !play.play.quick_ready() {
+            dev.toast = Some(("Quick save waits until the scene ends".into(), 120));
+            return;
+        }
+        let done = quick_save(&play.play);
+        dev.toast = Some((match done {
+            Ok(()) => "Quick saved (F10 loads)".into(),
+            Err(e) => format!("Quick save failed: {e}"),
+        }, 120));
+        return;
+    }
+    let Some(mut archive) = archive else { return };
+    let Archive { disc, index } = &mut *archive;
+    match quick_load(disc, index, &play.play) {
+        None => dev.toast = Some(("No quick save yet (F9 saves)".into(), 120)),
+        Some(Err(e)) => dev.toast = Some((format!("Quick load failed: {e}"), 180)),
+        Some(Ok(new)) => {
+            play.play = new;
+            match archive.disc.reopen() {
+                Ok(second) => commands.insert_resource(Streamer::start(second, archive.index.clone(), play.play.boot.clone())),
+                Err(e) => error!("No loader thread, streaming is off: {e}"),
+            }
+            dev.toast = Some(("Quick loaded".into(), 120));
+        }
+    }
+}
+
+/// The quick save (F9): a one-slot save file written as a save point would, and the hero's
+/// world, place and facing beside it.
+fn quick_save(play: &play::Play) -> Result<(), String> {
+    let mut file = neopets_sim::save::SaveFile::default();
+    play.write_slot(&mut file.slots[0], &save_date());
+    let (p, f) = (play.loco.position(), play.loco.facing);
+    let place = format!("{} {} {} {} {} {} {}
+", play.world.pack, p[0], p[1], p[2], f[0], f[1], f[2]);
+    let (bin, txt) = quick_paths();
+    write_save(&bin, &file)?;
+    std::fs::write(txt, place).map_err(|e| e.to_string())
+}
+
+/// The quick load (F10): the slot loaded as the menu's Load does, then the hero put back at
+/// the saved place when the loaded world is the saved one. None without a quick save.
+fn quick_load(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play) -> Option<Result<play::Play, String>> {
+    let (bin, txt) = quick_paths();
+    let file = read_save(&bin)?;
+    let place: Vec<f32> = std::fs::read_to_string(txt).unwrap_or_default().split_whitespace().filter_map(|v| v.parse().ok()).collect();
+    Some(load_game_from(disc, index, old, &file.slots[0]).map(|mut new| {
+        if let [pack, x, y, z, fx, fy, fz] = place[..] {
+            if new.world.pack == pack as u32 {
+                new.quick_place([x, y, z], [fx, fy, fz]);
+            }
+        }
+        new
+    }))
 }
 
 /// `--autoplay`: turn the autopilot on once play has started.
@@ -5759,6 +5834,27 @@ fn play_trace(
                         _ => {}
                     }
                     faerie_code = code;
+                }
+            }
+        }
+        // NEOPETS_TRACE_QUICK="save@t,load@t": the F9 quick save and F10 quick load on those
+        // ticks (diagnostic; use NEOPETS_QUICK_DIR to keep the player's quick save).
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_QUICK") {
+            for e in v.split(',') {
+                let Some((what, k)) = e.trim().split_once('@') else { continue };
+                if k.trim().parse::<u64>().ok() != Some(play.ticks) {
+                    continue;
+                }
+                if what == "save" {
+                    println!("      quick save on tick {}: ready {} {:?} at {:?}", play.ticks, play.quick_ready(), quick_save(&play), play.loco.position());
+                } else if let Some(r) = quick_load(&mut archive.disc, &archive.index, &play) {
+                    match r {
+                        Ok(p) => {
+                            play = p;
+                            println!("      quick load on tick {}: world {} hero at {:?} hp {}/{}", play.ticks, play.world.pack, play.loco.position(), play.hero_hp, play.hero_max);
+                        }
+                        Err(e) => println!("      quick load failed: {e}"),
+                    }
                 }
             }
         }

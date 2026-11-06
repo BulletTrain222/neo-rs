@@ -328,7 +328,7 @@ impl StoryRun {
 /// forced, as in the story checker, and each goal's result is added to private/story/hand.tsv.
 #[derive(Resource, Default)]
 pub struct GoalWalk {
-    goals: Vec<Goal>,
+    pub(crate) goals: Vec<Goal>,
     at: usize,
     begun: bool,
     /// Frames since the hero was last put at this goal, while there is still somewhere to put him.

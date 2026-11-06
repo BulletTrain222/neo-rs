@@ -444,7 +444,7 @@ pub fn spawn_panel(mut commands: Commands) {
             ui.spawn((Text::new("Developer menu"), font(22.0), TextColor(GOLD)));
             ui.spawn((Text::new("A test tool of this build, not part of the game"), font(13.0), TextColor(DIM)));
             ui.spawn((
-                Text::new("Keys: arrows pick and change (Shift x10), Tab other column, Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step
+                Text::new("Keys: arrows pick and change (Shift x10), Tab other column, Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step, F9 quick save, F10 quick load
 Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), LT/RT other column, A apply, B close | Mouse: click rows and < >, drag the slider"),
                 font(12.0),
                 TextColor(DIM),

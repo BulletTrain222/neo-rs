@@ -4344,6 +4344,17 @@ impl Play {
         None
     }
 
+    /// This build's quick save (F9): allowed only in free play, with no camera play, fade,
+    /// letterbox, hold or scripted hero walk under way, so a scene is never cut in half.
+    pub fn quick_ready(&self) -> bool {
+        self.cut.is_none() && self.fade.target == 0.0 && self.bars.target == 0.0 && !self.held && self.hero_walk.is_none() && self.loco.state != hero_states::LADDER
+    }
+
+    /// The hero at the quick save's place and facing (F10).
+    pub fn quick_place(&mut self, p: [f32; 3], f: [f32; 3]) {
+        self.arrive((p, f));
+    }
+
     /// Diagnostic: the scene state (camera play, fade, hold, scripted walk, threads).
     pub fn scene_status(&self) -> String {
         let walking = self.characters.iter().filter(|c| c.script_walk.is_some()).filter_map(|c| c.entity).collect::<Vec<_>>();
