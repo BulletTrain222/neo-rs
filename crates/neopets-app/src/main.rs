@@ -4576,6 +4576,8 @@ fn play_trace(
     if std::env::var_os("NEOPETS_TRACE_OBJAUDIT").is_some() {
         println!("OBJAUDIT {} {:?}", play.world.pack, play.undrawn_but_shown());
         println!("RAILOWNERS {} {:?}", play.world.pack, play.rail_owners());
+        println!("PANELOWNERS {} {:?} rails {}", play.world.pack, play.panel_owners(), play.world.rails.len());
+        println!("CLIMBDEBUG {}", play.climb_debug());
     }
     // NEOPETS_TRACE_CUE_RECORDS=1: the type-4 and type-5 records of all sound blocks, against SPEC-0031's counts (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_CUE_RECORDS").is_some() {

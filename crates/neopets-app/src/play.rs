@@ -6181,6 +6181,16 @@ impl Play {
                 return;
             }
             let stick = self.loco.target;
+            if std::env::var_os("NEOPETS_TRACE_CLIMB").is_some() {
+                for (k, r) in self.world.rails.iter().enumerate() {
+                    let pl = |q: [f32; 4]| q[0] * hero[0] + q[1] * hero[1] + q[2] * hero[2] + q[3];
+                    let d = pl(r.normal);
+                    if d.abs() < 3.0 && pl(r.u) > -2.0 && pl(r.u) < r.lu.abs() + 2.0 && pl(r.v).abs() < 3.0 {
+                        let n = [r.normal[0], r.normal[1], r.normal[2]];
+                        println!("      grab test tick {} rail {k} d {d:.2} x {:.2} y {:.2} lu {:.1} facing.n {:.2} stick.n {:.2} speed {v:.2}", self.ticks, pl(r.u), pl(r.v), r.lu, dot(self.loco.facing, n), dot(stick, n));
+                    }
+                }
+            }
             if let Some(k) = neopets_sim::ladder::grab(&self.world.rails, hero, self.loco.facing, stick, v, false) {
                 self.ladder = Some(neopets_sim::ladder::Ladder::new(k));
                 self.loco.enter_state(hero_states::LADDER, 93);
@@ -14252,7 +14262,15 @@ impl Play {
                 wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
                 c.position = wk.position();
             }
-            c.hp -= act.hp_loss.max(0);
+            // SPEC-0014 Hero actions (R-0214): stored health is clamped at 0, and a counted hit
+            // shows the boss in the monster health bar (10 s), reading that stored value (user's
+            // report 54: no bar was shown).
+            if act.hp_loss > 0 {
+                c.hp = (c.hp - act.hp_loss).max(0);
+                let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(c.name.as_bytes(), *sp));
+                let max = c.row.map_or(300, |r| r.hit_points as i32);
+                self.monster_bar.arm(c.id, &c.name, width, c.hp, max, &self.monster_words);
+            }
             if std::mem::discriminant(&before) != std::mem::discriminant(&after) {
                 self.last_boss = format!("Ixi Chief {:?} -> {:?} (hp {}, mode {}) on tick {}", before, after, c.hp, k.mode, self.ticks);
             }
@@ -16822,6 +16840,25 @@ impl Play {
         s
     }
 
+    /// Diagnostic: the climb records (by panel) that stand on a placed object, with that object,
+    /// each panel's kind and whether it is off (LU -200).
+    pub fn panel_owners(&self) -> Vec<(usize, usize, i8, bool)> {
+        self.world.climb_rest.as_ref().map_or(Vec::new(), |r| r.panel_owner.iter().enumerate().filter_map(|(k, o)| o.map(|o| (k, o, self.world.panels[k].kind, self.world.panels[k].lu <= -200.0))).collect())
+    }
+
+    /// Diagnostic: the objects that list type-10 groups, the groups of the type-10 records, and
+    /// each ladder's start point and lengths.
+    pub fn climb_debug(&self) -> String {
+        let w = &self.world;
+        let objs: Vec<String> = w.objects.iter().enumerate().filter_map(|(i, o)| o.as_ref().filter(|o| !o.panel_groups.is_empty()).map(|o| format!("obj {i} groups {:?}", o.panel_groups))).collect();
+        let none = w.objects.iter().filter(|o| o.is_none()).count();
+        let rails: Vec<String> = w.rails.iter().map(|r| {
+            let s: [f32; 3] = std::array::from_fn(|j| -r.normal[3] * r.normal[j] - r.u[3] * r.u[j] - r.v[3] * r.v[j]);
+            format!("start ({:.1}, {:.1}, {:.1}) lu {:.1} lv {:.1} n {:?} u {:?} v {:?}", s[0], s[1], s[2], r.lu, r.lv, r.normal, r.u, r.v)
+        }).collect();
+        format!("objects {} (none {none}) {objs:?}; record groups {:?}; rails {rails:?}", w.objects.len(), w.panel_groups)
+    }
+
     /// Diagnostic: the ladders (by rail) that stand on a placed object, with that object.
     pub fn rail_owners(&self) -> Vec<(usize, usize)> {
         self.world.climb_rest.as_ref().map_or(Vec::new(), |r| r.rail_owner.iter().enumerate().filter_map(|(k, o)| o.map(|o| (k, o))).collect())
@@ -16843,7 +16880,15 @@ impl Play {
         for other in [false, true] {
             let Some(w) = (if other { self.other.as_ref() } else { Some(&self.world) }) else { continue };
             let pack = w.pack;
-            let owners: Vec<usize> = w.ground.as_ref().map_or(Vec::new(), |g| g.object_sets().into_iter().map(|(_, o)| o).collect());
+            let mut owners: Vec<usize> = w.ground.as_ref().map_or(Vec::new(), |g| g.object_sets().into_iter().map(|(_, o)| o).collect());
+            // The objects that own ladders or climb records get a pose too (SPEC-0028 section 7.2):
+            // without one their records stayed off (LU -200), so pack 800's object 0, which owns
+            // the basin ladder and no ground, never let the hero climb (user's report 57).
+            if let Some(r) = w.climb_rest.as_ref() {
+                owners.extend(r.rail_owner.iter().chain(&r.panel_owner).flatten().copied());
+                owners.sort_unstable();
+                owners.dedup();
+            }
             let poses: std::collections::HashMap<usize, neopets_data::ground::OwnerPose> = owners
                 .into_iter()
                 .filter_map(|i| {

@@ -12447,9 +12447,17 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set_word(pack, 4, 1);
                 state.set(55, true);
                 state.set(200, true);
-                out.extend([Action::FadeOut { seconds: 1.0, wait: true }, Action::MoveEntity { entity: 9, locator: 17, face: true }, Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 }, Action::FadeIn { seconds: FADE, wait: true }, Action::Converse { entity: 9, line: 11 }, Action::PlayCamera { track: 19, wait: false, end: 1, speed: 1.0 }, wait(1.0)]);
+                // SPEC-0041 800 stage D in the spec's order: the archers' idle loops (animation
+                // 1), the Chieftain and the hero placed, the shots and line 11, the archers' walk
+                // out, then the slot reset that removes them (slot 3, set 7), line 12 and the
+                // Chieftain's one-shot animation 2 (user's report 55: the archers stayed and the
+                // Chieftain stood as in the fight). The idle loop on entity 9 is left out: the
+                // spec does not say which of his loops (8, 31, 32) this one is.
+                out.push(Action::FadeOut { seconds: 1.0, wait: true });
+                out.extend((12..=16).map(|entity| Action::EntityAnim { entity, anim: 1, looped: true, wait: false }));
+                out.extend([Action::MoveEntity { entity: 9, locator: 17, face: true }, Action::MoveHero { locator: 14 }, Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 }, Action::FadeIn { seconds: FADE, wait: true }, Action::Converse { entity: 9, line: 11 }, Action::PlayCamera { track: 19, wait: false, end: 1, speed: 1.0 }, wait(1.0)]);
                 out.extend((12..=16).zip(27..=31).map(|(entity, locator)| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 }));
-                out.extend([wait(1.5), Action::Converse { entity: 9, line: 12 }, Action::Sleep { ticks: 55 }, Action::ItemActivate { slot: 1, ordinal: 0, snap: true, placed: true }, Action::InitObjOn { obj: 0, end: false }, Action::ReturnCamera { preset: -1, release: true }]);
+                out.extend([wait(1.5), Action::LoadRegion { slot: 3, region: None }, Action::Converse { entity: 9, line: 12 }, Action::EntityAnim { entity: 9, anim: 2, looped: false, wait: false }, Action::Sleep { ticks: 55 }, Action::ItemActivate { slot: 1, ordinal: 0, snap: true, placed: true }, Action::InitObjOn { obj: 0, end: false }, Action::ReturnCamera { preset: -1, release: true }]);
             }
         }
         // SPEC-0041 985 Update: the thread of the load's branch.
@@ -18899,8 +18907,15 @@ mod tests {
         s.set_level(1, true);
         assert!(on_update(800, &mut s, false).contains(&Action::Agro { entity: 14 }));
         s.set_level(3, true);
-        on_update(800, &mut s, false);
+        let d = on_update(800, &mut s, false);
         assert!(s.flag(55) && s.flag(200));
+        // Stage D: the archers' walk out comes before their slot reset, then the Chieftain's
+        // one-shot animation 2.
+        let at = |a: &Action| d.iter().position(|x| x == a).unwrap();
+        let reset = at(&Action::LoadRegion { slot: 3, region: None });
+        assert!(at(&Action::WalkEntity { entity: 16, locator: 31, wait: false, orient: false, stop: 1.1 }) < reset);
+        assert!(reset < at(&Action::EntityAnim { entity: 9, anim: 2, looped: false, wait: false }));
+        assert!(d.contains(&Action::MoveHero { locator: 14 }));
         on_exit(800, &mut s, &|_| false);
         assert!(s.has_item(9));
     }
