@@ -27,6 +27,16 @@ def one_return_to_1098(out):
     return None if entered == 1 else f'entered 1156 {entered} times (the door at locator 3 sent him back)'
 
 
+def sisters_follow(out):
+    last = re.findall(r'SISTERS tick 1650: (.*)', out)
+    if not last:
+        return 'no sister line at tick 1650'
+    zs = [float(z) for z in re.findall(r'\(-?\d+, -?\d+, (-?\d+)\)', last[0])]
+    if len(zs) != 3:
+        return f'not three sisters: {last[0]}'
+    return None if all(z < 52 for z in zs) else f'a sister stayed in section 0: {last[0]}'
+
+
 def brendel(out):
     r = last_facing(out)
     if not r:
@@ -83,6 +93,7 @@ SCENARIOS = [
     ('the 956 lift carries the hero from the bottom to the top', 'SPEC-0043 956 Lift, R-0259', 420, 956, ['--flag', '211', '--flag', '208', '--flag', '209', '--flag', '210', '--flag', '623', '--start', '-703.7,-825,8'], {'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_STAND': '1'}, has(r'400 pos \(\s+-703\.\d+\s+6[6-9]\.\d+\s+-824\.\d+\) state  1 phase  0 action\s+\d+ gap\s+0\.0')),
     ('a jump after the 956 lift ride comes back down', 'SPEC-0043 956 Lift, R-0259', 560, 956, ['--flag', '211', '--flag', '208', '--flag', '209', '--flag', '210', '--flag', '623', '--start', '-703.7,-825,8'], {'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_CROSS': '450'}, has(r'559 pos \(\s+-703\.\d+\s+6[6-9]\.\d+\s+-824\.\d+\) state  1 ')),
     ('the 1174 gate-4 plank is ground once collision bit 4 is on', 'SPEC-0018 pack 1174 kind-7 volume 0, R-0261', 8, 1174, [], {'NEOPETS_PLANKS': '1', 'NEOPETS_TRACE_COLLIS': '2:4', 'NEOPETS_TRACE_PROBE': '5,-24,10,16,26,4,-80'}, has(r'probe z\s+22\.0:\s+-107\.9\s+-105\.5\s+-114\.0')),
+    ('all three 1174 sisters follow into section 1 after its checkpoint', 'SPEC-0011 Movement goals, R-0262', 1660, 1174, ['--start', '0,40,-127'], {'NEOPETS_TRACE_SISTERS': '1', 'NEOPETS_TRACE_PUSH': '0,75', 'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_GOD': '1'}, sisters_follow),
     ('leaving 1156 lands at 1098 locator 3 and stays out while standing in the door zone', 'SPEC-0006 Doors, R-0257', 700, 1098, ['--start', '88.1,-61,-121'], {'NEOPETS_TRACE_PUSH': '88,-75', 'NEOPETS_TRACE_PUSH_PACK': '1098', 'NEOPETS_TRACE_TOWARD': '250:89,-60', 'NEOPETS_TRACE_STICK': '250:-;330:0,0'}, one_return_to_1098),
     ('arriving in 1098 by the 1152 door puts the eye in front of the hero', 'SPEC-0027 Arrival through a scripted door, R-0243', 300, 1152, ['--start', '79.09,-47,-127.79'], {'NEOPETS_TRACE_EYE': '10', 'NEOPETS_TRACE_PUSH': '79,-140'}, has(r'EYE \d+ pack 1098 hero \S+ state \d+ facing 0\.00,-1\.00 eye [\d.]+,-12[345]\.\d+,-6[3-7]\.')),
     ('a closed lever gate stops the hero', 'SPEC-0028 Character versus moving placed objects; SPEC-0042 1171', 200, 1171, ['--start', '9.6,34,-0.61'], {'NEOPETS_TRACE_PUSH': '9.6,60', 'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_GOD': '1'}, has(r'200 pos \(\s+[\d.]+\s+-0\.\d+\s+42\.\d')),

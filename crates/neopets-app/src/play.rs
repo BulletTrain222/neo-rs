@@ -1593,6 +1593,9 @@ pub struct Play {
     starlight: Option<Starlight>,
     /// Sisters a navmesh edge turned back last tick (SPEC-0011 the blocked word).
     sisters_blocked: std::collections::HashSet<u64>,
+    /// SPEC-0011 Movement goals (pack 1174's escape): each sister's goal, hold counter and mode
+    /// (true seeking, false holding), by character id.
+    escape_goals: std::collections::HashMap<u64, ([f32; 3], i32, bool)>,
     mote_objects: Vec<neopets_sim::charm::Object>,
     /// A family handler's Mote kind during a Mote object's breakable walk.
     break_family: Option<i32>,
@@ -2408,6 +2411,7 @@ impl Play {
             summon_owner: None,
             starlight: None,
             sisters_blocked: Default::default(),
+            escape_goals: Default::default(),
             mote_objects: Vec::new(),
             break_family: None,
             dev_group: None,
@@ -15285,7 +15289,59 @@ impl Play {
                 let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
                 c.facing = neopets_sim::hero::steer(c.facing, to, w);
             }
-            if let Some((p, speed)) = act.travel {
+            // SPEC-0011 Movement goals, pack 1174 (the escape): a sister holds a goal for 240 to 360
+            // ticks, then seeks a new one: a centroid of the current section's mesh more than 10
+            // from the hero; reaching within 2 of a sought goal starts a new hold; body contact (the
+            // blocked word) ends a hold. When the section changes, a goal off the new section's mesh
+            // is replaced at once (this build's reading, R-0262: the spec's "goal update only when her
+            // nearest mesh is the section mesh" would strand her in the old section). She moves by
+            // the route table of mesh 0, which covers every section. The retreat from a hero within
+            // 5 (the avoid point) is the sim's and is left alone (user's report 79 and 81: the
+            // sisters stayed in the first room).
+            let mut travel = act.travel;
+            if pack == 1174 && c.sister.as_ref().is_some_and(|s| s.alternate && s.avoid.is_none()) {
+                let meshes = &self.world.navmeshes;
+                let sec = usize::try_from(sister_mesh(pack, &self.state, meshes, c.position)).ok().filter(|&k| k < meshes.len());
+                let rng = &mut self.rng;
+                let g = self.escape_goals.entry(c.id).or_insert_with(|| (c.position, rng.range(240, 360), false));
+                let draw = |rng: &mut neopets_sim::rng::Rng| sec.and_then(|k| meshes[k].far_centroid(hero, 10.0, rng));
+                let on_section = sec.is_some_and(|k| meshes[k].first_holding(g.0).is_some());
+                let near = |a: [f32; 3], b: [f32; 3]| (a[0] - b[0]).hypot(a[2] - b[2]);
+                if !on_section {
+                    if let Some(n) = draw(rng) {
+                        *g = (n, g.1, true);
+                    }
+                } else if g.2 {
+                    if near(c.position, g.0) < 2.0 {
+                        if let Some(n) = draw(rng) {
+                            g.0 = n;
+                        }
+                        *g = (g.0, rng.range(240, 360), false);
+                    }
+                } else {
+                    g.1 -= 1;
+                    if g.1 <= 0 || self.sisters_blocked.contains(&c.id) {
+                        if let Some(n) = draw(rng) {
+                            *g = (n, 0, true);
+                        }
+                    }
+                }
+                let goal = g.0;
+                travel = match travel {
+                    Some((_, speed)) if near(c.position, goal) >= 2.0 => {
+                        // The route step over mesh 0 toward the goal.
+                        let m0 = &meshes[0];
+                        let point = match (m0.locate_full(c.position), m0.locate_full(goal)) {
+                            (Some(a), Some(b)) if a != b => m0.route(a, b).filter(|&e| e < 3).map_or(goal, |e| m0.route_point(a, e, c.position, goal, 1.25)),
+                            _ => goal,
+                        };
+                        Some((point, speed))
+                    }
+                    Some(_) => None,
+                    None => None,
+                };
+            }
+            if let Some((p, speed)) = travel {
                 let m = [p[0] - c.position[0], 0.0, p[2] - c.position[2]];
                 let l = m[0].hypot(m[2]);
                 if l > 1e-6 {
