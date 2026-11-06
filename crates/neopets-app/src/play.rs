@@ -15290,7 +15290,14 @@ impl Play {
                     // which flips her orbit next tick.
                     let to = add(c.position, scale(m, speed / l));
                     let mesh = usize::try_from(sister_mesh(pack, &self.state, &self.world.navmeshes, c.position)).ok().and_then(|k| self.world.navmeshes.get(k));
-                    if mesh.is_none_or(|m| m.first_holding(to).is_some()) {
+                    // In pack 1174 the section meshes 1 to 4 do not touch; mesh 0 covers the
+                    // whole run. The goal is drawn on the section mesh, but a step is kept on any
+                    // of the pack's meshes, so a sister can cross to a new section (user's report
+                    // 79: held to the new section's mesh, every step from the old one was refused
+                    // and the sisters never left the first room).
+                    let on_mesh = |q: [f32; 3]| self.world.navmeshes.iter().any(|m| m.kind == 1 && m.first_holding(q).is_some());
+                    let held = if pack == 1174 { on_mesh(to) } else { mesh.is_none_or(|m| m.first_holding(to).is_some()) };
+                    if held {
                         c.position = to;
                         self.sisters_blocked.remove(&c.id);
                     } else {
@@ -17092,6 +17099,11 @@ impl Play {
                 (c[0] - x).hypot(c[2] - z) < r + 6.0
             }).map(|v| format!("SOLID kind {} flags {:#x} mask {:#x} {:?}", v.kind, v.flags, v.mask, v.shape)))
             .collect()
+    }
+
+    /// Diagnostic: the Faerie Sisters' names and positions.
+    pub fn sister_places(&self) -> String {
+        self.characters.iter().filter(|c| c.sister.is_some() && !c.inactive).map(|c| format!("{} ({:.0}, {:.0}, {:.0})", c.name, c.position[0], c.position[1], c.position[2])).collect::<Vec<_>>().join(", ")
     }
 
     /// Diagnostic: the gated solid boxes (gate mask, origin, axes, extents) and the current mask.

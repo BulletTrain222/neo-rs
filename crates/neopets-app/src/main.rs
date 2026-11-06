@@ -4770,6 +4770,10 @@ fn play_trace(
         println!("PANELOWNERS {} {:?} rails {}", play.world.pack, play.panel_owners(), play.world.rails.len());
         println!("CLIMBDEBUG {}", play.climb_debug());
         println!("GATED {}", play.gated_boxes());
+        for (k, m) in play.world.navmeshes.iter().enumerate() {
+            let (lo, hi) = m.triangles.iter().flatten().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| (std::array::from_fn(|i| lo[i].min(p[i])), std::array::from_fn(|i| hi[i].max(p[i]))));
+            println!("NAVMESH {k}: kind {} triangles {} bounds {:?} to {:?}", m.kind, m.triangles.len(), lo.map(|v| v.round()), hi.map(|v| v.round()));
+        }
     }
     // NEOPETS_TRACE_CUE_RECORDS=1: the type-4 and type-5 records of all sound blocks, against SPEC-0031's counts (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_CUE_RECORDS").is_some() {
@@ -5957,6 +5961,10 @@ fn play_trace(
                     faerie_code = code;
                 }
             }
+        }
+        // NEOPETS_TRACE_SISTERS: the Faerie Sisters' places every 150 ticks (diagnostic).
+        if std::env::var_os("NEOPETS_TRACE_SISTERS").is_some() && play.ticks % 150 == 0 {
+            println!("      SISTERS tick {}: {}", play.ticks, play.sister_places());
         }
         // NEOPETS_TRACE_FRAMES="tick:x,z,r": the frame records of the cell at (x, z) within r of it, with
         // their type, gate, start, face, top, length and height (diagnostic).
