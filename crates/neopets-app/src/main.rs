@@ -2833,6 +2833,9 @@ struct UvFlip(neopets_data::material::Flipbook);
 /// tick, which holds under a pause as the cells do).
 fn sync_uv_flip(state: Option<Res<PlayState>>, parts: Query<(&UvFlip, &MeshMaterial3d<StandardMaterial>)>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let _span = crate::perf::span("sync_uv_flip");
+    if std::env::var_os("NEOPETS_PERF_NOSCROLL").is_some() {
+        return;
+    }
     let Some(state) = state else { return };
     let n = state.play.ticks as u16;
     // NEOPETS_TRACE_FLIP: the flipbook parts and their offsets every 60 ticks (diagnostic).
@@ -2860,6 +2863,9 @@ struct UvScroll([f32; 2]);
 /// (the play tick).
 fn sync_uv_scroll(state: Option<Res<PlayState>>, parts: Query<(&UvScroll, &MeshMaterial3d<StandardMaterial>)>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let _span = crate::perf::span("sync_uv_scroll");
+    if std::env::var_os("NEOPETS_PERF_NOSCROLL").is_some() {
+        return;
+    }
     let Some(state) = state else { return };
     let n = state.play.ticks as u16;
     for (s, m) in &parts {
@@ -4687,7 +4693,7 @@ fn play_trace(
     println!("Script triggers of {} (index, kind, middle): {:?}", play.world.pack, play.trigger_points());
     if std::env::var_os("NEOPETS_TRACE_LOCATORS").is_some() {
         for (k, e) in play.world.entries.iter().enumerate() {
-            println!("      locator {k}: tag {:?} at {:?}", play.world.tags.get(k), e.0.map(|x| x.round() as i32));
+            println!("      locator {k}: tag {:?} at {:?} facing {:?}", play.world.tags.get(k), e.0.map(|x| x.round() as i32), e.1.map(|x| (x * 100.0).round() / 100.0));
         }
     }
     // NEOPETS_TRACE_NEAR="x,z,r": the placed objects whose rest origin is within r of (x, z).
@@ -4939,6 +4945,12 @@ fn play_trace(
                 if seen.insert(c.name.clone()) {
                     println!("MODEL {:?}: attachment slots {:?}", c.name, c.model.attachments.iter().map(|(k, _)| *k).collect::<Vec<_>>());
                 }
+            }
+        }
+        // NEOPETS_TRACE_OWNED="tick:x,z,r,top": the object-owned ground patches near (x, z) (diagnostic).
+        if let Some((k, n)) = std::env::var("NEOPETS_TRACE_OWNED").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.trim().parse::<u64>().unwrap_or(0), b.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect::<Vec<_>>())) {
+            if k == play.ticks && n.len() == 4 {
+                play.diag_owned(n[0], n[1], n[2], n[3]);
             }
         }
         // NEOPETS_TRACE_RAILS=x,y,z: every ladder's grab distances from that point, on tick 10.

@@ -67,6 +67,7 @@ pub mod petpet;
 pub mod rng;
 pub mod rumble;
 pub mod roberta;
+pub mod ride;
 pub mod rope;
 pub mod save;
 pub mod scene;

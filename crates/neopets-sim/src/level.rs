@@ -58,6 +58,9 @@ pub enum Action {
     /// SlotLoad into one of the level's slots: the region resource to load, or None to empty
     /// the slot (its characters leave).
     LoadRegion { slot: u8, region: Option<u32> },
+    /// A slot load with activate false: the region's item placements are not spawned at load
+    /// (ItemActivate can still place them; SPEC-0041 800 stage D).
+    LoadRegionQuiet { slot: u8, region: u32 },
     /// A slot request: changes the slot only when it holds something else; None empties it.
     RequestRegion { slot: u8, region: Option<u32> },
     /// The sound host calls (SPEC-0031 Script sound calls): PlaySound (a one-shot), LoopSound (a
@@ -2115,7 +2118,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             let one = [(58, 4), (57, 3), (56, 2), (55, 1)].into_iter().find(|&(fl, _)| f(fl)).map(|(_, j)| j);
             match one {
                 Some(j) => v.push(Action::LoadRegion { slot: 0, region: Some(801 + j) }),
-                None => v.extend([(0, 0), (1, 5), (2, 6)].map(|(slot, j)| Action::LoadRegion { slot, region: Some(801 + j) })),
+                // Set 5 (the Chieftain's slot) is loaded with activate false, so its item placement,
+                // the eye patch, waits for stage D's ItemActivate (user's report 46: it lay on the
+                // ground before the fight).
+                None => v.extend([Action::LoadRegion { slot: 0, region: Some(801) }, Action::LoadRegionQuiet { slot: 1, region: 806 }, Action::LoadRegion { slot: 2, region: Some(807) }]),
             }
             if f(55) {
                 v.push(Action::InitObjOn { obj: 0, end: false });
@@ -2853,6 +2859,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 state.set_word(pack, 1, 1);
             }
             v.extend((0..=4).map(|i| reg(i, i as u8)));
+            // SPEC-0045 842 Init and open question 23: the object helper starts the 49 fires of
+            // script group 0 when s is 53 or none and stops them for 54 to 59. The build ran
+            // neither, so the fires, on from the load, burned for good (user's report 41).
+            v.push(if matches!(s, None | Some(53)) { Action::GroupEffects { group: 0 } } else { Action::GroupEffectsStop { group: 0 } });
             v.push(if matches!(s, None | Some(53) | Some(54) | Some(57)) { Action::InitObjOn { obj: 0, end: false } } else { Action::DeactivateObj { obj: 0 } });
             state.set(197, true);
             v.extend((5..=8).map(|i| reg(i, 5)));
@@ -8414,7 +8424,19 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             for (line, track) in (0..=6).zip([6, 10, 8, 9, 8, 10, 11]) {
                 out.actions.extend([Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 }, Action::Converse { entity: 9, line }]);
             }
-            out.actions.extend([Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 }, Action::Sleep { ticks: 45 }, Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::ReturnCamera { preset: -1, release: true }]);
+            // The end of stage A (SPEC-0041 800, Arena facts): the hero to locator 14 (position
+            // and facing, control 1), the camera returned with release, SetAI_Agro on 10 and 11,
+            // the letterbox off. The build left out the move and the agro, so entities 10 and 11
+            // stayed script-held in their idle pose (user's report 46).
+            out.actions.extend([
+                Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 },
+                Action::Sleep { ticks: 45 },
+                Action::MoveHero { locator: 14 },
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::Agro { entity: 10 },
+                Action::Agro { entity: 11 },
+                Action::LetterBox { on: false, seconds: 1.0, wait: false },
+            ]);
         }
         // SPEC-0041 822 CB3 (trigger 2, entering, after the first arrival): object 7, value 50 for
         // eW 60 and the load of eW 60 (pack 864).
@@ -8434,6 +8456,13 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 state.set(621, true);
                 out.actions.extend([Action::HoldHero, Action::WalkHero { locator: 242, wait: true, orient: false }, Action::HeroAnim { anim: 140, wait: false }, Action::PlayAnim { obj: 14, speed: 1.0, wait: false }, Action::Sleep { ticks: 30 }]);
                 out.actions.extend((18..=21).map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
+                // R-0249 (this build's choice; CB5 is partly described): the lever also brings up
+                // what Init shows with 621 set, objects 5 and 4 and effects 55 to 60 (which Init
+                // stopped with 621 clear), so the canal fills now and not only at the next load
+                // (user's report 44).
+                state.set_word(pack, 1, 1);
+                out.actions.extend([Action::InitObjOn { obj: 5, end: false }, Action::InitObjOn { obj: 4, end: false }]);
+                out.actions.extend((55..=60).map(|slot| Action::StartEffect { slot, camera: false }));
                 out.actions.extend([
                     Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
                     Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 },
@@ -16000,7 +16029,11 @@ fn castle_activate(state: &mut GameState) -> Vec<Action> {
         100 => 10,
         _ => return Vec::new(),
     };
-    vec![Action::MoveHero { locator }, release_camera()]
+    // The other values: "the camera is set to normal after a move" (SPEC-0045), which call is
+    // not given (R-0250). This build's choice: the same SetToNormalCamera(5.0, 0.0, true) as value
+    // 90, the eye in front of the hero; the return to normal put it behind him, past the castle
+    // doors, after the village door (user's reports 39 and 40).
+    vec![Action::MoveHero { locator }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }]
 }
 
 /// The rest prompt's press (trigger 0).

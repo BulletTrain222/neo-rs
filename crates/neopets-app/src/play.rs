@@ -1476,6 +1476,11 @@ pub struct Play {
     class20_waits: (i32, i32),
     /// The class 20 creatures a hero swing touched this tick (SPEC-0047 Class 20 item test).
     class20_hits: Vec<u64>,
+    /// Slots loaded with activate false whose item placements are not spawned (LoadRegionQuiet).
+    quiet_slots: std::collections::HashSet<(u32, u8)>,
+    /// The hero's ground object on the last tick (SPEC-0018 riding): world, object index, its
+    /// rotation and translation then.
+    ride: Option<(u32, usize, neopets_sim::ride::Quat, [f32; 3])>,
     /// The Black Knight's tuning block (SPEC-0012, 0x2DA3E8).
     knight_words: Option<neopets_sim::knight::Words>,
     /// The Gelert Assassin's tuning words and data constants (SPEC-0013).
@@ -2418,6 +2423,8 @@ impl Play {
             feeding: None,
             class20_waits,
             class20_hits: Vec::new(),
+            quiet_slots: std::collections::HashSet::new(),
+            ride: None,
             knight_words,
             gelert_words,
             hit_list: Vec::new(),
@@ -4303,6 +4310,10 @@ impl Play {
                     if self.slot_regions.get(&(pack, slot)).copied() != region {
                         return self.execute(Action::LoadRegion { slot, region }, pack);
                     }
+                }
+                Action::LoadRegionQuiet { slot, region } => {
+                    self.quiet_slots.insert((pack, slot));
+                    return self.execute(Action::LoadRegion { slot, region: Some(region) }, pack);
                 }
                 Action::LoadRegion { slot, region } => {
                     if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
@@ -8663,6 +8674,40 @@ impl Play {
     }
 
     /// Diagnostic: put the hero at (x, z) on the current world's ground, probed from height c.
+    /// SPEC-0018 riding (the ground attach's carry): the hero's ground object is the placed
+    /// object whose inline patch the probe at the feet (ceiling + 2.5) chose (not deadly ground).
+    /// When it is the same object as on the last tick and the hero is at most 0.25 above the
+    /// ground, he is moved by its translation change plus the rotation term (x and z clamped to
+    /// 1.5; the vertical carry flag is taken as clear) and his facing is turned with it. Without
+    /// this a moving platform slid out from under him (user's report 45). The climb and hang
+    /// records' owners are not built.
+    fn ride_step(&mut self) {
+        let pack = self.world.pack;
+        let p = self.loco.position();
+        let hit = self.world.probe(p[0], p[2], p[1] + 2.5);
+        let owner = hit
+            .patch
+            .filter(|pt| pt.owner != 0 && hit.kind != Some(2))
+            .and_then(|pt| self.world.ground.as_ref()?.object_sets().into_iter().find(|s| s.0 == pt.owner).map(|s| s.1));
+        let now = owner.and_then(|o| self.object_matrix(pack, o).map(|m| (o, m)));
+        if let (Some((o, m)), Some((wp, po, q_prev, t_prev))) = (now, self.ride) {
+            if wp == pack && po == o && self.loco.body.gap <= 0.25 {
+                let (d, f) = neopets_sim::ride::carry(p, self.loco.facing, &m, q_prev, t_prev, false);
+                if d.iter().any(|v| v.abs() > 1e-6) {
+                    for k in 0..3 {
+                        self.loco.body.position[k] += d[k];
+                    }
+                }
+                let l = f[0].hypot(f[2]);
+                if l > 1e-4 && (f[0] - self.loco.facing[0]).abs() + (f[2] - self.loco.facing[2]).abs() > 1e-6 {
+                    self.loco.facing = [f[0] / l, 0.0, f[2] / l];
+                    self.loco.target = self.loco.facing;
+                }
+            }
+        }
+        self.ride = now.map(|(o, m)| (pack, o, neopets_sim::ride::rotation_of(&m), [m[12], m[13], m[14]]));
+    }
+
     /// Diagnostic: the hero put at a point as it is (no ground probe).
     pub fn place_exact(&mut self, p: [f32; 3]) {
         let f = self.loco.facing;
@@ -8706,7 +8751,9 @@ impl Play {
         }
         if slot != REBIND_SLOT {
             self.slot_items.insert((pack, slot), items.clone());
-            self.region_items(pack, &items);
+            if !self.quiet_slots.remove(&(pack, slot)) {
+                self.region_items(pack, &items);
+            }
             self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
         }
         if slot == PET_SLOT {
@@ -10335,6 +10382,30 @@ impl Play {
         }
     }
 
+    /// Diagnostic: the object-owned ground patches the probe finds on a grid around (x, z).
+    pub fn diag_owned(&self, x: f32, z: f32, r: f32, top: f32) {
+        let mut seen = std::collections::BTreeMap::new();
+        let mut gx = -r;
+        while gx <= r {
+            let mut gz = -r;
+            while gz <= r {
+                let h = self.world.probe(x + gx, z + gz, top);
+                if let Some(pt) = h.patch.filter(|pt| pt.owner != 0) {
+                    let e = seen.entry(pt.owner).or_insert((0, f32::MAX, f32::MIN, [0.0f32; 2]));
+                    e.0 += 1;
+                    if h.height < e.1 { e.1 = h.height; }
+                    if h.height > e.2 { e.2 = h.height; e.3 = [x + gx, z + gz]; }
+                }
+                gz += 1.0;
+            }
+            gx += 1.0;
+        }
+        let sets = self.world.ground.as_ref().map(|g| g.object_sets()).unwrap_or_default();
+        for (o, (n, lo, hi, at)) in seen {
+            println!("OWNED patch owner {o} (object {:?}): {n} points, heights {lo:.2} to {hi:.2}, highest at {:.1},{:.1}", sets.iter().find(|s| s.0 == o).map(|s| s.1), at[0], at[1]);
+        }
+    }
+
     /// Diagnostic: each ladder, with the grab test's distances from a point.
     pub fn diag_rails(&self, at: [f32; 3]) {
         for (k, r) in self.world.rails.iter().enumerate() {
@@ -10983,6 +11054,9 @@ impl Play {
         }
         self.loco.haste = self.cheats.haste_factor();
         self.hero.set_rate(self.loco.rate * self.loco.haste_rate());
+        if !self.cheats.noclip {
+            self.ride_step();
+        }
         let (world, other) = (&self.world, self.other.as_ref());
         let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
         let noclip = self.cheats.noclip;
