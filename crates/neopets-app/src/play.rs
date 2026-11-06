@@ -198,7 +198,10 @@ impl World {
         self.volumes = self.all_volumes.iter().filter(|v| v.fires_on_contact(mask)).copied().collect();
         self.shot_volumes = self.all_volumes.iter().filter(|v| v.fires_on_shot(mask)).copied().collect();
         self.boxes = self.all_boxes.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect();
-        self.planks = self.all_planks.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect();
+        // Off by default: the 1174 gate-4 rectangle read as a walkable plank lay inside the drawn
+        // fallen column, and walking on it, the pull-up and the hold left the hero standing in the
+        // air beside the column (user's report 80). NEOPETS_PLANKS turns them on (diagnostic).
+        self.planks = if std::env::var_os("NEOPETS_PLANKS").is_some() { self.all_planks.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect() } else { Vec::new() };
         self.push_spheres = self.all_spheres.iter().filter(|(m, ..)| *m == 0 || m & mask != 0).map(|&(_, c, r)| (c, r)).collect();
     }
 
