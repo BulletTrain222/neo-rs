@@ -5578,7 +5578,9 @@ fn stage_1174(s: &mut GameState) -> Vec<Action> {
         v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::MoveHero { locator: 3 }, Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 }, Action::FadeIn { seconds: 0.5, wait: true }, Action::WalkHero { locator: 4, wait: true, orient: false }]);
         v.extend(barrier_1174(s, 4, true));
         v.extend([Action::HeroAnim { anim: 32, wait: false }, wait(2.0)]);
-        v.extend([(1, 41), (2, 42), (3, 43)].map(|(entity, locator)| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 }));
+        // SPEC-0044 1174: the Sisters are moved (placed) to their scene locators, not walked
+        // (user's reports 82 and 87: walking, they straggled in from the last room).
+        v.extend([(1, 41), (2, 42), (3, 43)].map(|(entity, locator)| Action::MoveEntity { entity, locator, face: true }));
         v.extend(barrier_1174(s, 2, true));
         v.extend(barrier_1174(s, 3, true));
         v.extend([
@@ -5602,7 +5604,9 @@ fn stage_1174(s: &mut GameState) -> Vec<Action> {
         v.extend([lvl4(true), Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 }, wait(0.3), Action::HoldHero, Action::MoveHero { locator: 5 }, Action::WalkHero { locator: 2, wait: true, orient: false }]);
         v.extend((9..=14).map(|slot| Action::StartEffect { slot, camera: false }));
         v.push(wait(0.5));
-        v.extend([(1, 53), (2, 54), (3, 55)].map(|(entity, locator)| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 }));
+        // SPEC-0044 1174: the Sisters are moved (placed) to their scene locators, not walked
+        // (user's reports 82 and 87: walking, they straggled in from the last room).
+        v.extend([(1, 53), (2, 54), (3, 55)].map(|(entity, locator)| Action::MoveEntity { entity, locator, face: true }));
         v.push(wait(1.0));
         for g in 0..7 {
             v.extend(barrier_1174(s, g, g == 5));

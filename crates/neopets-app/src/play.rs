@@ -6572,8 +6572,17 @@ impl Play {
                 continue;
             }
             let toward = e.face[0] * f[0] + e.face[2] * f[2] > 0.0;
-            if toward && (3..=4).contains(&state) && !self.loco.slow_patch && !matches!(e.kind, 1 | 6) {
+            // SPEC-0033 Behavior 49 hand-off to state 10: only when the hero's ground record's
+            // surface code is neither 1 (grass) nor 6 (stone) (the resolved reading; not the kind
+            // word of Behavior 4A.1). The fallen 1174 column is stone, so walking along it no
+            // longer jumps off its side (user's report 86).
+            let surface = self.world.probe(hero[0], hero[2], hero[1] + 2.5).surface;
+            if toward && (3..=4).contains(&state) && !matches!(surface, Some(1 | 6)) && !matches!(e.kind, 1 | 6) {
                 self.loco.edge_jump();
+                if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
+                    let k = self.world.probe(hero[0], hero[2], hero[1] + 2.5);
+                    println!("      edge jump ground kind {:?} surface {:?} patch {:?}; record type {} face {:?}", k.kind, k.surface, k.patch, e.kind, e.face);
+                }
                 self.trace_edge("edge jump", state as usize, 0);
                 return false;
             }
@@ -11523,10 +11532,10 @@ impl Play {
                 self.seal_open(g);
             }
         }
-        // NEOPETS_DEV_FIRE="tick:index[:object]" (diagnostic, window or trace): on that tick the
+        // NEOPETS_DEV_FIRE="tick:index[:object][;...]" (diagnostic, window or trace): on that tick the
         // current world's routine for that trigger runs once with state 1 (object word 0 unless
         // ":1"), as a shot or touch would fire it, so a scene can be tested without its striker.
-        if let Some(v) = std::env::var("NEOPETS_DEV_FIRE").ok() {
+        for v in std::env::var("NEOPETS_DEV_FIRE").unwrap_or_default().split(';') {
             let n: Vec<u64> = v.split(':').filter_map(|s| s.trim().parse().ok()).collect();
             if n.len() >= 2 && n[0] == self.ticks {
                 let index = n[1] as u16;

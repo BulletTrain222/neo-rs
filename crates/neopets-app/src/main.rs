@@ -92,9 +92,9 @@ fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         let h = fx.add_object(EffectObject::new(&table, id, [0.0; 3], IDENTITY));
         fx.update(&table, h, None, &mut Midpoint);
         let mut seen = Vec::new();
-        for t in 1..=120 {
+        for t in 1..=1200 {
             fx.tick(&table, &mut Midpoint);
-            if matches!(t, 1 | 10 | 30 | 60 | 120) {
+            if matches!(t, 1 | 10 | 30 | 60 | 120 | 300 | 600 | 1200) {
                 let size = fx.particles.iter().flatten().map(|p| p.size[0]).fold(0.0f32, f32::max);
                 seen.push(format!("t{t}: {} spawners {} particles, largest size {size:.2}", fx.live_spawners(), fx.live_particles()));
             }

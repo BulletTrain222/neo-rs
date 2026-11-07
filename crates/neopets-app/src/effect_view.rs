@@ -148,7 +148,13 @@ pub fn sync_effects(
             for (u, v) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
                 // SPEC-0034 16.4: lane z is the half-width; lane x reaches up to the top edge
                 // and lane y down to the bottom edge.
-                let (x, y) = (u * p.half[2], if v > 0.0 { p.half[0] } else { -p.half[1] });
+                // The sprite's screen size uses the focal length 512 on both axes against the 3D
+                // projection's 409.6 and 477.87, so it is 1.25 times as wide and 1.07 times as tall
+                // as a world quad of the same size (16.4, High; user's reports 83 and 85: the
+                // fire walls looked thin).
+                const WIDE: f32 = 512.0 / 409.6;
+                const TALL: f32 = 512.0 / 477.87;
+                let (x, y) = (u * p.half[2] * WIDE, if v > 0.0 { p.half[0] } else { -p.half[1] } * TALL);
                 positions.push((centre + right * (x * c - y * s) + up * (x * s + y * c)).to_array());
                 uvs.push([(u + 1.0) * 0.5, (1.0 - v) * 0.5]);
                 // The GS scale: a byte of 128 is 1.0; Bevy blends vertex colour in linear space.
