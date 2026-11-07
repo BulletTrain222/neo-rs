@@ -95,7 +95,7 @@ fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         for &n in &def.nodes {
             let node = &table.nodes[n];
             let a = &table.a[node.a];
-            println!("    node {n}: gate {} size {:?} per_burst {} period {} cycles {} life {} looped {} material {:?} child {} factors {:?} ring {} fill {} preset {} birth {} transform {:?} c {:?}", a.gate, a.size, a.per_burst, a.period, a.cycles, a.life, a.looped, node.material, node.child, node.factors, node.ring, node.ring_fill, node.preset, a.birth_mode, node.transform, table.c[node.c]);
+            println!("    node {n}: rates {:?} thresholds {:?} B {:?} gate {} size {:?} per_burst {} period {} cycles {} life {} looped {} material {:?} child {} factors {:?} ring {} fill {} preset {} birth {} transform {:?} c {:?}", a.size_rates, a.thresholds, table.b[node.b], a.gate, a.size, a.per_burst, a.period, a.cycles, a.life, a.looped, node.material, node.child, node.factors, node.ring, node.ring_fill, node.preset, a.birth_mode, node.transform, table.c[node.c]);
         }
     }
     for id in [0xFA2, 0xFA3].into_iter().chain(extra) {
