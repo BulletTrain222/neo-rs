@@ -288,7 +288,7 @@ Each call of the mode setter also draws the mode timer as an integer uniformly f
 
 A class-6 character runs one routine each tick:
 
-1. It updates its navigation index.
+1. Once, before its first tick, it looks for a navigation mesh when it has none (the first mesh of kind 1 that contains its position). Later ticks do not look again (High).
 2. Pre-step:
    - In every mode except 10, 11 and 12, it runs the greeting entry test (see "Greeting").
    - In mode 0, it sets the mode from the code.
@@ -331,9 +331,9 @@ Once started, the class repeats these steps on each tick until it ends. All dist
 4. Otherwise the navigation step runs (see "Navigation step").
 5. Hold branch: the same body as the greeting (see "Greeting"): the idle picker for 180 ticks (3 seconds, confirmed on disc), then id 30 once, then the idle picker. Because the hold test runs only while not holding, the counter does not restart during a hold. The hold ends when the hero's horizontal distance is above 12.0 or the dot product is below -0.1 (both confirmed on disc). On exit, walking resumes on the next tick toward the same walk target. The hold does not end the class; only arrival does. Confidence: High.
 
-End step: play the idle animation, clear the navigation wait, and end the class.
+End step: play the idle animation, clear the navigation wait, set the base state from the control flag that the walk call stored (base state 1 when the flag is set, otherwise base state 33, script control), and end the class (High for the order; Medium for which script argument the flag mirrors). The arrival tick itself only snaps the position (classes 23 and 25) and yields; the idle request and the rest follow after that yield, one tick later. In the orientation classes (25 and 26) the idle request is made once, before the turn, and the base state is set after the turn has finished.
 
-Orientation (classes 25 and 26), after arrival: each tick, if the dot product of the facing and the target orientation is below 0.99 (confirmed on disc), the character turns toward the target orientation with blend weight 0.1 (confirmed on disc). When the dot product is 0.99 or more, the class goes to its end step.
+Orientation (classes 25 and 26), after arrival: each tick, if the dot product of the facing and the target orientation is below 0.99 (confirmed on disc), the character turns toward the target orientation with blend weight 0.1 (confirmed on disc). When the dot product is 0.99 or more, the class goes to its end step. Each pass of the turn loop yields once, including the pass that finds the dot product at 0.99 or more, so the class ends one tick after that pass.
 
 ### Navigation step (per tick, not yet arrived)
 
@@ -563,8 +563,8 @@ Table variant B is the 148-entry townsfolk animation table (named by the placeme
 - Route (High). The path is path number +0xB8 of the character's placement in the area's path list (SPEC-0006, Tagged tables, tag 0x0A): a run of entry records of the pack's entry list. A walk call with a path index of 0 or more first writes that index into the placement word (SPEC-0030 row 111); a negative index leaves the placement's own value, which is how a script walks a character along the path its placement names. The route is valid when 0 ≤ index < the path count: the first point is entry A[index] and the point count is B[index] − A[index] + 1. A route is set up once in the life of a character (the NPC reset clears it): a later walk call with another index changes the placement word but not the route already set up (Medium-High).
 - Start (High). The point index starts at 0 and the reached flag is clear, so the first target is point 0 (unlike the patrol of mode 6, whose first target is point 1). A character that stands elsewhere first walks to point 0. The class does not set the movement class itself (unlike classes 23 to 26): it keeps the one the townsfolk routine or the previous walk class last set, which is the character's move type (0 unless a script called SetAI_MovementType). With move type 0 it plays townsfolk walk id 1: 5.00 units per second at R = 1, 1.71 for table variant B (see Walk speed and movement type).
 - Each tick that is not a hold (High). With the reached flag clear, the navigation target is the current point, the navigation step runs, and when the horizontal distance to the point is then below 0.5 the reached flag is set. With the reached flag set at the start of the tick: if the current point is the last one, the class ends (End, below); otherwise the index goes up by 1, the flag is cleared and the navigation target becomes the new point (the navigation step runs from the next tick). The loop word +0xBC is not read by the path walk: loop and back-and-forth placements walk alike. There is no pause at a point, no random stop and no position snap.
-- End (Medium-High). On the tick after the last point is reached the class ends with no further animation request (unlike the classes 23 and 25, it does not snap or play an idle): the character's class and priority reset to 0 and the parked townsfolk class resumes (Class requests have priorities, below). From then on IsEntityWalkToPointActive is false for it and a WAIT loop of the walk call stops waiting. A path of one point is walked to and ends the same way. The character is not removed: the cycle zones of pack 1023 deactivate their finished walkers (SPEC-0006, Cycle load).
-- No route (Medium-Low). With an invalid index no route is set up, the reached flag stays clear, and the class steers toward entry 0 of the pack's entry list (a point past the list also reads entry 0), never advances and never ends. No shipped walk call names an invalid path.
+- End (Medium-High). On the tick after the last point is reached the class ends with no further animation request (unlike the classes 23 and 25, it does not snap or play an idle): the character's class and priority reset to 0 and the parked townsfolk class resumes (Class requests have priorities, below). The reached flag is set on the tick the distance test passes; the end is decided on the next tick (flag set, point index on the last point), and the class finishes when that tick's yield returns. From then on IsEntityWalkToPointActive is false for it and a WAIT loop of the walk call stops waiting. A path of one point is walked to and ends the same way. The character is not removed: the cycle zones of pack 1023 deactivate their finished walkers (SPEC-0006, Cycle load).
+- No route (Medium-Low). With an invalid index no route is set up, the reached flag stays clear, and the class steers toward entry 0 of the pack's entry list (a point past the list also reads entry 0), never advances and never ends. Once the character is within 0.5 of entry 0 the reached flag stays set, nothing clears it, and the character stops steering and stands there. No shipped walk call names an invalid path.
 - Hold (High). The hold test and hold branch are those of the walk-to-point classes and run before the arrival test each tick.
 - The script query IsEntityWalkToPointActive (SPEC-0030) is true while class 35 is the character's current requested class, as it is for classes 23 to 26 (High).
 
@@ -574,12 +574,12 @@ Values from the AI block: radius r, pause range [Pmin, Pmax] and pause chance (s
 
 1. Each tick: request the townsfolk walk animations for speed code 5 (walk id 1). If the pause timer is above 0, it drops by 1.
 2. Point choice, when no point is held:
-   - If r is below 0.1, the point is the centroid of a uniformly chosen cell of the character's current navigation mesh.
+   - If r is below 0.1, the point is the centroid of a uniformly chosen cell of the character's current navigation mesh (the mean of the cell's three corners, w = 1). When the world has no navigation-mesh list, the point is the character's home point.
    - Otherwise the point is home + (a - r/2, 0, b - r/2). Here a and b are each a whole number drawn uniformly from 0 to trunc(r) - 1 (0 when trunc(r) is 0), and home is the character's home point.
    - If that point is off the mesh, it moves halfway toward the character's current position and is tested again, up to 10 times. The 10th retry gives the home point whatever its test returns. This is form H of the spawn point search (see "Spawn point search", including its cursor quirk).
 3. Walking (pause timer below 1): the navigation target is the point, and the navigation step runs. Let d be the horizontal distance to the point. Walking continues while all three of these hold:
    - d is 1.5 or more;
-   - the character is not in the last cell of its route within 2.5 of an open (boundary) edge (Medium);
+   - the character is not standing in the cell that holds its goal while an open (boundary) edge of that cell is within 2.5 (High for the shape of the test: the current cell equals the goal cell and an edge-proximity test with range 2.5 passes; Medium for the exact edge geometry);
    - the goal latch of SPEC-0029 Behavior 2b is set. The latch clears when the goal locate has tested every triangle of the mesh without finding the goal point, so "no route" means "the goal point is on no triangle" (High for the latch; Medium for the reading of this test).
    Otherwise the point counts as reached. Then a roll from 1 to 100 is made. If the roll is below the chance, the pause timer and the fidget timer each draw from [Pmin, Pmax]. Otherwise there is no pause, and a new point is picked on the next tick.
 4. Pausing (pause timer 1 or more). The pause timer and the fidget timer were drawn together from [Pmin, Pmax] (step 3). Each pausing tick does one of these:
@@ -653,10 +653,10 @@ A townsfolk never requests ids 115 to 119, 141 or 142, because the idle picker r
 - Townsfolk are in base state 1 from the bind onward. Every bind (streamed, forced or spawn by key) sets base state 1 before the first draw. Base state 42 is the parked state: creation, reset, release and inactive slots. A parked character is neither updated nor drawn.
 - The other base states townsfolk take:
   - 25: conversation, from SetConversationTarget until EndConversation, which restores the saved state;
-  - 33: script control, set by GrabEntityControl, PlayEntityAnim, MoveEntity when its control argument is not 1, and the end of a LoopEntityAnim when the control flag is 0;
+  - 33: script control, set by GrabEntityControl, PlayEntityAnim, MoveEntity when its control argument is not 1, the end of a LoopEntityAnim when the control flag is 0, and the end of a walk of classes 23 to 26 when the control flag is 0;
   - 55: LoopEntityAnim;
   - 16: death, only if a script kills the character.
-- Scripts take and give back control. GrabEntityControl sets base state 33. ReleaseEntityControl and ReturnEntityAnimToIdle set base state 1. The walk calls also set base state 1 and store the control flag.
+- Scripts take and give back control. GrabEntityControl sets base state 33. ReleaseEntityControl and ReturnEntityAnimToIdle set base state 1. The walk calls also set base state 1 and store the control flag; the end of a walk of classes 23 to 26 sets base state 1 when that flag is set and base state 33 otherwise (Walk-to-point routine, End step). The end of a path walk (class 35) sets no base state.
 - The behavior coroutine is stepped in every base state except 16, 25, 33, 36, 42, 53 and 55. Base states 17 and 31 step it after their own step. In the excluded states, the mode machine, the walks and the greeting are frozen where they stopped, and they resume from there when the state returns to one that steps them.
 - Script hold during a walk (Medium-High; SPEC-0030 section 4). A character whose walk class (23 to 26 or 35) is applied and that is then put in base state 33:
   - The walk freezes. The walk stays the applied class, but its routine is not stepped: no steering, no arrival test and no hold test. The facing is not updated in base state 33.
@@ -889,6 +889,10 @@ A complete route over one real navigation mesh: the type-21 mesh 1 of the first 
 
 - Step 1 in full: triangle 8 has vertices (-1888.098, 1140.512), (-1894.675, 1127.447) and (-1883.086, 1113.304); edge 2 runs from vertex 2 to vertex 0, so A = (-1883.086, 1113.304), B = (-1888.098, 1140.512), C = vertex 1, D = B - A = (-5.012, 27.208). The distance of B from the line through C and A is k1 = 13.3685 and the distance of A from the line through C and B is k2 = 16.7116, so lo = min(1.425 / 13.3685, 0.5) = 0.10659 and hi = max(1 - 1.425 / 16.7116, 0.5) = 0.91473. The horizontal line from P toward G meets the edge line at s = 0.65070, inside [lo, hi], so K = A + 0.65070 x D = (-1886.347, 1131.008). The directions from P to G and from P to K agree (dot product 1.0), so the behind test leaves K alone. The walker steers toward K with weight 0.1. The edge's neighbour is triangle 7, and the next tick reads table(7, 5).
 - No row is clamped and no row falls back to the midpoint. The table value names the edge the walker leaves by; the walker reaches triangle 5 after the eighth crossing, where C0 = T0 and the settled case of the navigation step applies.
+- Class 24 walk, stop radius 1.1: the walker stands 5.0 from the target on tick t. It keeps walking until its horizontal distance is below 1.1 (no snap), requests idle, sets base state 1 or 33 by the control flag and ends one tick after the arrival tick.
+- Class 35 path of 3 points: the target is point 0 first; each time the horizontal distance is below 0.5 the flag is set, and the next tick moves the target to the next point. The flag set on point 2 (the last) is seen on the next tick, which ends the class after its yield; no base state is set.
+- Wander pause: the walker reaches its point with pause draw P = 100 and a passing chance roll. Pausing ticks follow with the pause timer at 99, 98 and so on down to 1 (99 ticks); on the tick the timer falls to 0 a new point is picked and the walk begins.
+- Wander with a world that has no navigation-mesh list and radius below 0.1: the point is the character's home point.
 
 ## What NPCs do not do
 
@@ -923,7 +927,7 @@ Townsfolk by code (666 placements): code 0 stand 414 (299 named, 115 unnamed), c
 
 Order inside the world tick: the NPC update (re-time of the playing clip, status tick, then the class routine through the arbiter when the base state allows it), the motion-record tick, the animation pass. The class routine does the following in this order every tick it is allowed to run (base state 1, or 17 or 31; frozen in 16, 25, 33, 36, 42, 53 and 55):
 
-1. Update the navigation index; on the very first run of a character with no mesh, search for one (kind 1 mesh containing the position).
+1. On the very first run only, when the character has no mesh, search for one (kind 1 mesh containing the position); later ticks do not search again.
 2. Pre-step: the greeting entry test (all modes except 10, 11, 12); in mode 0 set mode := code; in modes 5 and 6 the pair search (never matches on disc).
 3. Set the movement class from the move type.
 4. Run the body of the current mode (table below).

@@ -29,7 +29,7 @@ This is the ordered recipe for the shipped fight (pack 985, game state 281 clear
 6. Attack choosers (Attack selection), only if the state is still a free state.
 7. Movement chooser (Movement), only if the state is still a free state (an attack just chosen is not).
 8. The current state's handler (below). A choice made in steps 3 to 7 runs its handler in the same tick, so an attack's request tick is the tick of the choice.
-9. Chain spark updates, then wait one tick.
+9. Chain spark updates; then write the boss's character id into the selected hero's forced lock-on target field (every tick, so the hero's lock-on goes to Gnarfas while his controller runs; the hero's lock choice uses a forced target once and resets it, SPEC-0040 Behavior 20); then wait one tick.
 
 Free states are idle, approach and orbit.
 
@@ -308,7 +308,7 @@ Fixed values used by the facing rule (not data words): the turn blend 0.1 per ti
 5. Run the missile reaction and then the melee reaction (free states only).
 6. Run the attack choosers, then the movement chooser (free states only; the attack order is under Attack selection).
 7. Run the current state's behavior.
-8. Run the post updates (the chain spark checks).
+8. Run the post updates (the chain spark checks), then write the boss's character id into the selected hero's forced lock-on target field (Medium-High for the effect on the hero's lock choice; High that the write happens on every tick).
 9. Wait one tick.
 
 The same order, with the per-state clips and tick counts, is in the Fight AI build guide.

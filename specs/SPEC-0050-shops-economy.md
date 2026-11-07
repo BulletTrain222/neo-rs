@@ -86,7 +86,8 @@ Confidence: High for the values; Medium-High for the pickup path (SPEC-0021).
 
 - A coin in the world is not kept as an item. Picking it up adds its value to the wallet (table in Layout), and it plays the coin cue of SPEC-0021 (cue 0xA5). It also shows the gain on price caption line 1 (section 9).
 - The values 100, 25, 10, 5 and 1 are the denominations of the coins. A money amount is split into coins in that order (SPEC-0021, drop and money flow). A coin of 100 has id 139, a coin of 1 has id 135.
-- Ids 140 to 144 are coin-class rows that add nothing when picked up. Nothing in the code spawns or adds them (Open questions).
+- A coin's add to the wallet is a plain addition with no floor and no cap (unlike the Add rule of section 1). Only id 135 uses the pickup's count; ids 136 to 139 add their fixed value whatever the count.
+- Ids 140 to 144 are coin-class rows that add nothing to the wallet when picked up; the add then falls through to the ordinary item add. Nothing in the code spawns or adds them (Open questions).
 
 ### 3. Shop purchase from a world prompt
 
@@ -107,7 +108,8 @@ Steps of the buy action, in order:
 5. Otherwise (the price is no more than the balance), add the item to the hero's inventory by the same add routine that world pickups use, in shop mode.
    - The add is told whether to take the world item or copy it (section 8). It takes it when the item is equipment (config types 1 to 6), a stat-up item (stat A, B or C at least 1 under the SPEC-0021 stat-up type rule) or a treasure map (175). Otherwise it copies it.
    - If the add succeeds: the balance falls by the price. No message is shown. The stock rules of section 8 then apply.
-   - If the add fails: show the "can't buy that now" message. The balance does not change.
+   - If the add fails: show the "can't buy that now" message. The balance does not change. Besides the add gate below, the add fails when the hero is occupied (an action state in the busy list, stun active, or a screen fade running; SPEC-0021, Auto-collect, step 3) and the item is not a coin or Mote, when the world item's no-pickup flag is set, when the id is 191 or more and the item is not a charm, or when a petpet has reserved the item (High).
+   - The charge is a plain subtraction of the signed price from the balance, with no floor (the floor of section 1 belongs to the script remove only). It cannot go below 0 for a positive price, because the price was no more than the balance.
 
 Add gate. The add routine has its own hook check: the pickup hook of a level script (host row 265). When one is registered the add is handed to it and fails here, and the hook thread later runs the add again with the check skipped, with no price check and no charge. Five packs register a pickup hook, each in its init: 816, 893, 906, 1096 and 1238 (SPEC-0021, Auto-collect, step 4; High). The list is settled by the modules' import tables and call sites. None of the packs named has a flag-1 placement, so this free-item path cannot occur with the disc's data (High). An implementation may still keep the rule.
 

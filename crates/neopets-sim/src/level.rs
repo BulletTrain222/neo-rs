@@ -968,11 +968,10 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
         (1056, 0..=2) => Some(13),
         // SPEC-0045 1217: context 0 (on contact).
         (1217, 0 | 1) => Some(0),
-        // SPEC-0045 1098: 0, 1 and 3 act on contact; 4, 6 and 7 show context 26; 2 and 5 show
-        // a square-button prompt whose context is not given (13 here; R-0037).
-        (1098, 0 | 1 | 3) => Some(0),
+        // SPEC-0045 1098 (R-0257): 0, 1, 2, 3 and 5 show context 13 ("Enter"), 4, 6 and 7
+        // context 26 ("Exit"); every one needs the prompt and a Square press.
         (1098, 4 | 6 | 7) => Some(26),
-        (1098, 2 | 5) => Some(13),
+        (1098, 0..=3 | 5) => Some(13),
         _ => None,
     }
 }
@@ -5328,8 +5327,10 @@ fn tiles_1174(s: &mut GameState) -> Vec<Action> {
                 v.extend(tile_fire(s, 42));
             }
         }
-        // The crumble lasts past its timed sound (the pieces are still playing then).
-        if t >= (fade + 0.5).max(at + 0.02) {
+        // The crumble ends when no piece animates and the fade is over (SPEC-0044 1174 Pillar
+        // tiles): tile 43's longest piece runs about 3.2 s, so its fallen object 132 comes then.
+        let still = pieces.clone().any(|obj| s.animating.contains(&obj));
+        if t >= (fade + 0.5).max(at + 0.02) && !still {
             s.set_word(1174, 100 + k, state + 1);
             v.extend(pieces.filter(|&obj| obj != stays).map(|obj| Action::DeactivateObj { obj }));
             if short {
@@ -8477,24 +8478,24 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             } else if state.flag(55) {
                 out.actions.push(Action::Message { line: 8 });
             } else {
+                // SPEC-0041 822 CB5 (R-0248, R-0249): walk and orient to point 242 (waited),
+                // hero animation 140 (not waited), lever object 14 played and waited on, 15
+                // ticks, flag 621, the canal helper (loops 18 to 21, objects 5 and 4 on and
+                // played once so the water rises, effects 55 to 60), then camera 6, 1.0 s, sound
+                // 14, camera 7, the sound killed, 3.0 s and the normal camera.
+                out.actions.extend([Action::HoldHero, Action::WalkHero { locator: 242, wait: true, orient: true }, Action::HeroAnim { anim: 140, wait: false }, Action::PlayAnim { obj: 14, speed: 1.0, wait: true }, Action::Sleep { ticks: 15 }]);
                 state.set(621, true);
-                out.actions.extend([Action::HoldHero, Action::WalkHero { locator: 242, wait: true, orient: false }, Action::HeroAnim { anim: 140, wait: false }, Action::PlayAnim { obj: 14, speed: 1.0, wait: false }, Action::Sleep { ticks: 30 }]);
-                out.actions.extend((18..=21).map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
-                // R-0249 (this build's choice; CB5 is partly described): the lever also brings up
-                // what Init shows with 621 set, objects 5 and 4 and effects 55 to 60 (which Init
-                // stopped with 621 clear), so the canal fills now and not only at the next load
-                // (user's report 44).
                 state.set_word(pack, 1, 1);
-                // Their animations raise the water (object 5 from -1.7 to -0.1, object 4 by 1.3), so
-                // they are played: switched on at the start pose the canal stayed low (user's report
-                // 48).
+                out.actions.extend((18..=21).map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
                 out.actions.extend([Action::InitObjOn { obj: 5, end: false }, Action::InitObjOn { obj: 4, end: false }, Action::PlayAnim { obj: 5, speed: 1.0, wait: false }, Action::PlayAnim { obj: 4, speed: 1.0, wait: false }]);
                 out.actions.extend((55..=60).map(|slot| Action::StartEffect { slot, camera: false }));
                 out.actions.extend([
                     Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
-                    Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 },
+                    wait(1.0),
                     Action::PlaySound { cue: 14, locator: None },
+                    Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 },
                     Action::KillSound { cue: 14, locator: None },
+                    wait(3.0),
                     Action::ReturnCamera { preset: -1, release: true },
                 ]);
             }
@@ -9534,12 +9535,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 // lift word had already changed, and trigger 8 sent the lift away under him).
                 state.set_word(pack, 5, 1);
                 let at = if state.word(pack, 2) == 0 { 43 } else { 44 };
-                out.actions.extend([Action::HoldHero, Action::WalkHero { locator: at, wait: true, orient: true }, wait(2.0), Action::MoveHero { locator: at }]);
-                // Object 9 owns no ground patch, so the platform carry has nothing to follow;
-                // the hero is held at his height over it for the move (R-0259).
-                out.actions.push(Action::RideObj { obj: Some(9) });
+                // The walk is not waited on; the MoveHero after 2 s puts him on the lift's own
+                // patch. Object 9's patch and the engine's platform carry (SPEC-0040 item 6b) take
+                // him up or down; the module holds nothing (R-0259).
+                out.actions.extend([Action::HoldHero, Action::WalkHero { locator: at, wait: false, orient: true }, wait(2.0), Action::MoveHero { locator: at }]);
                 out.actions.extend(lift_move_956(state));
-                out.actions.extend([Action::RideObj { obj: None }, Action::Bits { word: 5, set: 0, clear: 1 }, Action::ReturnCamera { preset: -1, release: true }]);
+                out.actions.extend([Action::Bits { word: 5, set: 0, clear: 1 }, Action::ReturnCamera { preset: -1, release: true }]);
             } else if !state.flag(211) {
                 let left = [209, 210, 623].iter().filter(|&&f| !state.flag(f)).count();
                 let line = if !state.flag(208) { 70 } else { [0, 66, 67, 68][left] };
@@ -10131,9 +10132,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 state.take(9, 1);
             }
             out.actions.push(Action::Message { line: 168 });
-            // This build's choice (the user's account, R-0255): the chief gives a Red Negg
-            // (item 174, a stat-up) for the eye patch. SPEC-0045 842 trigger 2 lists no gift.
-            out.actions.push(Action::GiveItem { item: 174, count: 1 });
+            // R-0255: line 168 ends with a give record for item 174 (Red Negg) count 1, so the
+            // dialogue engine gives it as the reveal reaches it; the scene makes no item call.
             out.actions.extend((21..=26).map(|e| Action::WalkEntity { entity: e, locator: e - 4, wait: false, orient: false, stop: 1.1 }));
             out.actions.extend(slot(3));
             out.actions.extend([Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::ReturnCamera { preset: -1, release: true }]);
@@ -12501,17 +12501,30 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 // 1), the Chieftain and the hero placed, the shots and line 11, the archers' walk
                 // out, then the slot reset that removes them (slot 3, set 7), line 12 and the
                 // Chieftain's one-shot animation 2 (user's report 55: the archers stayed and the
-                // Chieftain stood as in the fight). The idle loop on entity 9 is left out: the
-                // spec does not say which of his loops (8, 31, 32) this one is.
+                // Chieftain stood as in the fight). Entity 9's idle loop is animation 32 (R-0254).
                 out.push(Action::FadeOut { seconds: 1.0, wait: true });
                 out.extend((12..=16).map(|entity| Action::EntityAnim { entity, anim: 1, looped: true, wait: false }));
-                out.extend([Action::MoveEntity { entity: 9, locator: 17, face: true }, Action::MoveHero { locator: 14 }, Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 }, Action::FadeIn { seconds: FADE, wait: true }, Action::Converse { entity: 9, line: 11 }, Action::PlayCamera { track: 19, wait: false, end: 1, speed: 1.0 }, wait(1.0)]);
+                out.extend([Action::MoveEntity { entity: 9, locator: 17, face: true }, Action::MoveHero { locator: 14 }, Action::EntityAnim { entity: 9, anim: 32, looped: true, wait: false }, Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 }, Action::FadeIn { seconds: FADE, wait: true }, Action::Converse { entity: 9, line: 11 }, Action::PlayCamera { track: 19, wait: false, end: 1, speed: 1.0 }, wait(1.0)]);
                 out.extend((12..=16).zip(27..=31).map(|(entity, locator)| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 }));
-                out.extend([wait(1.5), Action::LoadRegion { slot: 3, region: None }, Action::Converse { entity: 9, line: 12 }, Action::EntityAnim { entity: 9, anim: 2, looped: false, wait: false }, Action::Sleep { ticks: 55 }, Action::ItemActivate { slot: 1, ordinal: 0, snap: true, placed: true }, Action::InitObjOn { obj: 0, end: false }, Action::ReturnCamera { preset: -1, release: true }]);
-                // This build's choice (the user's account, R-0254): the Chieftain is removed once
-                // his fall (animation 2, about 110 ticks from its start) has ended, about 60 ticks
-                // after the scene's 55-tick sleep; SPEC-0014 leaves him in the basin.
-                out.extend([Action::Sleep { ticks: 60 }, Action::DeactivateEntity { entity: 9 }]);
+                out.extend([wait(1.5), Action::LoadRegion { slot: 3, region: None }, Action::Converse { entity: 9, line: 12 }, Action::EntityAnim { entity: 9, anim: 2, looped: false, wait: false }, Action::Sleep { ticks: 55 }, Action::ItemActivate { slot: 1, ordinal: 0, snap: true, placed: true }]);
+                // R-0254: camera 20 behind a 0.7 s fade out (waited) and a 0.4 s fade in (not
+                // waited); then the reset of the Chieftain's own slot releases him (not a kill)
+                // while the screen is still dark, 55 + 42 ticks after animation 2 started. This
+                // build removes the entity instead of resetting the slot, so the eye patch placed
+                // from that slot stays. Then 1.5 s, a 1.0 s fade out, the letterbox off, object 0
+                // on, a 0.5 s fade in and the normal camera.
+                out.extend([
+                    Action::FadeOut { seconds: 0.7, wait: true },
+                    Action::DeactivateEntity { entity: 9 },
+                    Action::PlayCamera { track: 20, wait: false, end: 1, speed: 1.0 },
+                    Action::FadeIn { seconds: 0.4, wait: false },
+                    wait(1.5),
+                    Action::FadeOut { seconds: 1.0, wait: true },
+                    Action::LetterBox { on: false, seconds: 1.0, wait: false },
+                    Action::InitObjOn { obj: 0, end: false },
+                    Action::FadeIn { seconds: 0.5, wait: false },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
             }
         }
         // SPEC-0041 985 Update: the thread of the load's branch.
@@ -16084,14 +16097,15 @@ fn castle_init(state: &mut GameState) -> Vec<Action> {
     } else if state.flag(501) && !state.has_item(72) && !state.flag(504) && !state.flag(503) {
         out.push(Action::LoadRegion { slot: 3, region: Some(1098 + 1 + 21) });
     }
-    // This build's choice (R-0258, user's report 61): the throne room's double doors, objects
-    // 10 and 11 at x -9.1 and 9.2, z 52.5, are drawn from the load, closed (start pose) while flag
-    // 622 is clear and open (end pose) once trigger 9 has played them. On disc they are in state
-    // 3 and no call of the module turns them on before trigger 9, so under SPEC-0028's draw gate
-    // the doorway stood empty. Objects 12 and 13, at the same places, are left as they are.
-    // Closed again from castle stage 30 (the user's report 75: open there was wrong).
-    let open = state.flag(622) && castle_stage(state) < 30;
-    out.extend([Action::InitObjOn { obj: 10, end: open }, Action::InitObjOn { obj: 11, end: open }]);
+    // SPEC-0045 1098 Init (R-0258): with flag 28 set, flag 30 clear and flag 622 set, objects
+    // 11 and 10 start at their end pose (the open throne-room doors) and object 14, the invisible
+    // wall box across the doorway, is left off; otherwise 11 and 10 start closed and 14 is on.
+    // Objects 12 and 13 are never touched.
+    let open = state.flag(28) && !state.flag(30) && state.flag(622);
+    out.extend([Action::InitObjOn { obj: 11, end: open }, Action::InitObjOn { obj: 10, end: open }]);
+    if !open {
+        out.push(Action::InitObjOn { obj: 14, end: false });
+    }
     out
 }
 
@@ -16121,10 +16135,8 @@ fn castle_activate(state: &mut GameState) -> Vec<Action> {
         100 => 10,
         _ => return Vec::new(),
     };
-    // The other values: "the camera is set to normal after a move" (SPEC-0045), which call is
-    // not given (R-0250). This build's choice: the same SetToNormalCamera(5.0, 0.0, true) as value
-    // 90, the eye in front of the hero; the return to normal put it behind him, past the castle
-    // doors, after the village door (user's reports 39 and 40).
+    // Values 10 to 70 (and 90): SetToNormalCamera(5.0, 0.0, true), the eye 5.0 in front of the
+    // hero along the locator facing (SPEC-0045, R-0250).
     vec![Action::MoveHero { locator }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }]
 }
 
@@ -18978,7 +18990,9 @@ mod tests {
         assert!(at(&Action::WalkEntity { entity: 16, locator: 31, wait: false, orient: false, stop: 1.1 }) < reset);
         assert!(reset < at(&Action::EntityAnim { entity: 9, anim: 2, looped: false, wait: false }));
         assert!(d.contains(&Action::MoveHero { locator: 14 }));
-        assert!(d.ends_with(&[Action::Sleep { ticks: 60 }, Action::DeactivateEntity { entity: 9 }]));
+        // R-0254: the Chieftain goes at the end of camera 20's 0.7 s fade out, after the sleep.
+        assert!(at(&Action::FadeOut { seconds: 0.7, wait: true }) + 1 == at(&Action::DeactivateEntity { entity: 9 }));
+        assert!(d.contains(&Action::EntityAnim { entity: 9, anim: 32, looped: true, wait: false }));
         on_exit(800, &mut s, &|_| false);
         assert!(s.has_item(9));
     }
@@ -19004,7 +19018,7 @@ mod tests {
         // CB5 with 55 and 621 clear: the lever sets 621.
         let mut s = GameState::default();
         on_init(822, &mut s);
-        assert!(on_trigger(822, 5, enter(8), &mut s).actions.contains(&Action::WalkHero { locator: 242, wait: true, orient: false }) && s.flag(621));
+        assert!(on_trigger(822, 5, enter(8), &mut s).actions.contains(&Action::WalkHero { locator: 242, wait: true, orient: true }) && s.flag(621));
     }
 
     #[test]
@@ -19915,10 +19929,10 @@ mod tests {
         // The ride (animated trigger 9, routine 30) from the bottom: walk to 43, held over
         // object 9 for the move up; the plain calls stay out until its end clears word 5.
         let ride = on_trigger(956, 30, enter(0), &mut s).actions;
-        assert!(ride.contains(&Action::WalkHero { locator: 43, wait: true, orient: true }) && ride.contains(&Action::RideObj { obj: Some(9) }) && ride.contains(&Action::PlayAnim { obj: 9, speed: 1.0, wait: false }));
+        assert!(ride.contains(&Action::WalkHero { locator: 43, wait: false, orient: true }) && !ride.iter().any(|a| matches!(a, Action::RideObj { .. })) && ride.contains(&Action::PlayAnim { obj: 9, speed: 1.0, wait: false }));
         assert!(on_trigger(956, 8, enter(8), &mut s).actions.is_empty() && on_trigger(956, 30, enter(0), &mut s).actions.is_empty());
         s.set_word(956, 5, 0);
-        assert!(on_trigger(956, 30, enter(0), &mut s).actions.contains(&Action::WalkHero { locator: 44, wait: true, orient: true }));
+        assert!(on_trigger(956, 30, enter(0), &mut s).actions.contains(&Action::WalkHero { locator: 44, wait: false, orient: true }));
         // The aftermath (214 set): flags 216 and 64, set 8 into S (region 965).
         s.set(214, true);
         let out = on_update(956, &mut s, false);

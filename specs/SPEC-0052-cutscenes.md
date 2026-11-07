@@ -129,14 +129,14 @@ Blocking calls and their conditions:
 - Fade calls with wait: yield one tick per loop while fade alpha differs from its target (SPEC-0030 rows 136 and 137).
 - Letterbox calls with wait: yield one tick per loop until the bar done flag is set (SPEC-0030 rows 139 and 140).
 - WalkHero with wait: waits while the hero stays in the walk state.
-- PlayEntityAnim with wait: waits until the entity reports that the play has ended.
+- PlayEntityAnim with wait value 1: yields one tick, then one tick at a time until the entity's animation track reports finished (High). Other wait values return at once.
 - LevelMsg with wait value 1: yields one tick at a time while the dialogue box is active, so it returns on the first pass after the box closes (the player dismisses the last page). Other wait values do not wait (High).
 
 ### Locator moves
 
 MoveObjToAnimatedLocator(target, source object, locator id, flag, W):
 
-1. Find the locator table of the world that owns the source object. If the source has no world, or the locator id is outside 0 to count minus 1, the call does nothing.
+1. The target and source are placed-object indices of the named world (the current world when none is named). Find the locator table of the world that owns the source object. If either index is out of range, the source has no locator table, or the locator id is outside 0 to count minus 1, the call does nothing (High).
 2. If the flag is 0, take one sample at the moment the call runs (High). Let L be the locator vector (record +0x30), P the source object's position (object +0xF0), row0, row1 and row2 the source object's first three basis rows (object +0x00, +0x10, +0x20), and V the source object's vector at +0x80. With d = L - P (x, y, z only):
    - sample.xyz = P.xyz + d.x row0.xyz + d.y row1.xyz + d.z row2.xyz + V.xyz;
    - sample.w = L.w + V.w.
@@ -240,8 +240,8 @@ Confidence High.
 
 - A lock is a state value, not a counter. It has no timeout. It lasts until a release or restore is run.
 - GrabHeroControl: sets the hero state to 0x21, with no check of the current state.
-- BlockPlayerControl: if the current hero has a control record, sets the hero state to 0x21. The hero argument is ignored and the current hero is always used. Without a control record nothing changes.
-- RestorePlayerControl: sets the current hero state to 1 only if it is currently 0x19, 0x37, 0x33 or 0x21. In any other state, including walking, nothing changes. So a block followed by a restore frees the hero, but a restore during a walk does nothing.
+- BlockPlayerControl(hero): the hero argument picks the hero (-1 means the current hero; any other value picks that entry of the two-hero table). If that hero has a control record, the call first plays the active hero's one-shot animation 0 with the control flag set to 1 (this yields one tick and puts the active hero in state 0x33), and then sets the picked hero's state to 0x21. Without a control record nothing changes and nothing yields. With the current hero (the usual case) the net result is state 0x21 after one tick (High). The disc calls are assumed to pass the current hero (Medium).
+- RestorePlayerControl(hero): the hero argument picks the hero as for BlockPlayerControl. It sets that hero's state to 1 only if the hero has a loaded model and its state is currently 0x19, 0x37, 0x33 or 0x21. In any other state, including walking, nothing changes. So a block followed by a restore frees the hero, but a restore during a walk does nothing.
 - ReleaseEntityControl(entity): sets the entity state to 1 when the entity exists, with no check of its current state.
 - CTL argument of PlayEntityAnim, LoopEntityAnim, WalkHero and MoveHero: stored on the entity as a flag, set when CTL equals 1. For PlayEntityAnim, the state after the play is 1 when CTL equals 1, and 0x21 otherwise.
 - The input lock during a scene has four layers: the script hold (state 0x21, from Block or Grab), the camera play's per-update hold (Camera track playback), the hero busy predicate while the screen effect moves, and the door refusal while the effect moves or the game status is not 0.

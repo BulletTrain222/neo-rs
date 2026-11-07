@@ -131,7 +131,7 @@ The travel is not blocked by the hero or other characters; only the arena mesh c
 - Boss HP 800: with a factor of 1.0 and a hero hit of 15 the boss takes 15; the same hit at the 60 s mark takes 75.
 - A melee hit needs all three of: the hero's attack-active word is set (event bit 0x1 of its current frame), the hero's second attack query holds, and the hero's weapon reaches one of the boss's bone capsules (SPEC-0036, Hero swing, step 2). If any fails, the missile slots are tested instead on that tick. There is no per-swing hit latch on the boss's side: after a hit the flinch makes it not hittable for 57 or 73 ticks, which outlasts any swing.
 - Hero shots pass through the boss, and stay alive, whenever it is in a state that cannot be hit; a slot is removed only on an overlap while the boss is hittable (including the overlaps that give no damage: a clone, healing phases, the sword-blocked slip).
-- The damage subtraction clamps at 0 (damage equal to or above HP leaves HP at 0) and runs the shared death hook, which changes nothing for this boss (G10).
+- The damage subtraction clamps at 0 (damage equal to or above HP leaves HP at 0) and runs the shared death hook, which changes nothing lasting for this boss because the loop restores base state 1 while HP is 0 (G10).
 - Where the boss can actually be hurt. The melee reaction (4.13) fires on the first tick a hero swing is active, with the hero within 12 units and facing it, and sends the boss into the melee dodge with chance 100/101. It runs in every reaction-capable state (idle, strafing, backing up, the dagger throw, the flinch, the stances), so a swing started inside 12 units almost never connects while the boss is in those states; the dodge slides it back 10 units and makes it not hittable for 65 ticks. The boss is hittable but cannot react in: the thrust lunge, sword blocked, evil laugh, shadow dagger, mirror attack (about 207 ticks), just appear (and its 132-tick laugh), healing (phases 0, 1, 3, damage-free), light arc (phases 0, 2, 3), and rainbow dash (all phases). It is never hittable in the sword swing, the jump thrust, the shadow slip, the back-stab, the stances, the dodges, the deflect, the flinch and the wait.
 
 ### G8. Phase transitions
@@ -148,7 +148,7 @@ The travel is not blocked by the hero or other characters; only the arena mesh c
 
 ### G10. Death
 
-- HP reaches 0 only through a flinching hit; the shared death hook does not change the state of class 1, so there is no death animation and no corpse. The HP check runs on the next decision-ready tick, so the boss first finishes the flinch (57 or 73 ticks) and any other non-decision state, then enters state 1A and raises event 7. The finale scene deactivates the boss and the clones.
+- HP reaches 0 only through a flinching hit; the loop writes base state 1 on every tick on which the boss's HP is 0 (the first step of each tick, 4.1), so the dead base state of the shared death hook never takes effect and there is no death animation and no corpse. The HP check runs on the next decision-ready tick, so the boss first finishes the flinch (57 or 73 ticks) and any other non-decision state, then enters state 1A and raises event 7. The finale scene deactivates the boss and the clones.
 - The boss cannot die in a state that takes no damage (healing, sword-blocked slip, stance).
 
 ### G11. What a port gets wrong easily
@@ -425,15 +425,15 @@ The settle test and smoothing constants 0.02, 0.15 and event id 0x13 (4.14) are 
 
 Every tick (1/60 s), the boss runs these steps in order:
 
-1. Count down each of four timers by one tick (stopping at 0): the shadow-slip timer, the attack timer, the back-up cooldown, and one further counter (the healing countdown copy; Open question 3).
-2. Reset the boss's animation speed to 1.0.
+1. Reset the boss's animation speed to 1.0. Then, if the boss's HP is 0, write base state 1 (this undoes the dead base state that the shared death hook may have set, G10). Then, if the navmesh blocked flag is set, raise the shadow-slip request latch (4.4).
+2. Count down each of four timers by one tick (stopping at 0): the shadow-slip timer, the attack timer, the back-up cooldown, and one further counter (the healing countdown copy; Open question 3).
 3. Script gate (4.3). Then the HP-band check (4.2), which can change the band and can start the death state.
 4. Missile reactions and melee reactions (4.13), if the boss is in a state that allows reactions (4.5).
 5. Attack choice (4.4), only if the attack timer is 0 and the boss is free to act.
 6. Strafe choice and the shadow-slip gate (4.4), only if the boss is free to act.
 7. Hit detection against the boss's six hit slots, and reactions to hits (4.13).
 8. Run the handler for the boss's current state (4.4b, 4.7 to 4.12).
-9. Advance the elapsed-time counter (4.6).
+9. Advance the elapsed-time counter (4.6). Then, on every tick whatever the state, store the boss's character id as the hero's forced lock-on target (the same write the Black Knight and the Cloud Beast make; SPEC-0040 Behavior 20), step the boss's fade level (visual) and the debug text (High, from the main loop).
 
 The boss is "free to act" (decision-ready) when it is idle or strafing (4.4). In every other state it is busy and does not choose a new action.
 
@@ -455,7 +455,7 @@ Let f = current HP / maximum HP of the boss.
 - A band can be skipped: if f falls from 0.8 to 0.2 at once, the boss goes straight to pattern 4 and raises only event 5.
 - The band check runs only when the boss is decision-ready (4.1). A boss that drops into a lower band during a swing enters the new stance after its current action ends.
 - Each band change resets the elapsed-time counter (4.6) to 0, which also returns the boss damage factor to 1.0.
-- Death: the check at HP 0 runs only on a decision-ready tick. The killing hit is taken in a flinch (4.13), and the shared death hook does not change the base state of class 1, so the boss plays no death animation; it finishes the flinch, then enters the death state and raises event 7.
+- Death: the check at HP 0 runs only on a decision-ready tick. The killing hit is taken in a flinch (4.13), and the loop writes base state 1 on every tick on which the boss's HP is 0, so the dead base state of the shared death hook never takes effect and the boss plays no death animation; it finishes the flinch, then enters the death state and raises event 7.
 
 Confidence: High for thresholds and events. The starting pattern is 1 (4.11).
 

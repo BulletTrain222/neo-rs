@@ -16,7 +16,7 @@ Node trees are found in four places, all inside IDM chunk files (SPEC-0002):
 | Where | Chunk | Space | Seen on disc |
 | --- | --- | --- | --- |
 | Mesh container ("core object") | type 8, whose children are type-13 (or type-12) chunks, each one node tree | model space | 214 type-8 chunks, 1,459 children |
-| Level display tree (world packs) | type 3, payload is one node tree | world space | 191 world packs |
+| Level display tree (world packs) | type 3, payload is one node tree; the u16 at chunk header byte 14 picks one of five display-tree slots (above 4 counts as slot 0; SPEC-0006) | world space | 191 world packs |
 | Placed objects (world packs) | type 29, each object holds an inline node tree | object space + matrix | 121 packs, 3,524 objects |
 | Instanced meshes (world packs) | type 20, each record holds an inline node tree | object space + per-instance matrix | 23 packs, 1,265 instances |
 | Standalone type-13 chunks (resources 544–575, the held-item display models, and resource 7) | type 13, one node tree per chunk (see "Standalone type-13 chunks") | model space, placed by an attach-point matrix, a held-entry or world-item matrix, or the item showcase | 65 chunks, 208 mesh leaves |
@@ -34,7 +34,7 @@ All values are little-endian. Offsets inside a node tree are **relative to the s
 - The payload starts with 0, 8 or 12 zero bytes (the chunk's extra-header length E), then a chain of child chunks of type 13 (or 12), back to back, then a 16-byte IDM end marker (type 0).
 - Each child's header bytes 14–15 hold a u16 **role id**. The child payload is one node tree with its root at payload offset 0.
 - 64 type-8 chunks on the disc have no children (just the end marker). They are empty slots in world-pack chains; skip them.
-- A character's main mesh is the first child. Later children with role ids 10–20 are optional extra parts that the game attaches by role. World packs register each child (other than role 401) under its role id as a **global model id** of the shared common-object registry: id 0 to 97, 98 to 190, 191 to 282 or 283 to 322, with the index inside the range being the id minus the range start (an id above 322 registers nothing, though the child is still relocated). Role 401 is the separate special path. The models are then found by id: item models (SPEC-0021, Item model registry), flowers and other placed models (SPEC-0028, section 16) and the model particles of effects (SPEC-0034, section 2.3). Across the world packs, 150 distinct role IDs occur: ordinary IDs run through 282, plus the separate special role 401. The same ordinary ID in two packs is the same model slot. Role meanings for character containers are in Child role dispatch below.
+- A character's main mesh is the first child. Later children with role ids 10–20 are optional extra parts that the game attaches by role. World packs register each child (other than role 401) under its role id as a **global model id** of the shared common-object registry: id 0 to 97, 98 to 190, 191 to 282 or 283 to 322, with the index inside the range being the id minus the range start (an id above 322 registers nothing, though the child is still relocated). Role 401 is the separate special path: its tree is relocated with no shader list (so no CPU vertex animator is ever bound to it) and is held as the world's single special model instead of being registered. A child of chunk type 1 is skipped silently; a child of any other type besides 12 and 13 is reported and skipped. The models are then found by id: item models (SPEC-0021, Item model registry), flowers and other placed models (SPEC-0028, section 16) and the model particles of effects (SPEC-0034, section 2.3). Across the world packs, 150 distinct role IDs occur: ordinary IDs run through 282, plus the separate special role 401. The same ordinary ID in two packs is the same model slot. Role meanings for character containers are in Child role dispatch below.
 - **Load-time handling (High)**: when the world loader reaches a type-8 chunk, it walks the child chain. For ordinary type-12/13 children it applies the node-tree pointer fix-up to the child payload using that payload as the relocation base and passes the current shader list for mesh-leaf material handling (SPEC-0003). The fix-up applies to the child node tree; the type-8 container header/pad is not itself relocated by this handler. Empty containers are skipped. The walk order and the other chunk handlers are in SPEC-0006.
 - **Child role dispatch (High for the source and dispatch; Medium for stored-field meanings)**: the book-page loader (the page models of resource 576, SPEC-0024, Book records; not the outfit loader) walks type-13 children inside the type-8 container and reads each child's role ID from header bytes 14–15 (+0x0E), separately from the child's chunk type at byte 4. It then acts on that role ID:
   - code 0: sets a count from the child's 16-bit field at offset 0x5C. In a mesh leaf that field is the material group index (above); in every page record it is the paper picture's group, so the count is that group index (Resolved; Medium-High).
@@ -79,7 +79,7 @@ Mesh leaf (type 1) fields after the common header:
 | --- | --- | --- | --- |
 | 0x50 | 4 | u32 | Offset of the packet. It is always this node + 0x90. |
 | 0x5C | 2 | u16 | **Material group index** into the shader list's groups (SPEC-0003). Always below the group count. |
-| 0x5E | 1 | u8 | Packet kind: 0 = one packet (all but 13 leaves); 1 = CPU-animated, double-buffered leaf (see "Multi-packet leaves"); 2 = a raw vertex-program record, sent whole (none on disc) |
+| 0x5E | 1 | u8 | Packet kind: 0 = one packet (all but 13 leaves), queued with the number of tags per batch taken from packet byte 0x0D; 1 = CPU-animated, double-buffered leaf (see "Multi-packet leaves"); 2 = a raw vertex-program record, sent whole by its quadword count (none on disc). Any other value is treated like 1. |
 | 0x64 | 4 | u32 | Total vertex count over all batches |
 | 0x68 | 4 | u32 | Number of batches |
 | 0x6C | 4 | u32 | 1 |
@@ -116,7 +116,7 @@ Confidence: High for the layout and the coverage; Medium for the node types of t
 
 ### Item model registry key (High)
 
-Every standalone type-13 tree is kept in the item model registry (SPEC-0021) under an item id. The id comes from the chunk header's u16 at byte 14 (+0x0E), the same header field that holds the role id of a type-8 container's children:
+Every standalone type-13 tree is kept in the item model registry (SPEC-0021) under an item id. When a tree is registered, the registry keeps not the root but a node found by descending first-child links from the root: it stops at the first node that has two or more children, or that is a type-4 (LOD) or type-1 (leaf) node. That node becomes the registered root and its parent link is cleared. If the node it stops at is a type-3 node (it has two or more children), its type is reset to 0, which turns off its visibility selector. For the usual chain (root group, one type-3 group, one type-4 LOD group) the registered root is therefore the LOD group, and the groups above it are never drawn (Medium-High). A tree with no such node is registered unchanged under its own root, and a diagnostic is printed. The id comes from the chunk header's u16 at byte 14 (+0x0E), the same header field that holds the role id of a type-8 container's children:
 
 - **Run-time models (544–575).** When an item display slot finishes loading one of these resources, it checks that the chunk type is 12 or 13 (otherwise the slot stays empty) and registers the model under id = header u16 + the slot's id base. The base is 98 for the weapon slot and the shield slot, and 0 for the fixed slot and the world-item slot.
 - **Boot models (resource 7).** The 33 containers are registered at boot under id = 98 + header u16.
@@ -434,10 +434,12 @@ Each frame, after the skeleton pose is built, for each entry k below the entry c
 
 Entries with a negative bone index keep their last value (identity after a reset). In the rest of this spec and in SPEC-0046, X_k, Y_k and Z_k are the first three columns of W_k (its axes) and T_k its fourth column (the attach point's origin).
 
-### Packet pointer relocation (load time, Medium)
+### Packet pointer relocation (load time, Medium-High)
 
-- When a packet record is loaded, the loader turns two offsets stored in the record (its first two words) into addresses by adding the base address of the loaded payload to each one.
-- It then sets the record's flag word to 1 and its third word to the caller's parameter. Which of the two words is the flag does not change any drawing rule (Open questions, default).
+- Every mesh leaf's packet offset (+0x50) is turned into an address by adding the tree payload's base address. Nothing inside a packet of kind 0 or 2 is changed.
+- For a kind-1 leaf (the 13 water leaves) the loader also adds the packet's own address to each non-zero word at packet offsets 0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20, 0x24, 0x28, 0x2C, 0x30, 0x34, 0x38, 0x3C, 0x40 and 0x4C. The word at 0x44 is then set to the vertex-animator routine for the material group's animator byte (SPEC-0003, group byte 0x29), or to 0 when that byte is 0 or below or when the tree is loaded with no shader list.
+- A type-4 node's three extra child offsets (+0x70, +0x74, +0x78) are each turned into an address and their subtrees are relocated too, when non-zero; first-child, sibling and parent links are relocated for every node.
+- The registration of a type-33 block adds the payload base to each non-zero list offset once (see Load-time conversion).
 
 ### Drawing a node tree
 
@@ -479,7 +481,7 @@ Drawing state is grouped into numbered pages. Each page has its own pool of 0x30
 
 - **Empty mesh containers** (64 type-8 chunks with only the end marker): no geometry.
 - **Multi-packet leaves** (packet kind 1; High): the 13 leaves are resource 9, type-12 children 16 to 28. Children 16–23 use material group 20 and children 24–28 group 21, both with CPU vertex animator 3 (water, SPEC-0003, group byte 0x29). No other leaf names a group with a nonzero animator byte. The packet header has a quadword count of 0. It holds pointer fields (at packet offsets 0x1C–0x28 and 0x3C–0x40) to four small tables and to two byte-identical draw packets, which are a double buffer for the CPU rewrite:
-  - at load, the fix-up relocates the packet's pointer fields and binds the group's CPU vertex animator into the packet;
+  - at load, the fix-up relocates fifteen of the packet's pointer words (0x0C to 0x40 except 0x44, and 0x4C) and binds the group's CPU vertex animator into word 0x44 of the packet (see "Packet pointer relocation");
   - each frame, the animator rewrites the draw packet of the current frame parity, and the draw sends the packet whose pointer is at packet + 0x3C on even parity and at packet + 0x40 on odd parity.
   Each draw packet decodes as a normal packet. Its batches use V4-32 positions (w = 1.0) with V4-32 UVs (z = w = 0) and a zero second array. A clean side that does the water animation itself may draw either copy.
 - Stream padding: after the last batch, a packet may contain zero or 0xCDCD fill up to its quadword count. Stop parsing at an unknown VIF command or at the packet end.
@@ -558,7 +560,7 @@ Numbers of removed questions are not reused.
 - **Loader of the top-level type-13 chunks**: Resolved: resource 7 loads at boot with the item data, and resources 544–575 load through the item display slots, which register them as in "Item model registry key" (SPEC-0002, SPEC-0021). **[High]**
 - Resolved: **Load status of computed loads.** Every computed region-slot load has a bounded set of region indices, so no region depends on an unknown run-time argument; a region named only in a slot-buffer reservation is not loaded (see "Load status of mesh resources").
 - Resolved: **Load status recount.** The counts of "Load status of mesh resources" now use SPEC-0006's 174 reached packs: 174 world packs reached, 2 reachable only from the unreached pair 683 and 1003, 15 with no route; 436 character regions reached, 59 only from unreached packs, 60 never loaded. SPEC-0021 still counts on its own earlier basis. **[Medium]**
-- **Packet pointer relocation** (Medium): the packet-kind-1 relocation is in "Packet pointer relocation" and Edge cases, Multi-packet leaves. Default if unresolved (rewrite choice): relocate the two stored offsets and ignore the flag and parameter words, which no drawing rule reads (needs a runtime check).
+- Resolved: **Packet pointer relocation.** Only kind-1 packets are relocated beyond the leaf's own packet offset, and the relocated words and the animator slot are listed under "Packet pointer relocation". Which of the relocated words are used by the animator and which only by the double-buffer choice stays open (Multi-packet leaves). **[Medium-High]**
 - **Standalone type-13 chunks**: seventeen LOD child links point to a node that is not a group node; their target type is not examined. Answered: where they are drawn is in SPEC-0046 (Held items and character attachments) and SPEC-0021, with resource 7's shader list. **[High]**
 - Resolved: **Attach point 7**. It is the status display anchor: every status effect start, the per-tick follow of the shown status effect and the immunity-block effects read its origin T_7. **[High]**
 - Resolved: **Type-33 bank index**. The byte is one bone index across the render object's three bone-matrix arrays; the two thresholds are the counts held at the start of its first and second skeleton records (see Bank index). The arrays are the main, sub-part and face outputs of the shared pose pass of the drawn character (SPEC-0046, Character part draw and the skin palette). Its use in the shadow behaviour is in SPEC-0046. **[High]**

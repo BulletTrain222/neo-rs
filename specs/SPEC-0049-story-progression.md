@@ -74,8 +74,9 @@ Titles and flag glosses (High). A quest row's title is the text that +0x0C point
 ### Bitmap operations
 
 1. Test(n): if n is outside 0 to 742, the answer is off. Otherwise it is the bit's value.
-2. Set(n): if n is outside 0 to 742, nothing happens. Otherwise the bit is set to on. If a watcher list exists, a notification with n and "on" is posted (SPEC-0022, Progress flags).
-3. Clear(n): the same rules as Set, setting the bit to off and posting "off".
+2. Set(n) with notification (the script call and the engine setters): if a current world exists, its script manager (when present) is told n, the bit's previous value and the new value "on" (SPEC-0022, Progress flags). Then, when the bit was off before, the flag's table-2 sound cue is played if it has one, and the journal icon is raised if the flag's table entry marks it. After all that, when n is 0 to 742 the bit is set to on; an n outside the range never writes a bit (no shipped call uses one). Without a current world only the bit is written.
+2a. Plain set (stage rows, act start, the 0x11 dialogue code): when n is 0 to 742 the bit is set; no notification, cue or icon.
+3. Clear(n) with notification: the script manager of the current world is told n, the bit's previous value and the new value "off", then the bit is cleared when n is in range. It plays no cue and raises no icon. The 0x12 dialogue code and the debug range clear use a plain clear (no notification). The world reset clears all 93 bytes at once, quietly.
 4. SetGameState(n, true) uses Set. SetGameState(n, false) uses Clear. QueryGameState(n) returns the bit's value (SPEC-0030 calls 147 and 148).
 5. Watchers: the boot program can add a watcher, but no level script found adds one. A level script's set or clear therefore does not call back into level code.
 
@@ -89,12 +90,12 @@ Confidence: High for the writer list (it is closed: no other routine writes the 
    - script SetGameState (on: set with notification; off: clear with notification);
    - the stage table (New game, and dialogue command kind 0x19);
    - the act-start setup (TriggerActStart);
-   - the start-up default table;
+   - the default-table routine (for all 743 flags: set with notification when the flag's table entry is 1, otherwise clear with notification; nothing calls it in this build and the table is all zero, so it never runs; Medium-High);
    - the dialogue commands of kinds 0x11 and 0x12 (plain set and plain clear; see below);
    - four fixed engine setter paths: flag 707 at New game, flag 273 by the Werelupe King's death state (SPEC-0019), flags 107 to 110 by the Whinny group routine (item 6 below), and a separate indirect method-table hook that sets the caller-supplied flag (it has no caller and never runs; question 29);
    - save load, which copies the whole bitmap.
    No item pickup, item use, NPC action record, switch-keyed entry, placed object or quest-table row writes a flag. The quest table is read-only: the journal and the map only read each row's start and done flags, and completing a journal step sets nothing by itself. A six-entry table of setter routines in the boot program's data (its first entry sets the flag given as its argument) has no user on the disc, so it is unused (Medium: no stored word, jump or address pair in the boot program names the table or its header, and none of its six routines is called directly; only a computed address could hide a user); it is not needed for any main-story flag.
-2. Dialogue command codes (SPEC-0022, the command kinds): a dialogue line can carry a control code of kind 0x11, which sets one flag or an inclusive range of flags, or of kind 0x12, which clears one flag or a range; both are the plain write with no watcher notification. On the disc exactly one kind-0x11 code exists, in a line of pack 772, and it sets flag 416 alone (the start of a side quest). No kind-0x12 code exists. No dialogue code sets or clears a main-story flag. High.
+2. Dialogue command codes (SPEC-0022, the command kinds): a dialogue line can carry a control code of kind 0x11, which sets one flag or an inclusive range of flags, or of kind 0x12, which clears one flag or a range; both are the plain write with no watcher notification. A code with first id f and last id l writes the whole range f to l only when l is at least 1 and l is greater than f; otherwise (l below 1, or l not above f) it writes f alone. On the disc exactly one kind-0x11 code exists, in a line of pack 772, and it sets flag 416 alone (the start of a side quest). No kind-0x12 code exists. No dialogue code sets or clears a main-story flag. High.
 3. Main-story setters. Every main-story flag the story tests has an ordinary SetGameState call in a level script. Many of these calls run only after a module variable (a puzzle counter, a phase number, a "done" or "door open" word) changes at run time, or are reached through a jump-table branch; a reading that treats module data as constant misses them (SPEC-0030). The setters:
    - 337 (Awaken Jerdana done) and 98: pack 1382, once all six elemental pedestals are lit. A pedestal lights when the hero strikes it with a weapon while a Mote of its element (lesser or greater) is equipped; a wrong or missing Mote drops that pedestal's lesser Mote instead. Lit pedestals stay lit for the rest of the load, and the order is free. On the first update with six lit: fade out, hide the puzzle entities, set 98 and 337, play movie 70, then arm a trigger that returns the hero to Altador (pack 1411). A "done" word stops a second run.
    - 106 (the Petpet-Handler legend), 356 and 724: pack 1398, when all Whinnies are on their plates; movie 67 plays.
@@ -135,7 +136,7 @@ Test vectors (synthetic):
 2. Pack 1300 entered with entry message 80: 366 turns on and the hero is placed at landing 2.
 3. Pack 1371 at wave 7 with every enemy of the wave dead: 343 turns on.
 4. Pack 1171 with the third drain cleared: flag 165 (162 + 3) turns on.
-5. Dialogue kind 0x11 with first argument 100 and second argument 103 sets 100, 101, 102 and 103; with 103 and 100 only 103 is set (SPEC-0022).
+5. Dialogue kind 0x11 with first argument 100 and second argument 103 sets 100, 101, 102 and 103; with 103 and 100 only 103 is set (SPEC-0022). With first 5 and last 5, only 5 is set; with first 7 and last 0, only 7 is set; with first 0 and last 2, flags 0, 1 and 2 are set.
 6. Pack 777 with trigger index 6 fired: flag 254 turns on and line 238 is shown. With trigger index 4: flag 252 turns on and no line is shown.
 7. Pack 1300 with 367 on and 368 off, trigger 3 fired: movie 83 plays and 368 turns on; on the next play pass the credits screen opens from play.
 8. Whinny roundup in pack 909: with three group members and none penned, the group writes 107. If two Whinnies become penned in the same world frame, each member update is followed by a group count, which writes 108 then 109. When the third becomes penned, the next count writes 110.
@@ -164,7 +165,7 @@ Confidence: High for the rules. Medium for the content of the stage table, which
 When the player confirms a start index k from 0 to 8 on the start-point chooser (SPEC-0035, section 5):
 
 0. Confirm tick (High). The chooser's confirm step acts only on a tick on which Cross is newly pressed: bit 0x40 of the menu rising-edge word, which is the OR of the newly-pressed words of the controlling pads (SPEC-0033, Controller map). On any other tick it runs only the controller check (which shows the controller message when pad slot 0 is not usable) and returns 0, so the chooser stays open and no flag, item or area load happens. On the Cross tick it plays cue 0x9A (154) and then runs steps 1 to 5. There is no path that starts a game and skips flag 707.
-1. Indices 1 to 8 apply the stage ids in the table below, in list order. For each stage id, every stage-table row with that id is applied in table order: set the row's flag with the plain set (no table 2 cue, no notification), unless the flag is -1. Then every table 12 row with that stage id, an item id of 0 or more and a count above 0 adds that many of the item through the normal add-item action (item 135 adds Neopoints; SPEC-0021, SPEC-0024). Index 0 applies no stage ids, so it sets no stage flag and grants no item.
+1. Indices 1 to 8 apply the stage ids in the table below, in list order. For each stage id, every stage-table row with that id is applied in table order: set the row's flag with the plain set (no table 2 cue, no notification), unless the flag is -1. Then every table 12 row with that stage id, an item id of 0 or more and a count above 0 adds that many of the item through the normal add-item action (item 135 adds Neopoints; SPEC-0021, SPEC-0024). Index 0 applies no stage ids, so it sets no stage flag and grants no item. Indices 0, 1, 4 and 5 also select a hero (0, 1, 0, 0) and index 0 resets both chosen-slot values to -1; the number the chooser passes per index to an empty routine (SPEC-0035, section 5) gives no item and plays no cue, so table 12 is the only source of items here.
 2. After the stage rows, flag 707 is set. It is the last flag written by a new game. It is set on every confirmed start index, 0 to 8 (step 0).
 3. Flag 707 is also a row of stage 0. So indices 1 to 3 and 6 to 8 set 707 twice. Setting a flag that is already on changes nothing.
 4. Because every step here only sets bits, the final bitmap is the same whichever order the 707 set and the stage rows are applied in.
@@ -196,13 +197,13 @@ The act-start setup is the routine behind the script call TriggerActStart (SPEC-
 
 | Act-start number | Flag set | Note |
 | --- | --- | --- |
-| 1 | none | Runs its own area setup (SPEC-0026). |
-| 2 | 220 (0xDC) | |
-| 3 | 248 (0xF8) | |
-| 4 | 332 (0x14C) | |
-| other | none | Sets swap mode 2 and heals both heroes (SPEC-0053 3.7); no script passes another number. |
+| 1 | none | Swap mode 0 and a normal switch request to Tor; no heal, no other step of the numbers below (SPEC-0053 3.7). |
+| 2 | 220 (0xDC) | Swap mode 1; Roberta is made the selected hero directly and receives the act 2 kit (SPEC-0021, SPEC-0053 3.7). |
+| 3 | 248 (0xF8) | Swap mode 2; the stash is merged back into the party inventory, then Tor is made the selected hero directly. |
+| 4 | 332 (0x14C) | Swap mode 2; selected hero unchanged. |
+| other | none | Swap mode 2 and a heal of both heroes (SPEC-0053 3.7); no script passes another number. |
 
-After the flag set (if any), the routine runs its shared scene setup (swap mode, selected hero and heal: SPEC-0053 3.7). The three flag writes do not notify a watcher. Only the bitmap set is made, with no notification.
+Acts 3, 4 and the other numbers heal both heroes; act 2 heals Roberta only. Every number then ends with the same tail: the combat subsystems are shut down, the effect lists are released and freed, and the petpet is deactivated. The three flag writes are plain sets: they do not notify a watcher and play no cue (High for the plain set and the swap modes, Medium-High for the tail).
 
 ### Movie gates
 
@@ -262,7 +263,7 @@ The flags of an act are the start and done flags of its rows, plus the flags its
 
 Movie table index ranges (SPEC-0026): act 1 is 0 to 17, act 2 is 18 to 29, act 3 is 30 to 56, act 4 is 57 to 85, and the four act intros are 88 to 91.
 
-Flag 248 is also an act-start flag (act 3) and a stage-1 row. Flag 220 is also an act-start flag (act 2) and a stage-0 row. Flags 332 and 333 to 336 are stage rows.
+Flag 248 is also an act-start flag (act 3) and a stage-1 row. Flag 220 ("Act 2 has started") is also an act-start flag (act 2) and a stage-0 row; it stays set for the rest of the game, so it is on in Acts 3 and 4 as well. Flags 332 and 333 to 336 are stage rows.
 
 ### Act 3 bosses (main story path)
 

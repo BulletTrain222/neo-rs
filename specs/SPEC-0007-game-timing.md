@@ -7,7 +7,7 @@
 
 ## Summary
 
-Gameplay runs on a **fixed time step of exactly 1/60 second**, one update per pass of the main loop, and one pass per video vertical blank. Elapsed time is never measured. The original does not clamp, accumulate or catch up: if a pass takes longer than one field, the game simply runs slower, and the logic still advances by 1/60 s per pass. Controller input is sampled once per pass, before anything else updates. The clean side can drive the simulation with a fixed 60 Hz tick that consumes one input snapshot per tick. The same pass also advances the in-game calendar and play-time totals, which run at four in-game seconds per real second; see "In-game calendar and clock".
+Gameplay runs on a **fixed time step of exactly 1/60 second**, one update per pass of the main loop, and one pass per video vertical blank. Elapsed time is never measured. The original does not clamp, accumulate or catch up: if a pass takes longer than one field, the game simply runs slower, and the logic still advances by 1/60 s per pass. Controller input is sampled once per pass, before anything else updates. The clean side can drive the simulation with a fixed 60 Hz tick that consumes one input snapshot per tick. The same pass also advances the in-game calendar and two play-time totals; the calendar and total A run at four in-game seconds per real second, total B at one per real second; see "In-game calendar and clock".
 
 ## Where it lives on the disc
 
@@ -168,13 +168,13 @@ Starting state (set once at boot; the only way the calendar gets a date):
 - Weekday Wednesday (index 3).
 - Both play-time totals and their derived fields zero, and the tick counter zero.
 
-**Step.** Each pass the clock is advanced by one step of 4 × tick length = 4 × (1/60) = **1/15 s** of in-game time. The clock therefore runs at four in-game seconds per real second: one in-game minute is 15 real seconds, one in-game hour is 15 real minutes, one in-game day is 6 real hours. The factor 4 is a fixed constant. The tick length it multiplies is the start-up word above, which is set once at start-up to 1/60 s (High). The calendar step is Medium only because of the factor 4.
+**Step.** Each pass the calendar and play-time total A are advanced by one step of 4 × tick length = 4 × (1/60) = **1/15 s** of in-game time; play-time total B is advanced by the plain tick length, **1/60 s**. The clock therefore runs at four in-game seconds per real second: one in-game minute is 15 real seconds, one in-game hour is 15 real minutes, one in-game day is 6 real hours. The factor 4 is a fixed constant. The tick length it multiplies is the start-up word above, which is set once at start-up to 1/60 s (High). The clock set-up passes the tick length itself as the second step, so total B runs at the real-time rate (High). The calendar step is Medium only because of the factor 4.
 
-**Per-pass order.** In each pass: (1) the tick counter += 1; (2) play-time total A and total B each += the step, and their derived fields are recomputed; (3) the calendar advances by the step.
+**Per-pass order.** In each pass: (1) the tick counter += 1; (2) play-time total A += 1/15 and total B += 1/60, and their derived fields are recomputed; (3) the calendar advances by the step.
 
 **When the clock runs.** The clock record pass runs on every pass while a world object exists, which is always the case after boot. It runs whatever the game-state code and the world-enable word: also under pause and the other freezing screens (game-state code 9), with the world disabled, and on the title screen and the front end before play. It does not run while a movie plays, because the movie blocks the whole loop. Play time and the calendar therefore include paused and menu time (High for the place in the pass; SPEC-0026, main loop step 8.2).
 
-**Play-time totals.** Each total is a float in seconds. After adding a delta, let T be the whole part of the new total. Then days = floor(T / 86400), hours = floor(T / 3600), minutes = floor(T / 60), each computed from T (not from the previous remainder). These are stored as whole numbers. Total B is fed a value that is effectively zero (see Edge cases), so it stays at zero in practice.
+**Play-time totals.** Each total is a float in seconds. After adding a delta, let T be the whole part of the new total. Then days = floor(T / 86400), hours = floor(T / 3600), minutes = floor(T / 60), each computed from T (not from the previous remainder). These are stored as whole numbers. Total A therefore counts in-game time (four times real time) and total B counts real-time play (one second per 60 passes). Neither is read by anything found. Both are single-precision sums with truncating adds, so each stops growing once its step is smaller than the float spacing: total B (and the game-time word) stops at 262,144 s and total A at 1,048,576 s, both after about 16.7 million passes (about 77 hours of running; Medium).
 
 **Advancing the calendar by a delta** (delta in seconds, may be fractional; also used by the hour and day helpers below):
 
@@ -188,10 +188,10 @@ Starting state (set once at boot; the only way the calendar gets a date):
 Each carry is a single subtraction, not a loop. A delta that would overflow a field by more than one unit loses the excess (see Edge cases).
 
 **Date from day count.** Month lengths are 31, 28 (29 in a leap year), 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 for January to December. The routine subtracts month lengths in order from January while the count is greater than the month's length; the remainder is the day of month, and the stopping month is the month index. The day count is 1-based (January 1 is 1). The month index found by the walk then passes through a month map that keeps 0 to 11 and turns any other value into 0.
-- **Range test (High).** The lookup fails when the day count is greater than the year's length: 366 or more in a non-leap year, and 367 or more in a leap year. A leap-year day count of 366 is accepted as December 31. On failure, the lookup leaves the day-of-month field unchanged and the caller sets the month index to 0.
+- **Range test (High).** The lookup fails when the day count is 367 or more, in any year, and also when it is exactly 366 in a leap year. In a non-leap year a day count of 366 is accepted: the walk runs past December into a thirteenth month of 30 days, leaving day of month 1 and month index 12, which the month map turns into 0, so it reads as January 1. A leap-year day count of 365 gives December 30, and December 31 is never shown in a leap year. On failure, the lookup leaves the day-of-month field unchanged and the caller sets the month index to 0.
 - **Failure (High).** On a failure the month index is set to 0 (January) and only the day of month keeps its value; the weekday is still recomputed.
 
-**Year turn (High).** From the default start (year 2003, not a leap year), the rollover into December 31 sets day count 365, and December 31 shows for one pass. On the next pass the step-5 test fires (365 is at least 365): the day count becomes 366, the hours fall by 365, and the date lookup fails. The month is set to 0 and the day of month stays 31; the weekday is recomputed. From then on, every pass adds one day and subtracts 365 from the hours. The lookup continues to fail, so the month stays 0 and the day of month stays 31, and the hour field never returns to 0 to 23. Every "hour in band" time-of-day test is then false, and every "before H:M" test is true. Reaching December 31 takes 363.5 in-game days from January 1 12:00, which is 471,096,000 passes, about 90.9 days of uninterrupted running.
+**Year turn (High).** From the default start (year 2003, not a leap year), the rollover into December 31 sets day count 365, and December 31 shows for one pass. On the next pass the step-5 test fires (365 is at least 365): the day count becomes 366, the hours fall by 365, and the date lookup accepts 366 as month 0, day of month 1 (January 1); the weekday is recomputed. On the pass after, the day count is 367 and the lookup fails. From then on every pass adds one day and subtracts 365 from the hours, the lookup keeps failing, the month stays 0 and the day of month stays 1, and the hour field never returns to 0 to 23. Every "hour in band" time-of-day test is then false, and every "before H:M" test is true. Reaching December 31 takes 363.5 in-game days from January 1 12:00, which is about 471.1 million passes (471,096,000 in exact arithmetic, a few thousand more with the truncating adds), about 90.9 days of uninterrupted running.
 
 **Leap years and year length.** A year is a leap year if it is divisible by 4 and either not divisible by 100 or divisible by 400. Year length is 366 in a leap year, otherwise 365. For example 2000 and 2004 are leap, 1900 and 2100 are not.
 
@@ -201,7 +201,7 @@ Each carry is a single subtraction, not a loop. A delta that would overflow a fi
 
 **Hour and day helpers.** Advancing by N hours calls the advance with N × 3600 seconds. Advancing by N days calls it with N × 86400 seconds. Both are whole numbers in seconds, so they go through the same carries.
 
-**Seconds to ticks and calendar steps.** Seconds to game ticks: multiply by 60 and keep the whole part (2 seconds is 120 ticks). Seconds to calendar steps: the whole part of (seconds ÷ step), which is 15 × seconds for the 1/15 s calendar step above (2 seconds is 30 steps).
+**Seconds to ticks and calendar steps.** Seconds to game ticks: multiply by 60 and keep the whole part (2 seconds is 120 ticks). Seconds to calendar steps: the whole part of (whole seconds ÷ step) in single precision. The stored step is slightly above 1/15, so the quotient falls just short of the exact multiple: 2 seconds gives 29 steps, not 30 (the quotient is 29.999998). No caller of this conversion was found.
 
 **Who reads the clock.** Only the readers listed here were found:
 
@@ -220,10 +220,10 @@ Offsets are from the start of the clock record. Every field is 4 bytes.
 | 0x08 | Play-time A, days | int | 0 and up |
 | 0x0C | Play-time A, hours | int | 0 and up |
 | 0x10 | Play-time A, minutes | int | 0 and up |
-| 0x14 | Play-time total B, seconds | float | effectively 0 (see Edge cases) |
-| 0x18 | Play-time B, days | int | 0 |
-| 0x1C | Play-time B, hours | int | 0 |
-| 0x20 | Play-time B, minutes | int | 0 |
+| 0x14 | Play-time total B, seconds | float | 0 and up (real-time rate) |
+| 0x18 | Play-time B, days | int | 0 and up |
+| 0x1C | Play-time B, hours | int | 0 and up |
+| 0x20 | Play-time B, minutes | int | 0 and up |
 | 0x24 | Calendar seconds | float | 0 to < 60 |
 | 0x28 | Calendar minutes | int | 0 to 59 |
 | 0x2C | Calendar hours | int | 0 to 23; negative and falling after the year turn |
@@ -232,8 +232,8 @@ Offsets are from the start of the clock record. Every field is 4 bytes.
 | 0x38 | Day of month | int | 1 to 31 |
 | 0x3C | Day count in year | int | 1 to year length; past it, rising by 1 per pass, after the year turn |
 | 0x40 | Year | int | 2003 at start |
-| 0x44 | Step per pass, seconds | float | 1/15 |
-| 0x48 | Second-channel rate word | 4 bytes | see Edge cases |
+| 0x44 | Step per pass for the calendar and total A, seconds | float | 1/15 |
+| 0x48 | Step per pass for total B, seconds | float | 1/60 |
 
 ## Edge cases and error handling
 
@@ -243,9 +243,9 @@ Offsets are from the start of the clock record. Every field is 4 bytes.
 - Run-time per-tick words: the clean side must not use a value from the disc for them, and must not assume a value other than the one the game sets (60 for the frame-rate word, 1/60 s for the tick-length word). The clock words start at zero, and the up vector and generator state are set at start-up (see Per-tick words read by gameplay code).
 - Calendar, weekday convention: the calendar passes a 1-based day count to the weekday formula. Jan 1 2004 therefore shows Friday, one day ahead of the real calendar. This is kept as original behavior.
 - Calendar, field overflow: each field takes at most one carry per advance. If a field would overflow by more than one unit (for example minutes at 59 plus a delta of 2 hours is handled by the split in the advance steps, but a field whose sum exceeds twice its range loses the excess), the result is not the true sum. Large advances (hours or days helpers) pass through the same carries; the clean side should split very large advances into whole-minute steps if it wants exact results.
-- Calendar, second play-time channel: its step is a 32-bit word that holds the clock record's own address, not a time, so the channel adds about 5 × 10^-39 per pass and stays at zero. Keep it at zero; do not treat it as a second clock.
-- Calendar, lookup failure: a day count greater than the year length makes the date lookup fail. The month index is set to 0 (January), the day of month keeps its last value, and the weekday is still recomputed. A day count of 366 fails in a non-leap year and succeeds as December 31 in a leap year.
-- Calendar, year turn: the year never advances. After December 31 in the default non-leap year, the month becomes January while the day of month stays 31; the hour field then becomes negative and continues falling. Reproduce it only if original-like behaviour past 363.5 in-game days is wanted.
+- Calendar, second play-time channel (total B): its step is the plain tick length (1/60 s), so it counts real-time play at one second per 60 passes, a quarter of the speed of total A. Nothing reads it.
+- Calendar, lookup failure: a day count of 367 or more (or 366 in a leap year) makes the date lookup fail. The month index is set to 0 (January), the day of month keeps its last value, and the weekday is still recomputed. A day count of 366 in a non-leap year does not fail: it reads as January 1.
+- Calendar, year turn: the year never advances. After December 31 in the default non-leap year, the month becomes January with day of month 1 and stays so; the hour field then becomes negative and continues falling. Reproduce it only if original-like behaviour past 363.5 in-game days is wanted.
 - Calendar, date setter: an invalid day for the month (for example February 30) is stored without a check, and the day count then runs into the next month.
 
 ## Test vectors
@@ -258,15 +258,15 @@ Offsets are from the start of the clock record. Every field is 4 bytes.
 - Weekday, using the day count as passed: weekday(2000, 0) = 6 (Saturday); weekday(2001, 0) = 0; weekday(2004, 0) = 4; weekday(2003, 1) = 3 (Wednesday, the default start); weekday(2004, 1) = 5 (Friday, the quirk above).
 - Leap and length: 2000 leap, 2004 leap, 1900 and 2100 not leap; year length of 2003 is 365 and of 2004 is 366.
 - Default start: 2003 January 1, 12:00:00.0, Wednesday, day count 1.
-- Step: 900 passes (60 s of in-game time) take the start to 12:01:00.0. 15 passes make 1 in-game second. 648,000 passes (12 in-game hours) from the start give January 2 2003 at 00:00:00.0, day count 2, weekday Thursday.
+- Step: because of the truncating adds, 900 passes from the start give 12:00:59.9993, and the minute turns on pass 901 (12:01:00.066). About 15 passes make 1 in-game second. 648,000 passes (12 in-game hours) give 23:59:59.51 on January 1; the date turns to January 2 2003 at 00:00:00.04 (day count 2, weekday Thursday) on pass 648,008.
 - Date normaliser: seconds 60.0 becomes 0; month 12 becomes 0; day 32 becomes 0; hours 24 becomes 0.
-- Play-time totals: total 90,000 s gives days 1, hours 25, minutes 1,500.
+- Play-time totals: total 90,000 s gives days 1, hours 25, minutes 1,500. After 3,600 passes total B reads 59.999142 s (the same sum as the game-time word) and total A reads 239.9966 s.
 - Time-of-day tests: hour 6 passes "5 < hour < 12"; hour 5 fails it; hour 20 passes "5 < hour < 21"; hour 21 fails it; no hour passes "21 < hour < 5".
 - Year turn, step 1: record December 30 2003, 23:59:59.95 (day count 364), advanced by 1/15 s: seconds about 0.0167, minutes 0, hours 0, day count 365, month 11, day of month 31, weekday 3 (Wednesday).
-- Year turn, step 2 (the next advance): day count 366, hours -365, month 0, day of month 31 (kept), weekday (trunc(3 × 365.25 + 366) + 6) mod 7 = 1467 mod 7 = 4.
-- Year turn, step 3 (the advance after): day count 367, hours -730, month 0, day of month 31 (kept), weekday 5. Hour -730 fails every "hour in band" test and passes "before 6:00".
-- Year turn, reach: from the default start, December 31 2003 00:00 comes after 363.5 × 86,400 × 15 = 471,096,000 passes (7,851,600 s, about 90.9 days of running).
-- Date lookup: (2003, 365) gives December 31; (2003, 366) fails and leaves day 31; (2003, 367) fails and leaves the prior day; (2004, 365) gives December 30; (2004, 366) gives December 31; (2004, 367) fails; (2004, 60) gives February 29.
+- Year turn, step 2 (the next advance): day count 366, hours -365, month 0, day of month 1 (January 1, accepted by the lookup), weekday (trunc(3 × 365.25 + 366) + 6) mod 7 = 1467 mod 7 = 4.
+- Year turn, step 3 (the advance after): day count 367, hours -730, month 0, day of month 1 (kept after the failed lookup), weekday 5. Hour -730 fails every "hour in band" test and passes "before 6:00".
+- Year turn, reach: from the default start, December 31 2003 00:00 comes after 363.5 × 86,400 × 15 = 471,096,000 passes in exact arithmetic (7,851,600 s, about 90.9 days of running); the truncating adds add a few thousand passes.
+- Date lookup: (2003, 365) gives December 31; (2003, 366) gives January 1 (month 0, day 1); (2003, 367) fails and leaves the prior day; (2004, 365) gives December 30; (2004, 366) fails and leaves the prior day; (2004, 367) fails; (2004, 60) gives February 29.
 - Load: a save loaded after 2 hours of play leaves the calendar and both play-time totals unchanged; they keep running from their values at the moment of the load.
 - Script clock reads (synthetic): a level script that calls GetSystemTime on pass 600 receives the game-time word of that pass (600 additions of 1/60 s, a little below 10.0 s after the truncating adds), and GetTimeStep returns the tick-length word, 1/60 s. No script call returns the in-game hour, so running the calendar to 18:00 or to 06:00 changes nothing in any level.
 
@@ -276,9 +276,9 @@ Offsets are from the start of the clock record. Every field is 4 bytes.
 
 Numbers of removed questions are not reused.
 
-- Resolved: Calendar year turn. Every advance whose stored day count is already at least the year length adds one more day and subtracts the year length from the hours; no path changes the year. In the default non-leap year, December 31 shows for one pass, then the day count rises by 1 and the hours fall by 365 on every pass, with month 0 and day of month 31 (Date from day count, Year turn; High). It needs about 90.9 days of uninterrupted running from the default start.
+- Resolved: Calendar year turn. Every advance whose stored day count is already at least the year length adds one more day and subtracts the year length from the hours; no path changes the year. In the default non-leap year, December 31 shows for one pass, then the day count rises by 1 and the hours fall by 365 on every pass, with month 0 and day of month 1 (Date from day count, Year turn; High). It needs about 90.9 days of uninterrupted running from the default start.
 - Resolved: Calendar weekday call. The date recompute passes (year, day count) to the weekday formula (High).
-- Resolved: calendar second play-time channel. The word at 0x48 is used as a step but holds the record's own address, so the channel stays at zero; keep it at zero (Edge cases; High). Whether the authors meant it as a rate is developer intent and not encoded anywhere.
+- Resolved: calendar second play-time channel. The word at 0x48 is the plain tick length (1/60 s), so total B counts real-time play at a quarter of total A's speed; nothing reads it (Edge cases; High). An earlier reading that it held an address and stayed at zero was wrong.
 - Resolved: save-file date text comes from the console real-time clock record, not the in-game calendar (SPEC-0025, Location, date and progress; Medium-High).
 - Resolved: Script callers of the time-of-day tests and the getters. There are none: the tests, the getters and the delta helper have no caller and are not in the script command table; scripts read only game time and the tick length (Who reads the clock; High).
 - Resolved: the day-count, weekday and leap rules are complete for years at and after 2000. The year starts at 2003 and never changes, and no script reads the calendar, so a year before 2000 cannot occur in play; the formula gives negative results there and the clean side need not support it (High).

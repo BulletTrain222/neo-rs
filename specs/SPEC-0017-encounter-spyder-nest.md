@@ -163,7 +163,7 @@ Each tick, in this order:
    - If the valve is not destroyed and L = 0 and its state is not 1, 2 or 3, its state becomes 1 (closed), and the countdown is set to 600 ticks.
    - Consequence: a fresh valve (state 0) goes to closed at once, when it has no living spiders.
 3. **Nest update.** Let d be the number of destroyed valves.
-   - If d = 3, the nest becomes defeated (state 2).
+   - If d = 3, the nest becomes defeated (state 2) and its animation playback rate is set to 1.0 in the same pass.
    - Otherwise the nest's animation playback rate is set to 1.2 to the power d (section 6), applied after the sweep.
 4. **Nest state.**
    - Active (1): update each valve's state machine (section 3), valves 0, 1 and 2 in order.
@@ -220,7 +220,7 @@ The hit test has two branches, chosen by whether the hero is attacking (the hero
 ### 6. Animation speed
 
 - Each tick, after the sweep, the nest's animation playback rate is 1.2 to the power d, where d is the number of destroyed valves: 1.0 at the start, 1.2 with one valve destroyed, 1.44 with two.
-- When d = 3 the nest goes to defeat and the rate stays at the value set on the previous tick (1.44, since that tick had d = 2).
+- When d = 3 the nest goes to defeat and the rate is set back to 1.0 on that same pass (not left at 1.44), so the defeat animation plays at the normal rate (High; the rate store happens after both branches).
 - The "pulsation animation speed increase" tunable (0x2DB0B4) is unused in the original (High).
 
 ### 7. Respawn cycle
@@ -399,7 +399,7 @@ Synthetic values. Defaults are the tunables above.
 - Valve cylinder: root bone at (0, 0, 0) with its up axis (0, 1, 0): the cylinder is centred at (0, 2, 0), radius 2.0, spanning y = 0 to 4. A valve tilted so that the bone's up axis is (1, 0, 0) gives the centre (2, 0, 0) and a horizontal cylinder from x = 0 to 4.
 - Attacking fallback: an armed shot slot of radius 0 at 4.9 from the root bone, behind the valve, hits (no direction gate); at 5.1 it misses.
 - Hit window: opened at the end of animation 1, no hit yet. After many cycles with no hit the window is still open; the first hit closes it.
-- Two destroyed valves: animation rate 1.44. Three destroyed valves: nest defeated.
+- Two destroyed valves: animation rate 1.44. Three destroyed valves: nest defeated, animation rate 1.0.
 - Spider count tunable 12 with 8 registered spiders: 8 spiders revealed.
 - Spider count tunable 2 with 10 registered spiders: the first 2 revealed.
 - Living count with spider count 2 and a list of [dead, alive, alive]: living = 1 (only the first two entries count).

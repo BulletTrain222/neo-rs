@@ -203,7 +203,7 @@ The pending return target is a runtime reference to a quest row or to a treasure
 
 In this order:
 
-1. Pulses: the float pulse and the integer pulse of section 5 each take one step.
+1. Pulses: the float pulse and the integer pulse of section 5 each take one step. The steps are part of the icon pass, so they are skipped on the tick on which Select leaves the page; they still step while the selected area is negative (High).
 2. Hero marker (section 7), only when the hero map area equals the displayed area.
 3. Cursor: if the list is empty, the cursor is set to 0. Otherwise an Up (0x1000) or Right (0x2000) press moves to the next icon (wrapping from the last to the first); else a Down (0x4000) or Left (0x8000) press moves to the previous icon (wrapping from the first to the last). If both kinds are pressed in one tick, the next move wins. These read the menu newly-pressed2 word, which includes stick-derived directions, so one push gives one move and holding gives no repeat (High on the rule and the bit names; SPEC-0033 Controller map). Cursor moves play no cue.
 4. Icons: each icon is drawn at its projected point (section 7) with the art for its kind: kind 0 primary-quest art (26 x 32), kind 1 secondary-quest art (26 x 29), kind 2 treasure-spot art (31 x 31). The cursor icon is drawn with the integer pulse as its scale on both axes; the others with scale 1.0 (4096). The cursor icon's label (quest title or treasure name) is drawn 14 pixels above its point in the colour at 0x2DD318. Icon anchor (High): the projected point is the centre of the icon on both axes. The icon's drawn width is its art width times its scale, and its top-left corner is the point minus half the drawn width and half the drawn height, so the pulse scale grows the cursor icon about its centre and the icon node's own position plays no part (the three art nodes sit at (0, 0)). A 26 x 32 icon at (105, 77) covers x 92 to 118 and y 61 to 93. Label (High): front-end font 2 (line height 14, the same font as the journal's objective line), letter spacing 0, no wrapping, centred on the point's x (the text width is halved toward zero and subtracted; the start x is raised to 16 if it falls below 16, SPEC-0022 Line alignment), baseline y = the point's y - 14, coordinates cut toward zero. A label of 100 pixels width at x 105 starts at x 55; a label of 60 pixels at x 30 starts at 16.
@@ -211,7 +211,7 @@ In this order:
    - Select press (0x0100 on the menu newly-pressed2 word): back to play (state code 0xB4), no cue. The exit fires on the press edge, on the tick Select goes down; holding Select does not keep firing it (High).
    - Cross (0x0040) press while the current icon has items, or R2 press: the pending target becomes the current icon's quest reference, or else its treasure reference (none if neither); the front-end select sound (cue 0x98) plays; the journal opens (state code 0x1B8). R2 with no icon or an icon without items opens the journal with no pending target.
    - L2 press: go to the item screen for the current tab and the active hero (SPEC-0035 section 14.4), no cue.
-   - Otherwise the page stays: the area-name label is set to the area's name (area row first word) in the colour at 0x2DD010, and the overlay group (section 8) is drawn.
+   - Otherwise the page stays: the area-name label is set to the area's name (area row first word) in the colour at 0x2DD010, and the overlay group (section 8) is drawn, and the shared front-end card message box is offered as on other pages (SPEC-0035).
 6. Cross on an icon without items, or with an empty list, does nothing. The area name is drawn every tick regardless of the cursor.
 7. Triangle is handled by the shared front-end back rule (SPEC-0035 section 9). The map record's back rule is 9, so opening a map page cuts the screen stack back to play and pushes the page; Triangle therefore always returns to play with cue 0x99, from any route, also when the map was opened from the pause page (High).
 
@@ -310,7 +310,7 @@ Let P be the locator's position (+0x30) and D its facing (+0x40; a unit vector, 
 1. Register the dig callback on the trigger index, with the group as its owner.
 2. If treasure i is not collected: object [0] is shown at the start of its animation (time 0). The marker effect is on exactly when map i is held.
 3. If treasure i is collected: object [2] at the start of its animation and object [1] at the end of its animation (the dug look). The marker effect is off.
-4. Objects not named in a branch keep their load state. Set-up needs at least 3 objects; all 47 entries have 3.
+4. Objects not named in a branch keep their load state. Set-up needs at least 3 objects; all 47 entries have 3. The collected and held flags are read only when the reward list is not empty (all 47 entries have one); a site with an empty reward list would always show the undug look with the marker off (High; not on disc).
 
 Setting a map held (a script grant, a pickup, a purchase or a save load) also turns that site's marker on at once when the site is in the current world, or else in the second loaded world. The site is found by its key 200 + i (High).
 

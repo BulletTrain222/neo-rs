@@ -85,6 +85,35 @@ pub struct OwnerPose {
 }
 
 impl OwnerPose {
+    /// A rest-frame point taken to world space: current x inverse(rest) (both rigid, columns 0
+    /// to 2 the axes, 12 to 14 the translation).
+    pub fn point_to_world(&self, p: [f32; 3]) -> [f32; 3] {
+        let (c, r) = (&self.current, &self.rest);
+        let d = [p[0] - r[12], p[1] - r[13], p[2] - r[14]];
+        let q = [0, 4, 8].map(|k| r[k] * d[0] + r[k + 1] * d[1] + r[k + 2] * d[2]);
+        [0, 1, 2].map(|i| c[i] * q[0] + c[4 + i] * q[1] + c[8 + i] * q[2] + c[12 + i])
+    }
+
+    /// A rest-frame direction taken to world space (the rotation part only).
+    pub fn dir_to_world(&self, v: [f32; 3]) -> [f32; 3] {
+        let (c, r) = (&self.current, &self.rest);
+        let q = [0, 4, 8].map(|k| r[k] * v[0] + r[k + 1] * v[1] + r[k + 2] * v[2]);
+        [0, 1, 2].map(|i| c[i] * q[0] + c[4 + i] * q[1] + c[8 + i] * q[2])
+    }
+
+    /// A rest-frame plane (n . p + d = 0) taken to world space.
+    pub fn plane_to_world(&self, q: [f32; 4]) -> [f32; 4] {
+        let n = self.dir_to_world([q[0], q[1], q[2]]);
+        let (c, r) = (&self.current, &self.rest);
+        let d = q[3] + q[0] * r[12] + q[1] * r[13] + q[2] * r[14] - (n[0] * c[12] + n[1] * c[13] + n[2] * c[14]);
+        [n[0], n[1], n[2], d]
+    }
+
+    /// An owned frame record rewritten in world space (SPEC-0028 section 7.2).
+    pub fn frame_to_world(&self, f: &FrameRecord) -> FrameRecord {
+        FrameRecord { start: self.point_to_world(f.start), face: self.plane_to_world(f.face), run: self.plane_to_world(f.run), top: self.plane_to_world(f.top), ..*f }
+    }
+
     /// The sampling point p' in the rest frame and the height raise O.y - T.y.
     pub fn map(&self, x: f32, z: f32) -> (f32, f32, f32) {
         let (c, r) = (&self.current, &self.rest);
@@ -191,11 +220,9 @@ fn sample_in(set: &[u8], p: &Patch, x: f32, z: f32) -> Option<(f32, [f32; 3])> {
         let (h00, h10, h01, h11) = (h(ix, iz)?, h(ix + 1, iz)?, h(ix, iz + 1)?, h(ix + 1, iz + 1)?);
         let top = h00 * (1.0 - fx) + h10 * fx;
         let bottom = h01 * (1.0 - fx) + h11 * fx;
-        let r = [
-            (-((h10 - h00) + (h11 - h01)) / 2.0).trunc(),
-            p.spacing.trunc(),
-            (-((h01 - h00) + (h11 - h10)) / 2.0).trunc(),
-        ];
+        // SPEC-0018 Surface normal of a sample: single-precision decimals, nothing truncated, so
+        // a sloped patch gives its true tilted normal.
+        let r = [-((h10 - h00) + (h11 - h01)) / 2.0, p.spacing, -((h01 - h00) + (h11 - h10)) / 2.0];
         let l = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
         let n = if l > 0.0 { r.map(|c| c / l) } else { [0.0; 3] };
         Some((top * (1.0 - fz) + bottom * fz, n))
@@ -928,10 +955,34 @@ impl Ground {
     /// one (link 3) of the same entry, for the pack's own model set; None for no link.
     pub fn frame_link(&self, from: &FrameRecord, next: bool) -> Option<FrameRecord> {
         let off = if next { from.next } else { from.prev };
-        if off == 0 || from.patch != 0 {
+        if off == 0 {
             return None;
         }
+        if from.patch != 0 {
+            // A placed object's inline set (SPEC-0018 Climb and hang data; the links are offsets
+            // from the entry in that set). The result is in the object's rest frame.
+            let set = &self.owned.iter().find(|o| o.id == from.patch)?.set;
+            return frame_record(set, from.entry as usize, off, from.gate, from.patch);
+        }
         frame_record(&self.set, from.entry as usize, off, from.gate, 0)
+    }
+
+    /// The placed object that owns patch id `id`, if any.
+    pub fn owner_of(&self, id: i32) -> Option<usize> {
+        self.owned.iter().find(|o| o.id == id).map(|o| o.object)
+    }
+
+    /// The frame records of the placed objects named in the cell containing (x, z), each moved
+    /// into world space through its owner's pose and paired with the owner (SPEC-0028 section
+    /// 7.2: frame records are rewritten in world space at the end of every pose evaluation).
+    pub fn object_frames_world(&self, x: f32, z: f32, owner: &dyn Fn(usize) -> Option<OwnerPose>) -> Vec<(usize, FrameRecord)> {
+        let mut out = Vec::new();
+        for (id, frames) in self.cell_frames(x, z, &|id| (id != 0).then(|| self.owned.iter().find(|o| o.id == id).map(|o| &o.set[..])).flatten()) {
+            let Some(o) = self.owned.iter().find(|o| o.id == id) else { continue };
+            let Some(pose) = owner(o.object) else { continue };
+            out.extend(frames.iter().map(|f| (o.object, pose.frame_to_world(f))));
+        }
+        out
     }
 
     /// The frame records named by the items of the cell containing (x, z), for the pack's own

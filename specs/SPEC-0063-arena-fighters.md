@@ -171,7 +171,7 @@ The Rogue is released in class state 8, sub-state 0 (hidden). The rules, in orde
 Every think tick of class state 19 (SPEC-0038 Behavior 44), in this order:
 
 1. The pre-step (Behavior 2): awareness countdown, alert flag, retarget countdown, alarm check, map search (see below), then the agro machine.
-2. Agro machine: recovery countdown down by 1 when positive; guard-state reset; missile defence; melee defence; lost-sight test; normal attack choice; counter-attack choice; distance-hide gate (does nothing: flag 0); the outer sub-state switch; the agro tail (leash).
+2. Agro machine: recovery countdown down by 1 when positive; guard-state reset; missile defence; melee defence; lost-sight test; normal attack choice; counter-attack choice; distance-hide gate (does nothing: flag 0); the outer sub-state switch; the agro tail (leash). The leash counts up only in outer sub-states 1, 3 and 4, only on ticks where the hero's position lies on no triangle of the fighter's mesh, the distance-band test of the fighter's row fails and the hero is 15.0 or more from the fighter's stored goal point; it clears on any other tick, and after more than 180 counts the fighter resets to class state 0. While the hero stands on the mesh (always, on the ring) the count stays 0 (High).
 3. The class-19 handler: defence hold down by 1; in the hold inner state, face the hero (blend 0.9) and request id 31; in outer 0 request the idle pick.
 4. The animation pass, then the motion pass (one-tick request-to-step latency, SPEC-0038 Behavior 48).
 
@@ -189,7 +189,7 @@ Runs each tick before the outer switch (SPEC-0038 Behavior 7), only while the he
    - the distance d to the hero satisfies the band strictly (slot 3: 5 < d < 15; slot 2: 5 < d < 20; slot 0: 0 < d < 10);
    - the dot product of the Rogue's facing and the unit direction to the hero is above the slot's arc (slot 3: above 0.0, the hero is anywhere in front; slots 0 and 2: above 0.92388, within 22.5 degrees of dead ahead);
    - a roll int[1, 100] is below the chance. Slot 3: below 25 (24 of 100); slots 2 and 0: below 50 (49 of 100). The backbiter factor is 1.0, so a hero behind him changes nothing;
-   - a route to the hero exists (slot 2), or, for slots 0 and 3, a route exists or the distance is below 10.0.
+   - for slot 2 (it has a charge) a route to the hero must exist; for a slot without a charge, a route exists, or the slot is a melee type (the Rogue's slots 0 and 3) and the distance is below 10.0. A slot that is not a melee type and has no charge needs no route at all.
    One roll is drawn for each slot whose cooldown, band and arc pass, in the order above, and the first success ends the test.
 5. On a choice: the slot's cooldown is drawn (slot 0: int[30, 60]; slot 2: int[60, 120]; slot 3: 0), the sequencer starts in state 0 (slots 0 and 3) or state 6 (slot 2), and the desired distance (6 + 14 x int[20, 80] / 100) and charge distance are drawn again.
 6. Probability that an attack starts in a tick when all cooldowns are 0, recovery is 0 and the hero is in front: d between 5 and 10: 1 - 0.76 x 0.51 x 0.51 = about 80 percent per tick (slot 3 first at 24 percent, slot 2 next, slot 0 last); d between 10 and 15: 1 - 0.76 x 0.51 = about 61 percent; d between 15 and 20: 49 percent (slot 2 only); d above 20 or inside 5 (slot 0 only): 0 or 49 percent. So the Rogue attacks within a few ticks of becoming eligible; the real limits are the cooldowns and the recovery countdown.
@@ -299,6 +299,7 @@ Counter attack (trigger 6, chance 25; slots 0 and 3):
 - If a slot is eligible, one roll int[0, 100] per tick (101 values): below 25 starts that slot's attack at once (sequencer state 0, outer 2), replacing the reaction. So each tick of the 53-tick reaction has a 24.75 percent chance (25 of 101) to turn into a counter attack; the chance that no counter happens in a whole reaction is under one in a million when a slot is eligible. Expected delay about 4 ticks.
 - Practical meaning: the Rogue is almost always countering a hit when the hero hits him from 5 to 15 units (slot 3: the full 10-damage three-hit combo) or from inside 5 when slot 0's cooldown has expired. He is only staggered for the full 53 ticks when no slot is eligible: the hero is inside 5 (slot 3 needs more than 5) and slot 0's cooldown (30 to 60 ticks after each use, set at the choice and again at the end of the swing) has not run out, or the hero is behind him.
 - The counter does not reset the shared recovery or other slots' cooldowns; the chosen slot's cooldown is redrawn.
+- A slot equal to the currently selected slot is never chosen by the counter. The normal chooser clears the selected slot first, so this matters only on ticks where the hero is not attackable and the normal chooser returns early: the slot left selected by the previous attack cannot counter again then (High). A counter always starts in sequencer state 0 for a slot without a charge and in state 6 for a charge slot; a loopable slot is not started in its loop state by a counter.
 
 ### Stealing and the coin detour
 

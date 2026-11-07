@@ -185,7 +185,7 @@ The swap task is a cooperative task that yields once per tick. It runs in the gl
    (High.)
 8. **Incoming one-shot prepared.** Set I's state to 0x33 (one-shot).
 9. **Select.** If O is not I: deactivate O (section 3.9). Then attach the camera to I (section 3.6b), set the camera's ground reference to I's, set the selected pointer to I, clear all 14 of I's status timers (status apply with kind "all"), and empty I's target list at +0xA70 (section 2.1). (High.)
-10. **End flags.** If the first flag is set, stop the second swap effect and start the third (section 3.5). If the second flag is set, start the fade-in from white back to clear over 8 ticks (section 3.5).
+10. **End flags.** If the first flag is set, stop the second swap effect and start the third (section 3.5). Then the task yields twice, so two ticks pass. Then, if the second flag is set, start the fade-in from white back to clear over 8 ticks (section 3.5). (High.)
 11. **Incoming one-shot.** Play I's one-shot cue 0xB0 and set I's state to 0x33 again.
 12. **Wait for the outgoing one-shot.** Wait until O's state is not 0x33 or the fade alpha equals its target: the wait ends on either condition (High).
 13. **Carried state.** If the extra flag in the request is set, the six HUD visibility timers C and G0 to G4 (SPEC-0023 section 4) are set to 240 ticks. Then set I's state to the carried state from step 1. (High.)
@@ -197,7 +197,7 @@ Notes:
 - Steps 1 to 16 use the flags as described in section 3.5.
 - The order of steps 9 to 11 is the order stated here, with the deactivation of O before the camera attach and the selection write (High).
 - The 0.7 is a single-precision code constant. The 60 ticks per second come from the game tick (SPEC-0007), read as the single-precision tick-rate word.
-- The request has an optional fifth argument (fade in from black with the guards skipped). No caller passes it.
+- The request has an optional fifth argument. When it is non-zero a fade in from black over 20 ticks (to alpha 128) starts, the mode, busy and dead-partner tests are skipped, and the request is always accepted. No caller passes it.
 
 Confidence: High for the order of waits and writes; Medium for the attack-pool reset of step 2 (what each of the 17 pools holds is in SPEC-0036) and for the repeated start sound of step 3 (whether the second play is audible needs a runtime check; the rewrite plays it).
 
@@ -454,4 +454,4 @@ Numbers of removed questions are not reused.
 34. Resolved: step 5 waits until the sound command channel is idle for 10 fields in a row, with no yield and no timeout; at least about 0.17 s of frozen picture when sound is on (Medium-High).
 35. Resolved: there is no cut. The eye is not moved by a switch, so a silent swap shows the new model on the same spot with the same view, whatever the hero's facing (section 3.6b; Medium).
 36. Resolved: the values are in SPEC-0023 section 12: pivot element 0x29 is 56 by 64 with pivot point (28, 32) under a parent at canvas (437, 17); Tor's group 0x2A has pivot (28, 29) and Roberta's group 0x2B has (29, 32).
-37. Resolved: yes. The picker's story-flag calls go to a routine that does nothing, and none of them names flag 220 or 248 in any case. Rule M then reads the flags as they already are, so after a start point on a fresh session the mode is 0 (Tor only) until a script or TriggerActStart changes it, even for a late start point (Medium-High; SPEC-0035).
+37. Resolved: yes. The debug start-point chooser (never entered; SPEC-0035 section 5) applies its stage ids with the live stage set, and stage 0 sets flag 220 and stage 1 sets flag 248 (SPEC-0049). Rule M, run at the world load that follows, then gives mode 1 for start index 1 (stage 0 only: 220 set, 248 clear), mode 2 for indices 2, 3 and 6 to 8 (stages 0 and 1), and mode 0 for indices 0, 4 and 5 (no 220). Flag 220 means Act 2 has started. Index 1 also selects Roberta, indices 0, 4 and 5 select Tor (Medium-High). The numbers the chooser hands to an empty routine do nothing.

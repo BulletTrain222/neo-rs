@@ -104,31 +104,6 @@ pub fn resolve(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> bool {
     hit
 }
 
-/// The hero's box push, with one choice of this build's (R-0244, user's report 27): when the
-/// feet are under the probed ground by less than 0.25 (the top gate's figure) and the same
-/// point on the ground would be outside the box, the feet go onto the ground instead of being
-/// pushed. SPEC-0018 (Pack 1056 stairs) says feet on the ramp never enter the top gate; this
-/// build's ramp normal truncates to flat (SPEC-0018 sample normal), so the feet trail it by 0.08
-/// to 0.16 and the side push held the hero at the box edge for good.
-pub fn resolve_grounded(p: &mut Vec3, boxes: &[BoxShape], r: f32, ground: Option<f32>) -> bool {
-    let mut hit = false;
-    for b in boxes {
-        let Some((_, n, dist)) = push(*p, b, r) else { continue };
-        if let Some(h) = ground.filter(|&h| h > p[1] && h - p[1] < 0.25) {
-            if push([p[0], h, p[2]], b, r).is_none() {
-                p[1] = h;
-                hit = true;
-                continue;
-            }
-        }
-        for k in 0..3 {
-            p[k] += n[k] * dist;
-        }
-        hit = true;
-    }
-    hit
-}
-
 /// The slide response for a cylinder contact (SPEC-0018 Cylinders (kind 3) against the hero,
 /// Response direction; Breakable cylinders; Tree trunks): `d` is the move and `n` the unit normal
 /// toward the axis that `upright_cylinder_push` gives. With motion into the pole (or none) and a
@@ -446,16 +421,8 @@ mod tests {
         let b = BoxShape { origin: [-8.3258, 22.0595, 363.2634], axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [5.3261, 10.8802, 3.9309] };
         assert_eq!(push([0.0, 27.2877, 368.36], &b, HERO_RADIUS), None);
         let mut p = [-4.0, 22.82, 368.0];
-        resolve_grounded(&mut p, &[b], HERO_RADIUS, Some(22.82));
+        resolve(&mut p, &[b], HERO_RADIUS);
         assert!((p[2] - 368.3693).abs() < 1e-3 && p[0] == -4.0 && p[1] == 22.82, "{p:?}");
-        // Feet 0.085 under the ramp (27.288): the spec's push holds him at the edge; the
-        // build's choice puts the feet on the ramp, outside the gate.
-        let mut q = [-3.8, 27.203, 368.30];
-        resolve(&mut q, &[b], HERO_RADIUS);
-        assert!((q[2] - 368.3693).abs() < 1e-3, "{q:?}");
-        let mut q = [-3.8, 27.203, 368.30];
-        resolve_grounded(&mut q, &[b], HERO_RADIUS, Some(27.288));
-        assert_eq!(q, [-3.8, 27.288, 368.30]);
     }
 
     #[test]

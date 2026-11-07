@@ -362,8 +362,8 @@ impl Pool {
                     if reflectable {
                         let speed = len(p.velocity);
                         // At the owner + (0, 2, 0); a shot with no owner (the shield lesson's
-                        // launcher, owner -1) goes straight back the way it came (R-0246; this
-                        // build's choice: the aim with no owner is not given).
+                        // launcher, owner -1) goes straight back the way it came at the same speed and,
+                        // with no owner to test, hits nothing more (SPEC-0044, R-0246).
                         p.velocity = match owner {
                             Some((base, _, _)) => unit(sub([base[0], base[1] + 2.0, base[2]], p.position)).map(|c| c * speed),
                             None => p.velocity.map(|c| -c),

@@ -51,13 +51,17 @@ Invariants on this build (good for self-checks):
   4. Reports `count[n] × 2048` as the number of bytes loaded.
 - Some callers ask only for the size (`count × 2048`) so they can reserve a buffer first. A few take the largest size over a range of resource numbers.
 - Sound banks and streamed audio use the same table. They take the resource's LBA and sector count from it and stream straight from the disc.
+- Reads go through a request queue. A request names the table, the resource number, a destination buffer and an optional completion callback. A blocking caller waits until its request finishes and gets the byte count back; a queued caller returns at once and the request advances one step per main-loop pass (start the read, poll it, run the callback). Streamed audio starts a stream instead of a block read. Every request reports `count[n] × 2048` taken from the index; the sector read itself is never compared with the buffer size the caller supplied, so callers size their buffers from the index (Medium).
+- A sector read that fails is repeated until it succeeds: the game prints a message, waits for the drive to settle and issues the same read again. There is no give-up path (Medium).
+- Three smaller index tables of the same 8-byte form exist inside the path-record resource 533 (its three type-43 chunks, SPEC-0024). In file order they belong to resource 144, resource 145 and resource 576. A table's payload holds a u32 entry count at payload offset 0x100, followed from payload offset 0x104 by (start sector, sector count) pairs. Each start is relative to the first sector of its resource, not of GAMEFILE.DAT: the base is that resource's own start. Lookup is the same as for the main table, including the one-past-the-end allowance (Edge cases). What the entries address in each resource is specified with the emote banks (SPEC-0009) and the book records (SPEC-0024) (Medium for the use; High for the table construction).
 
 ## Edge cases and error handling
 
 - **Zero-count entries** (76 of them) are placeholders. Their start equals the next entry's start. Treat them as empty and never read bytes for them. Reading at their start would return the *next* resource's data.
 - **Cut stinger slots:** the run of 72 empty entries 275–346 are the slots of cut stingers. Stinger clip n is resource 256 + n (SPEC-0009), and records 19 to 90 of the stinger chooser table (classes 19 to 65; SPEC-0024, table 14) would map to resources 275–346. The game does request those stinger indices, but its stinger routine drops every index of 19 or more, so these entries are never loaded. A clean build must play nothing for them (High).
 - **Out-of-range numbers:** the game does not bounds-check the lookup it uses for reads. Its size and existence check accepts numbers up to and **including** 1434, which is one past the end. The clean side should reject any number ≥ 1434.
-- **GAMEFILE.DAT missing:** the game prints a diagnostic message (text not recorded) and keeps going in a broken state. The clean side should fail disc validation instead.
+- **GAMEFILE.DAT missing:** the game prints a diagnostic message (text not recorded) and keeps going in a broken state: the table pointer, entry count and base sector of the archive stay zero, though it is marked open. The clean side should fail disc validation instead.
+- **Table location and size:** the table address and the entry count 1434 are passed together in the single start-up call that opens the archive, so the count really is a built-in constant (High).
 - The last sector of a resource is loaded in full, even when the payload ends earlier.
 
 ## Test vectors

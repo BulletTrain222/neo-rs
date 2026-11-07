@@ -81,7 +81,7 @@ Table counts and record sizes (from disc):
 | 15 | 623 | 8 | 5,000 |
 | 16 | 60 | 4 | 256 |
 
-Table identity comes from file order: the k-th type-42 chunk (k = 0 to 16) is table k. Any extra type-42 chunk, or a chunk of an unknown type, makes the resource invalid.
+Table identity comes from file order: the k-th type-42 chunk (k = 0 to 16) is table k. The loader walks the chunks until it meets a header of type 0 (or a zero type field). It does not validate the chunk set: an extra type-42 chunk (the 18th and later) or a chunk of an unknown type is skipped with a diagnostic message and the walk goes on, and a fourth type-43 chunk is skipped the same way. A clean build may reject such a resource, since none exists on disc (High).
 
 ### Pointers and string relocation
 
@@ -256,7 +256,7 @@ None of these fields is a timing. The only times are the bank offsets -3600 and 
 | Offset | Size | Type | Meaning | Confidence |
 | --- | --- | --- | --- | --- |
 | +0x00 | 4 | pointer | Location name. All 77 resolve. | H |
-| +0x04 | 4 | u32 | Runtime count of flagged table-6 entries for this location. Filled at load time; zero on disc. | M |
+| +0x04 | 4 | u32 | Runtime total: the number of table-6 rows whose location index is this row, whether or not they are flagged. Zero on disc; filled once when the resource is read. The map page shows it as the total next to the collected count (the number of table-6 rows of the location whose flag is set, summed live). | M-H |
 
 A save-slot list shows the location name; if the id is missing the game shows a generic "unknown location" label (text not copied here).
 
@@ -267,7 +267,7 @@ A save-slot list shows the location name; if the id is missing the game shows a 
 | +0x00 | 4 | s32 | Location index into table 5, or -1 for none. Values -1 to 73. | H for range |
 | +0x04 | 4 | u32 | Runtime flag: 0 to 1 when obtained or visited. Zero on disc in all records. | M |
 
-Behavior: a per-location count sums the flags of the table-6 entries whose location index matches. Writers (High):
+Behavior: the collected count of a location sums the flags of the table-6 entries whose location index matches, and is recomputed each time it is needed; the location's total (table 5 +0x04) is fixed at load and counts rows with indices 0 up to the table-5 row count minus 1 only (a row with -1 or an out-of-range index counts for no location). Writers (High):
 
 - The flag is set to 1 only by the three treasure-group callbacks: the Square-press chest, the element-break chest and the dig site (SPEC-0048, SPEC-0051). Each writes the row named by its group's collected-row key.
 - The single-row write ignores row 0 and any row at or past the row count.
@@ -376,7 +376,7 @@ Roll: the chooser draws a uniform whole number from 0 to 100 inclusive (101 valu
 
 Dropped indices 19 and above (cut stingers): stinger requests of 19 or more are made and are dropped. The game requests indices 19, 20, 21, 25, 26, 27, 28, 30, 32, 33 and 37 on Tor events and the same events plus 24 (43, 44, 45, 49, 50, 51, 52, 54, 56, 57 and 61) on Roberta events, plus 42 (Tor) and 66 (Roberta) when an item showcase starts. The events are take-hit, attack actions, item add and item showcase. The stinger routine rejects every index of 19 or more (SPEC-0009, "Effect and stinger index"), so nothing plays. Classes 19 to 65 hold records 19 to 90, whose clip numbers would be 256 + 19 to 256 + 90 = 275 to 346. Archive resources 275 to 346 are exactly the 72 empty (size 0) archive entries (SPEC-0001). These are cut hero-voice and item-event stingers. Class 66 has no records. A clean build must play nothing for them.
 
-Do not implement a weighted pick for classes 19 to 65 from this table. The chooser does not implement it (see Edge cases).
+Do not implement a weighted pick for classes 19 to 65 from this table. The chooser does not implement it (see Edge cases). The chooser returns no record when the roll exceeds the weight sum it accumulates, which can only happen for a class whose first record's weight times its record count is below 100.
 
 ### Table 15: credits roll (623 x 8) (purpose: credits text, H content, M mechanism)
 
@@ -492,6 +492,7 @@ Rules:
 - Setting a flag that is already set plays nothing and changes nothing; the notification is still posted, with old value 1.
 - The plain set used by the stage table (table 11) does not read table 2: no stinger, no journal cue and no notification.
 - Journal flag consumer: while the flag is set, the in-play HUD draws the pulsing journal icon (SPEC-0023, section 8). Building the quest journal list clears the flag. Nothing else clears it: not new game, not a load. A front-end handler also reports it when its save check passes (Medium for that handler).
+- Stinger gates: a stinger request does anything only while the music is active and no earlier stinger cue is still playing; otherwise it is dropped (High for the gate; Medium-High for the exact cue-finished test). Requests of 19 or more are dropped before the table 14 roll. The cooldown below is tested and updated only after those gates pass, so a stinger 4 request that is dropped for being busy does not restart the cooldown.
 - Stinger 4 cooldown: stinger 4 plays only when the game clock (seconds since boot, +1/60 per pass; SPEC-0007) is more than 40.0 s past the time stinger 4 last started. That last-start time is set to 0.0 when the music object is set up (and at its resets), so stinger 4 cannot play while the clock is at 40 s or less. A blocked stinger 4 is dropped, not queued.
 - The stinger index is the value minus 1, so value 19 gives stinger 18.
 
@@ -526,7 +527,7 @@ The lookup steps are defined in SPEC-0009 (Emote clip lookup). In short, for the
 1. Read the row for the emote id from table 7 (character) or table 8 (hero).
 2. If the clip index is 255, play no clip.
 3. Chance is 0 or 100 in every row. Play the clip when the chance is 100, and play no clip when it is 0.
-4. If the variance byte is nonzero, add a random step of -1, 0 or +1 to the clip index. If it is zero, add no step.
+4. If the variance byte is nonzero, add a random step of -1, 0 or +1 to the clip index. If it is zero, add no step. The chance draw (0 to 99) is made on every lookup, even for a row whose chance is 0 or 100, and the step draw (0 to 2) is made only when the chance test passes and the variance byte is nonzero; a clean build that must keep the random sequence of the original draws in that order (High).
 5. Character emote: clip = clip index + 74 times the partner's voice set c (villager row +0x14). With c = -1 the position is negative for every clip index below 74 and plays nothing.
 6. Hero body emote: clip = clip index + step + 183 when the hero is Roberta (the hero flag is set), and clip index + step otherwise. Hero face emotes take no hero shift for either hero. The hero flag, the body and face split and the shift of 183 are as stated in SPEC-0009 and SPEC-0022.
 7. A clip index that gives a directory entry of zero length plays nothing.
@@ -537,7 +538,7 @@ Runtime fields (table 3 +0x10, table 5 +0x04, table 6 +0x04) are zero in the fil
 
 ### Loading order
 
-Chunks are read in file order. The first 17 type-42 chunks are tables 0 to 16. The three type-43 chunks follow; they are loaded into the sound slots listed below. Missing or extra chunks make the resource invalid.
+Chunks are read in file order. The first 17 type-42 chunks are tables 0 to 16. The three type-43 chunks follow; they are loaded into the sound slots listed below, in order of appearance (first, second, third). The loader does no count check: a missing table leaves its reader without data, and surplus chunks are skipped with a message (High). Each table's pointer fix-up and run-time field clearing happen as its chunk is read (see Pointers and string relocation). The music table (4), the hero name colour table (10), the stage tables (11 and 12) and the Mote table (16) need no fix-up: the loader only records where their records start.
 
 ### Path records (type 43)
 
@@ -564,7 +565,7 @@ A book index i selects directory entry i of chunk 19, which gives the record's s
 
 ## Edge cases and error handling
 
-- Species or villager table with a count other than the expected one: the table is rejected, the build reports a changed table size, and no partial table is used (Medium).
+- Species or villager table with a length other than the expected one: the boot load accepts any length and reports nothing. The routine that compares the bytes read with an expected length and reports a changed table size is never called (Medium-High; see Load check).
 
 - Pointer 0 means no text. Zero-length strings are not expected in the pool.
 - Table 15: blank spacer rows have a zero pointer and must still take up their line space.

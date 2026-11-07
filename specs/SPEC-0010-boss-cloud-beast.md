@@ -146,7 +146,7 @@ Hero stands still 20 units away, not guarding, stage 1, companion present, stand
 
 ### Timing table (timing pass)
 
-Confidence: High for the counters and the order; the clip lengths are the rewrite defaults of Test setup (no clips exist on the disc). Units: ticks of 1/60 s. Hesitation and the three cooldowns are whole ticks lowered by one at the start of every controller tick (step 1), before the decision; the reaction hold is counted the same way.
+Confidence: High for the counters and the order; the clip lengths are the rewrite defaults of Test setup (no clips exist on the disc). Units: ticks of 1/60 s. Hesitation and the three cooldowns are whole ticks lowered by one at the start of every controller tick (step 1), before the decision. The reaction hold is not part of that step: it drops by one inside the reaction state, on ticks when the trigger is false.
 
 | Item | Timing |
 | --- | --- |
@@ -499,7 +499,7 @@ A rebuild spawns monster type 1, variant 0 (row 1, class 9) in the Juppie arena,
 - **Stage sampling during attacks** (High): the stage is recalculated every tick, but attack parameters are read at different points. Hesitation and lightning wind-up are chosen on attack selection; lightning fire duration is chosen when wind-up ends. Gust speed is read during gust/run-out ticks, and the air-flow cooldown is drawn on exit using the then-current stage. Ball count is read at the animation event, ball speed at each ball spawn, and bouncing cooldown at normal animation completion using the then-current stage. Lightning cooldown is likewise drawn on normal recovery completion using the current stage. Reaction interruption can skip those cooldown draws (above).
 - **Interrupted reply** (High): the reaction trigger can end the special reply before its 20 damage.
 - **Beam activity** (High): with no beam effect definition the beams never become active and the lightning cannot hit, be blocked or reflect, so the boss's HP never falls (Lightning, Beam activity). A rewrite that runs the designed fight binds stand-in beam effects.
-- **Debug display**: the original keeps a debug text line with the state name, HP, rounded distance and stage; only states 0 to 6 have names, which suggests the reply and reaction states were added later. Not needed for play.
+- **Debug display**: the original keeps a debug text line with the state name, HP, rounded distance and stage; only states 0 to 6 have names (idle, shock attack, combat fidget, air-flow attack, rapid air-flow attack, lightning attack, bouncing bolt attack, in that order, which confirms the state numbering above); the distance shown is the same distance value the shock check uses, rounded to the nearest whole number. The missing names suggest the reply and reaction states were added later. Not needed for play.
 
 ## Test vectors
 

@@ -111,12 +111,6 @@ pub struct World {
     /// collision mask, and all of them with their gate masks.
     boxes: Vec<BoxShape>,
     all_boxes: Vec<(u16, BoxShape)>,
-    /// The flat kind-4 and kind-7 rectangles (third extent 0 or less) whose face is near
-    /// horizontal (|normal y| above 0.85): the zero-radius contact's floor route (SPEC-0018
-    /// Primitive class routing; SPEC-0027 Eye pass, the separate floor push), stood on by the
-    /// ground probe while their gate passes (pack 1174's gate-4 plank, user's report 76).
-    all_planks: Vec<(u16, BoxShape)>,
-    planks: Vec<BoxShape>,
     /// The pushing collision spheres (SPEC-0018 Sphere contact): those whose mask passes, and
     /// all of them with their masks.
     push_spheres: Vec<([f32; 3], f32)>,
@@ -198,10 +192,6 @@ impl World {
         self.volumes = self.all_volumes.iter().filter(|v| v.fires_on_contact(mask)).copied().collect();
         self.shot_volumes = self.all_volumes.iter().filter(|v| v.fires_on_shot(mask)).copied().collect();
         self.boxes = self.all_boxes.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect();
-        // Off by default: the 1174 gate-4 rectangle read as a walkable plank lay inside the drawn
-        // fallen column, and walking on it, the pull-up and the hold left the hero standing in the
-        // air beside the column (user's report 80). NEOPETS_PLANKS turns them on (diagnostic).
-        self.planks = if std::env::var_os("NEOPETS_PLANKS").is_some() { self.all_planks.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect() } else { Vec::new() };
         self.push_spheres = self.all_spheres.iter().filter(|(m, ..)| *m == 0 || m & mask != 0).map(|&(_, c, r)| (c, r)).collect();
     }
 
@@ -260,8 +250,6 @@ impl World {
             flat: Some(0.0),
             boxes: crate::stage_view::wall_boxes(),
             all_boxes: crate::stage_view::wall_boxes().into_iter().map(|b| (0, b)).collect(),
-            all_planks: Vec::new(),
-            planks: Vec::new(),
             push_spheres: crate::stage_view::rock_spheres(),
             all_spheres: crate::stage_view::rock_spheres().into_iter().map(|(c, r)| (0, c, r)).collect(),
             collis_mask: 0,
@@ -358,12 +346,6 @@ impl World {
                 .filter(|r| r.pushes(0xFFFF))
                 .map(|r| (r.mask, BoxShape { origin: r.origin, axes: r.axes, extents: r.extents }))
                 .collect(),
-            all_planks: ground::rectangles(&bytes, &chain.chunks)
-                .into_iter()
-                .filter(|r| r.flags & 0b1001 != 0 && r.extents[2] <= 0.0 && r.axes[2][1].abs() > 0.85 && r.extents[0] > 0.0 && r.extents[1] > 0.0)
-                .map(|r| (r.mask, BoxShape { origin: r.origin, axes: r.axes, extents: r.extents }))
-                .collect(),
-            planks: Vec::new(),
             collis_mask: 0,
             neighbours: Neighbours::of(&bytes, &chain.chunks),
             planes: ground::teleport_planes(&bytes, &chain.chunks),
@@ -565,6 +547,33 @@ impl World {
             .collect()
     }
 
+    /// The frame records at (x, z) that the ledge tests read: the pack's own, then those owned by
+    /// drawn placed objects, rewritten in world space through the owner's pose, whose owner is
+    /// not looping or playing once (SPEC-0033 Behavior 49 gate 2: states 0 and 2 offer no edge; a
+    /// deactivated object has none; SPEC-0028 section 7.2).
+    fn edge_frames(&self, x: f32, z: f32) -> Vec<ground::FrameRecord> {
+        let Some(g) = &self.ground else { return Vec::new() };
+        let mut v = g.frames_at(x, z);
+        v.extend(
+            g.object_frames_world(x, z, &|o| self.owner_poses.get(&o).copied())
+                .into_iter()
+                .filter(|(o, _)| self.object_anims.get(*o).is_some_and(|a| !matches!(a.state, 0 | 2)))
+                .map(|(_, f)| f),
+        );
+        v
+    }
+
+    /// A record's link (next or previous), in world space for an object-owned record.
+    fn edge_link(&self, r: &ground::FrameRecord, next: bool) -> Option<ground::FrameRecord> {
+        let g = self.ground.as_ref()?;
+        let l = g.frame_link(r, next)?;
+        if r.patch == 0 {
+            return Some(l);
+        }
+        let pose = self.owner_poses.get(&g.owner_of(r.patch)?)?;
+        Some(pose.frame_to_world(&l))
+    }
+
     /// The state 1 or 3 breakables' upright cylinder volumes within `reach` of `at` horizontally:
     /// (base, length, radius, trigger number). The loader's flags 9 make each a solid.
     fn breakable_cylinders(&self, at: [f32; 3], reach: f32) -> Vec<([f32; 3], f32, f32, u16)> {
@@ -605,56 +614,12 @@ impl World {
         neopets_sim::block::Floor { height: h.found.then_some(h.height), patch: h.patch.map(|p| (p.owner, p.index)) }
     }
 
-    /// The height of an active plank over (x, z), its footprint widened by `margin` across.
-    fn plank_height(&self, x: f32, z: f32, margin: f32) -> Option<f32> {
-        let mut best: Option<f32> = None;
-        for b in &self.planks {
-            let ([a0, a1, _], [e0, e1, _]) = (b.axes, b.extents);
-            let det = a0[0] * a1[2] - a0[2] * a1[0];
-            if det.abs() < 1e-6 {
-                continue;
-            }
-            let (dx, dz) = (x - b.origin[0], z - b.origin[2]);
-            let s = (dx * a1[2] - dz * a1[0]) / det;
-            let t = (a0[0] * dz - a0[2] * dx) / det;
-            if !(0.0..=e0).contains(&s) || !(-margin..=e1 + margin).contains(&t) {
-                continue;
-            }
-            let y = b.origin[1] + s * a0[1] + t.clamp(0.0, e1) * a1[1];
-            best = Some(best.map_or(y, |h: f32| h.max(y)));
-        }
-        best
-    }
-
     fn probe(&self, x: f32, z: f32, c: f32) -> ProbeHit {
         // The test stage: one level floor everywhere, found from at or above it.
         if let Some(h) = self.flat.filter(|&h| c >= h - 0.5) {
             return ProbeHit { height: h, normal: UP, kind: None, found: true, respawn: None, surface: None, zone: None, patch: None };
         }
-        let hit = self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None, patch: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()));
-        // A gated plank above the ground found and at or below the ceiling is stood on.
-        let mut best = hit;
-        for b in &self.planks {
-            let ([a0, a1, n], [e0, e1, _]) = (b.axes, b.extents);
-            let det = a0[0] * a1[2] - a0[2] * a1[0];
-            if det.abs() < 1e-6 {
-                continue;
-            }
-            let (dx, dz) = (x - b.origin[0], z - b.origin[2]);
-            let s = (dx * a1[2] - dz * a1[0]) / det;
-            let t = (a0[0] * dz - a0[2] * dx) / det;
-            // Widened by 1.0 across (this build's choice, R-0261): the drawn column is wider than
-            // the 3-unit record, and the hero walked off its edge.
-            if !(0.0..=e0).contains(&s) || !(-1.0..=e1 + 1.0).contains(&t) {
-                continue;
-            }
-            let y = b.origin[1] + s * a0[1] + t.clamp(0.0, e1) * a1[1];
-            if y <= c && (!best.found || y > best.height) {
-                let up = if n[1] < 0.0 { [-n[0], -n[1], -n[2]] } else { n };
-                best = ProbeHit { height: y, normal: up, kind: None, found: true, respawn: None, surface: None, zone: None, patch: None };
-            }
-        }
-        best
+        self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None, patch: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()))
     }
 }
 
@@ -1318,11 +1283,6 @@ pub struct Play {
     /// Door prompt id posted by this tick's door step, and the one the chooser shows (posted on
     /// the previous tick); the door-confirm flag (SPEC-0006 Door prompt and confirm).
     door_prompt: Option<u16>,
-    /// This build's guard (R-0257): false after the hero is placed (a load, a landing, a
-    /// MoveHero) until a tick finds him touching no door. A contact door (context 0) does not
-    /// start while it is false, so a return locator inside a door's touch zone does not send him
-    /// straight back through it (pack 1098 locator 3 and door 1, user's report 60).
-    door_armed: bool,
     pub prompt_shown: Option<u16>,
     confirm: bool,
     /// A Square press waiting for the next tick.
@@ -2300,7 +2260,6 @@ impl Play {
             ticks: 0,
             swaps: 0,
             door_prompt: None,
-            door_armed: true,
             prompt_shown: None,
             confirm: false,
             square_latch: false,
@@ -2889,7 +2848,6 @@ impl Play {
     /// Move the hero to a landing in the current world and put the camera behind it.
     fn arrive(&mut self, (l, g): ([f32; 3], [f32; 3])) {
         self.loco.teleport(l, g);
-        self.door_armed = false;
         // The traversal holds of the world left behind end with the arrival.
         (self.ladder, self.ledge, self.hang, self.climb, self.panel, self.hold) = (None, None, None, None, None, None);
         let f = followed(&self.loco, &self.world);
@@ -2927,7 +2885,6 @@ impl Play {
             }
             let (at, facing) = (self.loco.position(), self.loco.facing);
             self.loco.teleport(at, facing);
-            self.door_armed = false;
             self.loco.state = hero_states::STANCE;
             self.grab_cooldown = 60;
         }
@@ -6388,18 +6345,19 @@ impl Play {
             }
         }
         if !matches!(self.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE | ledge::DROP) {
-            let Some(g) = &self.world.ground else { return false };
             let f = self.loco.facing;
             let toward = |e: &Edge| -(e.face[0] * f[0] + e.face[2] * f[2]);
             // The held edge: the record the hero's wall contact offers (Behavior 51A item 2; the
             // contact ran at the end of the last tick, so the hero's position now is where it left
-            // him), the one facing him most; ties keep the first.
-            let offers: Vec<(Edge, ground::FrameRecord)> = g
-                .frames_at(hero[0], hero[2])
+            // him), the one facing him most; ties keep the first. Object-owned records count too
+            // (SPEC-0033 Behavior 49; the pack 1174 stump of tile 43, SPEC-0044).
+            let offers: Vec<(Edge, ground::FrameRecord)> = self
+                .world
+                .edge_frames(hero[0], hero[2])
                 .into_iter()
                 .filter_map(|r| {
                     let e = edge_of(&r);
-                    let prev = g.frame_link(&r, false);
+                    let prev = self.world.edge_link(&r, false);
                     ledge::offered(&e, hero, contact::HERO_RADIUS, ledge::continues(&e, prev.as_ref().map(edge_of).as_ref())).then_some((e, r))
                 })
                 .collect();
@@ -6436,9 +6394,9 @@ impl Play {
         let f = self.loco.facing;
         let deep = [2.0, 2.5].iter().all(|&k| self.world.ground_at(hero[0] + f[0] * k, hero[2] + f[2] * k, hero[1] + 1.0).is_none_or(|g| hero[1] - g > 4.5));
         // SPEC-0018 Climb and hang data: the held record's links, for the hang's shimmy.
-        let (next, prev) = match (self.ledge_record.as_ref(), self.world.ground.as_ref()) {
-            (Some(r), Some(g)) => (g.frame_link(r, true), g.frame_link(r, false)),
-            _ => (None, None),
+        let (next, prev) = match self.ledge_record.as_ref() {
+            Some(r) => (self.world.edge_link(r, true), self.world.edge_link(r, false)),
+            None => (None, None),
         };
         let bits = self.hero.frame_bits();
         let touched = self.touched;
@@ -6566,7 +6524,9 @@ impl Play {
     /// this build).
     fn drop_check(&mut self) -> bool {
         use neopets_sim::ledge::{self, Ledge};
-        let Some(g) = &self.world.ground else { return false };
+        if self.world.ground.is_none() {
+            return false;
+        }
         let (hero, f, v, state) = (self.loco.position(), self.loco.facing, self.loco.body.velocity, self.loco.state);
         self.drop_panel = None;
         // SPEC-0033 Drop onto a panel (state 38): the drop test on a type-10 record whose V is near
@@ -6595,7 +6555,7 @@ impl Play {
                 return true;
             }
         }
-        for r in g.frames_at(hero[0], hero[2]) {
+        for r in self.world.edge_frames(hero[0], hero[2]) {
             let e = edge_of(&r);
             // SPEC-0033 Behavior 49 gate 1: the refusal counter of state 37's landing exit, in state 1.
             if state == 1 && self.drop_refuse > 0 {
@@ -6653,12 +6613,14 @@ impl Play {
     /// one and its links, within reach r with its wall span over the feet (2H band). It blocks unless it
     /// has the held record's entry and its start lies within 4.0 of the held start. No model set blocks.
     fn edge_obstacle(&self, q: [f32; 3]) -> bool {
-        let Some(g) = &self.world.ground else { return true };
+        if self.world.ground.is_none() {
+            return true;
+        }
         let Some(held) = self.ledge_record.as_ref() else { return false };
         let r = contact::HERO_RADIUS;
         let plane = |m: [f32; 4]| m[0] * q[0] + m[1] * q[1] + m[2] * q[2] + m[3];
-        g.frames_at(q[0], q[2]).into_iter().any(|x| {
-            let same = x.entry == held.entry;
+        self.world.edge_frames(q[0], q[2]).into_iter().any(|x| {
+            let same = x.entry == held.entry && x.patch == held.patch;
             if same && (x.own == held.own || x.own == held.next || x.own == held.prev) {
                 return false;
             }
@@ -8806,33 +8768,6 @@ impl Play {
     /// this a moving platform slid out from under him (user's report 45). The climb and hang
     /// records' owners are not built.
     fn ride_step(&mut self) {
-        // This build's pull-up onto a gated plank (R-0261, the user's request): a jumping hero
-        // whose feet are below an active plank's surface by no more than his height, with his
-        // position over it (its width widened by 1.0), is lifted onto it, as the original's pull-up
-        // onto pack 1174's fallen column puts him there; the record it uses is not known.
-        if matches!(self.loco.state, 7..=10) && !self.world.planks.is_empty() {
-            let p = self.loco.position();
-            if let Some(y) = self.world.plank_height(p[0], p[2], 1.0) {
-                if y > p[1] + 0.25 && y - p[1] <= 3.5 {
-                    self.loco.body.position[1] = y + 0.05;
-                    self.loco.body.velocity = [0.0; 3];
-                    self.last_door = format!("pulled up onto a plank at {y:.2} on tick {}", self.ticks);
-                }
-            }
-        }
-        // On foot on a plank, the feet follow its surface when it is within 0.3 below or 0.6 above
-        // them: walking up the 30-degree column he lagged behind its rise and dropped through it.
-        if matches!(self.loco.state, 1..=6) && !self.world.planks.is_empty() {
-            let p = self.loco.position();
-            if let Some(y) = self.world.plank_height(p[0], p[2], 1.0) {
-                if (p[1] - 0.3..=p[1] + 0.6).contains(&y) && (y - p[1]).abs() > 1e-3 {
-                    self.loco.body.position[1] = y;
-                    if self.loco.body.velocity[1] < 0.0 {
-                        self.loco.body.velocity[1] = 0.0;
-                    }
-                }
-            }
-        }
         // NEOPETS_TRACE_RIDE=obj: that object's pose and drawn heights and the ride lock, every 25 ticks (diagnostic).
         if let Some(o) = std::env::var("NEOPETS_TRACE_RIDE").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
             if self.ticks % 25 == 0 {
@@ -10747,17 +10682,13 @@ impl Play {
             return;
         }
         let p = self.loco.position();
-        let Some(n) = self.world.touched_door(p) else {
-            self.door_armed = true;
-            return;
-        };
+        let Some(n) = self.world.touched_door(p) else { return };
         if self.world.scripted_doors {
             // SPEC-0006 Doors, item 5: the registered callback decides. Context 0 starts on
             // contact; otherwise the door posts the context as its prompt and the callback starts
             // on a Square press edge with the confirm flag set, which it never clears.
             match level::teleport_context(self.world.pack, n) {
                 None => self.last_door = format!("door {n}: script door of {} not described yet", self.world.pack),
-                Some(0) if !self.door_armed => self.last_door = format!("door {n}: contact door waits until the hero leaves it (placed inside it)"),
                 Some(0) => {
                     let actions = level::on_teleport(self.world.pack, n, &mut self.state);
                     self.apply(&actions);
@@ -11306,10 +11237,6 @@ impl Play {
         let breakable_hits = RefCell::new(Vec::new());
         // SPEC-0036 Leap, step 1: in the leap Roberta is left out of the character body contacts.
         let leaping = self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| a.sub == 8);
-        // The class 20 creatures' bodies the hero can stand on, with the top of their hurt shapes
-        // in this pose (R-0245; this build's choice). The row's 3.5 body height stood the hero
-        // well above the shell (user's report 34).
-        let tops: Vec<(u64, Option<f32>)> = self.characters.iter().filter(|c| c.class20.is_some()).map(|c| (c.id, c.hurt_top())).collect();
         let bodies: Vec<([f32; 3], f32, f32, u64)> = if noclip || leaping || matches!(hero_state, 33 | 53) {
             Vec::new()
         } else {
@@ -11409,8 +11336,9 @@ impl Play {
                 // SPEC-0033 Behavior 13: the box push does nothing for a hero in state 21, 38 or 41.
                 let before = *p;
                 if !noclip && !matches!(hero_state, 21 | 38 | 41) {
-                    let ground = world.probe(p[0], p[2], p[1] + 2.5);
-                    contact::resolve_grounded(p, &world.boxes, contact::HERO_RADIUS, ground.found.then_some(ground.height));
+                    // SPEC-0018 Pack 1056 stairs: the plain push; with the true tilted ramp normal
+                    // the feet never enter the top gate (the build's R-0244 rule is gone).
+                    contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
                 }
                 // SPEC-0028 Character versus moving placed objects: into each object's rest frame,
                 // its boxes and spheres, the push back to world space.
@@ -11461,28 +11389,26 @@ impl Play {
                     }
                     let (dx, dz) = (p[0] - q[0], p[2] - q[2]);
                     let d = dx.hypot(dz);
-                    // SPEC-0047 Class 20 launches a hero standing on the creature (more than 0.5
-                    // above it, within 2.5). The character push of SPEC-0040 moves along the
-                    // bodies' overlap direction, which can be up, but how that direction is chosen
-                    // is not given (R-0245). This build's choice for a class 20 body: a hero
-                    // touching it with his feet within 1.0 of its top is put on the top, and
-                    // stands there while not rising. Its body is 3.5 high (radius 1.17) and a
-                    // jump lifts his feet 3.2, so a rule that needed his feet over the top, or
-                    // the smaller overlap, pushed a jumping hero off its side (user's report 34).
-                    if let Some(&(_, shell)) = tops.iter().find(|t| t.0 == id) {
-                        let top = shell.unwrap_or(q[1] + h);
-                        let up = top - p[1];
-                        if d < contact::HERO_RADIUS + r && up < 1.0 {
-                            if up > 0.0 {
-                                p[1] = top;
+                    // SPEC-0040 the character push rule (R-0245): with the hero's axis upright and
+                    // the axes closer than the hero radius, feet 3.1 to 3.5 over the body's origin
+                    // are pulled down onto 3.1 (the cap normal points into the body) with a
+                    // floor-flag landing; a head 3.1 to 3.5 under it is pushed up the same way.
+                    // Otherwise the push is horizontal, so nothing stands on a body (the class 20
+                    // shell included: its launch needs no standing, SPEC-0047).
+                    let hh = p[1] - q[1];
+                    if d < contact::HERO_RADIUS && hh.abs() > 3.1 && hh.abs() <= 3.5 {
+                        touch_ids.borrow_mut().push(id);
+                        if hh > 0.0 {
+                            p[1] = q[1] + 3.1;
+                            on_top = true;
+                            if vel[1] < 0.1 {
+                                vel[1] = 0.0;
                             }
-                            on_top |= vel[1] <= 0.0 && up > -0.05;
-                            continue;
+                        } else {
+                            p[1] = q[1] - 3.1;
+                            vel[1] = vel[1].min(0.0);
                         }
-                        if up <= 0.0 {
-                            // Above the shell (its hurt shapes are lower than the row's body).
-                            continue;
-                        }
+                        continue;
                     }
                     let min = contact::HERO_RADIUS + r;
                     if d < min {
@@ -11586,6 +11512,20 @@ impl Play {
                     self.arrive(pose);
                 }
                 self.seal_open(g);
+            }
+        }
+        // NEOPETS_DEV_FIRE="tick:index[:object]" (diagnostic, window or trace): on that tick the
+        // current world's routine for that trigger runs once with state 1 (object word 0 unless
+        // ":1"), as a shot or touch would fire it, so a scene can be tested without its striker.
+        if let Some(v) = std::env::var("NEOPETS_DEV_FIRE").ok() {
+            let n: Vec<u64> = v.split(':').filter_map(|s| s.trim().parse().ok()).collect();
+            if n.len() >= 2 && n[0] == self.ticks {
+                let index = n[1] as u16;
+                if let Some(&routine) = self.world.routines.get(&index) {
+                    let call = level::TriggerCall { index, state: 1, object: n.get(2) == Some(&1), square: false, block: -1 };
+                    let out = level::on_trigger(self.world.pack, routine, call, &mut self.state);
+                    self.apply(&out.actions);
+                }
             }
         }
         // The interaction chooser: a talk candidate claims Square before the doors.
@@ -12980,7 +12920,7 @@ impl Play {
             let clip = anim.clip_state();
             let has = |id: u32| anim.has(id);
             // The enemy's speed (SPEC-0038 sequencer state 7's stuck test): how far it actually
-            // moved last tick, after the navmesh confinement (R-0252; this build's reading). The
+            // moved last tick, after the navmesh confinement (SPEC-0038 state 7, R-0252). The
             // clip's root step kept a charge pressed against the basin wall "moving" for good
             // (user's report 51).
             let speed = wk.last_step;
@@ -15289,15 +15229,14 @@ impl Play {
                 let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
                 c.facing = neopets_sim::hero::steer(c.facing, to, w);
             }
-            // SPEC-0011 Movement goals, pack 1174 (the escape): a sister holds a goal for 240 to 360
-            // ticks, then seeks a new one: a centroid of the current section's mesh more than 10
-            // from the hero; reaching within 2 of a sought goal starts a new hold; body contact (the
-            // blocked word) ends a hold. When the section changes, a goal off the new section's mesh
-            // is replaced at once (this build's reading, R-0262: the spec's "goal update only when her
-            // nearest mesh is the section mesh" would strand her in the old section). She moves by
-            // the route table of mesh 0, which covers every section. The retreat from a hero within
-            // 5 (the avoid point) is the sim's and is left alone (user's report 79 and 81: the
-            // sisters stayed in the first room).
+            // SPEC-0011 Movement goals, pack 1174 (the escape; R-0262): while a sister is not inside
+            // the selected section's mesh, her route mesh is mesh 0 (which covers the gaps between
+            // sections) and her goal is the hero's current position, every tick. Once inside, the
+            // usual rules run with the goal she has: this build's hold of 240 to 360 ticks, then a
+            // seek to a centroid of the section mesh more than 10 from the hero; reaching within 2
+            // of a sought goal starts a new hold; body contact (the blocked word) ends a hold. A
+            // goal off her current mesh gives no step that tick and is replaced (Medium-High). The
+            // retreat from a hero within 5 (the avoid point) is the sim's and is left alone.
             let mut travel = act.travel;
             if pack == 1174 && c.sister.as_ref().is_some_and(|s| s.alternate && s.avoid.is_none()) {
                 let meshes = &self.world.navmeshes;
@@ -15305,12 +15244,16 @@ impl Play {
                 let rng = &mut self.rng;
                 let g = self.escape_goals.entry(c.id).or_insert_with(|| (c.position, rng.range(240, 360), false));
                 let draw = |rng: &mut neopets_sim::rng::Rng| sec.and_then(|k| meshes[k].far_centroid(hero, 10.0, rng));
-                let on_section = sec.is_some_and(|k| meshes[k].first_holding(g.0).is_some());
+                let inside = sec.is_some_and(|k| meshes[k].first_holding(c.position).is_some());
                 let near = |a: [f32; 3], b: [f32; 3]| (a[0] - b[0]).hypot(a[2] - b[2]);
-                if !on_section {
+                let mut skip = false;
+                if !inside {
+                    *g = (hero, g.1, true);
+                } else if sec.is_some_and(|k| meshes[k].first_holding(g.0).is_none()) {
                     if let Some(n) = draw(rng) {
-                        *g = (n, g.1, true);
+                        g.0 = n;
                     }
+                    skip = true;
                 } else if g.2 {
                     if near(c.position, g.0) < 2.0 {
                         if let Some(n) = draw(rng) {
@@ -15325,6 +15268,9 @@ impl Play {
                             *g = (n, 0, true);
                         }
                     }
+                }
+                if skip {
+                    travel = None;
                 }
                 let goal = g.0;
                 travel = match travel {
@@ -17141,12 +17087,15 @@ impl Play {
 
     /// Diagnostic: the frame records of the cell at (x, z) whose plane lies within r of the point.
     pub fn frames_near(&self, x: f32, z: f32, r: f32) -> Vec<String> {
-        let Some(g) = self.world.ground.as_ref() else { return Vec::new() };
-        g.frames_at(x, z)
+        if self.world.ground.is_none() {
+            return Vec::new();
+        }
+        self.world
+            .edge_frames(x, z)
             .into_iter()
             .filter_map(|f| {
                 let d = (f.face[0] * x + f.face[2] * z + f.face[3]).abs();
-                (d <= r).then(|| format!("FRAME type {} gate {:#x} start {:.1?} face {:.2?} top {:.2?} length {:.1} height {:.1} (plane distance {d:.2})", f.kind, f.gate, f.start, f.face, f.top, f.length, f.height))
+                (d <= r).then(|| format!("FRAME type {} patch {} gate {:#x} start {:.2?} face {:.2?} top {:.2?} length {:.2} height {:.2} (plane distance {d:.2})", f.kind, f.patch, f.gate, f.start, f.face, f.top, f.length, f.height))
             })
             .chain(self.world.solids.iter().filter(|v| {
                 let c = match v.shape {
@@ -17493,7 +17442,6 @@ impl Play {
             let f = self.loco.facing;
             let at = [p[0] - 8.0 * f[0], p[1] + 1.0, p[2] - 8.0 * f[2]];
             self.loco.teleport(at, f);
-            self.door_armed = false;
             self.diag_break_attack(i);
         }
     }
@@ -18957,7 +18905,6 @@ impl Play {
         let offset = state.1.accumulator;
         if let Some((at, f, dy)) = warp {
             self.loco.teleport(at, f);
-            self.door_armed = false;
             self.camera.eye[1] += dy;
             self.camera.focus[1] += dy;
         }
@@ -19773,17 +19720,16 @@ fn followed(loco: &Locomotion, world: &World) -> Followed {
 /// (Medium). Moving objects, cylinders, planes and characters are not pushed against yet.
 /// SPEC-0027 Line-of-sight timer: the line from the eye to the focus is blocked by "the world
 /// segment test or the camera visibility test". The segment test is the frame-record query of
-/// SPEC-0018; the visibility test is not described past its flag, so this build's reading is
-/// that it also sees the push boxes the eye pass uses (cell list A kinds 4 and 7), skipping a box
-/// that holds either end (R-0256). Without the boxes a camera dropped behind the door pillars of
-/// pack 1098's entrance by the arrival placement never counted as blocked and stayed outside
-/// (user's report 59).
+/// SPEC-0018; the visibility test (SPEC-0027, R-0256) also crosses the cell's boxes (list A
+/// kinds 4 and 7 with thickness): a segment wholly inside a box crosses no face and is clear, one
+/// with an end inside crosses a face on its way out and is blocked. Not built from that test:
+/// the wall groups, the plate pool, spheres, cylinders, flat rectangles, characters and blocks.
 fn eye_line_clear(world: &World, a: [f32; 3], c: [f32; 3]) -> bool {
     if world.ground.as_ref().is_some_and(|g| !g.segment_clear(a, c, true)) {
         return false;
     }
     let inside = |p: [f32; 3], b: &BoxShape| segment_box(p, p, b.origin, b.axes, b.extents);
-    !world.boxes.iter().any(|b| !inside(a, b) && !inside(c, b) && segment_box(a, c, b.origin, b.axes, b.extents))
+    !world.boxes.iter().any(|b| !(inside(a, b) && inside(c, b)) && segment_box(a, c, b.origin, b.axes, b.extents))
 }
 
 fn push_eye(world: &World, e: &mut [f32; 3]) {

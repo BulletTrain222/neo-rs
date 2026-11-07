@@ -115,8 +115,8 @@ Each module section lists: family; init steps in order; each registered callback
 - Init: stores the world handle. Registers trigger index 1 with callback B1. If game-state flag 252 is clear, also registers trigger index 0 with callback M0 and calls SetWorldCollisMask(world, 1).
 - B1 (trigger 1): if the object is non-null and state is non-zero:
   - DisplaySquareButtonContext(context 3).
-  - If button 0 is pressed (IsButtonPressed(button 0, flag 1, extra 0)), then LevelMsg(line 3, world, wait 1).
-- M0 (trigger 0): if the object is non-null and state is exactly 1, and flag 252 is still clear: LevelMsg(line 5, world, wait 1).
+  - If button 0 is pressed (IsButtonPressed(button 0, flag 1, extra 0)), then LevelMsg(line 3, world, flag 1, wait 1).
+- M0 (trigger 0): if the object is non-null and state is exactly 1, and flag 252 is still clear: LevelMsg(line 5, world, flag 1, wait 1).
 - Update and exit: nothing.
 - Confidence: High.
 - Edge: M0 does not set any flag; it can repeat each time the trigger fires while flag 252 is clear.
@@ -129,7 +129,7 @@ Each module section lists: family; init steps in order; each registered callback
 - If it were run with world W, it would do the following in order:
   - If flag 58 is set: SlotLoad(W, slot, set 1, keep 1, activate 1), with debug lines before and after.
   - Else if flag 57 is set: SlotLoad(W, slot, set 2, keep 1, activate 1), with debug lines.
-  - Else if flag 53 is set: SlotLoad(W, slot, set 0, keep 1, activate 1).
+  - Else if flag 53 is set: SlotLoad(W, slot, set 0, keep 1, activate 1), with debug lines before and after.
   - Else: print a debug line and load nothing.
 - Edge: the slot word the chooser reads has the file value -1, and no reachable part of the module writes a slot-create result into it. Each load would therefore do nothing in the original (Slot rules). The three loads sit in the module's first routine, which no named export or callback starts (Open). The fifth argument of each load is 1.
 - Confidence: High that nothing in the module calls it; High for the chooser rules.
@@ -175,7 +175,7 @@ Each module section lists: family; init steps in order; each registered callback
   - If the object is non-null but state is not 1: ReturnToNormalCamera(2, flag 1) as well.
 - Update and exit: nothing.
 - Edge cases: none (the value is 2 on every path).
-- Confidence: High for the entered sequence; Medium for the calls on the other paths.
+- Confidence: High for the entered sequence and for the calls on the other paths.
 
 ### 1055: Transition, world swap with two paths
 
@@ -199,7 +199,7 @@ Each module section lists: family; init steps in order; each registered callback
     6. WalkHero(locator 0, wait 1, control 1).
     7. Sleep(60 frames).
 - Update and exit: nothing.
-- Confidence: High for the first path; Medium for the second (its arguments mirror those of the first path).
+- Confidence: High for both paths (the second path uses locator 3, camera mode 5 and a walk to locator 0, with the same flags as the first).
 
 ### 1170: Interior, return trigger, teleport and blackboard-driven arrival
 
@@ -368,7 +368,7 @@ Each module section lists: family; init steps in order; each registered callback
 6. Resolved: the three codes are compared inside world-swap scene callbacks (registered by the transition packs 797, 908, 1055 and 1254), and those callbacks run only when a script starts a transition scene. No live script call does that, so the callbacks never run and the codes 1253, 753 and 1098 are never delivered in play (High; SPEC-0030 rows 268, 273 and 283). The numbers look like world-pack numbers (1098 is an exterior pack, 1253 sits next to the transition pack 1254), and the 1253 branch of pack 1254 reads as a sinkhole fall (hero to locator 0, camera 6, hero animation 136), but this is moot while the callbacks are unreachable (Medium).
 7. Module 851: Resolved (proactive (open close-out); Medium-High): no host path starts its chooser. The host runs only the load hook (whose start list is empty), the family Init, Update and Exit, and the callbacks and threads those register (SPEC-0030, Which level routines run in play); none of them reaches the routine that holds the three loads, so it is dead code and the no-op verdict stands. The intended slot id is not encoded anywhere (unknowable; the word is never stored).
 8. Resolved for quest flags: a flag that is a quest row's start or done flag takes that row's title (SPEC-0049 "Titles and flag glosses"). 259 = start Repair Brightvale Bridge; 265 = done Repair Brightvale Bridge; 273 = done Get Illusen's Charm; 481 = start A Magic Skull; 482 = done/start A Magic Skull; 516 = start Mayor's Broken Watch; 517 = done/start Mayor's Broken Watch (High). The other flags used here (e.g. 39, 53, 57, 58, 220, 258, 266, 274, 659) are not quest start or done flags and have no name source on disc.
-9. Module 1080: ReturnToNormalCamera gets 2 on every path.
+9. Resolved: module 1080 passes 2 to ReturnToNormalCamera on all three paths (object null, state not 1, entered); the value is set on every path, so no stale argument is involved (High).
 10. Resolved: transition map ids are map-area ids, the name the map page shows, not world ids (SPEC-0051 "Map area names"). 43 = Ruined Caves; 54 = Oubliette; 5 = Werelupe Burrows Upper; 7 = Werelupe Burrows Lower (High).
 11. SlotCreate's return value is the slot number of the buffer it reserves, in creation order, or -1 when no buffer is left (Slot rules). The call path does not remap -1 (High). A load through a slot word (file value -1) does nothing only where no reachable part of the module writes a slot-create result into that word (module 851, dormant). This also answers SPEC-0037 open question 1.
 12. The fifth argument of SlotLoad (activate) is 1 in every pilot load.

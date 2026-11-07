@@ -259,6 +259,7 @@ A slot is empty when key A (0x024) is -1. An empty slot is built as follows (the
 
 | Offset | Value |
 | --- | --- |
+| 0x000 and 0x010 | the four floats (0, 0, 0, 1.0) each, so the w float of vector A (0x00C) and of vector B (0x01C) holds 1.0 (0x3F800000), not 0 |
 | 0x020 | 0 (u32) |
 | 0x024, 0x028, 0x02C | -1 (s32 each) |
 | 0x200, 0x204 | 0 (u32 each) |
@@ -271,7 +272,7 @@ A slot is empty when key A (0x024) is -1. An empty slot is built as follows (the
 | 0x30A4 to 0x30BB | -1 (s32 each, all 6 values) |
 | 0x30BC, 0x30C0 | 0 (u32 each) |
 
-Everything else is zero, including the progress bitmap (0x030 to 0x08C), the options block (0x3084 to 0x30A3; the defaults question is Open question 76), the item containers, the 191-byte count table and both per-world tables. The save writer does not use this template: it rebuilds one slot from live state. The template is used to fill the slots at start-up and before each card scan.
+Everything else is zero (a rewrite that stores a zero w in the two vectors differs from the original only in an empty slot, whose vectors are never read), including the progress bitmap (0x030 to 0x08C), the options block (0x3084 to 0x30A3; the defaults question is Open question 76), the item containers, the 191-byte count table and both per-world tables. The save writer does not use this template: it rebuilds one slot from live state. The template is used to fill the slots at start-up and before each card scan.
 
 ### Validity rules (no checksum)
 
@@ -863,7 +864,7 @@ An import reads an original card's `savegame.01` (0xC400 bytes) from the card di
 - Slot index: index 3 is accepted (slot at 0x9300). Index 4 is refused: no copy, no world change.
 - Card wait and query result: with a card request still pending, the wait helper returns 0 and the job stays in its state. Once complete, the helper returns nonzero and places the operation result in its output. For the dormant query operation only, output 0 selects failure (no retry, no message); output 1 or another nonzero value selects completion. The external meaning of nonzero remains unknown.
 - Card rules, synthetic: no card gives record 4 in the save scan and record 13 in the load scan, and no write; an unformatted card gives the format offer in the save scan and record 11 in the load scan; directory present gives the 0x88-byte block (136 bytes); directory missing gives the 0x110-byte block (272 bytes) after the directory is created.
-- Empty template, bytes 0x024 to 0x02F: all 0xFF (three -1 keys). Bytes 0x2F6F to 0x2F74: `E m p t y` then 0x00. Byte 0x2FAB: 0x20.
+- Empty template, the floats at 0x00C and 0x01C are 1.0; the other bytes of 0x000 to 0x01F are 0. Bytes 0x024 to 0x02F: all 0xFF (three -1 keys). Bytes 0x2F6F to 0x2F74: `E m p t y` then 0x00. Byte 0x2FAB: 0x20.
 - Hero 1 status timers start at 0x8A8. That is hero 0 status timers (0x870) plus one 56-byte block (0x38).
 - Unlabelled option handlers (synthetic): with +0x0C = 0, Left gives 2; with +0x0C = 2, Right gives 0; with +0x0C = 1, Right gives 2. For +0x10, a held Left or Right changes 0 to 1 and 1 to 0.
 - Progress flags: a slot with byte 41 set to 0x10 has flag 332 set and no other flag in that byte. Flag 332 tests as set; flag 333 tests as clear.
