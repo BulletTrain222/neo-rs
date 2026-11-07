@@ -73,6 +73,12 @@ fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         format!("{} parts, y {lo:.2} to {hi:.2}", m.parts.len())
     };
     println!("Effect child chunks: {}", table.child_chunks.len());
+    // SPEC-0004 Which models carry animated materials: 4 of the 38 container models scroll
+    // (roles 2, 30, 31 and 33) and 9 of the 50 children use scrolled or flipbook materials.
+    let animated = |m: &neopets_data::model::ModelData| m.parts.iter().any(|p| p.scroll.is_some() || p.flipbook.is_some());
+    let roles: Vec<u16> = (0..38u16).filter(|&r| neopets_data::model::build_roles(&bytes, &chain.chunks, None, Some(&[r])).is_ok_and(|m| animated(&m))).collect();
+    let kids: Vec<usize> = (0..table.child_chunks.len()).filter(|&k| neopets_data::model::build_child(&bytes, &chain.chunks, range.start + table.child_chunks[k]).is_ok_and(|m| animated(&m))).collect();
+    println!("Animated effect models: container roles {roles:?}; child chunks {kids:?}");
     for k in [8usize, 9] {
         let child = table.child_chunks.get(k).map(|&o| neopets_data::model::build_child(&bytes, &chain.chunks, range.start + o).map(|m| size(&m)));
         let role = neopets_data::model::build_roles(&bytes, &chain.chunks, None, Some(&[k as u16])).map(|m| size(&m));
@@ -2961,14 +2967,17 @@ fn sync_uv_flip(state: Option<Res<PlayState>>, parts: Query<(&UvFlip, &MeshMater
 struct UvScroll([f32; 2]);
 
 /// Each frame: a scrolling part's UV offset is frac(s x N) per axis, N the 16-bit pass counter
-/// (the play tick).
-fn sync_uv_scroll(state: Option<Res<PlayState>>, parts: Query<(&UvScroll, &MeshMaterial3d<StandardMaterial>)>, mut materials: ResMut<Assets<StandardMaterial>>) {
+/// at 60 passes a second of real time: the scroll never reads game time, so it runs on during a
+/// pause or a cutscene and does not slow with a time scale (SPEC-0003, Speed per second).
+fn sync_uv_scroll(state: Option<Res<PlayState>>, time: Res<Time<bevy::time::Real>>, parts: Query<(&UvScroll, &MeshMaterial3d<StandardMaterial>)>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let _span = crate::perf::span("sync_uv_scroll");
     if std::env::var_os("NEOPETS_PERF_NOSCROLL").is_some() {
         return;
     }
-    let Some(state) = state else { return };
-    let n = state.play.ticks as u16;
+    if state.is_none() {
+        return;
+    }
+    let n = (time.elapsed_secs_f64() * 60.0) as u64 as u16;
     for (s, m) in &parts {
         let off = Vec2::new(neopets_data::material::scroll_offset(s.0[0], n), neopets_data::material::scroll_offset(s.0[1], n));
         let want = bevy::math::Affine2::from_translation(off);
@@ -3872,7 +3881,7 @@ fn sync_effect_models(
         let parts = part_assets(m, &mut meshes, &mut materials, &mut images);
         let mut handles = Vec::new();
         let mut children = Vec::new();
-        for (_, mesh, material) in parts {
+        for (i, mesh, material) in parts {
             let mut own = materials.get(&material).cloned().unwrap_or_default();
             own.unlit = true;
             own.cull_mode = None;
@@ -3881,11 +3890,20 @@ fn sync_effect_models(
             }
             let h = materials.add(own);
             handles.push(h.clone());
-            children.push((mesh, h));
+            // SPEC-0003 Effect model particles: an effect model's scrolled or flipbook material
+            // runs like any mesh's (the lightning columns, bolts and the flame sheet).
+            let anim = (m.parts[i].scroll.filter(|_| m.parts[i].texture.is_some()), m.parts[i].flipbook);
+            children.push((mesh, h, anim));
         }
         commands.spawn((EffectModelRoot(model, slot, handles), Transform::IDENTITY, Visibility::Hidden)).with_children(|c| {
-            for (mesh, h) in children {
-                c.spawn((Mesh3d(mesh), MeshMaterial3d(h), Transform::IDENTITY, bevy::light::NotShadowCaster));
+            for (mesh, h, (scroll, flip)) in children {
+                let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(h), Transform::IDENTITY, bevy::light::NotShadowCaster));
+                if let Some(s) = scroll {
+                    e.insert(UvScroll(s));
+                }
+                if let Some(f) = flip {
+                    e.insert(UvFlip(f));
+                }
             }
         });
     }
@@ -4421,11 +4439,14 @@ pub(crate) fn part_assets(
             };
             // A scrolling part (level water, SPEC-0046) has its own blended material, whose UV
             // offset moves every frame.
+            // An additive pass (the effect lightning and bolts, SPEC-0003 Effect model particles)
+            // keeps its additive blend while it scrolls.
+            let scroll_adds = part.alpha.is_some() && crate::pass1::blend_of(part.alpha).0 < 2;
             let scrolling = match (part.scroll, part.texture) {
                 (Some(_), Some(t)) => Some(materials.add(StandardMaterial {
                     base_color_texture: Some(images.add(model_texture(&m.textures[t]))),
                     unlit: true,
-                    alpha_mode: AlphaMode::Blend,
+                    alpha_mode: if scroll_adds { AlphaMode::Add } else { AlphaMode::Blend },
                     cull_mode: None,
                     ..default()
                 })),
