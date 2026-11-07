@@ -87,6 +87,17 @@ fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     // spawners and particles live after each tick count.
     // NEOPETS_FX_IDS="a,b,...": more effect ids to run the same way (diagnostic).
     let extra: Vec<i32> = std::env::var("NEOPETS_FX_IDS").map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default();
+    // NEOPETS_FX_IDS also dumps each extra definition's gates and emitters (diagnostic).
+    for &id in &extra {
+        let Some(d) = table.find(id) else { continue };
+        let def = &table.definitions[d];
+        println!("  definition {id}: threshold {} cull {} cone {} multi {} scale {}", def.threshold, def.cull, def.cone, def.multi, def.scale);
+        for &n in &def.nodes {
+            let node = &table.nodes[n];
+            let a = &table.a[node.a];
+            println!("    node {n}: gate {} size {:?} per_burst {} period {} cycles {} life {} looped {} material {:?} child {} factors {:?} ring {} fill {} preset {} birth {} transform {:?} c {:?}", a.gate, a.size, a.per_burst, a.period, a.cycles, a.life, a.looped, node.material, node.child, node.factors, node.ring, node.ring_fill, node.preset, a.birth_mode, node.transform, table.c[node.c]);
+        }
+    }
     for id in [0xFA2, 0xFA3].into_iter().chain(extra) {
         let mut fx = Effects::new();
         let h = fx.add_object(EffectObject::new(&table, id, [0.0; 3], IDENTITY));
