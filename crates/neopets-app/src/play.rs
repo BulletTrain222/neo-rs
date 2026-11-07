@@ -164,6 +164,9 @@ pub struct World {
     /// The solid volumes (flag bit 0; SPEC-0028 Blade recoil, SPEC-0036 World contact), each
     /// with its gate mask; the users test the current collision mask.
     pub solids: Vec<neopets_sim::trigger::Volume>,
+    /// Every list-A primitive of kinds 1, 3, 4 and 7, for the camera's line-of-sight sweep
+    /// (SPEC-0027; its class and mask gates are applied there).
+    camera_prims: Vec<neopets_sim::trigger::Volume>,
     routines: HashMap<u16, u8>,
     /// Script-group type registrations: trigger index to its owner group (SPEC-0048 Script
     /// groups, type registration); a later RegisterTrigger on the index replaces it.
@@ -277,6 +280,7 @@ impl World {
             all_volumes: Vec::new(),
             shot_volumes: Vec::new(),
             solids: Vec::new(),
+            camera_prims: Vec::new(),
             routines: HashMap::new(),
             group_routes: HashMap::new(),
             disabled_triggers: Default::default(),
@@ -376,6 +380,7 @@ impl World {
             all_volumes: Vec::new(),
             shot_volumes: Vec::new(),
             solids: Vec::new(),
+            camera_prims: Vec::new(),
             routines: HashMap::new(),
             group_routes: HashMap::new(),
             disabled_triggers: Default::default(),
@@ -467,6 +472,7 @@ impl World {
             })
             .collect();
         world.solids = all.iter().map(|(v, _)| *v).filter(|v| v.solid(0xFFFF)).collect();
+        world.camera_prims = all.iter().map(|(v, _)| *v).filter(|v| matches!(v.kind, 1 | 3 | 4 | 7)).collect();
         world.volumes = all.into_iter().map(|(v, _)| v).filter(|v| v.fires_on_contact(0xFFFF) || v.fires_on_shot(0xFFFF)).collect();
         world.all_volumes = world.volumes.clone();
         // SPEC-0048 Source and Placement: each n1 entry with a bit-1 box is a block, placed on
@@ -19886,14 +19892,57 @@ fn followed(loco: &Locomotion, world: &World) -> Followed {
 /// segment test or the camera visibility test". The segment test is the frame-record query of
 /// SPEC-0018; the visibility test (SPEC-0027, R-0256) also crosses the cell's boxes (list A
 /// kinds 4 and 7 with thickness): a segment wholly inside a box crosses no face and is clear, one
-/// with an end inside crosses a face on its way out and is blocked. Not built from that test:
-/// the wall groups, the plate pool, spheres, cylinders, flat rectangles, characters and blocks.
+/// with an end inside crosses a face on its way out and is blocked. The list-A primitives under
+/// the mask gate also block by class: spheres (class bit 0 or 1, not 2) and cylinders (bit 0 or
+/// 4, not 5, within 50 of the camera) as horizontal circles, where one end inside blocks and
+/// both inside is clear, and flat rectangles (bit 0 or 5) as two-sided crossings. This build
+/// tests every primitive, not only those of the camera's grid cell. Not built: the wall groups,
+/// the plate pool, characters and movable blocks.
 fn eye_line_clear(world: &World, a: [f32; 3], c: [f32; 3]) -> bool {
     if world.ground.as_ref().is_some_and(|g| !g.segment_clear(a, c, true)) {
         return false;
     }
     let inside = |p: [f32; 3], b: &BoxShape| segment_box(p, p, b.origin, b.axes, b.extents);
-    !world.boxes.iter().any(|b| !(inside(a, b) && inside(c, b)) && segment_box(a, c, b.origin, b.axes, b.extents))
+    if world.boxes.iter().any(|b| !(inside(a, b) && inside(c, b)) && segment_box(a, c, b.origin, b.axes, b.extents)) {
+        return false;
+    }
+    // The segment against a horizontal circle (height ignored).
+    let circle = |q: [f32; 3], r: f32| -> bool {
+        let d2 = |p: [f32; 3]| (p[0] - q[0]).powi(2) + (p[2] - q[2]).powi(2);
+        let (ia, ic) = (d2(a) < r * r, d2(c) < r * r);
+        if ia || ic {
+            return ia != ic;
+        }
+        let (dx, dz) = (c[0] - a[0], c[2] - a[2]);
+        let l2 = dx * dx + dz * dz;
+        let t = if l2 > 1e-9 { (((q[0] - a[0]) * dx + (q[2] - a[2]) * dz) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        d2([a[0] + t * dx, 0.0, a[2] + t * dz]) < r * r
+    };
+    let dot = |u: [f32; 3], v: [f32; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    let mask = world.collis_mask;
+    !world.camera_prims.iter().filter(|v| v.mask == 0 || v.mask & mask != 0).any(|v| {
+        let f = v.flags;
+        match v.shape {
+            neopets_sim::trigger::Shape::Sphere { centre, radius } if v.kind == 1 => f & 0b11 != 0 && f & 0b100 == 0 && circle(centre, radius),
+            neopets_sim::trigger::Shape::Cylinder { base, radius, .. } if v.kind == 3 => f & 0b1_0001 != 0 && f & 0b10_0000 == 0 && (base[0] - a[0]).hypot(base[2] - a[2]) < 50.0 && circle(base, radius),
+            neopets_sim::trigger::Shape::Rectangle { origin, axes, extents } if matches!(v.kind, 4 | 7) && extents[2] <= 0.0 => {
+                if f & 0b10_0001 == 0 {
+                    return false;
+                }
+                let n = axes[2];
+                let rel = |p: [f32; 3]| [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]];
+                let (s0, s1) = (dot(n, rel(a)), dot(n, rel(c)));
+                if s0 * s1 >= 0.0 {
+                    return false;
+                }
+                let k = s0 / (s0 - s1);
+                let p = rel([a[0] + (c[0] - a[0]) * k, a[1] + (c[1] - a[1]) * k, a[2] + (c[2] - a[2]) * k]);
+                let within = |u: f32, e: f32| u >= e.min(0.0) && u <= e.max(0.0);
+                within(dot(axes[0], p), extents[0]) && within(dot(axes[1], p), extents[1])
+            }
+            _ => false,
+        }
+    })
 }
 
 fn push_eye(world: &World, e: &mut [f32; 3]) {

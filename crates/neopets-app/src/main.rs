@@ -3916,12 +3916,20 @@ fn sync_effect_models(
         };
         set_if(&mut t, Transform::from_matrix(m));
         set_if(&mut vis, Visibility::Visible);
-        // SPEC-0034 4.7 and step 7: colour channel 1 is a GS modulation in gamma space (1.0 is
-        // neutral, trunc(c x 127) as a byte), so its RGB goes to linear like the vertex colours;
-        // taken as linear it drew every effect model about twice as bright, and the save point's
-        // overlapping ray copies glared (user's reports 66 and 69).
-        let g = |v: f32| v.clamp(0.0, 2.0).powf(2.2);
-        let colour = Color::linear_rgba(g(c[0]), g(c[1]), g(c[2]), c[3]);
+        // SPEC-0034 4.7 (SPEC-0046 draw colour scale): with r, g and b all within 0.49 to 0.51 no
+        // colour command is sent and the scale is (1, 1, 1, a'), a' = 0.008 + 0.992 x round(256 x
+        // clamp(a, 0.008, 1)) / 256; otherwise (2r, 2g, 2b, a), so 0.5 is neutral. The scale is
+        // in the GS's gamma space, so the RGB goes to linear like the vertex colours. (Before the
+        // child-chunk models were drawn, the wrong save point models glared and this build used
+        // c^2.2; reports 66, 69 and 94.)
+        let neutral = c[..3].iter().all(|v| (0.49..=0.51).contains(v));
+        let colour = if neutral {
+            let a = 0.008 + 0.992 * (256.0 * c[3].clamp(0.008, 1.0)).round() / 256.0;
+            Color::linear_rgba(1.0, 1.0, 1.0, a)
+        } else {
+            let g = |v: f32| (2.0 * v.clamp(0.0, 2.0)).powf(2.2);
+            Color::linear_rgba(g(c[0]), g(c[1]), g(c[2]), c[3])
+        };
         for h in &root.2 {
             if materials.get(h).is_some_and(|mat| mat.base_color != colour) {
                 if let Some(mut mat) = materials.get_mut(h) {
