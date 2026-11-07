@@ -1562,6 +1562,9 @@ pub struct Play {
     summon_owner: Option<u64>,
     /// The breakables' flying pieces (SPEC-0048 Piece flight).
     pub debris: neopets_sim::debris::Pool,
+    /// The running breakable blasts (SPEC-0048 Break routes, blast chain): pack, centre,
+    /// radius, final radius and ticks left; at most ten.
+    blasts: Vec<(u32, [f32; 3], f32, f32, i32)>,
     /// The attacker's point while an attack contact breaks things.
     break_from: Option<[f32; 3]>,
     /// State 38: the type-10 record of the drop in progress.
@@ -2389,6 +2392,7 @@ impl Play {
             showcase_fx: None,
             drop_panel: None,
             debris: Default::default(),
+            blasts: Vec::new(),
             break_from: None,
             summon_owner: None,
             starlight: None,
@@ -3063,6 +3067,7 @@ impl Play {
     /// The current world's Init (a world loaded by a door job).
     fn run_init(&mut self) {
         self.kills_load(self.world.pack);
+        self.revive_broken();
         let mut init = level::on_init(self.world.pack, &mut self.state);
         init.extend(self.group_setup());
         self.apply(&init);
@@ -3160,6 +3165,7 @@ impl Play {
         if let Some(o) = self.other.take() {
             let current = std::mem::replace(&mut self.world, o);
             self.kills_load(self.world.pack);
+            self.revive_broken();
             let mut init = level::on_init(self.world.pack, &mut self.state);
             if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
                 println!("      Init of other world {}: {} actions", self.world.pack, init.len());
@@ -7169,6 +7175,27 @@ impl Play {
             return u16::try_from(ordinal).ok().filter(|&b| b < 256);
         }
         self.entity_of(pack, region, ordinal).and_then(|e| u16::try_from(e).ok()).filter(|&b| b < 256)
+    }
+
+    /// SPEC-0048 Start mode and reset: after the group set-up and before Init, every entry whose
+    /// persistent broken bit is set takes its start mode: 1 disabled, 2 intact with no drop,
+    /// anything else intact. So a switch-group chain broken to a later stage comes back with
+    /// those stages intact (the set-up had disabled them).
+    fn revive_broken(&mut self) {
+        let pack = self.world.pack;
+        let Some(row) = self.broken_sets.get(&pack).copied() else { return };
+        for b in &mut self.world.breakables {
+            if (0..128).contains(&b.script) && neopets_sim::save::bit_get(&row, b.script as usize) {
+                match b.start_mode {
+                    1 => b.state = 0,
+                    2 => {
+                        b.state = 1;
+                        b.drop = -1;
+                    }
+                    _ => b.state = 1,
+                }
+            }
+        }
     }
 
     /// A world load copies its row of the kill table into its live block, once while it stays
@@ -11968,6 +11995,7 @@ impl Play {
         self.wild_step();
         self.drop_refuse = (self.drop_refuse - 1).max(0);
         self.debris.step();
+        self.blast_step();
         self.chains_864();
         let (a, b) = (self.world.pack, self.other.as_ref().map(|o| o.pack));
         self.debris.retain_packs(|p| p == a || Some(p) == b);
@@ -17555,6 +17583,12 @@ impl Play {
         }
         let (at, drop, cue) = (b.position(), b.drop, break_cue(b.material));
         let (key, facing) = (b.spawn_key, unit([b.matrix[8], b.matrix[9], b.matrix[10]]));
+        // Step 5: a blast value above 0 starts a blast at the break position, when one of the
+        // world's ten blast slots is free (its visual effect is not known, Open question 11).
+        if b.break_float > 0 && self.blasts.len() < 10 {
+            let v = b.break_float as f32;
+            self.blasts.push((pack, at, 1.0, v, (v / 12.8 * 60.0) as i32));
+        }
         // Step 4: one emitter per piece record, from the entry's position and rows; an attack contact
         // pushes along the direction from the attacker to the entry (R-0187).
         let rows = [0, 4, 8].map(|k| [b.matrix[k], b.matrix[k + 1], b.matrix[k + 2]]);
@@ -17591,6 +17625,45 @@ impl Play {
         }
         if with_cue {
             self.cue(cue);
+        }
+    }
+
+    /// SPEC-0048 blast chain: each running blast grows its radius by 12.8 / 60 a tick up to its
+    /// final value, then offers every entry in state 1 or 3 strictly inside it to the chain
+    /// route, which breaks a state-1 entry whose blast value is above 0 (push 0, no cue; it may
+    /// start its own blast). A blast ends after int(V / 12.8 x 60) ticks.
+    fn blast_step(&mut self) {
+        let pack = self.world.pack;
+        let mut k = 0;
+        while k < self.blasts.len() {
+            let (p, centre, r, v, left) = self.blasts[k];
+            if p != pack {
+                self.blasts.remove(k);
+                continue;
+            }
+            let r = (r + 12.8 / 60.0).min(v);
+            self.blasts[k] = (p, centre, r, v, left - 1);
+            let hit: Vec<usize> = self
+                .world
+                .breakables
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.state == 1 && b.break_float > 0)
+                .filter(|(_, b)| {
+                    let q = b.position();
+                    ((q[0] - centre[0]).powi(2) + (q[1] - centre[1]).powi(2) + (q[2] - centre[2]).powi(2)).sqrt() < r
+                })
+                .map(|(i, _)| i)
+                .collect();
+            for i in hit {
+                self.break_from = None;
+                self.break_one_with(i, false);
+            }
+            if left - 1 <= 0 {
+                self.blasts.remove(k);
+            } else {
+                k += 1;
+            }
         }
     }
 

@@ -16912,7 +16912,9 @@ pub fn block_sound(pack: u32) -> Option<i32> {
 /// breaks on its next hit, with nothing else marked: this build's choice for those saves.
 pub fn on_breakable(pack: u32, script: i16, id: usize, open: bool, s: &mut GameState) -> Option<Vec<Action>> {
     match (pack, script) {
-        (735, 4..=31) | (1174, 3..=10) => Some(Vec::new()),
+        // SPEC-0048 Level-script breakables: the do-nothing hooks of 735 (4 to 31), 1174 (3 to
+        // 10) and 1081 (entry 0, broken only by its story scene) swallow every hit.
+        (735, 4..=31) | (1174, 3..=10) | (1081, 0) => Some(Vec::new()),
         (1056, 24 | 27 | 30 | 33 | 36) => {
             let flag = 625 + (script as u16 - 24) / 3;
             if !open || !s.flag(174) {
