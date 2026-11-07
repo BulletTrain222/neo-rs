@@ -14066,8 +14066,12 @@ impl Play {
         let Some(it) = self.pools.get(&pack).and_then(|pool| pool.slots[i]) else { return };
         let coin = neopets_sim::items::is_coin(it.id);
         let state = self.loco.state;
-        // SPEC-0021 Auto-collect step 4: only these four states refuse a non-coin.
-        if !coin && matches!(state, 0x19 | 0x21 | 0x33 | 0x37) {
+        // SPEC-0021 Auto-collect step 3: an item that is neither a coin nor a Mote is refused
+        // while the hero is occupied: an action state of 7 to 0x13, 0x15, 0x17 to 0x1E, 0x21,
+        // 0x23, 0x25, 0x26, 0x29 or 0x2B to 0x3C, the stun status, or a screen fade.
+        let mote = (160..=173).contains(&it.id);
+        let occupied = matches!(state, 7..=0x13 | 0x15 | 0x17..=0x1E | 0x21 | 0x23 | 0x25 | 0x26 | 0x29 | 0x2B..=0x3C) || self.statuses.active(0) || self.fade.moving();
+        if !coin && !mote && occupied {
             return;
         }
         if it.id >= 191 && !it.charm {
