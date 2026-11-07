@@ -435,11 +435,14 @@ pub struct EffectObject {
     pub slots: [Option<usize>; 5],
     /// A placed record's own cull (squared), used instead of the definition's.
     pub cull: Option<f32>,
+    /// A placed record's own motion scale S (+0x80), used instead of the definition's
+    /// (SPEC-0034 section 6, R-0267).
+    pub scale: Option<f32>,
 }
 
 impl EffectObject {
     pub fn new(table: &EffectTable, id: i32, position: V3, frame: Frame) -> Self {
-        Self { def: table.find(id), position, frame, state: 0, slots: [None; 5], cull: None }
+        Self { def: table.find(id), position, frame, state: 0, slots: [None; 5], cull: None, scale: None }
     }
 
     pub fn live(&self) -> bool {
@@ -601,7 +604,7 @@ impl Effects {
                 target: position,
                 delta: [0.0; 3],
                 velocity: [0.0; 3],
-                scale: d.scale,
+                scale: o.scale.unwrap_or(d.scale),
                 last_born: None,
                 owner: if keep { handle } else { None },
             });

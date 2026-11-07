@@ -17910,6 +17910,11 @@ impl Play {
         if r.cull > 0.0 || r.cull == -1.0 {
             o.cull = Some(r.cull);
         }
+        // SPEC-0034 section 6 (R-0267): the record's own scale S multiplies its sprites and its
+        // particles' travel (the 1174 doorway fires use 3.0; user's reports 83, 85 and 88).
+        if r.scale.is_finite() && r.scale > 0.0 {
+            o.scale = Some(r.scale);
+        }
         let h = self.effects.add_object(o);
         self.placed_fx.insert((pack, slot), h);
         Some(h)

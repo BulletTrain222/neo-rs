@@ -14522,6 +14522,14 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.extend([Action::InitObjOn { obj: 13, end: false }, Action::InitObjOn { obj: 14, end: false }, Action::DeactivateObj { obj: 15 }, Action::DeactivateObj { obj: 16 }]);
             v.push(mask_1174(state, 1, 0));
             v.extend(gates_1174(state, false));
+            // Every barrier group starts lowered (its effects stopped, its object off) and the
+            // barrier's rubble record (placed effect 4) is stopped, so it plays only at hit 2
+            // (SPEC-0044 1174 Barrier groups and Two-hit object, R-0267 and R-0268; user's
+            // reports 88 and 89: the fire and the rubble showed from the load).
+            for g in 0..BARRIERS_1174.len() {
+                v.extend(barrier_1174(state, g, false));
+            }
+            v.push(Action::StopEffect { slot: 4 });
             state.set_word(1174, 177, 0);
             state.act1_indices = [-1; 4];
             section_1174(state, 0);

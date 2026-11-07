@@ -49,6 +49,8 @@ pub struct Placed {
     pub id: i32,
     pub zone: u32,
     pub cull: f32,
+    /// The per-placement motion scale S (+0x80; SPEC-0028 section 4, SPEC-0034 section 6).
+    pub scale: f32,
 }
 
 /// The placed-effect records of a walked world pack chain, in slot order (a u32 count at +0,
@@ -63,7 +65,7 @@ pub fn placed(bytes: &[u8], chain: &[crate::resource::Chunk]) -> Vec<Placed> {
         .map_while(|i| {
             let r = 0x10 + 0x90 * i;
             let v = |at: usize| Some([f(r + at)?, f(r + at + 4)?, f(r + at + 8)?]);
-            Some(Placed { frame: [v(0)?, v(0x10)?, v(0x20)?], position: v(0x30)?, id: u(r + 0x40)? as i32, zone: u(r + 0x44)?, cull: f(r + 0x84)? })
+            Some(Placed { frame: [v(0)?, v(0x10)?, v(0x20)?], position: v(0x30)?, id: u(r + 0x40)? as i32, zone: u(r + 0x44)?, cull: f(r + 0x84)?, scale: f(r + 0x80).unwrap_or(1.0) })
         })
         .collect()
 }
