@@ -6335,7 +6335,12 @@ impl Play {
             }
         }
         if !matches!(self.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE | ledge::DROP) {
-            self.ledge = None;
+            // Left the hang by another route (a hit's hurt state, a knock): the ledge's
+            // no-gravity word goes too, as the character update clears it every tick (SPEC-0040;
+            // user's reports 90 to 92: hit while hanging, the hero floated up for good).
+            if self.ledge.take().is_some() {
+                self.loco.body.no_gravity = false;
+            }
             self.loco.body.no_snap = false;
             if (1..=4).contains(&self.loco.state) && !self.drop_check() {
                 return false;
