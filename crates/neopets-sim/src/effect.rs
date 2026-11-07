@@ -131,11 +131,18 @@ pub struct EffectTable {
     pub b: Vec<RecordB>,
     pub c: Vec<RecordC>,
     pub children: usize,
+    /// Where each child chunk (type 12) starts, from the payload start (2.1 step 1: each offset
+    /// is relative to its own table entry).
+    pub child_chunks: Vec<usize>,
 }
 
 fn align16(v: usize) -> usize {
     (v + 15) & !15
 }
+
+/// The model code of child chunk k is CHILD_MODEL + k (`Effects::models`); lower codes are
+/// resource-9 models (common objects 283 and up).
+pub const CHILD_MODEL: u16 = 100;
 
 impl EffectTable {
     /// Parse a type-34 chunk payload (2.1): six counts, then A, B and C, the child offset
@@ -248,7 +255,8 @@ impl EffectTable {
         if nodes.iter().any(|n| n.a >= a.len() || n.b >= b.len() || n.c >= c.len()) {
             return Err("Effect table: a node names a record out of range".into());
         }
-        Ok(Self { definitions, nodes, a, b, c, children })
+        let child_chunks = (0..children).filter_map(|i| i32_at(p, child_at + 4 * i).and_then(|o| usize::try_from(child_at as i64 + 4 * i as i64 + o as i64).ok())).collect();
+        Ok(Self { definitions, nodes, a, b, c, children, child_chunks })
     }
 
     /// The first definition with this id (2.7).
@@ -917,10 +925,14 @@ impl Effects {
             if table.a[node.a].light || node.material.is_some() {
                 return None;
             }
+            // A low child byte names common object byte + 283, which is resource-9 model byte;
+            // a byte of 0x80 or more names the group's own child chunk +0x60 (0 to 49), returned
+            // as CHILD_MODEL + k (2.1 step 3, Resolved 148: the save point's rays are child
+            // chunks 8 and 9, not resource-9 models 8 and 9).
             let model = match node.child_gate {
                 g @ 0..=0x27 => g as u16,
                 0x28..=0x7F => return None,
-                _ => u16::try_from(node.child).ok().filter(|&c| c <= 49)?,
+                _ => CHILD_MODEL + u16::try_from(node.child).ok().filter(|&c| c <= 49)?,
             };
             let c = &table.c[node.c];
             Some((model, p.position, p.draw_frame(c.orient, c.spin_axis), p.colour))
@@ -1074,6 +1086,7 @@ mod tests {
                 flag: 1,
             }],
             children: 0,
+            child_chunks: Vec::new(),
         }
     }
 

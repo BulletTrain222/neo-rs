@@ -64,7 +64,20 @@ fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     let bytes = index.read(disc, neopets_data::effect::RESOURCE)?;
     let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
     let range = neopets_data::effect::table_in_chain(&bytes, &chain.chunks).ok_or("no effect table")?;
-    let table = EffectTable::parse(&bytes[range])?;
+    let table = EffectTable::parse(&bytes[range.clone()])?;
+    // SPEC-0034 2.1: the 50 child chunks; the save point's ray models (children 8 and 9) against
+    // resource-9 models 8 and 9, by part count and height.
+    let size = |m: &neopets_data::model::ModelData| {
+        let ys = m.parts.iter().flat_map(|p| p.positions.iter().map(|q| q[1]));
+        let (lo, hi) = ys.fold((f32::MAX, f32::MIN), |(l, h), y| (l.min(y), h.max(y)));
+        format!("{} parts, y {lo:.2} to {hi:.2}", m.parts.len())
+    };
+    println!("Effect child chunks: {}", table.child_chunks.len());
+    for k in [8usize, 9] {
+        let child = table.child_chunks.get(k).map(|&o| neopets_data::model::build_child(&bytes, &chain.chunks, range.start + o).map(|m| size(&m)));
+        let role = neopets_data::model::build_roles(&bytes, &chain.chunks, None, Some(&[k as u16])).map(|m| size(&m));
+        println!("  model {k}: child chunk {child:?}; resource-9 model {role:?}");
+    }
     println!("Effect table: {} definitions, {} nodes; id 101 -> {:?}, 159 -> {:?}, 1201 -> {:?}, 938 -> {:?}, 4007 -> {:?}, 162 -> {:?}", table.definitions.len(), table.nodes.len(), table.find(101), table.find(159), table.find(1201), table.find(938), table.find(4007), table.find(162));
     // SPEC-0034 4.5 / SPEC-0046: light-emitter records, the definitions using one, and the
     // point lights effect 1300 publishes after 60 ticks.
@@ -3840,6 +3853,14 @@ fn sync_effect_models(
             archive.as_deref_mut().and_then(|Archive { disc, index }| {
                 let b = index.read(disc, neopets_data::effect::RESOURCE).ok()?;
                 let c = neopets_data::resource::walk_chunks(&b, None).ok()?.chunks;
+                // SPEC-0034 2.1: a child-chunk model is the effect group's own type-12 chunk k,
+                // not resource-9 model k (user's reports 66, 69 and 94: the save point's rays drew
+                // container models 8 and 9, tall shafts the original does not show).
+                if let Some(k) = model.checked_sub(neopets_sim::effect::CHILD_MODEL) {
+                    let table = neopets_data::effect::table_in_chain(&b, &c)?;
+                    let at = table.start + *play.effect_table.child_chunks.get(k as usize)?;
+                    return neopets_data::model::build_child(&b, &c, at).ok().filter(|m| !m.parts.is_empty());
+                }
                 neopets_data::model::build_roles(&b, &c, None, Some(&[model])).ok().filter(|m| !m.parts.is_empty())
             })
         });
@@ -3869,7 +3890,9 @@ fn sync_effect_models(
         });
     }
     for (root, mut t, mut vis) in &mut roots {
-        let Some(&(m, c)) = shown.get(&(root.0, root.1)) else {
+        // NEOPETS_HIDE_FXMODEL="a,b": those effect models are never shown (diagnostic).
+        let hidden = std::env::var("NEOPETS_HIDE_FXMODEL").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<usize>().ok() == Some(root.0 as usize)));
+        let Some(&(m, c)) = shown.get(&(root.0, root.1)).filter(|_| !hidden) else {
             set_if(&mut vis, Visibility::Hidden);
             continue;
         };

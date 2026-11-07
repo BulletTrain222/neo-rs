@@ -512,6 +512,21 @@ pub fn build_roles(
     build_masked(bytes, top, shared, roles, None)
 }
 
+/// One child chunk of the effect group (SPEC-0034 2.1: a standard type-12 chunk starting at
+/// byte `at` of the resource), drawn with the resource's own first shader list (SPEC-0004:
+/// resource 9's 50 effect children use its 123-group list).
+pub fn build_child(bytes: &[u8], top: &[Chunk], at: usize) -> Result<ModelData, String> {
+    let chain = resource::walk_chunks(bytes.get(at..).ok_or("Child chunk past the resource")?, Some(1))?;
+    let c = chain.chunks.first().ok_or("No child chunk")?;
+    if c.kind != TREE_12 {
+        return Err(format!("Child chunk at {at:#x} has type {}", c.kind));
+    }
+    let payload = at + c.payload.start..at + c.payload.end;
+    let mut b = Builder::new(vec![ChainMaterials::of(bytes, top)?], None);
+    b.add_tree(bytes, payload, 0, None, None, None)?;
+    Ok(b.finish())
+}
+
 /// A region character's draw mask (SPEC-0004 Drawing a node tree, item 3a): bit 30 normally,
 /// bit 31 while the region's colour override is on.
 pub const REGION_MASK: u32 = 0x4000_0000;
