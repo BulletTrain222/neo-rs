@@ -5453,6 +5453,9 @@ fn tiles_1174(s: &mut GameState) -> Vec<Action> {
         let still = pieces.clone().any(|obj| s.animating.contains(&obj));
         if t >= (fade + 0.5).max(at + 0.02) && !still {
             s.set_word(1174, 100 + k, state + 1);
+            if i == 43 {
+                s.set_word(1174, 192, 0);
+            }
             v.extend(pieces.filter(|&obj| obj != stays).map(|obj| Action::DeactivateObj { obj }));
             if short {
                 v.push(Action::InitObjOn { obj: stays, end: false });
@@ -5560,7 +5563,12 @@ fn stage_1174(s: &mut GameState) -> Vec<Action> {
     if has(8) && !has(9) {
         set(s, 9);
         s.set_word(p, 2, 1);
-        v.extend([lvl4(true), Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 }, Action::ReturnCamera { preset: -1, release: true }, Action::DeactivateObj { obj: 8 }, lvl4(false), Action::Bits { word: 2, set: 0, clear: 1 }]);
+        // SPEC-0044 1174 bit 8: camera 6 started without waiting, then the thread waits until
+        // tile 43 reaches its rest state (word 192, this build's flag for it, cleared by the
+        // tile step), not for the track's end; the normal camera, one tick, object 8 off (user's
+        // report 93: the pillar's fall showed no scene).
+        s.set_word(p, 192, (s.word(p, 107) == 1) as i32);
+        v.extend([lvl4(true), Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 }, Action::WaitWord { word: 192 }, Action::ReturnCamera { preset: -1, release: true }, Action::Sleep { ticks: 1 }, Action::DeactivateObj { obj: 8 }, lvl4(false), Action::Bits { word: 2, set: 0, clear: 1 }]);
         return v;
     }
     if has(6) && !has(7) {
