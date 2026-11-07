@@ -5354,6 +5354,13 @@ fn play_trace(
             }
         }
         // NEOPETS_TRACE_KILL="n[,n...]": the developer menu's enemy defeat on those ticks.
+        // NEOPETS_DEV_KILL_ENTITY="tick:e,e,...": those entities of the current world killed on that tick (diagnostic).
+        if let Some((k, list)) = std::env::var("NEOPETS_DEV_KILL_ENTITY").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.trim().parse::<u64>().unwrap_or(0), b.split(',').filter_map(|s| s.trim().parse::<usize>().ok()).collect::<Vec<_>>())) {
+            if k == play.ticks {
+                let (tick, n) = (play.ticks, play.dev_kill_entities(&list));
+                println!("      developer kill of entities {list:?} on tick {tick}: {n} hit");
+            }
+        }
         if std::env::var("NEOPETS_TRACE_KILL").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {
             let pk = play.world.pack;
             let alive: Vec<(String, bool)> = play.characters.iter().filter(|c| c.pack == pk && c.enemy.as_ref().is_some_and(|e| !e.dead)).map(|c| (c.name.clone(), c.inactive)).collect();

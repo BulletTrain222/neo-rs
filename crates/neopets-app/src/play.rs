@@ -11628,6 +11628,14 @@ impl Play {
         // NEOPETS_DEV_FIRE="tick:index[:object][;...]" (diagnostic, window or trace): on that tick the
         // current world's routine for that trigger runs once with state 1 (object word 0 unless
         // ":1"), as a shot or touch would fire it, so a scene can be tested without its striker.
+        // NEOPETS_DEV_WORD="tick:word:value[;...]" (diagnostic): a module word of the current
+        // world set on that tick, to reach a stage of a level's script in a trace.
+        for v in std::env::var("NEOPETS_DEV_WORD").unwrap_or_default().split(';') {
+            let n: Vec<i64> = v.split(':').filter_map(|s| s.trim().parse().ok()).collect();
+            if n.len() == 3 && n[0] as u64 == self.ticks {
+                self.state.set_word(self.world.pack, n[1] as u8, n[2] as i32);
+            }
+        }
         for v in std::env::var("NEOPETS_DEV_FIRE").unwrap_or_default().split(';') {
             let n: Vec<u64> = v.split(':').filter_map(|s| s.trim().parse().ok()).collect();
             if n.len() >= 2 && n[0] == self.ticks {
@@ -14445,9 +14453,21 @@ impl Play {
                 let weapon = Cylinder { center: w.t, axis: w.cols[2], radius: r, length };
                 caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
             });
+            // SPEC-0014 phase 1 (R-0251, R-0253): in fight mode 0 the stage-rule step gives the
+            // Chieftain the first ground mesh holding the hero's point whenever the hero is off
+            // his assigned mesh, so from the rim fragment he heads for the hero in the basin, off
+            // his own mesh, walks off the rim's edge and falls to the basin floor.
+            let mode0 = c.ixi.as_ref().is_some_and(|k| k.mode == 0);
+            if let Some(wk) = c.walker.as_mut().filter(|_| mode0) {
+                if wk.mesh.and_then(|i| world.navmeshes.get(i)).is_none_or(|m| m.locate_full(hero).is_none()) {
+                    if let Some(pick) = world.navmeshes.iter().position(|m| m.kind == 1 && m.locate_full(hero).is_some()) {
+                        wk.assign_mesh(Some(pick), &world.navmeshes);
+                    }
+                }
+            }
             // The navmesh pick (SPEC-0029 Behavior 2): the first ground mesh holding the boss,
-            // again whenever the stored one no longer holds it.
-            if let Some(wk) = c.walker.as_mut() {
+            // again whenever the stored one no longer holds it (outside mode 0).
+            if let Some(wk) = c.walker.as_mut().filter(|_| !mode0) {
                 let p = wk.position();
                 if wk.mesh.and_then(|i| world.navmeshes.get(i)).is_none_or(|m| m.locate_full(p).is_none()) {
                     let pick = world.navmeshes.iter().position(|m| m.kind == 1 && m.locate_full(p).is_some());
@@ -18906,6 +18926,18 @@ impl Play {
 
     /// Developer menu: every living enemy of the current world takes a defeating hit (bosses that
     /// refuse damage keep refusing it). Returns how many were hit.
+    /// Diagnostic: the characters of the current world with these entity numbers take a
+    /// killing hit (to reach a scene that waits on IsAI_Dead in a trace).
+    pub fn dev_kill_entities(&mut self, entities: &[usize]) -> usize {
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let targets: Vec<usize> = (0..self.characters.len()).filter(|&i| self.characters[i].pack == pack && self.characters[i].entity.is_some_and(|e| entities.contains(&e))).collect();
+        for &i in &targets {
+            self.character_take_hit(i, 1_000_000, hero, "the developer kill ");
+        }
+        targets.len()
+    }
+
     pub fn dev_kill_enemies(&mut self) -> usize {
         let pack = self.world.pack;
         let hero = self.loco.position();

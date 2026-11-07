@@ -12630,13 +12630,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     Action::EntityAnim { entity: 9, anim: 8, looped: true, wait: false },
                     Action::Converse { entity: 9, line: 8 },
                     Action::EntityAnim { entity: 9, anim: 4, looped: false, wait: true },
-                    // This build's choice (user's report 53, R-0253): the Chieftain comes down
-                    // into the basin after animation 4, put at stage C's floor place (locator
-                    // 17) under a short fade. SPEC-0014 keeps him on the rim fragment until
-                    // stage C, where the hero's swing cannot reach him.
-                    Action::FadeOut { seconds: 0.4, wait: true },
-                    Action::MoveEntity { entity: 9, locator: 17, face: true },
-                    Action::FadeIn { seconds: 0.4, wait: true },
+                    // R-0253: his controller takes him down into the basin (SPEC-0014 phase 1).
                     Action::EntityAnim { entity: 9, anim: 8, looped: true, wait: false },
                     // SPEC-0014 (arena end-to-end, step 2): released into stage 1; the
                     // animation calls above put him under script control in this build.
@@ -19148,7 +19142,8 @@ mod tests {
         let b = on_update(800, &mut s, false);
         // Stage B: line 8, animation 4, then the release and level state 0 at the end of the scene.
         assert!(b.contains(&Action::Converse { entity: 9, line: 8 }) && b.contains(&Action::EntityAnim { entity: 9, anim: 4, looped: false, wait: true }));
-        assert!(b.contains(&Action::MoveEntity { entity: 9, locator: 17, face: true }));
+        // R-0253: no move; his controller takes him down.
+        assert!(!b.contains(&Action::MoveEntity { entity: 9, locator: 17, face: true }));
         assert!(b.ends_with(&[Action::ReleaseEntity { entity: 9 }, Action::LevelState { flag: 0, on: true }, Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::ReturnCamera { preset: -1, release: true }]));
         s.set_level(0, true);
         s.set_level(1, true);
