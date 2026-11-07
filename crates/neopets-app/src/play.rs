@@ -630,6 +630,9 @@ impl World {
 pub struct Recorder {
     inputs: std::collections::VecDeque<(u64, HeroInput)>,
     snapshots: std::collections::VecDeque<Snapshot>,
+    /// The hero's state at the start of each of the last HISTORY ticks (where the previous tick
+    /// left him), one CSV row each, for the bug report's history.csv (a test tool of this build).
+    history: std::collections::VecDeque<String>,
 }
 
 struct Snapshot {
@@ -644,6 +647,26 @@ struct Snapshot {
 
 impl Recorder {
     const KEEP: usize = 3600;
+    const HISTORY: usize = 600;
+    /// The columns of history.csv.
+    pub const HISTORY_HEADER: &'static str = "tick,pack,x,y,z,vx,vy,vz,state,phase,action,progress,gap,floor,no_gravity,no_snap,platform_dy,ride,ledge,hp,mp,attack,dialogue";
+
+    fn note(&mut self, row: String) {
+        self.history.push_back(row);
+        if self.history.len() > Self::HISTORY {
+            self.history.pop_front();
+        }
+    }
+
+    /// history.csv: the header and the rows, oldest first.
+    pub fn history_csv(&self) -> String {
+        let mut s = String::from(Self::HISTORY_HEADER);
+        for r in &self.history {
+            s.push('\n');
+            s.push_str(r);
+        }
+        s
+    }
 
     fn push(&mut self, tick: u64, input: &HeroInput, pack: u32, position: [f32; 3], s: &GameState, hp: i32) {
         if tick % 1800 == 0 || self.snapshots.is_empty() {
@@ -10739,6 +10762,38 @@ impl Play {
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
         self.recorder.push(self.ticks, input, self.world.pack, self.loco.position(), &self.state, self.hero_hp);
+        {
+            // The bug report's history row: the hero as the previous tick left him.
+            let (p, v, b) = (self.loco.position(), self.loco.body.velocity, &self.loco.body);
+            let c = self.hero.clip_state();
+            let row = format!(
+                "{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{:.2},{:.3},{},{},{},{},{},{},{},{},{},{}",
+                self.ticks,
+                self.world.pack,
+                p[0],
+                p[1],
+                p[2],
+                v[0],
+                v[1],
+                v[2],
+                self.loco.state,
+                self.loco.phase,
+                c.action,
+                c.progress,
+                b.gap,
+                b.floor as u8,
+                b.no_gravity as u8,
+                b.no_snap as u8,
+                b.platform_dy.map_or(String::new(), |d| format!("{d:.3}")),
+                self.ride_lock.map_or(String::new(), |r| r.0.to_string()),
+                self.ledge.as_ref().map_or(String::new(), |l| format!("{:?}", l.state)),
+                self.hero_hp,
+                self.hero_mp,
+                self.attack.is_some() as u8,
+                self.dialogue_open as u8,
+            );
+            self.recorder.note(row);
+        }
         self.l1_held = input.guard;
         self.rope_y = -neopets_sim::camera::converter_a(pad.right_y);
         self.ticks += 1;

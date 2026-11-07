@@ -261,7 +261,7 @@ pub fn save_report(
     let log: Vec<&str> = d.log.iter().map(String::as_str).collect();
     let (start, inputs) = p.recorder.export();
     let replay = format!("Replay in a trace (no window):\n  python scripts/replay.py {n}\nor by hand:\n  NEOPETS_REPLAY=private/reports/{n:03} target/release/neopets-app.exe --play-trace {} --pack {} --seed 1\n", p.recorder.len() + 30, p.recorder.start_pack(p.world.pack));
-    let writes = [("state.txt", text), ("events.txt", log.join("\n")), ("start.txt", start), ("input.csv", inputs), ("replay.txt", replay)];
+    let writes = [("state.txt", text), ("events.txt", log.join("\n")), ("start.txt", start), ("input.csv", inputs), ("replay.txt", replay), ("history.csv", p.recorder.history_csv())];
     for (name, body) in writes {
         if let Err(e) = std::fs::write(dir.join(name), body) {
             error!("Bug report: could not write {name}: {e}");
