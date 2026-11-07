@@ -11280,7 +11280,16 @@ impl Play {
         self.loco.record_tick(
             self.root_step,
             |x, z, c| {
-                let hit = world.probe(x, z, c);
+                let mut hit = world.probe(x, z, c);
+                // SPEC-0018 World and fallbacks of the attach probe: with no entry the selected
+                // hero retries at eight points 0.2 away, in the spec's order; the first that
+                // answers gives the height and entry.
+                if !hit.found {
+                    const AROUND: [(f32, f32); 8] = [(0.2, 0.0), (-0.2, 0.0), (0.0, -0.2), (0.0, 0.2), (0.2, 0.2), (-0.2, -0.2), (-0.2, 0.2), (0.2, -0.2)];
+                    if let Some(h) = AROUND.iter().map(|&(dx, dz)| world.probe(x + dx, z + dz, c)).find(|h| h.found) {
+                        hit = h;
+                    }
+                }
                 if !hit.found && search_other {
                     if let Some(o) = other {
                         let there = o.probe(x, z, c);
@@ -14728,6 +14737,10 @@ impl Play {
                 k.parts = [0; 6];
             }
             let before = k.state;
+            // SPEC-0012 G16: the time scale is written from the speed multiplier M at the start of
+            // every tick (1.0, then 1.25 times larger at each en garde); the en garde entry raises M
+            // after the write, so its own tick still runs at the old rate.
+            c.anim.set_rate(k.speed);
             let act = k.tick(&v, &words, &mut self.rng);
             let after = k.state;
             self.boss_info = k.summary(&v, &words);

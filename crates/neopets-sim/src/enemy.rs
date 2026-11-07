@@ -2789,6 +2789,11 @@ impl Enemy {
         if s.orient && (1..=3).contains(&self.seq) {
             a.face = Some((v.hero, 1.0));
         }
+        // SPEC-0038 state 2: a missile slot aims at the hero every tick whatever its orient flag,
+        // at the row's aim turn weight (not mapped here; 1.0, the ground rows' usual value).
+        else if s.kind == MISSILE && self.seq == 2 {
+            a.face = Some((v.hero, 1.0));
+        }
         let cos = dot(v.facing, hdir(v.position, v.hero));
         let strike = |e: &mut Self, a: &mut Act| -> Option<bool> {
             if v.contact && !e.hit {
@@ -2913,7 +2918,9 @@ impl Enemy {
                     let c = self.charge[k];
                     match s.charge {
                         2 if d <= s.range => self.seq = 8,
-                        3 if t >= c || d <= s.range || v.speed <= 0.1 => self.seq = 12,
+                        // Kind 3 keeps running only while the body is airborne: a ground gap
+                        // of at most 0.1 ends it (SPEC-0038 Behavior 13, R-0252; not a speed).
+                        3 if t >= c || d <= s.range || v.gap <= 0.1 => self.seq = 12,
                         3 => {}
                         _ if t >= c => self.seq = 12,
                         _ => {}

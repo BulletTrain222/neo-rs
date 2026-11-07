@@ -2143,7 +2143,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if state.flag(621) && !state.flag(57) {
                 state.set_word(pack, 1, 1);
                 v.extend((18..=21).map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
-                v.extend([Action::InitObjOn { obj: 5, end: false }, Action::InitObjOn { obj: 4, end: false }]);
+                // The canal helper with argument 1 (R-0249): objects 5 and 4 set and played once,
+                // so the water rises again after every load; no effect is started.
+                v.extend([Action::InitObjOn { obj: 5, end: false }, Action::InitObjOn { obj: 4, end: false }, Action::PlayAnim { obj: 5, speed: 1.0, wait: false }, Action::PlayAnim { obj: 4, speed: 1.0, wait: false }]);
             } else if state.flag(57) {
                 v.extend((55..=60).map(|slot| Action::StopEffect { slot }));
             } else {
@@ -3449,26 +3451,29 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         678 | 686 | 691 => road_init(pack, state),
         1023 => village_init(state),
-        // SPEC-0042 990 Init (Low for the module overall): blackboard value 2 for eW 78; objects
-        // 15, 13, 17, 19, 21 and 23 set up on (at their end) and 0, 1, 2, 7, 3, 4, 5, 11 and 9
-        // off (at their start); the fall handler on trigger 2 and the prompt handler on triggers
-        // 3 to 8. Words: 0 the lever word (-1 at load), 12, 14 and 16 whether objects 12, 14
-        // and 16 are active. Of the twelve record setups only their objects (39 to 50, off) are
-        // set up; their animated locators, handler S on triggers 16 to 87 (its body is open in
-        // the spec), the record thread, the animation-linked sounds and the debug log mode are
-        // not built.
+        // SPEC-0042 990 Init: blackboard value 2 for eW 78; objects 15, 13, 17, 19, 21 and 23 on
+        // (at their end) and 0, 1, 2, 7, 3, 4, 5, 11 and 9 off; the twelve walkway records
+        // (objects 39 to 50, off; records switched off, last trigger the fifth, idle bob phases
+        // from the spec's list) with their six-trigger blocks 16 to 87 on handler S (routine 4);
+        // the fall handler on trigger 2 and the prompt handler on triggers 3 to 8. Words: 0 the
+        // lever word (-1 at load); 12 to 23 whether that pair's even object is active; 100 + 10k
+        // record k (Walk990). Not built: moving objects 39 to 50 onto animated locators 0 to 11
+        // (the spec does not name the host), the five animation-linked sounds and the log mode.
         990 => {
             state.blackboard.insert((2, 78), 2);
             state.set_word(990, 0, -1);
-            for w in [12, 14, 16] {
+            for w in 12..=23 {
                 state.set_word(990, w, 0);
+            }
+            for (k, phase) in [0.5f32, 0.2, 0.3, 0.6, 0.4, 0.2, 0.5, 0.6, 0.4, 0.4, 0.3, 0.1].into_iter().enumerate() {
+                walk990_set(state, k, Walk990 { phase, ..Walk990::default() });
             }
             let mut v: Vec<Action> = [15, 13, 17, 19, 21, 23].map(|obj| Action::InitObjOn { obj, end: true }).to_vec();
             v.extend([0, 1, 2, 7, 3, 4, 5, 11, 9].map(|obj| Action::InitObjOn { obj, end: false }));
-            // The record setups' own object setups: objects 39 to 50 off.
             v.extend((39..=50).map(|obj| Action::InitObjOn { obj, end: false }));
             v.push(reg(2, 2));
             v.extend((3..=8).map(|i| reg(i, 3)));
+            v.extend((16..=87).map(|i| reg(i, 4)));
             v
         }
         1184 => woods_init(state),
@@ -5216,6 +5221,122 @@ fn market_value(pack: u32) -> Option<i32> {
         1020 => Some(70),
         _ => None,
     }
+}
+
+/// One SPEC-0042 990 walkway record: switched on, the last trigger stepped on (0 to 5 from the
+/// record's first; the fifth, 4, is the rest), the current frame, the current move's target
+/// (-255 none), the queued move (start, target; -255 none), the idle offset (the last target)
+/// and the bob phase and its direction. Kept in module words 100 + 10k to 108 + 10k.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Walk990 {
+    on: bool,
+    last: i32,
+    frame: i32,
+    target: i32,
+    queued: (i32, i32),
+    idle: i32,
+    phase: f32,
+    up: bool,
+}
+
+impl Default for Walk990 {
+    fn default() -> Self {
+        Self { on: false, last: 4, frame: 40, target: -255, queued: (-255, -255), idle: 40, phase: 0.0, up: true }
+    }
+}
+
+fn walk990_get(s: &GameState, k: usize) -> Walk990 {
+    let w = |o: u8| s.word(990, 100 + 10 * k as u8 + o);
+    Walk990 { on: w(0) & 1 != 0, last: w(1), frame: w(2), target: w(3), queued: (w(4), w(5)), idle: w(6), phase: w(7) as f32 / 1000.0, up: w(8) == 0 }
+}
+
+fn walk990_set(s: &mut GameState, k: usize, r: Walk990) {
+    let b = 100 + 10 * k as u8;
+    for (o, v) in [r.on as i32, r.last, r.frame, r.target, r.queued.0, r.queued.1, r.idle, (r.phase * 1000.0).round() as i32, (!r.up) as i32].into_iter().enumerate() {
+        s.set_word(990, b + o as u8, v);
+    }
+}
+
+/// SPEC-0042 990 handler S: trigger `index` (16 to 87) is trigger t of record (index - 16) / 6;
+/// from the rest onto t the object sinks from frame 10t to 10t + 8; onto the rest from L it
+/// rises from 10L + 8 to 10L + 1; onto a trigger next to L it runs the block's in-between
+/// frames (from 10t + 2; Medium); the sixth trigger returns the record to rest (this build
+/// does it on the step, not after the hero leaves). A move takes the current slot when it is
+/// free, else the queued one.
+fn walk990_step(s: &mut GameState, index: u16) {
+    let i = index as i32 - 16;
+    if !(0..72).contains(&i) {
+        return;
+    }
+    let (k, t) = ((i / 6) as usize, i % 6);
+    let mut r = walk990_get(s, k);
+    if !r.on || t == r.last {
+        return;
+    }
+    let l = r.last;
+    let mv = if t == 5 {
+        r.last = 4;
+        (10 * l + 8, 41)
+    } else {
+        r.last = t;
+        if l == 4 {
+            (10 * t, 10 * t + 8)
+        } else if t == 4 {
+            (10 * l + 8, 10 * l + 1)
+        } else if (t - l).abs() == 1 {
+            (10 * t + 2, 10 * t + 8)
+        } else {
+            (10 * t, 10 * t + 8)
+        }
+    };
+    if r.target == -255 {
+        r.frame = mv.0;
+        r.target = mv.1;
+    } else {
+        r.queued = mv;
+    }
+    walk990_set(s, k, r);
+}
+
+/// SPEC-0042 990 record thread: each active record steps its frame one toward the target (at
+/// the target the queued move, if any, becomes current), advances its bob 0.1 a tick between 0
+/// and 1.2, and sets its object (39 + k) to (idle offset + bob) / 30 s with no move, else to
+/// frame / 30 s with the bob reset.
+fn walk990_thread(s: &mut GameState) -> Vec<Action> {
+    let mut v = Vec::new();
+    for k in 0..12 {
+        let mut r = walk990_get(s, k);
+        if !r.on {
+            continue;
+        }
+        if r.target != -255 {
+            r.frame += (r.target - r.frame).signum();
+            if r.frame == r.target {
+                r.idle = r.target;
+                if r.queued.0 != -255 {
+                    (r.frame, r.target) = r.queued;
+                    r.queued = (-255, -255);
+                } else {
+                    r.target = -255;
+                }
+            }
+        }
+        r.phase += if r.up { 0.1 } else { -0.1 };
+        if r.phase > 1.2 {
+            r.up = false;
+        } else if r.phase < 0.0 {
+            r.up = true;
+        }
+        let seconds = if r.target == -255 {
+            (r.idle as f32 + r.phase) / 30.0
+        } else {
+            r.phase = 0.0;
+            r.frame as f32 / 30.0
+        };
+        v.push(Action::SetObjTime { obj: 39 + k, seconds });
+        walk990_set(s, k, r);
+    }
+    v
 }
 
 /// SPEC-0044 1174's floor tile i (36 to 53): solid object, pieces, the piece that stays (long) or
@@ -8021,7 +8142,8 @@ fn outskirts_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
 }
 
 /// The flag-67 line rotation of SPEC-0039 880 and 1230: lines 0 to 2 with flag 67 set, 3 to 5
-/// clear, one counter (word 2) restarted the first time 67 is seen set (word 3).
+/// clear, one counter (word 2) restarted the first time 67 is seen set (word 3). After the third
+/// line the counter becomes 1, not 0, so the talks run 0, 1, 2, 1, 2, ... (High).
 fn rotation_67(pack: u32, state: &mut GameState) -> u16 {
     let set = state.flag(67);
     if set && state.word(pack, 3) == 0 {
@@ -8029,7 +8151,7 @@ fn rotation_67(pack: u32, state: &mut GameState) -> u16 {
         state.set_word(pack, 2, 0);
     }
     let k = state.word(pack, 2).rem_euclid(3);
-    state.set_word(pack, 2, k + 1);
+    state.set_word(pack, 2, if k == 2 { 1 } else { k + 1 });
     if set { k as u16 } else { 3 + k as u16 }
 }
 
@@ -11142,41 +11264,67 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             Action::ReturnCamera { preset: -1, release: true },
         ]),
         // 990 handler P (triggers 3 to 8, while the object is present): 3 to 5 show context 1
-        // while object 12, 14 or 16 is inactive, and a press swaps the pair (12/13, 14/15 or
-        // 16/17) and plays camera 5, 4 or 6; 6 to 8 always show context 4, and a press negates
-        // the lever word, plays sounds 6 and 7 and object 0's animation at that speed. The
-        // press paths' hero walk and animations (139, 140) and their order are Low and left out.
-        (990, 3) if call.object && call.state != 0 => match call.index {
-            3..=5 => {
-                let k = (call.index - 3) as usize;
-                let even = [12, 14, 16][k];
-                if state.word(pack, even as u8) == 0 {
-                    out.prompt = Some(1);
-                    if call.square && !state.talking {
-                        state.set_word(pack, even as u8, 1);
-                        out.actions.extend([
-                            Action::DeactivateObj { obj: even + 1 },
-                            Action::InitObjOn { obj: even, end: false },
-                            Action::PlayCamera { track: [5, 4, 6][k], wait: true, end: 1, speed: 1.0 },
-                            Action::ReturnCamera { preset: -1, release: true },
-                        ]);
+        // while object 12, 14 or 16 is inactive, 6 to 8 always context 4. A press: the walk to
+        // locator 7 to 12, the pair swap (the old member off, the new on and played), hero
+        // animation 140 and 0.7 s (139 and 0.6 s when the odd member was not active), sound 4;
+        // 6 to 8 then the lever: the word negated, sound 6 (+1) or 7 (-1), the twelve records on,
+        // object 0 played at the word's speed and waited, the records off again when it is -1;
+        // 3 to 5 then their scene objects and camera, with the letterbox around it while the
+        // lever word is not -1 (its tint is not built). SPEC-0042 990.
+        (990, 3) if call.object && call.state != 0 && (3..=8).contains(&call.index) => {
+            let i = call.index as usize;
+            let even = 12 + 2 * (i - 3);
+            let shows = i >= 6 || state.word(pack, even as u8) == 0;
+            if shows {
+                out.prompt = Some(if i >= 6 { 4 } else { 1 });
+            }
+            if shows && call.square && !state.talking {
+                let odd_on = state.word(pack, even as u8) == 0;
+                state.set_word(pack, even as u8, odd_on as i32);
+                let (old, new) = if odd_on { (even + 1, even) } else { (even, even + 1) };
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::WalkHero { locator: i + 4, wait: true, orient: true },
+                    Action::DeactivateObj { obj: old },
+                    Action::InitObjOn { obj: new, end: false },
+                    Action::PlayAnim { obj: new, speed: 1.0, wait: false },
+                    Action::HeroAnim { anim: if odd_on { 140 } else { 139 }, wait: false },
+                    wait(if odd_on { 0.7 } else { 0.6 }),
+                    Action::PlaySound { cue: 4, locator: None },
+                ]);
+                if i >= 6 {
+                    let l = -state.word(pack, 0);
+                    state.set_word(pack, 0, l);
+                    out.actions.push(Action::PlaySound { cue: if l == 1 { 6 } else { 7 }, locator: None });
+                    out.actions.extend((0..12u8).map(|k| Action::Bits { word: 100 + 10 * k, set: 1, clear: 0 }));
+                    out.actions.push(Action::PlayAnim { obj: 0, speed: l as f32, wait: true });
+                    if l == -1 {
+                        out.actions.extend((0..12u8).map(|k| Action::Bits { word: 100 + 10 * k, set: 0, clear: 1 }));
+                    }
+                    out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+                } else {
+                    let (plays, off, on, track): (&[usize], usize, usize, usize) = match i {
+                        3 => (&[3, 4], 5, 6, 5),
+                        4 => (&[1, 2], 7, 8, 4),
+                        _ => (&[11], 9, 10, 6),
+                    };
+                    for &obj in plays {
+                        out.actions.extend([Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 1.0, wait: false }]);
+                    }
+                    out.actions.extend([Action::DeactivateObj { obj: off }, Action::InitObjOn { obj: on, end: false }]);
+                    let tinted = state.word(pack, 0) != -1;
+                    if tinted {
+                        out.actions.push(Action::LetterBox { on: true, seconds: 1.0, wait: false });
+                    }
+                    out.actions.extend([Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 }, Action::ReturnCamera { preset: -1, release: true }]);
+                    if tinted {
+                        out.actions.push(Action::LetterBox { on: false, seconds: 1.0, wait: false });
                     }
                 }
             }
-            6..=8 => {
-                out.prompt = Some(4);
-                if call.square && !state.talking {
-                    let l = -state.word(pack, 0);
-                    state.set_word(pack, 0, l);
-                    out.actions.extend([
-                        Action::PlaySound { cue: 6, locator: None },
-                        Action::PlaySound { cue: 7, locator: None },
-                        Action::PlayAnim { obj: 0, speed: l as f32, wait: false },
-                    ]);
-                }
-            }
-            _ => {}
-        },
+        }
+        // 990 handler S (triggers 16 to 87, first contact): the walkway record of that block.
+        (990, 4) if call.state == 1 => walk990_step(state, call.index),
         (1130, 6) if state.word(pack, 20) == 0 => {
             state.set_word(pack, 20, 1);
             out.actions.push(Action::Message { line: 3 });
@@ -12651,6 +12799,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         // SPEC-0041 1428 Update (322 set): the update helper and THREAD-A.
         1428 if state.flag(322) => out.extend(arena_1428(state)),
+        // SPEC-0042 990 record thread: every active walkway record once per tick.
+        990 => out.extend(walk990_thread(state)),
         // SPEC-0042 1381 Update: the timed objects switch on for 2 s and off for 4 s together
         // (each switch re-binds its trigger, object + 58, to the return routine or to nothing; word
         // 2 the last phase + 1); the hazard thread: hazard k starts 0.4 s after k - 1, its object
@@ -17621,8 +17771,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
             state.set_word(pack, 4, k as i32);
             return vec![Action::Prompt { line: shop[k].1, routine }];
         }
+        // SPEC-0039 880: 11, 12, 13, 12, 13, ... (after the third line the counter becomes 1).
         let r = state.word(pack, 5).rem_euclid(3);
-        state.set_word(pack, 5, r + 1);
+        state.set_word(pack, 5, if r == 2 { 1 } else { r + 1 });
         return vec![Action::Talk { line: 11 + r as u16 }];
     }
     if pack == 991 {
@@ -20925,7 +21076,8 @@ mod tests {
         s.maps.insert(11);
         let rot: Vec<_> = (0..4).map(|_| on_talk(880, 7, &mut s)).collect();
         assert_eq!(rot[0], vec![Action::Talk { line: 11 }]);
-        assert_eq!(rot[3], vec![Action::Talk { line: 11 }]);
+        // After the third line the counter becomes 1 (SPEC-0039 880): 11, 12, 13, 12.
+        assert_eq!(rot[3], vec![Action::Talk { line: 12 }]);
         // The way on to 991 opens once AI 21 to 23 are dead.
         assert_eq!(on_teleport(880, 0, &mut s)[0], Action::Message { line: 20 });
         s.ai_dead.extend([21, 22]);
@@ -21630,7 +21782,23 @@ mod tests {
         assert!(after.prompt.is_none() && after.actions.is_empty());
         assert_eq!(on_trigger(990, 3, at(7, false), &mut s).prompt, Some(4));
         let lever = on_trigger(990, 3, at(7, true), &mut s).actions;
-        assert!(lever.contains(&Action::PlayAnim { obj: 0, speed: 1.0, wait: false }));
+        assert!(lever.contains(&Action::PlayAnim { obj: 0, speed: 1.0, wait: true }) && lever.contains(&Action::Bits { word: 100, set: 1, clear: 0 }));
+        // Handler S test vector: record at rest, the hero on its third trigger (t = 2): frames 20
+        // to 28 at one a tick, 8 ticks, time 0.667 s to 0.933 s; then the rest trigger from
+        // L = 2: frame 28 to 21.
+        let mut r = walk990_get(&s, 0);
+        r.on = true;
+        walk990_set(&mut s, 0, r);
+        on_trigger(990, 4, TriggerCall { index: 18, state: 1, object: true, square: false, block: -1 }, &mut s);
+        let mut last = Vec::new();
+        for _ in 0..8 {
+            last = on_update(990, &mut s, false);
+        }
+        // On the eighth tick the move ends at 28 (0.933 s); the idle bob then adds 0.1 frame.
+        assert_eq!(last, vec![Action::SetObjTime { obj: 39, seconds: 28.1 / 30.0 }]);
+        on_trigger(990, 4, TriggerCall { index: 20, state: 1, object: true, square: false, block: -1 }, &mut s);
+        let r = walk990_get(&s, 0);
+        assert_eq!((r.frame, r.target, r.last), (28, 21, 4));
     }
 
     #[test]
