@@ -882,6 +882,7 @@ impl Enemy {
                 self.outer = 0;
                 self.recovery = 0;
                 self.cooldown = [0; 4];
+                self.defence_hold = 0;
                 self.joined = true;
                 self.alarmed = self.spawn.alarm.is_some();
             }
@@ -1022,14 +1023,17 @@ impl Enemy {
         match self.state {
             0 | 3 | 5..=7 | 14 => {
                 self.set(2, v, rng, a);
-                a.anim = Some(18);
+                a.anim = Some(if self.airborne() { 149 } else { 18 });
                 // The group alarm needs no second pass: the alert animation runs to its gate.
-                self.alerting = true;
+                // A Display-0 row lands in state 21 instead and must pass its own notice check.
+                if self.state == 2 {
+                    self.alerting = true;
+                }
             }
             8 => {
                 a.sting = self.spawn.int(0xC4) == 0;
-                let sel = self.spawn.selector;
-                let id = if self.p.can_fly != 0 { 165 } else if (1..=4).contains(&sel) { 132 + sel } else { 10 };
+                // The alarm always requests 10, ignoring the emerge selector and the flyer code.
+                let id = 10;
                 if (v.has)(id) {
                     self.through(id, v, a);
                     self.emerge = 2;
@@ -1067,7 +1071,8 @@ impl Enemy {
             }
             (near, far) = (p.range_near * f2, p.range_far * f2);
         }
-        let d = len(sub(v.hero, v.position));
+        // The notice distance is horizontal (Behavior 3 step 5).
+        let d = hdist(v.hero, v.position);
         if d < near {
             return true;
         }
@@ -1206,7 +1211,14 @@ impl Enemy {
             damage *= 2;
             self.previous = self.state;
             self.state = 19;
+            // The class-state setter's full agro entry (Behavior 37 step 6, Behavior 5): outer 0,
+            // defence hold 0, recovery 0, the cooldowns 0, and the alarm post.
+            self.outer = 0;
+            self.defence_hold = 0;
+            self.recovery = 0;
+            self.cooldown = [0; 4];
             self.joined = true;
+            self.alarmed = self.spawn.alarm.is_some();
         }
         // Behavior 37 step 7: no hit reaction while stunned (status 0).
         if !self.status(0) && !(self.outer == 10 && self.react == 2 && self.stun_type == 1) {
@@ -2453,10 +2465,12 @@ impl Enemy {
         self.defend(v, rng);
         // Lost-sight test; it does not run during a grab-and-throw attack (Behavior 15).
         let grabbing = self.outer == 2 && self.selected.is_some_and(|k| self.p.slots[k].flags & 0x08 != 0);
+        // The search counter is not reset here: outer 9 drops to 0 after each step that does not
+        // keep it, the test re-enters it with a fresh last-seen point, and the count goes on
+        // (SPEC-0038 outer 9, refined 2026-11-09).
         if self.outer != 9 && !v.sight && !grabbing {
             self.outer = 9;
             self.last_seen = v.hero;
-            self.counter = 0;
         }
         self.choose(v, rng);
         self.counter_choose(v, rng);
@@ -2522,7 +2536,11 @@ impl Enemy {
                 } else {
                     match self.inner {
                         4 => {
-                            self.hold_anim(25, 0.25, v, a);
+                            // The 0.25 blend, then the class handler's aim at the row hold weight
+                            // (0x84; 0x88 for a flyer): an effective 1 - 0.75 (1 - w) (SPEC-0038
+                            // outer 3 inner 4).
+                            let w = if self.p.can_fly != 0 { self.p.fly_turn } else { self.p.turn };
+                            self.hold_anim(25, 1.0 - 0.75 * (1.0 - w), v, a);
                             if d > dmax {
                                 self.inner = 3;
                             } else if d < dmin {
@@ -2567,19 +2585,28 @@ impl Enemy {
                         4 => pt = along(pt, dir, self.p.strafe.0),
                         _ => {}
                     }
-                    if hdist(v.position, pt) < 0.5 {
+                    // Within 0.5: the counter up and outer 0 (re-entered next tick); farther: gait
+                    // 2 to the point, the counter reset while a route exists (outer 9 stays), else
+                    // up by one and outer 0. Above 120 the enemy leaves agro.
+                    let stay = if hdist(v.position, pt) < 0.5 {
                         self.counter += 1;
                         a.anim = Some(self.idle(false, v, rng));
+                        false
                     } else {
                         self.walk(2, pt, v, a);
                         if v.route {
                             self.counter = 0;
+                            true
                         } else {
                             self.counter += 1;
+                            false
                         }
-                    }
+                    };
                     if self.counter > 120 {
+                        self.counter = 0;
                         self.set(0, v, rng, a);
+                    } else if !stay {
+                        self.outer = 0;
                     }
                 } else {
                     self.outer = 0;
@@ -2918,7 +2945,10 @@ impl Enemy {
                 }
             }
             6 => {
+                // Each tick of state 6 aims at the hero with the row turn weight (0x84), whatever
+                // the orient flag says: the charge's only aim (SPEC-0038 Behavior 13).
                 self.start = v.position;
+                a.face = Some((v.hero, self.p.turn));
                 a.rate = Some(s.wind_speed);
                 if self.through(ka, v, a) {
                     if (v.has)(kb) {
@@ -3020,7 +3050,9 @@ impl Enemy {
                     a.anim = Some(kb);
                 }
                 if self.loop_count == 0 {
-                    a.strike = Some(Strike { slot: k, damage: s.damage, knockback: s.knockback, unblockable: true, force_blocked: false, blocked: false });
+                    // SPEC-0038 Behavior 15: the loop strike calls the take-hit directly, with
+                    // no guard test, no hit list and no knockback.
+                    a.strike = Some(Strike { slot: k, damage: s.damage, knockback: 0.0, unblockable: true, force_blocked: false, blocked: false });
                     self.loop_count = rng.range(s.loop_min, s.loop_max);
                 } else {
                     self.loop_count -= 1;

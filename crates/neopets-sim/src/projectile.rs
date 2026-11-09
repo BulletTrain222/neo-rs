@@ -4,7 +4,7 @@
 //! hero hit test, the ground test), and the straight, homing, ballistic and lobbed launches.
 //!
 //! Not covered: the effects and trails (SPEC-0034), the hold word, the mote eater's drain (built by the host from the event), the
-//! status roll (no statuses yet), the summon of a lobbed shot (Behavior 31), the owner's own block query after a reflection (enemies do not guard
+//! status roll on the owner after a reflection (enemy statuses are not built), the summon of a lobbed shot (Behavior 31), the owner's own block query after a reflection (enemies do not guard
 //! here), the shield Mote's charge, and the world
 //! test against static meshes, primitives and moving objects: the build tests the segment
 //! against the cell's frame-record walls instead (R-0016).
@@ -274,6 +274,10 @@ impl Pool {
                 if p.pulse == 0 && h < p.s.area_radius && env.hero_gap < 1.0 {
                     p.pulse = 60;
                     out.push(Event::Hero { damage: p.s.damage.max(0.0), owner: p.s.owner, blocked: false, element: p.s.element });
+                    // SPEC-0029 Behavior 9 Area mode: each pulse also runs the status roll.
+                    if p.s.status.0 != -1 {
+                        out.push(Event::Status { code: p.s.status.0, chance: p.s.status.1, seconds: p.s.status.2 });
+                    }
                 }
                 p.area_left -= 1;
                 if p.pulse > 0 {
