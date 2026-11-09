@@ -3135,6 +3135,7 @@ impl Play {
 
     /// The current world's Init (a world loaded by a door job).
     fn run_init(&mut self) {
+        self.state.switch_levels(self.world.pack);
         self.kills_load(self.world.pack);
         self.before_init();
         let mut init = level::on_init(self.world.pack, &mut self.state);
@@ -3233,6 +3234,8 @@ impl Play {
     fn init_other(&mut self) {
         if let Some(o) = self.other.take() {
             let current = std::mem::replace(&mut self.world, o);
+            // The neighbour's Init writes its own level flags, not the current world's.
+            self.state.switch_levels(self.world.pack);
             self.kills_load(self.world.pack);
             self.before_init();
             let mut init = level::on_init(self.world.pack, &mut self.state);
@@ -3243,11 +3246,14 @@ impl Play {
             self.apply(&init);
             self.entity_setup();
             self.other = Some(std::mem::replace(&mut self.world, current));
+            self.state.switch_levels(self.world.pack);
         }
     }
 
     /// SPEC-0006 Make current: the new world's script runs its activate-world routine.
     fn activated(&mut self) {
+        // The scripts now read and write this world's own level flags (SPEC-0030 row 152).
+        self.state.switch_levels(self.world.pack);
         // An Update's per-tick undamageable set belongs to the world that was current.
         self.state.undamageable_now.clear();
         // The world's own region (its embedded type-32 characters), slot 255, once per load.
@@ -3468,7 +3474,7 @@ impl Play {
                     let interior = std::mem::replace(&mut self.world, o);
                     drop(interior);
                     self.interior_t = None;
-                    self.state.reset_levels();
+                    self.state.switch_levels(self.world.pack);
                     self.arrive(landing);
                     if let Some(&pack) = self.boot.areas.packs.get(slot) {
                         self.job = Some(Job::ReloadTransition(pack));
@@ -4664,7 +4670,7 @@ impl Play {
                 // Leave-interior job: E becomes current, the upright landing on plane e (always
                 // probed), facing F; then T is reloaded with the pack it held.
                 if self.land_in_other(e, false, true) {
-                    self.state.reset_levels();
+                    self.state.switch_levels(self.world.pack);
                     if let Some(t) = self.interior_t.take() {
                         self.job = Some(Job::ReloadTransition(t));
                     }
@@ -10263,7 +10269,7 @@ impl Play {
                 }
                 let exterior = std::mem::replace(&mut self.world, world);
                 self.other = Some(exterior);
-                self.state.reset_levels();
+                self.state.switch_levels(self.world.pack);
                 self.drop_camera_play();
                 self.run_init();
                 let (l, g) = self.world.entries.first().copied().unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
@@ -10281,7 +10287,7 @@ impl Play {
                 self.kills_loaded.remove(&world.pack);
                 self.world = world;
                 self.other = None;
-                self.state.reset_levels();
+                self.state.switch_levels(self.world.pack);
                 self.drop_camera_play();
                 self.run_init();
                 let landing = self.world.landing(plane, false, false).or_else(|| {

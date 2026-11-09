@@ -630,9 +630,13 @@ pub struct GameState {
     /// The pack that was current before this one (the "last active world" an activate-world
     /// routine reads).
     pub last_pack: Option<u32>,
-    /// The current world's level flags (SetLevelState and the boss posts; cleared when a world
-    /// loads).
+    /// The level flags of the world `level_pack` (SetLevelState and the boss posts). Each
+    /// resident world keeps its own 64 flags for its whole residency (SPEC-0030 row 152): the
+    /// other worlds' sets wait in `saved_levels`, and a world's set is cleared when its pack is
+    /// loaded again (before its Init).
     pub level_flags: BTreeSet<u16>,
+    pub level_pack: u32,
+    pub saved_levels: std::collections::HashMap<u32, BTreeSet<u16>>,
     /// A Random(1, 3) draw the host makes before each proximity routine (the routines that
     /// draw read it; the shared generator is the host's).
     pub talk_roll: i32,
@@ -889,11 +893,34 @@ impl GameState {
     pub fn reload_module(&mut self, pack: u32) {
         self.rotations.retain(|(p, _), _| *p != pack);
         self.words.retain(|(p, _), _| *p != pack);
+        // The level flags are cleared when the world's buffer is released before the load.
+        self.saved_levels.remove(&pack);
+        if self.level_pack == pack {
+            self.level_flags.clear();
+        }
     }
 
-    /// A new current world: the level states start clear.
+    /// `pack` becomes the world whose level flags the scripts read and write: the previous
+    /// world's set is kept for it, and `pack`'s own set (empty if it has none) comes back.
+    pub fn switch_levels(&mut self, pack: u32) {
+        if self.level_pack == pack {
+            return;
+        }
+        // At start-up the set has no world yet: the first world adopts it.
+        if self.level_pack == 0 {
+            self.level_pack = pack;
+            return;
+        }
+        let old = std::mem::take(&mut self.level_flags);
+        self.saved_levels.insert(self.level_pack, old);
+        self.level_flags = self.saved_levels.remove(&pack).unwrap_or_default();
+        self.level_pack = pack;
+    }
+
+    /// Every world's level flags dropped (a teardown: the test stage, a new game).
     pub fn reset_levels(&mut self) {
         self.level_flags.clear();
+        self.saved_levels.clear();
     }
 
     fn word(&self, pack: u32, w: u8) -> i32 {
