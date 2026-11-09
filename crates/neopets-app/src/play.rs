@@ -97,6 +97,10 @@ pub struct World {
     pub headers: Vec<Option<neopets_data::trigger::ObjectHeader>>,
     /// MoveObjToAnimatedLocator links: object to (host, locator).
     pub obj_links: std::collections::HashMap<usize, (usize, usize)>,
+    /// A linked object's base as its last pose evaluation left it (SPEC-0030 row 124: no
+    /// per-frame copy; the per-tick update of a playing or looping follower, InitObjOn and
+    /// SetObjToTime re-pose it from the host's locator).
+    pub link_base: std::collections::HashMap<usize, [f32; 3]>,
     /// RegisterScriptAnimatedTrigger: record index to (host object, routine).
     /// RegisterScriptAnimatedTrigger records by (host object, record index): the routine.
     pub anim_routines: std::collections::BTreeMap<(usize, u16), u8>,
@@ -250,6 +254,7 @@ impl World {
             object_anims: Vec::new(),
             headers: Vec::new(),
             obj_links: Default::default(),
+            link_base: Default::default(),
             anim_routines: Default::default(),
             patches: Vec::new(),
             lights: Vec::new(),
@@ -361,6 +366,7 @@ impl World {
             object_anims: Vec::new(),
             headers: Vec::new(),
             obj_links: Default::default(),
+            link_base: Default::default(),
             anim_routines: Default::default(),
             children: neopets_data::model::find_trees(&bytes, &chain.chunks).0.iter().filter(|t| t.depth > 0).map(|t| t.role_id).collect(),
             ground: Ground::of(&bytes, &chain.chunks, CellOrder::XMajor),
@@ -3696,7 +3702,10 @@ impl Play {
                     let w = if self.world.pack == pack { &mut self.world } else { self.other.as_mut().unwrap() };
                     let (m, o) = (&w.motions[obj], &mut w.object_anims[obj]);
                     match a {
-                        Action::InitObjOn { end, .. } => o.init_on(m, end),
+                        Action::InitObjOn { end, .. } => {
+                            o.init_on(m, end);
+                            self.repose_link(pack, obj);
+                        }
                         Action::PlayAnim { speed, wait, .. } => {
                             o.play(m, speed);
                             if wait {
@@ -3798,6 +3807,8 @@ impl Play {
                     let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
                     if let Some(w) = w.filter(|w| obj < w.objects.len() && w.headers.get(host).and_then(|h| h.as_ref()).is_some_and(|h| locator < h.locators.len())) {
                         w.obj_links.insert(obj, (host, locator));
+                        // Nothing else happens at the call: the next pose evaluation re-poses it.
+                        w.link_base.remove(&obj);
                     }
                 }
                 Action::GroupEffectsToObjLocators { group, host, locator } => {
@@ -4283,6 +4294,7 @@ impl Play {
                     let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
                     if let Some(w) = w.filter(|w| obj < w.object_anims.len()) {
                         w.object_anims[obj].set_time(&w.motions[obj], seconds);
+                        self.repose_link(pack, obj);
                     }
                 }
                 Action::SetObjTimeRandom { obj } => {
@@ -10673,9 +10685,22 @@ impl Play {
         let Some(w) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack) else { return [0.0; 3] };
         let rest = w.objects.get(i).and_then(|o| o.as_ref()).map_or([0.0; 3], |o| [o.rest[12], o.rest[13], o.rest[14]]);
         match w.obj_links.get(&i) {
+            Some(_) if w.link_base.contains_key(&i) => w.link_base[&i],
             Some(&(h, k)) if depth < 4 && h != i => self.anim_locator(pack, h, k, depth + 1).unwrap_or(rest),
             _ => rest,
         }
+    }
+
+    /// Re-pose a linked object's base from its host's locator (a pose evaluation).
+    fn repose_link(&mut self, pack: u32, i: usize) {
+        let Some(w) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack) else { return };
+        let Some(&(h, k)) = w.obj_links.get(&i) else { return };
+        if h == i {
+            return;
+        }
+        let Some(b) = self.anim_locator(pack, h, k, 1) else { return };
+        let w = if self.world.pack == pack { &mut self.world } else if let Some(o) = self.other.as_mut().filter(|o| o.pack == pack) { o } else { return };
+        w.link_base.insert(i, b);
     }
 
     /// Formula A (SPEC-0030 Note on animated locators): the current position of locator k of
@@ -12169,11 +12194,20 @@ impl Play {
         // resident non-current world keeps every object at its last pose (no time step, no pose
         // evaluation; SPEC-0028 Run-time object changes, SPEC-0067 16.6 item 14).
         let mut object_sounds = Vec::new();
+        let mut relink: Vec<usize> = Vec::new();
         let current = self.world.pack;
         for w in [&mut self.world].into_iter().chain(self.other.as_mut()) {
             if w.pack == current {
                 for (o, m) in w.object_anims.iter_mut().zip(&w.motions) {
                     o.tick(m);
+                }
+            }
+            // A linked object that plays or loops is re-posed by its update this tick.
+            if w.pack == current {
+                for (&i, _) in w.obj_links.iter() {
+                    if w.object_anims.get(i).is_some_and(|a| matches!(a.state, 0 | 2)) {
+                        relink.push(i);
+                    }
                 }
             }
             // SPEC-0031 Animated-object sounds: a slot's start plays once (do-not-restart) on
@@ -12187,6 +12221,11 @@ impl Play {
                     }
                 }
             }
+        }
+        // Hosts first (a follower's host may itself be linked): sort for a stable order.
+        relink.sort_unstable();
+        for i in relink {
+            self.repose_link(current, i);
         }
         for (start, stop, at) in object_sounds {
             if let Some(cue) = start {
