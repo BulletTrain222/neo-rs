@@ -107,31 +107,34 @@ impl Candidates {
 }
 
 /// The target list's range and cone by attack variant (0 Tor, 1 Roberta; boot data 0x2DD6A8 to
-/// 0x2DD6B4), its rescan period (0x2DD6B8) and the near distance that keeps a hit target listed
-/// as a candidate behind the hero.
+/// 0x2DD6B4), the pin limit (0x2DD6B8: how long the first record may stay pinned) and the near
+/// distance that keeps a hit target listed as a candidate behind the hero.
 pub const TARGET_RANGE: [f32; 2] = [20.0, 100.0];
 pub const TARGET_CONE: f32 = 0.5;
-pub const RESCAN: u32 = 90;
+pub const PIN: u32 = 90;
 const NEAR: f32 = 6.0;
 
-/// A target list record (SPEC-0053 Layout +0xA70): the character, its hit counter, distance,
-/// alignment and candidate flag (in range, in front and with a clear path).
+/// A target list record (SPEC-0053 Layout +0xA70): the character, its hit counter, horizontal
+/// distance, alignment, the first record's pin counter and the candidate flag (in range, in
+/// front and with a clear path).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Target {
     pub id: u64,
     pub counter: u32,
     pub d: f32,
     pub dot: f32,
+    pub pin: u32,
     pub flag: bool,
 }
 
-/// The hero's target list (SPEC-0053 3.9): up to 15 records; characters that pass the scan are
-/// added on the rescan (every 90 ticks, and on the first tick after the list is emptied); each
-/// tick every record is refreshed, a gone one dropped, and the candidates moved ahead.
+/// The hero's target list (SPEC-0053 3.9 Target scan): up to 15 records, refreshed every tick.
+/// Every listed character's distance and alignment are horizontal. The first record stays pinned
+/// for up to 90 ticks while its flag holds; otherwise the whole list is re-sorted from index 0:
+/// flagged records ahead of the others, then among the flagged the pairwise swap with the +1.0
+/// margin (records i and j swap when d_j < d_i + 1.0).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TargetList {
     pub records: Vec<Target>,
-    clock: u32,
 }
 
 impl TargetList {
@@ -144,27 +147,48 @@ impl TargetList {
     /// is the clear-path test from the hero to a character.
     pub fn tick(&mut self, chars: &[(u64, Vec3)], hero: Vec3, forward: Vec3, variant: usize, clear: impl Fn(u64) -> bool) {
         let range = TARGET_RANGE[variant.min(1)];
-        if self.clock == 0 {
-            for &(id, p) in chars {
-                if self.records.len() < RECORDS && !self.records.iter().any(|r| r.id == id) && dist(p, hero) <= range {
-                    self.records.push(Target { id, ..Default::default() });
+        for &(id, _) in chars {
+            if self.records.len() < RECORDS && !self.records.iter().any(|r| r.id == id) {
+                self.records.push(Target { id, flag: true, ..Default::default() });
+            }
+        }
+        self.records.retain(|r| chars.iter().any(|c| c.0 == r.id));
+        let fl = forward[0].hypot(forward[2]).max(1e-6);
+        let (fx, fz) = (forward[0] / fl, forward[2] / fl);
+        for (k, r) in self.records.iter_mut().enumerate() {
+            let Some(&(_, p)) = chars.iter().find(|c| c.0 == r.id) else { continue };
+            let (dx, dz) = (p[0] - hero[0], p[2] - hero[2]);
+            r.d = dx.hypot(dz);
+            let n = r.d.max(1e-6);
+            r.dot = (fx * dx + fz * dz) / n;
+            r.flag = !((r.dot < TARGET_CONE && (r.counter < 1 || r.d > NEAR)) || r.d > range) && clear(r.id);
+            if k > 0 {
+                r.pin = 0;
+            }
+        }
+        let start = match self.records.first_mut() {
+            Some(f) => {
+                f.pin += 1;
+                if f.pin > PIN || !f.flag {
+                    f.pin = 0;
+                    0
+                } else {
+                    1
+                }
+            }
+            None => 0,
+        };
+        let tail = self.records.split_off(start);
+        let (mut a, b): (Vec<Target>, Vec<Target>) = tail.into_iter().partition(|r| r.flag);
+        for i in 0..a.len() {
+            for j in i..a.len() {
+                if a[j].d < a[i].d + 1.0 {
+                    a.swap(i, j);
                 }
             }
         }
-        self.clock = (self.clock + 1) % RESCAN;
-        self.records.retain(|r| chars.iter().any(|c| c.0 == r.id));
-        for r in &mut self.records {
-            let Some(&(_, p)) = chars.iter().find(|c| c.0 == r.id) else { continue };
-            r.d = dist(p, hero);
-            let to = [p[0] - hero[0], p[1] - hero[1], p[2] - hero[2]];
-            let n = r.d.max(1e-6);
-            r.dot = (forward[0] * to[0] + forward[1] * to[1] + forward[2] * to[2]) / n;
-            r.flag = !((r.dot < TARGET_CONE && (r.counter < 1 || r.d > NEAR)) || r.d > range) && clear(r.id);
-        }
-        // Candidates ahead of non-candidates, each group in its order.
-        let (mut a, b): (Vec<Target>, Vec<Target>) = self.records.iter().partition(|r| r.flag);
-        a.extend(b);
-        self.records = a;
+        self.records.extend(a);
+        self.records.extend(b);
     }
 
     /// Raise a listed character's counter (the hero's ten-entry list of hits, +0x400).
@@ -370,13 +394,32 @@ mod tests {
     fn target_list_flags() {
         let mut t = TargetList::default();
         let fwd = [0.0, 0.0, 1.0];
-        // Ahead within range: a candidate; behind: not; beyond 20: not listed.
+        // Ahead within range: a candidate; behind: not; beyond 20: listed but not a candidate.
         let chars = [(1, [0.0, 0.0, 10.0]), (2, [0.0, 0.0, -5.0]), (3, [0.0, 0.0, 30.0])];
         t.tick(&chars, [0.0; 3], fwd, 0, |_| true);
-        assert_eq!(t.records.iter().map(|r| (r.id, r.flag)).collect::<Vec<_>>(), vec![(1, true), (2, false)]);
+        assert_eq!(t.records.iter().map(|r| (r.id, r.flag)).collect::<Vec<_>>(), vec![(1, true), (2, false), (3, false)]);
         // A hit target close behind stays a candidate; a blocked path clears the flag.
         t.hit(2);
         t.tick(&chars, [0.0; 3], fwd, 0, |id| id != 1);
-        assert_eq!(t.records.iter().map(|r| (r.id, r.flag)).collect::<Vec<_>>(), vec![(2, true), (1, false)]);
+        assert_eq!(t.records.iter().map(|r| (r.id, r.flag)).collect::<Vec<_>>(), vec![(2, true), (1, false), (3, false)]);
+        // The distance is horizontal (a candidate 15 ahead and 50 up is at 15); the first
+        // record is pinned while its flag holds, and loses the pin when its flag clears.
+        let mut t = TargetList::default();
+        let two = [(1, [0.0, 50.0, 15.0]), (2, [0.0, 0.0, 8.0])];
+        t.tick(&two, [0.0; 3], fwd, 0, |_| true);
+        assert_eq!(t.records[0].id, 1);
+        assert!((t.records[0].d - 15.0).abs() < 1e-5);
+        t.tick(&two, [0.0; 3], fwd, 0, |id| id != 1);
+        assert_eq!(t.records[0].id, 2);
+        // The pinned first record stays first for 90 ticks, then the list is re-sorted.
+        let mut t = TargetList::default();
+        t.tick(&[(1, [0.0, 0.0, 12.0])], [0.0; 3], fwd, 0, |_| true);
+        let both = [(1, [0.0, 0.0, 12.0]), (2, [0.0, 0.0, 5.0])];
+        for _ in 0..89 {
+            t.tick(&both, [0.0; 3], fwd, 0, |_| true);
+            assert_eq!(t.records[0].id, 1);
+        }
+        t.tick(&both, [0.0; 3], fwd, 0, |_| true);
+        assert_eq!(t.records[0].id, 2);
     }
 }

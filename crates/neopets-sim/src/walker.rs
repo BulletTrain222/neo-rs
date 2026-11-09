@@ -17,6 +17,9 @@ pub struct Obstacle {
     pub radius: f32,
     pub length: f32,
     pub owner: u32,
+    /// Both lanes are tested (the kind-3 cylinders); blocks, grid-cell entries and characters
+    /// test only the first lane, P + s to W + s (SPEC-0029 2a quirk).
+    pub both_lanes: bool,
 }
 
 /// The radius and length of a block's, or another character's, obstacle.
@@ -48,7 +51,7 @@ pub fn look_ahead(p: Vec3, w: Vec3, hero: Vec3, avoid: &[Obstacle], own: u32, on
     let hit = avoid
         .iter()
         .filter(|o| o.owner != own || own == 0)
-        .filter(|o| segment_meets(lane(1.0, p), lane(1.0, w), o) || segment_meets(lane(-1.0, p), lane(-1.0, w), o))
+        .filter(|o| segment_meets(lane(1.0, p), lane(1.0, w), o) || (o.both_lanes && segment_meets(lane(-1.0, p), lane(-1.0, w), o)))
         .min_by(|a, b| hdist(a.point, p).total_cmp(&hdist(b.point, p)));
     let Some(o) = hit else { return w };
     let (ux, uz) = (o.point[0] - hero[0], o.point[2] - hero[2]);
@@ -511,7 +514,7 @@ mod tests {
     /// SPEC-0029 2a: the side comes from the hero's position, and the mesh decides between the candidates.
     #[test]
     fn look_ahead_shifts_around_the_nearest_obstacle() {
-        let o = |x: f32, z: f32, owner: u32| Obstacle { point: [x, 0.0, z], radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner };
+        let o = |x: f32, z: f32, owner: u32| Obstacle { point: [x, 0.0, z], radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner, both_lanes: true };
         let (p, w, hero) = ([0.0; 3], [0.0, 0.0, 30.0], [0.0, 0.0, 40.0]);
         // Clear lanes: w unchanged.
         assert_eq!(look_ahead(p, w, hero, &[o(20.0, 15.0, 2)], 1, |_| true), w);
@@ -522,7 +525,7 @@ mod tests {
         assert_eq!(look_ahead(p, w, hero, &[o(0.0, 10.0, 3)], 1, |_| false), w);
         // Its own entry is skipped; so is one above the lanes.
         assert_eq!(look_ahead(p, w, hero, &[o(0.0, 10.0, 1)], 1, |_| true), w);
-        let high = Obstacle { point: [0.0, 30.0, 10.0], radius: 5.0, length: 20.0, owner: 2 };
+        let high = Obstacle { point: [0.0, 30.0, 10.0], radius: 5.0, length: 20.0, owner: 2, both_lanes: true };
         assert_eq!(look_ahead(p, w, hero, &[high], 1, |_| true), w);
     }
 

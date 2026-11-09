@@ -127,14 +127,14 @@ impl NavMesh {
         std::array::from_fn(|k| (a[k] + b[k] + c[k]) / 3.0)
     }
 
-    /// SPEC-0029 Behavior 2b nearest triangle: smallest 3-D distance from its centroid to q,
-    /// earlier triangle on a tie. (The occupancy quirk, which passes or fails every triangle of
+    /// SPEC-0029 Behavior 2b nearest triangle: smallest horizontal (x, z) distance from its
+    /// centroid to q (corrected 2026-11-09), earlier triangle on a tie. (The occupancy quirk, which passes or fails every triangle of
     /// one search alike, is not modelled: every triangle passes.)
     pub fn nearest(&self, q: Vec3) -> Option<usize> {
         let mut best = (1.0e9f32, None);
         for t in 0..self.len() {
             let c = self.centroid(t);
-            let d = ((c[0] - q[0]).powi(2) + (c[1] - q[1]).powi(2) + (c[2] - q[2]).powi(2)).sqrt();
+            let d = ((c[0] - q[0]).powi(2) + (c[2] - q[2]).powi(2)).sqrt();
             if d < best.0 {
                 best = (d, Some(t));
             }

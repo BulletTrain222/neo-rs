@@ -580,13 +580,16 @@ impl Locomotion {
     /// hero to the stick direction at rate 1.0, requesting 119 when that direction is more than
     /// about 18 degrees from the facing (dot below 0.95; R-0017). No travel step.
     fn guard(&mut self, input: &HeroInput, stick: bool, clip: ClipState) {
+        // L1 released: state 1 and the idle request, and the routine still runs its stick part
+        // for this tick (it may request 119; SPEC-0033 4A.3, corrected from code).
         if !input.guard {
             self.state = STANCE;
-            return;
-        }
-        let blocking = clip.action == ANIM_BLOCK && clip.progress < 0.99;
-        if !blocking {
-            self.request = ANIM_GUARD;
+            self.request = 0;
+        } else {
+            let blocking = clip.action == ANIM_BLOCK && clip.progress < 0.99;
+            if !blocking {
+                self.request = ANIM_GUARD;
+            }
         }
         if stick {
             let u = self.target;

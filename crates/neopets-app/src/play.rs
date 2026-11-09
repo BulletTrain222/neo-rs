@@ -1910,6 +1910,8 @@ pub struct Play {
     attack_repeat: bool,
     /// The parked hero's quick-item marker (-1 none).
     other_marker: i32,
+    /// The pending exterior replacement was requested with movies queued.
+    replace_after_movie: bool,
     /// The Mote colour rows (SPEC-0023 section 25; 0x2DCA60, one RGB row per Mote 160 to 173).
     mote_glow_rgb: [[u8; 3]; 14],
     landing_rumble: (usize, f32, f32),
@@ -2662,6 +2664,7 @@ impl Play {
             rumble_presets: Vec::new(),
             attack_repeat: false,
             other_marker: -1,
+            replace_after_movie: false,
             mote_glow_rgb: [[0; 3]; 14],
             landing_rumble: (5, 0.0, 0.0),
             motor: None,
@@ -4189,6 +4192,9 @@ impl Play {
                 }
                 Action::ReplaceExterior { slot, plane } => {
                     if let Some(&p) = self.boot.areas.packs.get(slot) {
+                        // A load handed off after a movie arrives with no fade (SPEC-0026 flag B
+                        // is not armed; SPEC-0067 section 2 step 4).
+                        self.replace_after_movie = !self.state.movie_queue.is_empty();
                         self.job = Some(Job::Replace(p, plane));
                         self.last_door = format!("script: replacing the exterior with slot {slot} (pack {p}), plane {plane}");
                     }
@@ -5081,7 +5087,9 @@ impl Play {
             let target = if row.homing == 0 && aiming {
                 None
             } else if row.homing <= 1 {
-                self.lock
+                // The first record of the hero target list when its flag is set (SPEC-0036
+                // Launch; SPEC-0040: never the forced id or the enemy lock).
+                self.targets.records.first().filter(|r| r.flag).map(|r| r.id)
             } else {
                 self.shot_target()
             };
@@ -7994,6 +8002,9 @@ impl Play {
                     self.hit_list.push(c.id);
                     e.block_hit = true;
                     landed += 1;
+                    // A blocked swing on any guarding target plays the impact cue and asks Tor's
+                    // recoil (SPEC-0036 Hero swing, step 4).
+                    knight_block = true;
                 }
                 continue;
             }
@@ -8362,14 +8373,14 @@ impl Play {
             if let neopets_sim::trigger::Shape::Cylinder { base, axis, length, radius } = v.shape {
                 if v.kind == 3 && axis[1].abs() >= 0.99 {
                     let point = [base[0], base[1] + 0.5 * length * axis[1], base[2]];
-                    list.push(Obstacle { point, radius, length, owner: 0 });
+                    list.push(Obstacle { point, radius, length, owner: 0, both_lanes: true });
                 }
             }
         }
-        list.extend(self.world.blocks.iter().filter(|b| b.active != 0).map(|b| Obstacle { point: b.position, radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner: 0 }));
+        list.extend(self.world.blocks.iter().filter(|b| b.active != 0).map(|b| Obstacle { point: b.position, radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner: 0, both_lanes: false }));
         list.extend(self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0).filter(|c| {
             !c.enemy.as_ref().is_some_and(|e| e.is_dead() || e.hidden(c.anim.clip_state().action))
-        }).map(|c| Obstacle { point: c.position, radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner: c.walker.as_ref().map_or(0, |w| w.avoid_id) }));
+        }).map(|c| Obstacle { point: c.position, radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner: c.walker.as_ref().map_or(0, |w| w.avoid_id), both_lanes: false }));
         let list = std::sync::Arc::new(list);
         for c in self.characters.iter_mut().filter(|c| c.pack == pack) {
             if let Some(w) = c.walker.as_mut() {
@@ -10351,8 +10362,10 @@ impl Play {
                 self.last_door = format!("replaced the exterior with {}, arriving at door {plane}", self.world.pack);
                 self.activated();
                 // SPEC-0026 flag B: the post-load fade-in (the knight's defeat faded out to the
-                // return to 986 and nothing faded back in: a black screen).
-                self.fade_in_after_load = Some(0);
+                // return to 986 and nothing faded back in: a black screen); not after a movie.
+                if !std::mem::take(&mut self.replace_after_movie) {
+                    self.fade_in_after_load = Some(0);
+                }
             }
             Job::ReloadTransition(_) => {
                 // SPEC-0026 (the world reload): the reloaded pack's Init runs at load
