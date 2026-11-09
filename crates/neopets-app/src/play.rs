@@ -1528,6 +1528,8 @@ pub struct Play {
     /// (entity 8) on its first tick, before the King's region has bound it (SPEC-0041 985 CB3
     /// rule 4); without this the hold was lost and the King fought beside Gnarfas.
     pending_holds: std::collections::HashMap<(u32, usize), (u32, u64)>,
+    /// Slot navmesh assignments waiting for their character to arrive: (pack, slot, index, mesh).
+    pending_navmesh: Vec<(u32, u8, usize, i32)>,
     /// The Juppie tuning words and the boss hits of this tick's swing (character id, damage).
     juppie_words: neopets_sim::juppie::Words,
     gnarfas_words: neopets_sim::gnarfas::Words,
@@ -2517,6 +2519,7 @@ impl Play {
             gesture_words,
             pending_off: Default::default(),
             pending_holds: Default::default(),
+            pending_navmesh: Vec::new(),
             juppie_words,
             gnarfas_words,
             king_words,
@@ -4265,6 +4268,13 @@ impl Play {
                             w.assign_mesh(usize::try_from(mesh).ok().filter(|&m| m < meshes.len()), meshes);
                         }
                     }
+                }
+                Action::SlotNavmesh { slot, index, mesh } => {
+                    self.pending_navmesh.push((pack, slot, index, mesh));
+                }
+                Action::SlotNavmeshAll { slot, mesh } => {
+                    let n = self.characters.iter().filter(|c| c.pack == pack && c.slot == slot).count();
+                    self.pending_navmesh.extend((0..n).map(|index| (pack, slot, index, mesh)));
                 }
                 Action::QueryNavmesh { entity, word } => {
                     let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
@@ -11655,7 +11665,10 @@ impl Play {
                 let mut on_top = false;
                 let mut latch = (0..3).any(|k| (p[k] - entry[k]).abs() > 1e-5) || matches!(hero_state, 50 | 52 | 21 | 41);
                 for &(q, r, h, id) in &bodies {
-                    if p[1] >= q[1] + h || q[1] >= p[1] + HERO_HEIGHT {
+                    // The flat-ended cylinder overlap's parallel branch (both bodies upright):
+                    // the height ranges and the radius sum compare inclusively (SPEC-0040
+                    // Behavior 11, corrected 2026-11-09).
+                    if p[1] > q[1] + h || q[1] > p[1] + HERO_HEIGHT {
                         continue;
                     }
                     let (dx, dz) = (p[0] - q[0], p[2] - q[2]);
@@ -11682,7 +11695,7 @@ impl Play {
                         continue;
                     }
                     let min = contact::HERO_RADIUS + r;
-                    if d < min {
+                    if d <= min {
                         let (ux, uz) = if d > 1e-4 { (dx / d, dz / d) } else { (1.0, 0.0) };
                         touch_ids.borrow_mut().push(id);
                         if latch {
@@ -12203,6 +12216,7 @@ impl Play {
         self.mice_step();
         self.cloud_beast_step();
         self.enemies_step();
+        self.pending_navmesh_step();
         self.lock_step();
         self.npc_block_step();
         self.items_step();
@@ -12373,6 +12387,32 @@ impl Play {
     /// SPEC-0040 Behavior 20 items 1 to 5 each tick: the candidates are the current world's
     /// living characters the hero's attacks can hit (not townsfolk, not petpet types; the
     /// spawn-record foe test is read as this), engaged by an attack (state 13) while facing them.
+    /// The queued slot navmesh assignments (SPEC-0044 1091): each applies once its character
+    /// (the slot's record `index`) has arrived; a pack no longer resident drops its entries.
+    fn pending_navmesh_step(&mut self) {
+        if self.pending_navmesh.is_empty() {
+            return;
+        }
+        let resident: Vec<u32> = std::iter::once(self.world.pack).chain(self.other.as_ref().map(|o| o.pack)).collect();
+        let mut keep = Vec::new();
+        for (pack, slot, index, mesh) in std::mem::take(&mut self.pending_navmesh) {
+            if !resident.contains(&pack) {
+                continue;
+            }
+            let Some(world) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack) else { continue };
+            let meshes = &world.navmeshes;
+            match self.characters.iter_mut().find(|c| c.pack == pack && c.slot == slot && c.ordinal == index) {
+                Some(c) => {
+                    if let Some(w) = c.walker.as_mut() {
+                        w.assign_mesh(usize::try_from(mesh).ok().filter(|&m| m < meshes.len()), meshes);
+                    }
+                }
+                None => keep.push((pack, slot, index, mesh)),
+            }
+        }
+        self.pending_navmesh = keep;
+    }
+
     fn lock_step(&mut self) {
         let pack = self.world.pack;
         let chars: Vec<(u64, [f32; 3])> = self

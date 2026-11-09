@@ -368,6 +368,12 @@ pub enum Action {
     /// CharacterNavmeshAssign(entity, mesh) (SPEC-0030 row 210): the mesh set (a negative id
     /// leaves the character off-mesh).
     NavmeshAssign { entity: usize, mesh: i32 },
+    /// The navmesh id of character `index` of a slot, applied once that character has arrived
+    /// (SPEC-0044 1091 Character navmesh assignments).
+    SlotNavmesh { slot: u8, index: usize, mesh: i32 },
+    /// Every character the slot holds now (counted before a reload resets it) gets `mesh` once it
+    /// has arrived again.
+    SlotNavmeshAll { slot: u8, mesh: i32 },
     /// GetClosestNavMeshId(W, entity) (SPEC-0030 row 122), answered by the host into a module
     /// word of the thread's pack as the id plus 1 (0: none yet).
     QueryNavmesh { entity: usize, word: u8 },
@@ -4133,10 +4139,24 @@ fn stage_states_1091(s: &GameState, stage: i32) -> Vec<Action> {
 }
 
 /// The slot thread: character set 0 to 3 for stages 0 to 3, set 3 for stage 4, into slot
-/// store A (region 1091 + 1 + set). The navmesh assignment after the load is not built.
-fn slot_1091(stage: i32) -> Action {
+/// store A (region 1091 + 1 + set), then the navmesh ids by set: 0: characters 0 and 1 get 8
+/// and 9; 1: 0 to 5 get 11, 10, 10, 10, 12, 10; 2: 0 to 4 get 13, 13, 14, 15, 13; 3: every
+/// character the slot held before the reset gets 7 (none on the first load).
+fn slot_1091(stage: i32) -> Vec<Action> {
     let set = if (0..=3).contains(&stage) { stage as u32 } else { 3 };
-    Action::LoadRegion { slot: 0, region: Some(1092 + set) }
+    let ids: &[i32] = match set {
+        0 => &[8, 9],
+        1 => &[11, 10, 10, 10, 12, 10],
+        2 => &[13, 13, 14, 15, 13],
+        _ => &[],
+    };
+    let mut v = Vec::new();
+    if set == 3 {
+        v.push(Action::SlotNavmeshAll { slot: 0, mesh: 7 });
+    }
+    v.push(Action::LoadRegion { slot: 0, region: Some(1092 + set) });
+    v.extend(ids.iter().enumerate().map(|(index, &mesh)| Action::SlotNavmesh { slot: 0, index, mesh }));
+    v
 }
 
 /// The button states for a stage. At start-up: an available button at its end pose, the
@@ -4192,7 +4212,7 @@ fn init_1091(s: &mut GameState) -> Vec<Action> {
     }
     v.extend(buttons_1091(s, 4, true));
     v.extend(stage_states_1091(s, 4));
-    v.push(slot_1091(4));
+    v.extend(slot_1091(4));
     v
 }
 
@@ -4267,7 +4287,7 @@ fn puzzle_1091(s: &mut GameState) -> Vec<Action> {
     if !moved {
         s.set_word(1091, W1091_BUSY, 0);
         v.extend(buttons_1091(s, stage, false));
-        v.push(slot_1091(stage));
+        v.extend(slot_1091(stage));
         v.push(Action::ReturnCamera { preset: -1, release: true });
     }
     v
