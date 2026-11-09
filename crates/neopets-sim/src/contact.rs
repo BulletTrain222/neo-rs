@@ -76,22 +76,44 @@ pub fn push_grown(p: Vec3, b: &BoxShape, r: f32, grow: bool) -> Option<(u8, Vec3
 /// The sphere contact radius (SPEC-0018 Sphere contact; boot word 0x2DB400).
 pub const SPHERE_CONTACT: f32 = 1.25;
 
-/// A collision sphere pushes characters out when its id word has class 0 or class 1 and not
-/// class 2 (SPEC-0018 Primitive class bits; Sphere contact).
+/// A collision sphere pushes (slides) a character when its flag word has bit 0 (SPEC-0018
+/// Kind-1 sphere, character side, code pass 2026-11-09: bit 0 slides; bits 3, 4 and 9 do other
+/// things and never push).
 pub fn sphere_pushes(id: u16) -> bool {
-    id & 3 != 0 && id & 4 == 0
+    id & 1 != 0
 }
 
-/// Sphere contact: a point closer than r + 1.25 to a sphere's centre moves along the unit vector
-/// from the centre to it, onto the sphere of radius r + 1.25. Returns whether any pushed.
+/// The body cylinder a sphere is tested against: the hero's radius and height from the feet.
+pub const BODY_HEIGHT: f32 = 3.5;
+
+/// Sphere contact (SPEC-0018 Kind-1 sphere, character side): each sphere (centre, radius)
+/// against the body's upright flat-ended cylinder standing on `p` (radius 1.175, height 3.5);
+/// an overlap moves the body out along the line from the sphere's centre to the cylinder's
+/// nearest point by the overlap. Returns whether any pushed.
 pub fn resolve_spheres(p: &mut Vec3, spheres: &[(Vec3, f32)]) -> bool {
     let mut any = false;
     for &(c, r) in spheres {
-        let d = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
-        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        let reach = r + SPHERE_CONTACT;
-        if len < reach && len > 0.0 {
-            *p = std::array::from_fn(|k| c[k] + d[k] / len * reach);
+        let (dx, dz) = (c[0] - p[0], c[2] - p[2]);
+        let dh = dx.hypot(dz);
+        let y = c[1].clamp(p[1], p[1] + BODY_HEIGHT);
+        let (ux, uz) = if dh > 1e-6 { (dx / dh, dz / dh) } else { (1.0, 0.0) };
+        let reach = dh.min(HERO_RADIUS);
+        // The cylinder's nearest point to the centre.
+        let q = [p[0] + ux * reach, y, p[2] + uz * reach];
+        let d = [q[0] - c[0], q[1] - c[1], q[2] - c[2]];
+        let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let inside = dh < HERO_RADIUS && c[1] > p[1] && c[1] < p[1] + BODY_HEIGHT;
+        if inside {
+            // The centre inside the body: out horizontally to the touching distance.
+            let m = HERO_RADIUS + r - dh;
+            p[0] -= ux * m;
+            p[2] -= uz * m;
+            any = true;
+        } else if dist < r && dist > 1e-6 {
+            let m = r - dist;
+            for k in 0..3 {
+                p[k] += d[k] / dist * m;
+            }
             any = true;
         }
     }
@@ -348,16 +370,20 @@ mod tests {
 
     #[test]
     fn sphere_contact() {
-        // Class 0 or 1 push; class 2 or only class 3 or 4 does not.
-        assert!(sphere_pushes(1) && sphere_pushes(2) && sphere_pushes(3));
-        assert!(!sphere_pushes(5) && !sphere_pushes(8) && !sphere_pushes(16) && !sphere_pushes(0));
-        // A sphere of radius 2 at the origin: a point 1.0 away on +x ends 3.25 away; one at 4.0
-        // stays.
+        // Bit 0 alone pushes.
+        assert!(sphere_pushes(1) && sphere_pushes(3) && sphere_pushes(5));
+        assert!(!sphere_pushes(2) && !sphere_pushes(8) && !sphere_pushes(16) && !sphere_pushes(0));
+        // A sphere of radius 2 at (0, 2, 0): a body standing at x 1.0 is pushed out to
+        // 2 + 1.175 horizontally; one at x 4.0 stays.
         let mut p = [1.0, 0.0, 0.0];
-        assert!(resolve_spheres(&mut p, &[([0.0; 3], 2.0)]));
-        assert!((p[0] - 3.25).abs() < 1e-6 && p[1] == 0.0);
+        assert!(resolve_spheres(&mut p, &[([0.0, 2.0, 0.0], 2.0)]));
+        assert!((p[0] - 3.175).abs() < 1e-5 && p[1] == 0.0, "{p:?}");
         let mut q = [4.0, 0.0, 0.0];
-        assert!(!resolve_spheres(&mut q, &[([0.0; 3], 2.0)]));
+        assert!(!resolve_spheres(&mut q, &[([0.0, 2.0, 0.0], 2.0)]));
+        // A sphere above the head (centre 3.5 + 1.5 up, radius 2): the body is pushed down.
+        let mut h = [0.0, 0.0, 0.0];
+        assert!(resolve_spheres(&mut h, &[([0.0, 5.0, 0.0], 2.0)]));
+        assert!((h[1] + 0.5).abs() < 1e-5, "{h:?}");
     }
 
     use super::*;

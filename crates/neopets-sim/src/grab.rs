@@ -129,7 +129,9 @@ pub fn search(lines: &[Line], current: usize, p: Vec3, f: Vec3, b1: Vec3, side: 
             continue;
         }
         let t = dot([p[0] - l.a[0], p[1] - l.a[1], p[2] - l.a[2]], l.u);
-        if !(t > 0.0 && t < l.length) || s.abs() >= 20.0 || (l.a[1] - p[1]).abs() >= 8.0 {
+        // The height test uses the foot point Q = A + t u at the hero's own distance along the
+        // line, not the start point (SPEC-0033, corrected 2026-11-09).
+        if !(t > 0.0 && t < l.length) || s.abs() >= 20.0 || (l.a[1] + t * l.u[1] - p[1]).abs() >= 8.0 {
             continue;
         }
         if best.is_none_or(|(_, d)| s.abs() < d) {

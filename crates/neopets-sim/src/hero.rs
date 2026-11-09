@@ -900,7 +900,10 @@ impl Locomotion {
             // Behavior 9A: the walk-off check runs first in states 1 to 6.
             if self.body.gap > 3.0 && self.body.velocity[1] < -3.0 {
                 self.enter_air(JUMP);
-                let m = self.last_motion;
+                // The vertical lane of the motion is zeroed first, so the test is horizontal
+                // (SPEC-0033, corrected from code).
+                let mut m = self.last_motion;
+                m[1] = 0.0;
                 let still = dot(m, self.facing) < 0.0 || dot(m, m).sqrt() < 0.01;
                 (self.phase, self.request) = if still { (2, ANIM_JUMP_STILL) } else { (4, ANIM_JUMP_MOVE) };
                 return;

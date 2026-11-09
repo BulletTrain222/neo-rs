@@ -72,6 +72,9 @@ pub enum Action {
     AddAnimObjSound { obj: usize, cue: i32, a: f32, b: f32 },
     LoopSound { cue: i32, locator: Option<usize> },
     VisitLoopSound { cue: i32, locator: Option<usize> },
+    /// PlaySound with its noRestart argument set (SPEC-0030 row 223): nothing starts while a
+    /// voice of the same slot, cue and emitter runs.
+    PlaySoundNoRestart { cue: i32, locator: Option<usize> },
     KillSound { cue: i32, locator: Option<usize> },
     /// PlayHeroSound(h, cue, locator, do-not-restart) on the selected hero's voice slot, only
     /// when h is -1 or the selected hero's flag (0 Tor).
@@ -6319,8 +6322,9 @@ fn obj_sounds(list: &[(usize, i32, f32)]) -> Vec<Action> {
 fn solved_1324() -> Vec<Action> {
     // The helper starts sound 5 (the third bell plays 4 and 5 before its camera; SPEC-0041
     // 1324 Order independence).
-    let pair = [Action::PlaySound { cue: 4, locator: None }, Action::PlaySound { cue: 5, locator: None }];
-    let mut v = vec![Action::PlaySound { cue: 5, locator: None }];
+    // Pack 1324 starts its gear and bell cues 4 and 5 with noRestart set (SPEC-0030 row 223).
+    let pair = [Action::PlaySoundNoRestart { cue: 4, locator: None }, Action::PlaySoundNoRestart { cue: 5, locator: None }];
+    let mut v = vec![Action::PlaySoundNoRestart { cue: 5, locator: None }];
     v.extend([
         wait(2.0),
         Action::SetFlag { flag: 239, on: true },

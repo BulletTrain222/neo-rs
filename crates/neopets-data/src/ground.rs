@@ -637,15 +637,32 @@ pub struct Rectangle {
 }
 
 impl Rectangle {
-    /// The box-push gate of SPEC-0018: class 3 or class 0 (flag bits 3 or 0), the mask gate
-    /// against the world mask, and a positive B extent (zero or less is a contact plane).
-    ///
-    /// SPEC-0018 Contact pass (R-0237): bit 3 with bits 1, 2, 5 and 7 clear pushes no character (flags 0x8 and 0x9).
+    /// The box-push gate: the moving-rectangle bits (`moving_rect_pushes`), the mask gate against
+    /// the world mask, and a positive B extent (zero or less is a contact plane).
     pub fn pushes(&self, world_mask: u16) -> bool {
-        self.flags & 0b1001 != 0
-            && !(self.flags & 8 != 0 && self.flags & (2 | 4 | 0x20 | 0x80) == 0)
-            && (self.mask == 0 || self.mask & world_mask != 0)
-            && self.extents[2] > 0.0
+        moving_rect_pushes(self.flags) && (self.mask == 0 || self.mask & world_mask != 0) && self.extents[2] > 0.0
+    }
+}
+
+/// SPEC-0028 / SPEC-0018 moving-rectangle response (corrected 2026-11-09): with bit 5 or bit 7
+/// set the push follows only when bit 0 is set and bit 8 clear; with neither, a rectangle pushes
+/// unless bit 3 is set (even without bit 0).
+pub fn moving_rect_pushes(flags: u16) -> bool {
+    let bit = |n: u16| flags & (1 << n) != 0;
+    if bit(5) || bit(7) {
+        bit(0) && !bit(8)
+    } else {
+        !bit(3)
+    }
+}
+
+#[cfg(test)]
+mod moving_rect_tests {
+    #[test]
+    fn push_bits() {
+        use super::moving_rect_pushes as p;
+        assert!(p(0x0) && p(0x2) && p(0x1) && !p(0x8) && !p(0x9) && !p(0xA));
+        assert!(p(0x21) && !p(0x20) && !p(0x121) && p(0x81) && !p(0x80));
     }
 }
 

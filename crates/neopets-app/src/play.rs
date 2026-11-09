@@ -3088,10 +3088,7 @@ impl Play {
             for v in &h.volumes {
                 match v.shape {
                     neopets_data::trigger::Shape::Rectangle { origin, axes, extents } if matches!(v.kind, 4 | 7) => {
-                        let pushes = v.flags & 0b1001 != 0
-                            && !(v.flags & 8 != 0 && v.flags & (2 | 4 | 0x20 | 0x80) == 0)
-                            && (v.mask == 0 || v.mask & w.collis_mask != 0)
-                            && extents[2] > 0.0;
+                        let pushes = ground::moving_rect_pushes(v.flags) && (v.mask == 0 || v.mask & w.collis_mask != 0) && extents[2] > 0.0;
                         if pushes && near(origin) {
                             boxes.push(BoxShape { origin, axes, extents });
                         }
@@ -3119,7 +3116,10 @@ impl Play {
         let mut out = Vec::new();
         for (i, h) in w.headers.iter().enumerate() {
             let Some(h) = h else { continue };
-            for v in h.volumes.iter().filter(|v| v.kind == 3 && v.flags & 1 != 0 && v.flags & 0x000E == 0) {
+            // The character cylinder response pushes on bit 0; a bit-3 cylinder also slides when
+            // bit 0 is set, and a bit-2 (spring) one falls back to solid (SPEC-0018, code pass
+            // 2026-11-09). Bit 1 skips the record as for the static cylinders (R-0238).
+            for v in h.volumes.iter().filter(|v| v.kind == 3 && v.flags & 1 != 0 && v.flags & 2 == 0) {
                 let neopets_data::trigger::Shape::Cylinder { base, axis, length, radius } = v.shape else { continue };
                 if axis[1].abs() < 0.99 {
                     continue;
@@ -4439,12 +4439,15 @@ impl Play {
                         println!("      Whinny pen: point {point:?}; inner {inner} (kind, triangles, holds point) {:?}; entrance {entrance} {:?}", info(inner), info(entrance));
                     }
                 }
-                Action::PlaySound { cue, locator } | Action::LoopSound { cue, locator } | Action::VisitLoopSound { cue, locator } | Action::KillSound { cue, locator } => {
+                Action::PlaySound { cue, locator } | Action::PlaySoundNoRestart { cue, locator } | Action::LoopSound { cue, locator } | Action::VisitLoopSound { cue, locator } | Action::KillSound { cue, locator } => {
                     use neopets_sim::sound::{Play as Cue, AREA};
                     let at = locator.and_then(|i| self.world.entries.get(i)).map(|e| e.0);
                     match a {
                         Action::PlaySound { .. } => {
                             self.sound.play(AREA, cue, Cue { emitter: at, ..Default::default() });
+                        }
+                        Action::PlaySoundNoRestart { .. } => {
+                            self.sound.play(AREA, cue, Cue { emitter: at, do_not_restart: true, ..Default::default() });
                         }
                         Action::LoopSound { .. } => {
                             self.sound.play(AREA, cue, Cue { emitter: at, keep_alive: true, ..Default::default() });
@@ -5605,6 +5608,11 @@ impl Play {
         if let Some(f) = flag {
             self.state.set(f, true);
         }
+        // Every act branch (stages 1 to 4) removes the live petpet: acts 3 and 4 before the
+        // heal, acts 1 and 2 after it (SPEC-0047, confirmed 2026-11-09).
+        if matches!(stage, 3 | 4) {
+            self.deactivate_pet();
+        }
         for hero in 0..2 {
             if heal & (1 << hero) == 0 {
                 continue;
@@ -5618,6 +5626,9 @@ impl Play {
                 p.hp = p.hp_max;
                 p.mp = p.mp_max;
             }
+        }
+        if matches!(stage, 1 | 2) {
+            self.deactivate_pet();
         }
         self.last_swap = format!("act start {stage}: mode {mode}, hero {} on tick {}", self.hero_index, self.ticks);
     }
@@ -9270,8 +9281,16 @@ impl Play {
         for (i, _) in near.take(cap.saturating_sub(kept)) {
             binds.push(i);
         }
+        // A release outside default mode 7 writes the current position and heading back into
+        // the record, and a rebind starts from them (SPEC-0056 Release and rebind, corrected
+        // 2026-11-09).
+        let left: Vec<(u64, [f32; 3], [f32; 3])> = self.characters.iter().filter(|c| release.contains(&c.id) && c.enemy.as_ref().is_none_or(|e| e.state != 7)).map(|c| (c.id, c.position, c.facing)).collect();
         let recs = self.blocks.get_mut(&pack).unwrap_or_else(|| unreachable!());
         for (r, &f) in recs.iter_mut().zip(&free) {
+            if let Some(&(_, at, facing)) = r.bound.and_then(|id| left.iter().find(|l| l.0 == id)) {
+                r.pl.position = at;
+                r.pl.facing = facing;
+            }
             if f || r.bound.is_some_and(|id| release.contains(&id)) {
                 r.bound = None;
             }
@@ -9303,7 +9322,11 @@ impl Play {
         {
             self.next_character += 1;
             let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
-            let position = match world.and_then(|w| w.ground_at(pl.position[0], pl.position[2], pl.position[1] + 2.5)) {
+            // The ground placement (SPEC-0040 step 5): the probe 8.0 above the feet replaces the
+            // height only on a hit and only when the row's Can Fly word is 0; a flyer keeps the
+            // height it was given.
+            let grounded = row.is_none_or(|r| r.can_fly == 0);
+            let position = match world.filter(|_| grounded).and_then(|w| w.ground_at(pl.position[0], pl.position[2], pl.position[1] + 8.0)) {
                 Some(h) => [pl.position[0], h, pl.position[2]],
                 None => pl.position,
             };
