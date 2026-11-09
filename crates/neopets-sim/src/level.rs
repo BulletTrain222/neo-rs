@@ -9500,9 +9500,10 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             ]);
         }
         // Trigger 24 (the plain exit; entering, after an arrival): value 50 for eW 50 and its load.
+        // The hero first walks to point 3 with orientation and waits 0.5 s (SPEC-0044 864).
         (864, 24) if call.object && call.state == 1 && state.word(pack, 5) != 0 => {
             state.blackboard.insert((2, 50), 50);
-            out.actions.push(Action::ReplaceExterior { slot: 50, plane: -1 });
+            out.actions.extend([Action::HoldHero, Action::WalkHero { locator: 3, wait: true, orient: true }, wait(0.5), Action::ReplaceExterior { slot: 50, plane: -1 }]);
         }
         // SPEC-0041 985 CB2 (trigger 4, 281 clear at load): step A2 on every fire; CB5 (281 set):
         // B1 with the hero.
@@ -20285,7 +20286,7 @@ mod tests {
         // The plain exit needs an arrival first.
         assert!(on_trigger(864, 24, inside(24), &mut s).actions.is_empty());
         on_activate(864, &mut s);
-        assert_eq!(on_trigger(864, 24, inside(24), &mut s).actions, vec![Action::ReplaceExterior { slot: 50, plane: -1 }]);
+        assert_eq!(on_trigger(864, 24, inside(24), &mut s).actions.last(), Some(&Action::ReplaceExterior { slot: 50, plane: -1 }));
         // The fight: start, then the boss's level state 0 marks the end (293) and the end stage.
         // Level state 3 clears after camera 11 (an action of the scene, after the camera).
         on_trigger(864, 1, inside(1), &mut s);

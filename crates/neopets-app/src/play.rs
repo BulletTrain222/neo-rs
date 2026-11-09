@@ -11254,6 +11254,13 @@ impl Play {
             &fol,
             pad,
             |x, z, c| w.probe(x, z, c).height,
+            |x, z, c| {
+                let h = w.probe(x, z, c);
+                if h.found {
+                    return h.height;
+                }
+                other.map(|o| o.probe(x, z, c)).filter(|o| o.found).map_or(h.height, |o| o.height)
+            },
             |e| {
                 let g = ground_world(*e);
                 clip_eye(g, trunks_of(g), fol.focus(), e)

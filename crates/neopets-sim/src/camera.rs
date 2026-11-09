@@ -343,6 +343,7 @@ impl FollowCamera {
         hero: &Followed,
         pad: CameraPad,
         ground: impl Fn(f32, f32, f32) -> f32,
+        clearance: impl Fn(f32, f32, f32) -> f32,
         push: impl Fn(&mut Vec3),
         gather: impl Fn(Vec3) -> Vec<EyePrim>,
         clear: impl Fn(Vec3, Vec3) -> bool,
@@ -432,7 +433,9 @@ impl FollowCamera {
             self.eye = add(self.eye, v);
         }
         // Step 11: ground clearance, the eye pass with its stuck timer, R3 recentre.
-        self.clear_ground(&ground);
+        // The clearance probes the current world, then the other resident world when the first
+        // finds nothing (SPEC-0027 Ground clearance; SPEC-0018 Camera position queries).
+        self.clear_ground(&clearance);
         let prims = gather(self.eye);
         let (forward, first) = self.rows();
         let ctx = EyeCtx { focus: self.focus, forward, first, moving: hero.moving, hold: self.hold > 0, heading: self.heading, clear: &clear };
@@ -686,7 +689,7 @@ mod tests {
         let want = [(1, 10.0100, 0.0508), (5, 9.9955, 0.0652), (10, 9.9740, 0.1007), (20, 9.8865, 0.1774), (30, 9.7914, 0.1965), (60, 9.7439, 0.2000)];
         let mut got = Vec::new();
         for t in 1..=60 {
-            c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |_, _| true);
+            c.update(&hero, CameraPad::default(), none, none, |_| {}, |_| Vec::new(), |_, _| true);
             got.push((t, polar(sub(c.eye, c.focus))));
         }
         for (t, r, e) in want {
@@ -704,7 +707,7 @@ mod tests {
         let pad = CameraPad { right_x: 255, ..Default::default() };
         let mut spins = Vec::new();
         for _ in 0..60 {
-            c.update(&hero, pad, none, |_| {}, |_| Vec::new(), |_, _| true);
+            c.update(&hero, pad, none, none, |_| {}, |_| Vec::new(), |_, _| true);
             spins.push(c.spin);
         }
         for (t, want) in [(1, -0.0065), (2, -0.012188), (6, -0.028663), (20, -0.048401), (60, -0.051983)] {
@@ -740,7 +743,7 @@ mod tests {
         let pad = CameraPad { right_y: 0, ..Default::default() };
         let mut got = Vec::new();
         for _ in 0..120 {
-            c.update(&hero, pad, none, |_| {}, |_| Vec::new(), |_, _| true);
+            c.update(&hero, pad, none, none, |_| {}, |_| Vec::new(), |_, _| true);
             got.push(polar(sub(c.eye, c.focus)));
         }
         for (t, e, r) in [(30, 0.6185, 8.5087), (60, 1.1375, 5.3794), (120, 1.5, 3.5330)] {
@@ -767,12 +770,12 @@ mod tests {
         let mut hero = still(2.0);
         let mut c = camera_at([0.0, 2.0, -10.0], &hero);
         hero.ground_kind = Some(5);
-        c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |_, _| true);
+        c.update(&hero, CameraPad::default(), none, none, |_| {}, |_| Vec::new(), |_, _| true);
         assert_eq!((c.profile.distance, c.profile.elevation), (15.0, 0.6));
         // Profile 3 at elevation 0.6: target distance 11.8915.
         assert!((c.target_distance(0.6) - 11.8915).abs() < 1e-3);
         hero.ground_kind = None;
-        c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |_, _| true);
+        c.update(&hero, CameraPad::default(), none, none, |_| {}, |_| Vec::new(), |_, _| true);
         assert_eq!(c.profile.distance, 15.0, "kept without a ground patch");
     }
 
@@ -781,10 +784,10 @@ mod tests {
         let hero = still(2.0);
         let mut c = camera_at([3.0, 2.0, 9.0], &hero);
         for _ in 0..60 {
-            c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |a, _| a[2] < 0.0);
+            c.update(&hero, CameraPad::default(), none, none, |_| {}, |_| Vec::new(), |a, _| a[2] < 0.0);
         }
         assert!(c.eye[2] > 0.0, "still in front after 60 blocked ticks");
-        c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |a, _| a[2] < 0.0);
+        c.update(&hero, CameraPad::default(), none, none, |_| {}, |_| Vec::new(), |a, _| a[2] < 0.0);
         assert!(c.eye[2] < 0.0, "behind the hero after the 61st: {:?}", c.eye);
     }
 
@@ -810,7 +813,7 @@ mod tests {
         let mut c = camera_at([0.0, 4.0, -9.0], &hero);
         c.side_target = 3.0;
         c.hold = 10;
-        c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |_, _| true);
+        c.update(&hero, CameraPad::default(), none, none, |_| {}, |_| Vec::new(), |_, _| true);
         assert!((c.side_offset - 0.1).abs() < 1e-6, "{}", c.side_offset);
     }
 }
