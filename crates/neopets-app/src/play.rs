@@ -81,6 +81,8 @@ pub struct World {
     pub atmos: Vec<neopets_sim::atmosphere::Zone>,
     /// Each type-10 record's group, for the groups a placed object owns.
     panel_groups: Vec<u32>,
+    /// Each type-10 group's centre and squared radius Q (the camera's wall-group prefilter).
+    panel_bounds: Vec<([f32; 3], f32)>,
     /// The ladders and climb records at rest, each with the placed object it stands on (R-0226).
     climb_rest: Option<ClimbRest>,
     /// The grab lines (SPEC-0033 Behavior 9): bit-1 cylinders of the type-11 list.
@@ -237,6 +239,7 @@ impl World {
             blocks: Vec::new(),
             owner_poses: Default::default(),
             panel_groups: Vec::new(),
+            panel_bounds: Vec::new(),
             rails: Vec::new(),
             atmos: Vec::new(),
             climb_rest: None,
@@ -347,6 +350,7 @@ impl World {
             blocks: Vec::new(),
             owner_poses: Default::default(),
             panel_groups: Vec::new(),
+            panel_bounds: Vec::new(),
             rails: Vec::new(),
             atmos: Vec::new(),
             climb_rest: None,
@@ -445,6 +449,7 @@ impl World {
             .collect();
         let records = neopets_data::trigger::panels(&bytes, &chain.chunks);
         world.panel_groups = records.iter().map(|p| p.group).collect();
+        world.panel_bounds = neopets_data::trigger::panel_groups(&bytes, &chain.chunks).into_iter().map(|(c, q, _)| (c, q)).collect();
         world.rails = records.iter().filter(|p| p.kind == -3).map(|p| neopets_sim::ladder::Rail { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv }).collect();
         world.panels = records.iter().map(|p| neopets_sim::climb::Panel { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv, kind: p.kind, links: p.links }).collect();
         // SPEC-0018 Patch-id table: each placed object's inline model set is registered under
@@ -560,6 +565,23 @@ impl World {
     pub fn ground_at(&self, x: f32, z: f32, c: f32) -> Option<f32> {
         let h = self.probe(x, z, c);
         h.found.then_some(h.height)
+    }
+
+    /// The camera's wall-face groups (SPEC-0027 Occlusion clip step 1, sight-line sweep source
+    /// 1): every face of each type-10 group admitted by |C - at|^2 / 2 < Q, as a frame record
+    /// (normal, run axis U with length LU, up axis V with depth LV).
+    fn wall_group_faces(&self, at: [f32; 3]) -> Vec<WallEdge> {
+        self.panels
+            .iter()
+            .zip(&self.panel_groups)
+            .filter(|(_, g)| {
+                self.panel_bounds.get(**g as usize).is_some_and(|&(c, q)| {
+                    let d = [c[0] - at[0], c[1] - at[1], c[2] - at[2]];
+                    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) / 2.0 < q
+                })
+            })
+            .map(|(p, _)| WallEdge { face: p.normal, run: p.u, top: p.v, length: p.lu, height: p.lv, kind: p.kind })
+            .collect()
     }
 
     /// The walls of the drawn placed objects whose model sets the cell at (x, z) names, each with
@@ -4987,7 +5009,7 @@ impl Play {
                 self.pay_mp(cost);
             }
             // SPEC-0036 Launch: in right-stick aim mode, mode 0 drops the target; with none the aim is the
-            // stored point: camera eye + 150 x forward (the scan's character candidates are not specified).
+            // stored point of the aim scan below.
             let aiming = self.aim.on;
             let target = if row.homing == 0 && aiming {
                 None
@@ -4996,9 +5018,34 @@ impl Play {
             } else {
                 self.shot_target()
             };
+            // The stored right-stick aim point (SPEC-0036 Right-stick aim mode; SPEC-0033 aim
+            // scan): the active character within 110 of the camera eye with the best camera-forward
+            // score, when that score is above 0.998 and its sightline from 1.5 below the eye is
+            // clear, at its position raised by half its height; else eye + 150 x forward.
             let stored = {
                 let (forward, _) = self.camera.rows();
-                add(self.camera.eye, forward.map(|v| v * 150.0))
+                let eye = self.camera.eye;
+                let pack = self.world.pack;
+                let world = &self.world;
+                let low = [eye[0], eye[1] - 1.5, eye[2]];
+                let best = self
+                    .characters
+                    .iter()
+                    .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.townsfolk.is_none() && c.row.is_some())
+                    .filter_map(|c| {
+                        let d = [c.position[0] - eye[0], c.position[1] - eye[1], c.position[2] - eye[2]];
+                        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                        (l < 110.0 && l > 0.0).then(|| ((forward[0] * d[0] + forward[1] * d[1] + forward[2] * d[2]) / l, c))
+                    })
+                    .filter(|(_, c)| world.ground.as_ref().is_none_or(|g| g.segment_clear(low, c.position, true)))
+                    .max_by(|a, b| a.0.total_cmp(&b.0));
+                match best {
+                    Some((score, c)) if score > 0.998 => {
+                        let h = c.row.map_or(neopets_sim::trigger::BODY_HEIGHT, |r| r.height);
+                        [c.position[0], c.position[1] + 0.5 * h, c.position[2]]
+                    }
+                    _ => add(eye, forward.map(|v| v * 150.0)),
+                }
             };
             let aim = target.and_then(|id| self.aim_point(id)).unwrap_or_else(|| if aiming { stored } else { default_aim(p, f) });
             // SPEC-0030 row 90: the override is tested and cleared for each shot; the target stays.
@@ -20076,6 +20123,11 @@ fn eye_line_clear(world: &World, a: [f32; 3], c: [f32; 3]) -> bool {
     if world.ground.as_ref().is_some_and(|g| !g.segment_clear(a, c, true)) {
         return false;
     }
+    // Sweep source 1: the wall-face groups admitted around the camera point, each face a
+    // two-sided crossing with the face test's windows.
+    if world.wall_group_faces(a).iter().any(|w| neopets_sim::eye_pass::face_crossed(a, c, w)) {
+        return false;
+    }
     let inside = |p: [f32; 3], b: &BoxShape| segment_box(p, p, b.origin, b.axes, b.extents);
     if world.boxes.iter().any(|b| !(inside(a, b) && inside(c, b)) && segment_box(a, c, b.origin, b.axes, b.extents)) {
         return false;
@@ -20131,8 +20183,13 @@ fn eye_prims(world: &World, trunks: &[([f32; 3], f32)], e: [f32; 3], clip: bool)
     use neopets_sim::eye_pass::EyePrim;
     use neopets_sim::trigger::Shape;
     let mask = world.collis_mask;
-    // The clip has no movable-block source and reads no frame gate word.
-    let mut out: Vec<EyePrim> = if clip { Vec::new() } else { world.blocks.iter().filter(|b| b.active != 0).map(|b| EyePrim::Box(b.shape())).collect() };
+    // The clip has no movable-block source and reads no frame gate word; it starts with the
+    // wall-face groups.
+    let mut out: Vec<EyePrim> = if clip {
+        world.wall_group_faces(e).into_iter().map(EyePrim::Wall).collect()
+    } else {
+        world.blocks.iter().filter(|b| b.active != 0).map(|b| EyePrim::Box(b.shape())).collect()
+    };
     if let Some(g) = &world.ground {
         let mut frames = g.frames_at(e[0], e[2]);
         frames.extend(g.object_frames_world(e[0], e[2], &|o| world.owner_poses.get(&o).copied()).into_iter().map(|(_, f)| f));

@@ -527,6 +527,26 @@ pub fn clip_face(eye: Vec3, focus: Vec3, w: &WallEdge) -> Option<Vec3> {
     Some(if ell - t < 1.2 * rh { focus } else { add(focus, scale(sub(eye, focus), t)) })
 }
 
+/// The face test's crossing as a boolean (the line-of-sight sweep's wall groups): the segment
+/// a to c crosses the plane at a fraction in [-0.02, 1.02], inside the run widened 0.25 and the
+/// vertical window from 0.25 below the depth to 0.25 under the top. Two-sided.
+pub fn face_crossed(a: Vec3, c: Vec3, w: &WallEdge) -> bool {
+    if w.top[1] == 0.0 {
+        return false;
+    }
+    let (da, dc) = (plane(w.face, a), plane(w.face, c));
+    if da == dc {
+        return false;
+    }
+    let t = da / (da - dc);
+    if !(-0.02..=1.02).contains(&t) {
+        return false;
+    }
+    let x = add(a, scale(sub(c, a), t));
+    let top = w.edge_height(x) + 0.25;
+    (-0.25..=w.length + 0.25).contains(&plane(w.run, x)) && x[1] >= top - w.height - 0.25 && x[1] <= top - 0.25
+}
+
 /// The ray from s along unit u against a sphere: the nearest root in (0, len), else the far one.
 fn ray_sphere(s: Vec3, u: Vec3, l: f32, c: Vec3, r: f32) -> Option<f32> {
     let m = sub(s, c);
@@ -817,5 +837,16 @@ mod tests {
         assert_eq!(st.contacts.len(), CONTACT_CAPACITY);
         st.begin(false);
         assert!(st.contacts.iter().all(|c| c.1 >= CONTACT_LIFE - 1));
+    }
+
+    #[test]
+    fn wall_group_face_crossing() {
+        // The face of the clip vectors (plane z = 0, run x 0 to 40, top 20, depth 20): a line
+        // through it is blocked; over the top cut (y 19.9) or past the run (x 50) it is clear.
+        let w = wall_z0();
+        assert!(face_crossed([10.0, 5.0, 8.0], [10.0, 5.0, -3.0], &w));
+        assert!(!face_crossed([10.0, 19.9, 8.0], [10.0, 19.9, -3.0], &w));
+        assert!(!face_crossed([50.0, 5.0, 8.0], [50.0, 5.0, -3.0], &w));
+        assert!(!face_crossed([10.0, 5.0, 8.0], [10.0, 5.0, 2.0], &w));
     }
 }
