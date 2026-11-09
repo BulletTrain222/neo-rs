@@ -191,8 +191,10 @@ pub enum Move {
     /// By the clip's root motion with the facing turned toward the target at the weight (the
     /// shared steering rule: modes 5 and 6 face across the move, others along it).
     Steer { mode: u8, target: Vec3, weight: f32 },
-    /// By this velocity (a jump arc), facing the motion at 0.2.
-    Fly(Vec3),
+    /// By this velocity (a jump arc), turning at 0.2 toward the unit direction to the jump's
+    /// target (flat in steps 1 and 5, three-dimensional in step 2; SPEC-0020 Step 1, corrected
+    /// 2026-11-09: not the direction of the motion).
+    Fly(Vec3, Vec3),
     /// No travel.
     Still,
 }
@@ -555,7 +557,11 @@ impl Gnarfas {
                     1 | 2 | 5 => {
                         a.anim = Some(if step == 2 && v.clip.0 != 0x0B && !ended(0x0C) { 0x0C } else { 0x0B });
                         let vel = [velocity[0], velocity[1] - w.gravity, velocity[2]];
-                        a.travel = Move::Fly(vel);
+                        let to = sub(target, v.position);
+                        let to = if step == 2 { to } else { [to[0], 0.0, to[2]] };
+                        let l = dot(to, to).sqrt();
+                        let dir = if l > 0.0 { [to[0] / l, to[1] / l, to[2] / l] } else { [0.0; 3] };
+                        a.travel = Move::Fly(vel, dir);
                         let next = [v.position[0] + vel[0], v.position[1] + vel[1], v.position[2] + vel[2]];
                         let dist3 = dot(sub(target, next), sub(target, next)).sqrt();
                         self.state = State::Jump { step, target, velocity: vel, wait, tree };

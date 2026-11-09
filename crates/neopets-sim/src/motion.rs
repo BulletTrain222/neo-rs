@@ -90,7 +90,8 @@ impl Body {
     }
 
     /// Item 5b, ground constraint: when the predicted gap is at or below the tolerance, the
-    /// force and velocity lose their normal parts (all velocity if it still rises) and the
+    /// force and velocity lose their normal parts (the vertical velocity too if it still rises)
+    /// and the
     /// record moves onto the ground plane.
     pub fn constrain(&mut self) {
         if let Some(d) = self.platform_dy {
@@ -105,8 +106,10 @@ impl Body {
             self.force[k] -= f * n[k];
             self.velocity[k] -= v * n[k];
         }
+        // Still rising: only the vertical lane is zeroed; x and z stay (SPEC-0040 item 5b,
+        // corrected from code).
         if self.velocity[1] > 0.0 {
-            self.velocity = [0.0; 3];
+            self.velocity[1] = 0.0;
         }
         if self.no_snap {
             return;

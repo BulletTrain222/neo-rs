@@ -74,7 +74,9 @@ pub enum Shape {
     /// Roberta's Rock skipping shot: a sphere of the rock's scale, moved by `Object::rock_move`.
     Rock(Rock),
     /// Roberta's Fog cloud: no volume of its own (Aimed timed object).
-    Cloud,
+    /// Roberta's Fog cloud with its stored unit motion direction (SPEC-0036 Aimed timed object,
+    /// spawn step 4, corrected 2026-11-09: the direction is kept, not zeroed).
+    Cloud { dir: Vec3 },
 }
 
 /// A Rock skipping shot's fields (SPEC-0036): the flat direction, the speed in units a tick, the vertical
@@ -142,9 +144,15 @@ pub fn spawn_rocks(start: Vec3, direction: Vec3, scale: f32, angle: f32, rng: &m
         .collect()
 }
 
-/// Roberta's Fog cloud at the release point, held at the ground + 3.5 by the host.
-pub fn spawn_cloud(centre: Vec3, angle: f32, scale: f32) -> Object {
-    Object { id: 166, shape: Shape::Cloud, centre, angle, life: CLOUD_TICKS, scale, list: [None; 10], delay: 0, age: 0, hero: 1, fx: Vec::new(), fx_started: false, timer: 0 }
+/// Roberta's Fog cloud at the release point, held at the ground + 3.5 by the host; it drifts
+/// along the hero's body direction `dir` (normalised here).
+/// The Fog caller's rate (attack id 166): the per-tick drift and the height-follow weight.
+pub const FOG_RATE: f32 = 0.6;
+
+pub fn spawn_cloud(centre: Vec3, dir: Vec3, angle: f32, scale: f32) -> Object {
+    let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+    let dir = if l > 0.0 { [dir[0] / l, dir[1] / l, dir[2] / l] } else { [0.0; 3] };
+    Object { id: 166, shape: Shape::Cloud { dir }, centre, angle, life: CLOUD_TICKS, scale, list: [None; 10], delay: 0, age: 0, hero: 1, fx: Vec::new(), fx_started: false, timer: 0 }
 }
 
 /// The family A height and the particle lines (start, rate, life in seconds).
@@ -311,7 +319,7 @@ impl Object {
             Shape::Ring { start, top, rate, .. } => add(start, mul(rate, self.age as f32 / 60.0)).min(top),
             Shape::Beam { half, .. } => half,
             Shape::Rock(r) => r.scale,
-            Shape::Cloud => 0.0,
+            Shape::Cloud { .. } => 0.0,
         }
     }
 
@@ -374,7 +382,7 @@ impl Object {
 
     /// The Sun has only its first active tick: the tick after the spawn.
     fn active(&self) -> bool {
-        self.delay == 0 && !matches!(self.shape, Shape::Cloud) && (!matches!(self.shape, Shape::Burst { .. }) || self.age == 2)
+        self.delay == 0 && !matches!(self.shape, Shape::Cloud { .. }) && (!matches!(self.shape, Shape::Burst { .. }) || self.age == 2)
     }
 
     /// The volume as a segment and a radius, for the world breakables; none while it is not active.
@@ -438,7 +446,7 @@ impl Object {
         match self.shape {
             Shape::Sphere { radius: r } | Shape::Burst { radius: r } => sphere_meets_body(self.centre, r, feet, radius, height),
             Shape::Rock(rock) => sphere_meets_body(self.centre, rock.scale, feet, radius, height),
-            Shape::Cloud => false,
+            Shape::Cloud { .. } => false,
             Shape::Orbit { sphere, .. } => sphere_meets_body(self.centre, sphere, feet, radius, height),
             Shape::Cylinder { radius: r, height: h, .. } => cylinder_meets_body(self.centre, r, h, feet, radius, height),
             Shape::Grow { .. } => cylinder_meets_body(self.centre, self.radius(), GROW_HEIGHT, feet, radius, height),

@@ -2100,14 +2100,20 @@ impl Enemy {
         }
     }
 
-    /// Behavior 39, state 17: the hero closer than the greedy range, or the target gone, resets
-    /// to the default state; within 1.0 of the item it is consumed (the pool slot freed, no
+    /// Behavior 39, state 17: the hero closer than the greedy range sends it to agro; the target
+    /// gone resets to the default state; within 1.0 of the item it is consumed (the pool slot freed, no
     /// give) with the idle pick and the reset; otherwise the enemy runs to it (gait 0).
     fn fetch_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
         let greedy = self.p.map_search.map_or(0.0, |m| m.greedy);
+        // Step 1: the hero closer than the greedy range sends it to agro at once, with the
+        // target kept (SPEC-0038 Behavior 39, corrected 2026-11-09; not the reset).
+        if len(sub(v.hero, v.position)) < greedy {
+            self.set(19, v, rng, a);
+            return;
+        }
         let item = self.map_target.and_then(|t| v.items.iter().find(|it| it.0 == t)).copied();
         match item {
-            Some((index, _, at)) if len(sub(v.hero, v.position)) >= greedy => {
+            Some((index, _, at)) => {
                 if len(sub(at, v.position)) < 1.0 {
                     a.consume = Some(index);
                     a.anim = Some(self.idle(false, v, rng));
@@ -3459,8 +3465,8 @@ mod tests {
     fn map_search_fetches_coins() {
         // SPEC-0038 Behaviors 9 and 39 (the Rogue's type 1, greedy range 10): a coin and the
         // hero farther than 10 send the enemy to state 17; it runs to the coin, consumes it on
-        // arrival within 1.0 and resets to its default state; the hero coming within 10 makes
-        // it give up.
+        // arrival within 1.0 and resets to its default state; the hero coming within 10 sends
+        // it to agro.
         let has = |_: u32| true;
         let mut rng = Rng::seeded(3);
         let mut p = skeleton();
@@ -3476,7 +3482,8 @@ mod tests {
         v.position = [5.5, 0.0, 0.0];
         let a = e.tick(&v, &mut rng);
         assert_eq!((a.consume, e.state, e.map_target), (Some(4), 0, None));
-        // The hero within the greedy range: no search, and a fetch is given up.
+        // The hero within the greedy range: no search, and a fetch turns to agro at once with
+        // the target kept (corrected 2026-11-09).
         v.position = [0.0; 3];
         v.hero = [-8.0, 0.0, 0.0];
         let mut e = Enemy::new(p, Spawn { default_state: 8, home: [0.0; 3], ..Spawn::default() }, &mut rng);
@@ -3486,8 +3493,7 @@ mod tests {
         e.state = 17;
         e.map_target = Some(4);
         let a = e.tick(&v, &mut rng);
-        assert_eq!((a.consume, e.map_target), (None, None));
-        assert_ne!(e.state, 17);
+        assert_eq!((a.consume, e.map_target, e.state), (None, Some(4), 19));
     }
 
     #[test]

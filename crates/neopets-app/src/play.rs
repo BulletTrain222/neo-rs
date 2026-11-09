@@ -4905,7 +4905,7 @@ impl Play {
                     165 => neopets_sim::charm::spawn_rocks(at, f, scale, self.orbit_angle_r, &mut self.rng),
                     166 => {
                         let g = self.world.ground_at(at[0], at[2], at[1] + 8.0).unwrap_or(at[1]);
-                        vec![neopets_sim::charm::spawn_cloud([at[0], g + 3.5, at[2]], self.orbit_angle_r, scale)]
+                        vec![neopets_sim::charm::spawn_cloud([at[0], g + 3.5, at[2]], f, self.orbit_angle_r, scale)]
                     }
                     _ => neopets_sim::charm::spawn_roberta(id, &self.charm_words, at, hero, self.orbit_angle_r, scale),
                 };
@@ -8055,7 +8055,7 @@ impl Play {
         objects.retain_mut(|o| {
             let mut live = o.tick(hero, ground);
             o.aim(query, facing);
-            // The Rock shots' flight, and the Fog cloud's height toward trunc(ground + 3.5).
+            // The Rock shots' flight, and the Fog cloud's drift and height follow.
             if matches!(o.shape, neopets_sim::charm::Shape::Rock(_)) {
                 o.rock_move();
                 let g = self.world.ground_at(o.centre[0], o.centre[2], o.centre[1] + 8.0);
@@ -8067,9 +8067,16 @@ impl Play {
                     self.effects.update(&table, h, None, &mut self.rng);
                     self.effects.release(h);
                 }
-            } else if matches!(o.shape, neopets_sim::charm::Shape::Cloud) {
-                if let Some(g) = self.world.ground_at(o.centre[0], o.centre[2], o.centre[1] + 8.0) {
-                    o.centre[1] += 0.1 * ((g + 3.5).trunc() - o.centre[1]);
+            } else if let neopets_sim::charm::Shape::Cloud { dir } = o.shape {
+                // SPEC-0036 Aimed timed object, tick step 1 (corrected 2026-11-09): the new point
+                // is the position plus the direction x the rate; the target is that point at the
+                // ground + 3.5 (no truncation); the position moves toward it by the rate.
+                if o.life > 0 {
+                    let rate = neopets_sim::charm::FOG_RATE;
+                    let p = add(o.centre, scale(dir, rate));
+                    let g = self.world.ground_at(p[0], p[2], p[1] + 8.0).filter(|g| (g - p[1]).abs() < 1.0e8).unwrap_or(p[1] - 3.5);
+                    let target = [p[0], g + 3.5, p[2]];
+                    o.centre = add(o.centre, scale(sub(target, o.centre), rate));
                 }
                 self.fog_after = live.then(|| {
                     let n = self.fog_after.map_or_else(|| neopets_sim::charm::fog_countdown(&mut self.rng), |f| f.2);
@@ -10181,7 +10188,7 @@ impl Play {
     fn trigger_step(&mut self) {
         let frame = self.ticks as i64;
         let p = self.loco.position();
-        let mut fired: Vec<u16> = self.world.volumes.iter().filter(|v| v.touches(p)).map(|v| v.index).collect();
+        let mut fired: Vec<u16> = self.world.volumes.iter().filter(|v| v.hero_touches(p)).map(|v| v.index).collect();
         // SPEC-0018 Breakable cylinders: a flag-9 volume fires its number on a body contact (a
         // chest's is a stale number that starts nothing).
         fired.extend(std::mem::take(&mut self.breakable_hits));
@@ -10367,7 +10374,7 @@ impl Play {
             let col = |c: usize| [m[4 * c], m[4 * c + 1], m[4 * c + 2]];
             let dot = |a: [f32; 3]| (a[0] * d[0] + a[1] * d[1] + a[2] * d[2]) / (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).max(1e-12);
             let local = [rest[12] + dot(col(0)), rest[13] + dot(col(1)), rest[14] + dot(col(2))];
-            if !v.touches(local) {
+            if !v.hero_touches(local) {
                 continue;
             }
             // Each host's records keep their own state (host x 64 + record).
@@ -11316,13 +11323,17 @@ impl Play {
         self.loco.p1 = self.weapon_drawn;
         self.loco.roberta = self.hero_index == 1;
         self.loco.air_ok = self.hero_index == 0 && self.equipment.entries[2][self.hero_index] != Some(126);
-        // SPEC-0036 the stick step: Tor's 7, 8 and 10 in the attack window; Roberta's spins until the end
-        // clip, and her sub-state 14's turn.
+        // SPEC-0036 the stick step: Tor's 7 and 8 in the attack window; his power step 10 only with
+        // Mote 162 (0xA2) in word 2 and the stick off centre, with no window test (corrected
+        // 2026-11-09); Roberta's spins until the end clip, and her sub-state 14's turn.
+        let stick_off = input.forward != 0.0 || input.side != 0.0;
         self.loco.stick_step = {
             use neopets_sim::hero::StickStep::*;
             let action = self.hero.clip_state().action;
+            let mote = self.attack.as_ref().and_then(|a| a.mote);
             match (self.attack.as_ref().map(|a| a.sub), self.r_attack.as_ref().map(|a| a.sub)) {
-                (Some(7 | 8 | 10), _) if self.hero.frame_bits() & 1 != 0 => Clear,
+                (Some(7 | 8), _) if self.hero.frame_bits() & 1 != 0 => Clear,
+                (Some(10), _) if mote == Some(0xA2) && stick_off => Clear,
                 (_, Some(6)) if action != neopets_sim::roberta::SPIN_CW_END => Horizontal,
                 (_, Some(7)) if action != neopets_sim::roberta::SPIN_CCW_END => Horizontal,
                 (_, Some(14)) => Turn,
@@ -11947,7 +11958,8 @@ impl Play {
         let pack = self.world.pack;
         self.state.ai_dead = self.killed.iter().filter(|(p, _)| *p == pack).map(|&(_, e)| e).collect();
         self.state.entity_mesh = self.characters.iter().filter(|c| c.pack == pack && !c.inactive).filter_map(|c| Some((c.entity?, c.walker.as_ref()?.mesh.map_or(-1, |m| m as i32)))).collect();
-        self.state.ai_dead.retain(|&e| !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.is_dead()) && c.hp > 0));
+        // A bound living character does not suppress the kill bit (SPEC-0030 row 45, corrected
+        // 2026-11-08).
         self.state.aggressive = self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.enemy.as_ref().is_some_and(|e| e.state == 19 && !e.is_dead())).filter_map(|c| c.entity).collect();
         self.slot_arrived.retain(|(p, _)| *p == pack || self.other.as_ref().is_some_and(|o| o.pack == *p));
         // The switch-group stages whose 0.4 s has passed become breakable.
@@ -12260,7 +12272,8 @@ impl Play {
             .map(|c| (c.id, c.position))
             .collect();
         let attacking = self.loco.state == hero_states::ATTACK;
-        self.lock = self.candidates.tick(&chars, self.loco.position(), self.loco.facing, attacking);
+        let exists = |id: u64| self.characters.iter().any(|c| c.id == id);
+        self.lock = self.candidates.tick(&chars, exists, self.loco.position(), self.loco.facing, attacking);
         // SPEC-0010 Hero lock-on: while its companion exists the Cloud Beast writes its id into the
         // hero's forced lock word every tick (both bodies are otherwise unhittable, so no
         // candidate scan finds them).
@@ -12988,7 +13001,7 @@ impl Play {
         } else {
             Vec::new()
         };
-        let mut casts: Vec<(u64, u64, u8, i32, [f32; 3], i32)> = Vec::new();
+        let mut casts: Vec<(u64, u64, u8, i32, [f32; 3], i32, [f32; 3])> = Vec::new();
         // SPEC-0038 Behavior 7 step 5e: each enemy's live summons.
         let mut summons: HashMap<u64, u32> = HashMap::new();
         // (SPEC-0038 Lobbed summon: corpses count until released.)
@@ -13288,7 +13301,7 @@ impl Play {
                 if std::env::var_os("NEOPETS_TRACE_ATTACKS").is_some() {
                     println!("CAST {name} tick {}: sub-type {sub} at character {target}", self.ticks);
                 }
-                casts.push((*id, target, sub, e.p.element, [p[0], p[1] + 0.5 * row.height, p[2]], row.hit_points as i32 - *hp));
+                casts.push((*id, target, sub, e.p.element, [p[0], p[1] + 0.5 * row.height, p[2]], row.hit_points as i32 - *hp, p));
             }
         }
         if sting {
@@ -13305,10 +13318,13 @@ impl Play {
         }
         // SPEC-0038 Behavior 43: each spell goes into the enemy pool, aimed 1.5 above its target.
         // Sub-type 5 first deals the caster's missing HP to the target, if a slot is free.
-        for (owner, target, sub, element, launch, missing) in casts {
+        // Sub-type 5, the heal spell, is built the other way round: from the target's point 1.5
+        // up toward the caster's (corrected 2026-11-09).
+        for (owner, target, sub, element, launch, missing, caster) in casts {
             let Some(i) = self.characters.iter().position(|c| c.id == target) else { continue };
             let at = self.characters[i].position;
-            if self.shots.submit(neopets_sim::projectile::spell(sub, owner, element, launch, [at[0], at[1] + 1.5, at[2]], target)) && sub == 5 {
+            let (from, to) = if sub == 5 { ([at[0], at[1] + 1.5, at[2]], [caster[0], caster[1] + 1.5, caster[2]]) } else { (launch, [at[0], at[1] + 1.5, at[2]]) };
+            if self.shots.submit(neopets_sim::projectile::spell(sub, owner, element, from, to, target)) && sub == 5 {
                 self.character_take_hit(i, missing, launch, "a spell ");
             }
         }
@@ -14355,10 +14371,10 @@ impl Play {
                 c.facing = neopets_sim::hero::steer(c.facing, to, rate);
             }
             match act.travel {
-                neopets_sim::gnarfas::Move::Fly(vel) => {
+                neopets_sim::gnarfas::Move::Fly(vel, dir) => {
                     c.position = add(c.position, vel);
-                    if vel[0] != 0.0 || vel[2] != 0.0 {
-                        c.facing = neopets_sim::hero::steer(c.facing, [vel[0], 0.0, vel[2]], 0.2);
+                    if dir[0] != 0.0 || dir[2] != 0.0 {
+                        c.facing = neopets_sim::hero::steer(c.facing, [dir[0], 0.0, dir[2]], 0.2);
                     }
                     if let Some(wk) = c.walker.as_mut() {
                         wk.body.position = c.position;
@@ -14891,7 +14907,8 @@ impl Play {
                 hero_damage,
                 // G6 item 6: the knight's own horizontal distance from its start point.
                 second_measure: c.knight.as_ref().and_then(|k| k.start).map_or(0.0, |s| (c.position[0] - s[0]).hypot(c.position[2] - s[2])),
-                ground: world.ground_at(c.position[0], c.position[2], c.position[1] + 8.0),
+                // The sword's height target probes at the hero (SPEC-0012 Flying sword e, corrected 2026-11-09).
+                ground: world.ground_at(hero[0], hero[2], hero[1] + 8.0),
                 // Attachment point 0, the hand grip: the sword's attach and return point
                 // (SPEC-0012 Bone table and attachment points).
                 hand: Self::attach_point(c, 0).unwrap_or(add(add(c.position, [0.0, 3.0, 0.0]), scale(fwd, 1.1))),

@@ -36,9 +36,15 @@ fn dist(a: Vec3, b: Vec3) -> f32 {
 
 impl Candidates {
     /// One tick. `chars` are the characters passing the candidate test with their positions, in
-    /// actor-list order; `forward` is the hero's forward axis; `attacking` the engagement test.
-    /// Returns the lock.
-    pub fn tick(&mut self, chars: &[(u64, Vec3)], hero: Vec3, forward: Vec3, attacking: bool) -> Option<u64> {
+    /// actor-list order; `exists` says whether an id is still found (world list, petpet
+    /// children, second world); `forward` is the hero's forward axis; `attacking` the engagement
+    /// test. Returns the lock.
+    ///
+    /// SPEC-0040 Behavior 20 item 2 (corrected 2026-11-09): a record whose character is found and
+    /// fails the candidate test is removed; one whose id is not found is left exactly as it is
+    /// (not refreshed, its flags stale) and does not count as in range this tick. The refresh
+    /// distance and alignment are horizontal; only the add stores a 3D distance.
+    pub fn tick(&mut self, chars: &[(u64, Vec3)], exists: impl Fn(u64) -> bool, hero: Vec3, forward: Vec3, attacking: bool) -> Option<u64> {
         // 1. Adding.
         for &(id, p) in chars {
             if self.records.len() < RECORDS && !self.records.iter().any(|r| r.id == id) {
@@ -47,19 +53,22 @@ impl Candidates {
         }
         // 2. Refresh: a removal moves the later records up and the walk skips the one that
         // moved into the freed place.
+        let mut refreshed: Vec<u64> = Vec::new();
         let mut i = 0;
         while i < self.records.len() {
-            match chars.iter().find(|c| c.0 == self.records[i].id) {
-                None => {
+            let id = self.records[i].id;
+            match chars.iter().find(|c| c.0 == id) {
+                None if exists(id) => {
                     self.records.remove(i);
                 }
+                None => {}
                 Some(&(_, p)) => {
-                    let d = dist(p, hero);
-                    let u = [p[0] - hero[0], p[1] - hero[1], p[2] - hero[2]];
+                    let u = [p[0] - hero[0], 0.0, p[2] - hero[2]];
+                    let d = u[0].hypot(u[2]);
                     let l = d.max(1e-6);
                     let r = &mut self.records[i];
                     r.d = d;
-                    r.a = (forward[0] * u[0] + forward[1] * u[1] + forward[2] * u[2]) / l;
+                    r.a = (forward[0] * u[0] + forward[2] * u[2]) / l;
                     // 3. Engagement.
                     if !r.engaged && r.a > 0.25 && attacking {
                         r.engaged = true;
@@ -72,6 +81,7 @@ impl Candidates {
                             r.in_range = false;
                         }
                     }
+                    refreshed.push(id);
                 }
             }
             i += 1;
@@ -79,7 +89,7 @@ impl Candidates {
         // 4. Order: the in-range records to the front, then the pairwise pass.
         let mut front = 0;
         for k in 0..self.records.len() {
-            if self.records[k].in_range {
+            if self.records[k].in_range && refreshed.contains(&self.records[k].id) {
                 self.records.swap(front, k);
                 front += 1;
             }
@@ -316,25 +326,32 @@ mod tests {
         let fwd = [0.0, 0.0, 1.0];
         let chars = [(1, [0.0, 0.0, 10.0]), (2, [0.0, 0.0, 15.0]), (3, [0.0, 0.0, -5.0])];
         // Not engaged until the hero attacks while facing the candidate.
-        assert_eq!(c.tick(&chars, [0.0; 3], fwd, false), None);
-        assert_eq!(c.tick(&chars, [0.0; 3], fwd, true), Some(1));
+        assert_eq!(c.tick(&chars, |_| true, [0.0; 3], fwd, false), None);
+        assert_eq!(c.tick(&chars, |_| true, [0.0; 3], fwd, true), Some(1));
         // The one behind (alignment -1) is never engaged; at 20.0 a record loses both flags.
         assert!(!c.records.iter().find(|r| r.id == 3).unwrap().engaged);
         let far = [(1, [0.0, 0.0, 20.0]), (2, [0.0, 0.0, 15.0]), (3, [0.0, 0.0, -5.0])];
-        assert_eq!(c.tick(&far, [0.0; 3], fwd, false), Some(2));
+        assert_eq!(c.tick(&far, |_| true, [0.0; 3], fwd, false), Some(2));
         // Two in range within 1.0 of each other swap every tick (the quirk).
         let close = [(1, [0.0, 0.0, 10.0]), (2, [0.0, 0.0, 10.5])];
         let mut c = Candidates::default();
-        let a = c.tick(&close, [0.0; 3], fwd, true);
-        let b = c.tick(&close, [0.0; 3], fwd, true);
+        let a = c.tick(&close, |_| true, [0.0; 3], fwd, true);
+        let b = c.tick(&close, |_| true, [0.0; 3], fwd, true);
         assert_ne!(a, b);
         // A removed candidate leaves the list; 15 records at most.
         let many: Vec<(u64, Vec3)> = (0..20).map(|k| (k, [0.0, 0.0, 30.0])).collect();
         let mut c = Candidates::default();
-        c.tick(&many, [0.0; 3], fwd, false);
+        c.tick(&many, |_| true, [0.0; 3], fwd, false);
         assert_eq!(c.records.len(), RECORDS);
-        c.tick(&many[1..], [0.0; 3], fwd, false);
+        c.tick(&many[1..], |_| true, [0.0; 3], fwd, false);
         assert!(!c.records.iter().any(|r| r.id == 0));
+        // A record whose character no longer exists is kept as it is.
+        c.tick(&many[2..], |id| id != 1, [0.0; 3], fwd, false);
+        assert!(c.records.iter().any(|r| r.id == 1));
+        // Refresh distance is horizontal: a candidate 10 ahead and 30 up is at 10.
+        let mut c = Candidates::default();
+        c.tick(&[(7, [0.0, 30.0, 10.0])], |_| true, [0.0; 3], fwd, true);
+        assert!((c.records[0].d - 10.0).abs() < 1e-5 && (c.records[0].a - 1.0).abs() < 1e-5);
     }
 
     #[test]

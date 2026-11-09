@@ -149,6 +149,23 @@ impl Volume {
         self.touches_with(p, BODY_RADIUS, BODY_HEIGHT)
     }
 
+    /// The selected hero's trigger contact: a moving rectangle (switch above zero) is a point
+    /// test of the feet, inside the box grown by the hero radius 1.175 sideways and below, and
+    /// at least 0.1 under its top (no top growth; SPEC-0028 Trigger volumes, SPEC-0039 1066
+    /// trigger 0); every other shape is the body test of `touches`.
+    pub fn hero_touches(&self, p: [f32; 3]) -> bool {
+        match self.shape {
+            Shape::Rectangle { origin, axes, extents } if extents[2] > 0.0 => {
+                let r = crate::contact::HERO_RADIUS;
+                let d = [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]];
+                let along = |k: usize| d[0] * axes[k][0] + d[1] * axes[k][1] + d[2] * axes[k][2];
+                let (v, a, b) = (along(0), along(1), along(2));
+                -r < a && a < extents[1] + r && -r < b && b < extents[2] + r && -r < v && v < extents[0] - 0.1
+            }
+            _ => self.touches(p),
+        }
+    }
+
     /// An upright cylinder of radius `body_radius` and height `body_height` from `p` against
     /// the volume.
     fn touches_with(&self, p: [f32; 3], body_radius: f32, body_height: f32) -> bool {
@@ -568,5 +585,9 @@ mod tests {
         assert!(hint.touches([o[0] - 0.9, o[1], o[2] + 2.0]), "the body radius reaches in");
         assert!(!hint.touches([o[0] - 1.1, o[1], o[2] + 2.0]));
         assert!(!hint.touches([o[0] + 2.0, o[1] + 6.0, o[2] + 2.0]));
+        // The hero's feet-point test: grown by 1.175 sideways and below, 0.1 under the top.
+        assert!(hint.hero_touches([o[0] - 1.1, o[1], o[2] + 2.0]) && !hint.hero_touches([o[0] - 1.2, o[1], o[2] + 2.0]));
+        assert!(hint.hero_touches([o[0] + 2.0, o[1] - 1.1, o[2] + 2.0]) && !hint.hero_touches([o[0] + 2.0, o[1] - 1.2, o[2] + 2.0]));
+        assert!(hint.hero_touches([o[0] + 2.0, o[1] + 5.7, o[2] + 2.0]) && !hint.hero_touches([o[0] + 2.0, o[1] + 5.8, o[2] + 2.0]));
     }
 }

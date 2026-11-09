@@ -140,7 +140,10 @@ impl PlaybackRecord {
         }
         let f = clip.frames as f32;
         let mut wrapped = false;
-        if self.cursor >= f - 1.0 {
+        // A looping main layer wraps only past F - 1 (a cursor of exactly F - 1 is left alone and
+        // sets no wrap flag); the equality path is the one-shot's (SPEC-0005 Layer step,
+        // confirmed 2026-11-09).
+        if self.cursor > f - 1.0 || (self.cursor == f - 1.0 && !clip.looping) {
             if clip.looping {
                 wrapped = true;
                 self.cursor -= f;
@@ -253,6 +256,9 @@ mod tests {
         assert_eq!((s.key, s.next_key, s.fraction), (0, 1, 0.25));
         let s = at(19.0, true).1.unwrap();
         assert_eq!((s.key, s.fraction), (0, 0.0));
+        // Exactly F - 1 on a looping clip: left alone, no wrap flag.
+        let s = at(18.0, true).1.unwrap();
+        assert_eq!((s.key, s.next_key, s.wrapped), (18, 0, false));
     }
 
     #[test]

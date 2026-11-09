@@ -138,6 +138,9 @@ pub fn display_hp(p: &[i32; 6]) -> i32 {
 }
 
 /// A knock-back velocity: unit(9 d + 12 up) x scale.
+/// The flying sword's orbit-hit knockback scale.
+pub const ORBIT_KNOCK: f32 = 5.0;
+
 pub fn knock(d: Vec3, scale: f32) -> Vec3 {
     let v = [9.0 * d[0], 12.0, 9.0 * d[2]];
     let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
@@ -277,7 +280,8 @@ pub struct View<'a> {
     pub hero_damage: i32,
     /// The high swing's second measure (below 10.0 to swing).
     pub second_measure: f32,
-    /// The ground under the knight (probed 8.0 above it); the hand and return points.
+    /// The ground under the hero (probed 8.0 above the hero, for the sword's height); the hand
+    /// and return points.
     pub ground: Option<f32>,
     pub hand: Vec3,
     pub return_point: Vec3,
@@ -947,7 +951,7 @@ impl Knight {
                     }
                     3 => {
                         a.anim = Some(23);
-                        if self.stun_tick(v, &[BACK], 44, true, a) {
+                        if self.stun_tick(v, &[BACK], 44, false, a) {
                             4
                         } else if self.parts[BACK] <= 0 {
                             5
@@ -1004,7 +1008,7 @@ impl Knight {
                     }
                     3 => {
                         a.anim = Some(42);
-                        if self.stun_tick(v, &[NECK], 47, true, a) {
+                        if self.stun_tick(v, &[NECK], 47, false, a) {
                             self.phase = 0;
                             self.state = State::Idle;
                             return;
@@ -1118,7 +1122,9 @@ impl Knight {
                 }
                 if !s.latch && (v.sword_hit)(s.position) {
                     s.latch = true;
-                    a.hero_damage = Some((w.sword_damage, Some(knock(v.facing, w.knock))));
+                    // An orbit hit's knockback scales by 5.0, not the charge's 20.0 (SPEC-0012 damage
+                    // table, corrected 2026-11-09).
+                    a.hero_damage = Some((w.sword_damage, Some(knock(v.facing, ORBIT_KNOCK))));
                 }
                 Some(s.position)
             }
@@ -1135,7 +1141,8 @@ impl Knight {
             }
             4 => {
                 let (p, gap) = toward(s.position, v.return_point, step);
-                if gap < step {
+                // Arrived when the gap is not larger than one step (corrected 2026-11-09).
+                if gap <= step {
                     s.returned = true;
                     s.sub = 5;
                     s.position = v.hand;
