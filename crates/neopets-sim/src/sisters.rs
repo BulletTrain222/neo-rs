@@ -400,7 +400,8 @@ impl Sister {
         let ended = |anim: u32| v.clip.0 == anim && v.clip.1;
         // The release: the event bit 0x20 or progress above 0.5, whichever comes first (R-0065).
         let release = |anim: u32| v.clip.0 == anim && (v.frame_bits & 0x20 != 0 || v.progress > 0.5);
-        a.face = Some(0.25);
+        // The main loop snaps her facing to the hero (weight 1.0; SPEC-0011 move step).
+        a.face = Some(1.0);
         match self.state {
             State::Idle => a.anim = Some(1),
             State::Move => {

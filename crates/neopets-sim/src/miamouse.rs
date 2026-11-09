@@ -238,7 +238,7 @@ impl Miamouse {
                         self.sub = 0;
                         return CLIP_IDLE;
                     }
-                    if d <= 20.0 {
+                    if d < 20.0 {
                         self.sub = 0;
                     } else {
                         self.sub = 2;

@@ -1906,6 +1906,10 @@ pub struct Play {
     /// the window to pass to the first controller's large motor.
     rumble: neopets_sim::rumble::Rumble,
     rumble_presets: Vec<neopets_sim::rumble::Preset>,
+    /// This tick's held-attack repeat (SPEC-0022 chooser step 3).
+    attack_repeat: bool,
+    /// The parked hero's quick-item marker (-1 none).
+    other_marker: i32,
     /// The Mote colour rows (SPEC-0023 section 25; 0x2DCA60, one RGB row per Mote 160 to 173).
     mote_glow_rgb: [[u8; 3]; 14],
     landing_rumble: (usize, f32, f32),
@@ -2656,6 +2660,8 @@ impl Play {
             menu_open: false,
             rumble: Default::default(),
             rumble_presets: Vec::new(),
+            attack_repeat: false,
+            other_marker: -1,
             mote_glow_rgb: [[0; 3]; 14],
             landing_rumble: (5, 0.0, 0.0),
             motor: None,
@@ -3925,6 +3931,9 @@ impl Play {
                     self.open_line(line);
                     if let Some(l) = self.world.lines.line(line as usize) {
                         self.textbox.open_choice(&l.raw);
+                    } else {
+                        // An out-of-range line shows nothing and answers false (SPEC-0030 row 100).
+                        self.textbox.result = -1;
                     }
                     return Some(Wait::Choice(routine));
                 }
@@ -4897,7 +4906,7 @@ impl Play {
             let d = sub_v(c.position, hero_at);
             (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
         });
-        if self.r_attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
+        if self.r_attack.is_none() && (input.attack || self.attack_repeat) && (1..=6).contains(&self.loco.state) {
             self.r_attack = Some(if self.gesture.mode == 0 && locked.is_some_and(|d| d < 5.0) { RobertaAttack::start_at(5) } else { RobertaAttack::start_with(self.gesture.mode) });
             self.draw_items(true);
         }
@@ -5727,6 +5736,9 @@ impl Play {
         std::mem::swap(&mut self.hero_mp_max, &mut p.mp_max);
         self.parked = Some(p);
         self.hero_index = 1 - self.hero_index;
+        // Each hero keeps its own quick-item marker (SPEC-0021 +0x155C; SPEC-0053 3.7 step 8);
+        // Roberta's starts at -1.
+        std::mem::swap(&mut self.quick.marker, &mut self.other_marker);
         // SPEC-0053 step 9: the incoming hero's target list is emptied.
         self.targets.clear();
         self.draw_items(false);
@@ -6207,7 +6219,7 @@ impl Play {
         }
         let hero = self.loco.position();
         let c = self.hero.clip_state();
-        let clip = neopets_sim::block::EdgeClip { action: c.action, progress: c.progress };
+        let clip = neopets_sim::block::EdgeClip { action: c.action, progress: c.progress, bits: self.hero.frame_bits() };
         let v = neopets_sim::hero::speed_value(input);
         let stick = self.loco.target.map(|x| x * v);
         let f = self.loco.facing;
@@ -7125,10 +7137,11 @@ impl Play {
             let d = dx.hypot(dz);
             (d > 1e-6 && (dx * f[0] + dz * f[2]) / d > 0.5).then_some(d)
         };
-        let shot = self.shots.slots.iter().flatten().any(|s| ahead(s.position).is_some());
+        // Kind-9 slots (the poison cloud) are not threats.
+        let shot = self.shots.slots.iter().flatten().filter(|s| s.s.kind != 9).any(|s| ahead(s.position).is_some());
         let attacker = || {
             self.characters.iter().any(|c| {
-                c.pack == self.world.pack && c.hp > 0 && !c.inactive && c.row.is_some() && c.anim.frame_bits() & 0x1F != 0 && ahead(c.position).is_some_and(|d| d <= 10.0)
+                c.pack == self.world.pack && c.hp > 0 && !c.inactive && c.row.is_some() && c.anim.frame_bits() & 0x1F != 0 && ahead(c.position).is_some_and(|d| d < 10.0)
             })
         };
         if shot || attacker() {
@@ -10376,6 +10389,8 @@ impl Play {
         self.pending_off.retain(|(p, _)| *p != pack);
         self.pending_holds.retain(|(p, _), _| *p != pack);
         self.max_active.remove(&pack);
+        // The display-mask word is 0 at world setup (SPEC-0030 row 212).
+        self.display_mask.remove(&pack);
     }
 
     /// SPEC-0028 Trigger pass for the selected hero's body (the grid cell lists are not
@@ -11391,15 +11406,20 @@ impl Play {
             self.hud.d = 240;
         }
         // SPEC-0033 Behavior 1A: the chain's attack part and the jump do nothing for a busy hero; during stun a press is lost.
+        // SPEC-0022 chooser step 3: with the weapon out, a held attack button with no press edge
+        // and no Square press enters the attack state again (holding the button repeats it).
+        let mut repeat = input.attack_held && !input.attack && !input.square && self.weapon_drawn;
         if out.consumed || was_open || self.statuses.active(neopets_sim::status::STUN) {
             input.jump = false;
             input.attack = false;
+            repeat = false;
         }
         // The Mote panel takes Cross, Square and Circle while it is open.
         if mote_was_open || self.mote_panel.open {
             input.jump = false;
             input.attack = false;
             input.square = false;
+            repeat = false;
         }
         if let Some(id) = out.use_item {
             self.use_item(id as u16);
@@ -11410,10 +11430,13 @@ impl Play {
         // active hero's weapon-family entry (Tor's sword, Roberta's wand) is empty.
         if self.equipment.entries[0][self.hero_index.min(1)].is_none() {
             input.attack = false;
+            repeat = false;
         }
         if matches!(self.loco.state, hero_states::DEAD | hero_states::HURT | hero_states::LONG_FALL) {
             input = HeroInput { side: input.side, forward: input.forward, ..HeroInput::default() };
+            repeat = false;
         }
+        self.attack_repeat = repeat;
         // SPEC-0033 Behavior 52: the stick gesture machine (reset while busy or in a box), in
         // the dead-zoned stick units (87.5 at a full push).
         if self.hero_busy() || self.dialogue_open {
@@ -11428,7 +11451,7 @@ impl Play {
         self.attack_fx_step();
         self.shot_fx_step();
         self.items_flags_step();
-        if self.hero_index == 0 && self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
+        if self.hero_index == 0 && self.attack.is_none() && (input.attack || repeat) && (1..=6).contains(&self.loco.state) {
             self.attack = Some(neopets_sim::attack::TorAttack::start_with(self.gesture.mode));
             self.draw_items(true);
         }
@@ -14519,7 +14542,8 @@ impl Play {
             self.loco.block();
         } else if !busy {
             self.attack = None;
-            self.loco.hurt(self.weapon.is_some());
+            // The 32/192 flinch reads Tor's weapon entry for both heroes (SPEC-0036 state 17).
+            self.loco.hurt(self.equipment.entries[0][0].is_some());
         }
         self.hero_hp -= damage;
         self.hero_flash = HIT_FLASH;
@@ -14575,7 +14599,7 @@ impl Play {
             let world = &self.world;
             let locator = |k: usize| world.tags.iter().position(|&t| t as usize == k).and_then(|i| world.entries.get(i)).map(|e| e.0);
             let trees = neopets_sim::gnarfas::TREES.map(locator);
-            let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed), s.radius)).collect();
+            let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0), s.radius)).collect();
             // SPEC-0020: "the hero is down" is action state 16 only.
             let busy = self.loco.state == 16;
             let st = self.loco.state;
@@ -14769,7 +14793,8 @@ impl Play {
             let (radius, height) = c.row.map_or((1.5, 3.5), |r| (r.radius, r.height.max(1.0)));
             let body = Cylinder { center: add(c.position, [0.0, 0.5 * height, 0.0]), axis: UP, radius, length: height };
             let missile_contact = self.hero_shots.iter().any(|s| {
-                let end = add(s.position, scale(s.dir, s.speed * 120.0));
+                // The shot speed is per second (it moves speed / 60 a tick): 120 ticks ahead.
+                let end = add(s.position, scale(s.dir, s.speed / 60.0 * 120.0));
                 neopets_sim::combat::segment_meets(s.position, end, &Cylinder { radius: radius + s.radius, ..body })
             });
             let place = placement(c.position, c.facing);
@@ -15328,7 +15353,7 @@ impl Play {
                 Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
             })
             .collect();
-        let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed), s.radius)).collect();
+        let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0), s.radius)).collect();
         let attacking = self.attack.is_some();
         let guarding = self.hero_guarding();
         let hero_anim = self.hero.clip_state().action;
@@ -15556,7 +15581,7 @@ impl Play {
             self.shots.submit(s);
         }
         for (a, b) in walls {
-            self.hero_shots.retain(|s| !ge::wall_stops(a, b, s.position, scale(s.dir, s.speed)));
+            self.hero_shots.retain(|s| !ge::wall_stops(a, b, s.position, scale(s.dir, s.speed / 60.0)));
         }
         let table = self.effect_table.clone();
         for (e, p) in effects {
@@ -15648,7 +15673,7 @@ impl Play {
         if self.sister_group.recount(alive) {
             self.state.set_level(2, true);
         }
-        let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed), s.radius)).collect();
+        let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0), s.radius)).collect();
         // SPEC-0044 1174 Checkpoints: the fourth word is a locator for 40 percent of the balls.
         let aim_point = usize::try_from(self.state.act1_indices[3]).ok().filter(|_| pack == 1174).and_then(|k| self.locator(pack, k)).map(|l| l.0);
         for id in ids {
@@ -15659,7 +15684,7 @@ impl Play {
             let body = c.row.map_or(1.0, |r| r.radius);
             let height = c.row.map_or(3.0, |r| r.height);
             let (a, b) = (c.position, add(c.position, [0.0, height, 0.0]));
-            let near = shots.iter().take(6).filter(|&&(p, v, r)| neopets_sim::gnarfas::segment_distance(p, add(p, scale(v, 10.0)), a, b) <= body + r).count();
+            let near = shots.iter().take(6).filter(|&&(p, v, r)| neopets_sim::gnarfas::segment_distance(p, add(p, scale(v, 30.0)), a, b) <= body + r).count();
             let clip = c.anim.clip_state();
             // The alternate loops' avoid point: the far centroid pick of her ground mesh, 10 from
             // the hero, while the hero is within 5.0 of her.

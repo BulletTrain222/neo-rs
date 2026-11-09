@@ -301,7 +301,8 @@ impl HeroAnim {
 
     /// Set the play rate R of every family (hero clip speeds follow R every pass).
     pub fn set_rate(&mut self, rate: f32) {
-        for f in &mut self.families {
+        // The face record is never re-timed: it keeps the speed of its clip start (SPEC-0005).
+        for f in self.families.iter_mut().filter(|f| f.role != 2) {
             f.record.set_rate(rate);
         }
     }

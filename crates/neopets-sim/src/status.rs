@@ -104,6 +104,8 @@ impl Statuses {
         let ticks = s * 60;
         if (IMMUNE_CURSE..=IMMUNE_SLOW).contains(&i) {
             if ticks < 1 {
+                // A 0-second request writes timer 0, ending a running immunity (SPEC-0036).
+                self.timers[i] = 0;
                 return false;
             }
             self.clear(i - 7);

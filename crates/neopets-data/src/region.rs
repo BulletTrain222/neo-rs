@@ -216,7 +216,7 @@ pub fn records(p: &[u8]) -> Records {
                     ai_code: s(0x84),
                     scale_set: i16_at(p, data + 0x8C).unwrap_or(0),
                     variant: s(0xB2) as u16,
-                    summon: p.get(data + 0xB6).is_some_and(|&b| b != 0),
+                    summon: p.get(data + 0xB6).is_some_and(|&b| (b as i8) > 0),
                     key: s(0xAC),
                     emerge_distance: f32_at(p, data + 0xC0).unwrap_or(0.0),
                     selector: u32_at(p, data + 0xC8).unwrap_or(0),

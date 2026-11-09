@@ -157,7 +157,8 @@ pub fn wrap(body: &[u8], width: i32, advance: &dyn Fn(u8) -> Option<i32>) -> Vec
             if w > width {
                 done = Some(match last {
                     Some((k, wb)) => (k, k + 1, true, wb),
-                    None => (j, j + 1, false, w - advance(c).unwrap_or(0)),
+                    // No candidate: the overflowing byte stays in the line (SPEC-0035 rule 10).
+                    None => (j + 1, j + 1, false, w),
                 });
                 break;
             }
@@ -218,10 +219,10 @@ mod tests {
         assert!((l[0].2 - 7.0 / 19.0).abs() < 1e-6 && l[0].3.abs() < 1e-4);
         // "bbb" ends at a newline (not stretched), the blank line, then "ccc".
         assert_eq!(l[1..].iter().map(|x| (x.0, x.1, x.2)).collect::<Vec<_>>(), [(20, 23, 0.0), (24, 24, 0.0), (25, 28, 0.0)]);
-        // No candidate: the line ends before the overflowing byte, which is lost.
+        // No candidate: the overflowing byte stays in the line.
         let long = [b'x'; 25];
         let l = wrap(&long, 192, &adv);
-        assert_eq!((l[0].0, l[0].1, l[1].0), (0, 19, 20));
+        assert_eq!((l[0].0, l[0].1, l[1].0), (0, 20, 20));
     }
 
     #[test]

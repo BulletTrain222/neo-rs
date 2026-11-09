@@ -396,6 +396,8 @@ pub struct EdgeStep {
 pub struct EdgeClip {
     pub action: u32,
     pub progress: f32,
+    /// The current frame's event bits (0x40 allows the pull-up's early exit).
+    pub bits: u32,
 }
 
 /// An approach step (SPEC-0033 Behavior 51, R-0079): `len` units along the straight 3D line to
@@ -492,8 +494,13 @@ impl Hang {
             }
             _ => {
                 step.request = 59;
+                // SPEC-0033 sub-mode 4: while the clip runs, event bit 0x40 with the stick
+                // forward goes to state 4; at 0.95 it always goes to state 1 with the 0.1 step
+                // (the stick is not read there).
                 if clip.action == 59 && clip.progress >= 0.95 {
-                    step.exit = Some(if forward { (4, 0.0) } else { (1, 0.1) });
+                    step.exit = Some((1, 0.1));
+                } else if clip.action == 59 && forward && clip.bits & 0x40 != 0 {
+                    step.exit = Some((4, 0.0));
                 }
             }
         }
@@ -822,26 +829,26 @@ mod tests {
         let mut h = Hang::new(0, 0);
         assert_eq!(h.tick(&v, [0.0, 0.0, -3.0], 0.0, false, 0.0, EdgeClip::default()).request, 72);
         // In the air (gap 1.0) 1 unit above the edge point: one 0.5 step, then the snap.
-        let s = h.tick(&v, [0.0, -0.7, -1.35], 0.0, false, 1.0, EdgeClip { action: 72, progress: 0.5 });
+        let s = h.tick(&v, [0.0, -0.7, -1.35], 0.0, false, 1.0, EdgeClip { action: 72, progress: 0.5, bits: 0 });
         assert_eq!((h.sub, s.place.map(|p| (p[1] * 100.0).round())), (1, Some(-120.0)));
-        let s = h.tick(&v, [0.0, -1.5, -1.35], 0.0, false, 1.0, EdgeClip { action: 72, progress: 0.5 });
+        let s = h.tick(&v, [0.0, -1.5, -1.35], 0.0, false, 1.0, EdgeClip { action: 72, progress: 0.5, bits: 0 });
         assert_eq!((h.sub, s.request, s.place), (2, 71, Some([0.0, -1.7, -1.35])));
-        h.tick(&v, [0.0, -1.7, -1.35], 0.0, false, 0.0, EdgeClip { action: 71, progress: 0.96 });
+        h.tick(&v, [0.0, -1.7, -1.35], 0.0, false, 0.0, EdgeClip { action: 71, progress: 0.96, bits: 0 });
         assert_eq!(h.sub, 3);
-        assert_eq!(h.tick(&v, [0.0, -1.7, -1.35], 0.0, true, 0.0, EdgeClip { action: 73, progress: 0.5 }).request, 59);
-        let s = h.tick(&v, [0.0, 2.0, -0.4], 0.0, false, 0.0, EdgeClip { action: 59, progress: 0.96 });
+        assert_eq!(h.tick(&v, [0.0, -1.7, -1.35], 0.0, true, 0.0, EdgeClip { action: 73, progress: 0.5, bits: 0 }).request, 59);
+        let s = h.tick(&v, [0.0, 2.0, -0.4], 0.0, false, 0.0, EdgeClip { action: 59, progress: 0.96, bits: 0 });
         assert_eq!(s.exit, Some((1, 0.1)));
         // The climb: 70 to the target at the top less 1.2, then 134 and the exit.
         // A block lower than 3.7: the edge point is below a hero on the ground, so state 1.
         let mut low = Hang::new(0, 0);
         low.tick(&v, [0.0, 0.0, -3.0], 0.0, false, 0.0, EdgeClip::default());
-        assert_eq!(low.tick(&v, [0.0, 0.0, -3.0], 0.0, false, 0.0, EdgeClip { action: 72, progress: 0.1 }).exit, Some((1, 0.0)));
+        assert_eq!(low.tick(&v, [0.0, 0.0, -3.0], 0.0, false, 0.0, EdgeClip { action: 72, progress: 0.1, bits: 0 }).exit, Some((1, 0.0)));
         let mut c = Climb::new(0, 0);
         let s = c.tick(&v, [0.0, 0.0, -1.75], false, EdgeClip::default());
         assert_eq!((c.sub, s.place.map(|p| (p[1] * 100.0).round())), (0, Some(20.0)));
         let s = c.tick(&v, [0.0, 0.7, -1.75], false, EdgeClip::default());
         assert_eq!((c.sub, s.request), (2, 134));
-        assert_eq!(c.tick(&v, [0.0, 2.0, 0.5], true, EdgeClip { action: 134, progress: 0.96 }).exit, Some((4, 0.0)));
+        assert_eq!(c.tick(&v, [0.0, 2.0, 0.5], true, EdgeClip { action: 134, progress: 0.96, bits: 0 }).exit, Some((4, 0.0)));
         // A contact on the last step (the touched flag) snaps the approach to the target at once.
         let mut t = Climb::new(0, 0);
         t.touched = true;
