@@ -1940,6 +1940,19 @@ fn landing_cue(k: u32) -> Option<i32> {
 const ONCE_ITEMS: [u16; 5] = [19, 20, 151, 174, 154];
 
 impl Play {
+    /// The near-tree trunks (SPEC-0018 Tree trunks; SPEC-0060): each plant of a key-4 tree
+    /// patch within 100 units of the eye, as a base and a radius of 5.5 x its scale.
+    fn near_trunks(&self, eye: [f32; 3]) -> Vec<([f32; 3], f32)> {
+        self.foliage
+            .get(&self.world.pack)
+            .into_iter()
+            .flatten()
+            .filter(|p| p.kind.family == neopets_sim::foliage::Family::Tree && p.kind.near == Some(200) && p.kind.far.is_none())
+            .filter(|p| (p.centre[0] - eye[0]).powi(2) + (p.centre[1] - eye[1]).powi(2) + (p.centre[2] - eye[2]).powi(2) < 100.0 * 100.0)
+            .flat_map(|p| p.plants.iter().map(|q| (q.position, 5.5 * q.scale)))
+            .collect()
+    }
+
     /// Load a hero outfit and a world pack's ground and spawn point. Pack 909 starts as the new
     /// game does, with 691 resident in T.
     pub fn load(disc: &mut Disc, index: &ArchiveIndex, pack: u32, outfit: u32) -> Result<Self, String> {
@@ -10955,11 +10968,13 @@ impl Play {
             let f = self.loco.facing;
             self.camera.blend_step(f, |e| push_eye(w, e));
         } else {
+        let trunks = self.near_trunks(self.camera.eye);
         self.camera.update(
             &followed(&self.loco, w),
             pad,
             |x, z, c| w.probe(x, z, c).height,
             |e| push_eye(w, e),
+            |e| eye_prims(w, &trunks, e),
             |a, c| eye_line_clear(w, a, c),
         );
         }
@@ -16386,16 +16401,7 @@ impl Play {
         // 25, radius 5.5 x the tree's scale) to each tree in turn and tests the hero against it in
         // every hero state (SPEC-0018 Tree trunks against the hero; R-0153): the slide response
         // moves him out to 5.5 K + 1.175 and clips his velocity into the trunk.
-        let pack = self.world.pack;
-        let trunks: Vec<([f32; 3], f32)> = self
-            .foliage
-            .get(&pack)
-            .into_iter()
-            .flatten()
-            .filter(|p| p.kind.family == neopets_sim::foliage::Family::Tree && p.kind.near == Some(200) && p.kind.far.is_none())
-            .filter(|p| (p.centre[0] - eye[0]).powi(2) + (p.centre[1] - eye[1]).powi(2) + (p.centre[2] - eye[2]).powi(2) < 100.0 * 100.0)
-            .flat_map(|p| p.plants.iter().map(|q| (q.position, 5.5 * q.scale)))
-            .collect();
+        let trunks = self.near_trunks(eye);
         for (base, radius) in trunks {
             let pos = self.loco.position();
             if let Some((d, n)) = contact::upright_cylinder_push(pos, contact::HERO_RADIUS, HERO_HEIGHT, base, 25.0, radius) {
@@ -20001,6 +20007,55 @@ fn eye_line_clear(world: &World, a: [f32; 3], c: [f32; 3]) -> bool {
             _ => false,
         }
     })
+}
+
+/// The primitives of the follow camera's eye pass at the eye (SPEC-0027 Walls and the stuck
+/// timers, Eye pass per-primitive routines), in the pass order: the active movable blocks (no
+/// gates), the frame records of the eye's cell (pack and drawn objects; type 6 skipped; the gate
+/// word against the world's collision word), list A by kind with the mask and class gates
+/// (kind 1 class 0 or 1 and not 2; kind 3 class 0 or 4 and not 5; zero-radius 4 and 7 class 0 or
+/// 5; boxes class 0 or 3), then the near tree trunks. This build's choices: list A is taken
+/// within 60 units horizontally of the eye instead of by grid cell, and the current world stands
+/// in for the camera's ground world.
+fn eye_prims(world: &World, trunks: &[([f32; 3], f32)], e: [f32; 3]) -> Vec<neopets_sim::eye_pass::EyePrim> {
+    use neopets_sim::eye_pass::EyePrim;
+    use neopets_sim::trigger::Shape;
+    let mask = world.collis_mask;
+    let mut out: Vec<EyePrim> = world.blocks.iter().filter(|b| b.active != 0).map(|b| EyePrim::Box(b.shape())).collect();
+    if let Some(g) = &world.ground {
+        let mut frames = g.frames_at(e[0], e[2]);
+        frames.extend(g.object_frames_world(e[0], e[2], &|o| world.owner_poses.get(&o).copied()).into_iter().map(|(_, f)| f));
+        out.extend(
+            frames
+                .into_iter()
+                .filter(|f| f.kind != 6 && (f.gate == 0 || f.gate & mask != 0))
+                .map(|f| EyePrim::Wall(WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind })),
+        );
+    } else {
+        out.extend(world.boxes.iter().map(|b| EyePrim::Box(*b)));
+    }
+    for v in world.camera_prims.iter().filter(|v| v.mask == 0 || v.mask & mask != 0) {
+        let f = v.flags;
+        let near = |q: [f32; 3]| (q[0] - e[0]).hypot(q[2] - e[2]) < 60.0;
+        match v.shape {
+            Shape::Sphere { centre, radius } if v.kind == 1 && f & 0b11 != 0 && f & 0b100 == 0 && near(centre) => out.push(EyePrim::Sphere { centre, radius }),
+            Shape::Cylinder { base, axis, length, radius } if v.kind == 3 && f & 0b1_0001 != 0 && f & 0b10_0000 == 0 && near(base) => {
+                out.push(EyePrim::Cylinder { base, axis, length, radius })
+            }
+            Shape::Rectangle { origin, axes, extents } if matches!(v.kind, 4 | 7) && near(origin) => {
+                if extents[2] <= 0.0 {
+                    if f & 0b10_0001 != 0 {
+                        out.push(EyePrim::Panel { origin, axes, extents });
+                    }
+                } else if f & 0b1001 != 0 {
+                    out.push(EyePrim::Box(BoxShape { origin, axes, extents }));
+                }
+            }
+            _ => {}
+        }
+    }
+    out.extend(trunks.iter().map(|&(base, radius)| EyePrim::Trunk { base, length: 25.0, radius }));
+    out
 }
 
 fn push_eye(world: &World, e: &mut [f32; 3]) {

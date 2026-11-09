@@ -4,11 +4,13 @@
 //! the R3 recentre, plus the load placement with the pull-in setter.
 //! Profiles are selected by the ground kind under the hero; the line-of-sight timer and the
 //! recentre's line test use the caller's segment query (`clear`).
-//! The hold and the side lean frame the hero's target (the host's point). Not covered: the script
-//! override profile, the turn leans of states 0x12 and 0x17, the spring's contact-normal exception, the eye pass failure flag and
-//! stuck timer, the camera visibility test, scripted plays, shakes, the fade ramp and modes
-//! other than 0.
+//! The hold and the side lean frame the hero's target (the host's point). The eye pass after the
+//! spring (contact list, failure flag, stuck timer, side swing) is `eye_pass` over the host's
+//! primitives; the host's `push` stands in for the occlusion clip of the recentre commit and the
+//! pull-in setter. Not covered: the script override profile, the turn leans of states 0x12 and
+//! 0x17, the camera visibility test, scripted plays, shakes, the fade ramp and modes other than 0.
 
+use crate::eye_pass::{eye_pass, EyeCtx, EyePrim, EyeState};
 use crate::hero::Vec3;
 
 /// SPEC-0027 Projection: focal length 512 on a 640 × 480 canvas, near 1, far 5280.
@@ -178,6 +180,10 @@ pub struct FollowCamera {
     profile_index: Option<usize>,
     /// Consecutive ticks with the eye-to-focus line blocked.
     blocked: u32,
+    /// The eye pass words (contact list, failure flags, stuck counter, side swing).
+    pub eye_state: EyeState,
+    /// The previous tick's final eye (0xF0).
+    pub prev_eye: Vec3,
 }
 
 impl FollowCamera {
@@ -205,6 +211,8 @@ impl FollowCamera {
             r3_latch: false,
             profile_index: None,
             blocked: 0,
+            eye_state: EyeState::default(),
+            prev_eye: [0.0; 3],
         };
         cam.select_profile(hero);
         let d = cam.target_distance(0.0);
@@ -263,6 +271,8 @@ impl FollowCamera {
         self.current = p;
         self.elevation_target = p[2];
         self.manual = p[2];
+        self.prev_eye = self.eye;
+        self.eye_state.swing_ticks = 0;
     }
 
     /// Target distance: profile distance × (1 − 0.65 sin² e) + side offset; e ≤ 0 drops the
@@ -328,6 +338,7 @@ impl FollowCamera {
         pad: CameraPad,
         ground: impl Fn(f32, f32, f32) -> f32,
         push: impl Fn(&mut Vec3),
+        gather: impl Fn(Vec3) -> Vec<EyePrim>,
         clear: impl Fn(Vec3, Vec3) -> bool,
     ) {
         self.select_profile(hero);
@@ -367,7 +378,7 @@ impl FollowCamera {
         self.focus = hero.focus();
         // Step 6: spin, then the eye's polar about the new focus with the yaw spun.
         let p = self.profile;
-        self.spin = self.spin + d * p.spin_gain - self.spin * p.spin_decay;
+        self.spin = self.spin + d * p.spin_gain - self.spin * p.spin_decay + self.eye_state.swing_step();
         let mut c = polar(sub(self.eye, self.focus));
         c[1] = wrap(c[1] + self.spin);
         self.current = c;
@@ -401,9 +412,15 @@ impl FollowCamera {
             self.velocity[i] += -k * (self.eye[i] - t[i]) - damping * self.velocity[i];
             self.eye[i] += self.velocity[i];
         }
-        // Step 11: ground clearance, walls, R3 recentre.
+        // Step 11: ground clearance, the eye pass with its stuck timer, R3 recentre.
         self.clear_ground(&ground);
-        push(&mut self.eye);
+        let prims = gather(self.eye);
+        let (forward, first) = self.rows();
+        let ctx = EyeCtx { focus: self.focus, forward, first, moving: hero.moving, hold: self.hold > 0, heading: self.velocity, clear: &clear };
+        eye_pass(&mut self.eye_state, &mut self.eye, &mut self.velocity, &prims, &ctx);
+        if self.eye_state.finish(&mut self.eye, self.prev_eye) {
+            self.recentre(hero, &ground, &push, &clear);
+        }
         // Line-of-sight timer: the 61st consecutive blocked tick runs the recentre pass.
         if clear(self.eye, self.focus) {
             self.blocked = 0;
@@ -420,6 +437,7 @@ impl FollowCamera {
         if pad.r3_pressed && !self.r3_latch {
             self.recentre(hero, &ground, &push, &clear);
         }
+        self.prev_eye = self.eye;
     }
 
     fn chase_step(&mut self, s: f32, moving: bool) {
@@ -646,7 +664,7 @@ mod tests {
         let want = [(1, 10.0100, 0.0508), (5, 9.9955, 0.0652), (10, 9.9740, 0.1007), (20, 9.8865, 0.1774), (30, 9.7914, 0.1965), (60, 9.7439, 0.2000)];
         let mut got = Vec::new();
         for t in 1..=60 {
-            c.update(&hero, CameraPad::default(), none, |_| {}, |_, _| true);
+            c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |_, _| true);
             got.push((t, polar(sub(c.eye, c.focus))));
         }
         for (t, r, e) in want {
@@ -664,7 +682,7 @@ mod tests {
         let pad = CameraPad { right_x: 255, ..Default::default() };
         let mut spins = Vec::new();
         for _ in 0..60 {
-            c.update(&hero, pad, none, |_| {}, |_, _| true);
+            c.update(&hero, pad, none, |_| {}, |_| Vec::new(), |_, _| true);
             spins.push(c.spin);
         }
         for (t, want) in [(1, -0.0065), (2, -0.012188), (6, -0.028663), (20, -0.048401), (60, -0.051983)] {
@@ -700,7 +718,7 @@ mod tests {
         let pad = CameraPad { right_y: 0, ..Default::default() };
         let mut got = Vec::new();
         for _ in 0..120 {
-            c.update(&hero, pad, none, |_| {}, |_, _| true);
+            c.update(&hero, pad, none, |_| {}, |_| Vec::new(), |_, _| true);
             got.push(polar(sub(c.eye, c.focus)));
         }
         for (t, e, r) in [(30, 0.6185, 8.5087), (60, 1.1375, 5.3794), (120, 1.5, 3.5330)] {
@@ -727,12 +745,12 @@ mod tests {
         let mut hero = still(2.0);
         let mut c = camera_at([0.0, 2.0, -10.0], &hero);
         hero.ground_kind = Some(5);
-        c.update(&hero, CameraPad::default(), none, |_| {}, |_, _| true);
+        c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |_, _| true);
         assert_eq!((c.profile.distance, c.profile.elevation), (15.0, 0.6));
         // Profile 3 at elevation 0.6: target distance 11.8915.
         assert!((c.target_distance(0.6) - 11.8915).abs() < 1e-3);
         hero.ground_kind = None;
-        c.update(&hero, CameraPad::default(), none, |_| {}, |_, _| true);
+        c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |_, _| true);
         assert_eq!(c.profile.distance, 15.0, "kept without a ground patch");
     }
 
@@ -741,10 +759,10 @@ mod tests {
         let hero = still(2.0);
         let mut c = camera_at([3.0, 2.0, 9.0], &hero);
         for _ in 0..60 {
-            c.update(&hero, CameraPad::default(), none, |_| {}, |a, _| a[2] < 0.0);
+            c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |a, _| a[2] < 0.0);
         }
         assert!(c.eye[2] > 0.0, "still in front after 60 blocked ticks");
-        c.update(&hero, CameraPad::default(), none, |_| {}, |a, _| a[2] < 0.0);
+        c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |a, _| a[2] < 0.0);
         assert!(c.eye[2] < 0.0, "behind the hero after the 61st: {:?}", c.eye);
     }
 
@@ -770,7 +788,7 @@ mod tests {
         let mut c = camera_at([0.0, 4.0, -9.0], &hero);
         c.side_target = 3.0;
         c.hold = 10;
-        c.update(&hero, CameraPad::default(), none, |_| {}, |_, _| true);
+        c.update(&hero, CameraPad::default(), none, |_| {}, |_| Vec::new(), |_, _| true);
         assert!((c.side_offset - 0.1).abs() < 1e-6, "{}", c.side_offset);
     }
 }

@@ -18,6 +18,7 @@ pub mod clip;
 pub mod cloudbeast;
 pub mod combat;
 pub mod contact;
+pub mod eye_pass;
 pub mod credits;
 pub mod effect;
 pub mod cues;

@@ -29,11 +29,19 @@ fn dot(a: Vec3, b: Vec3) -> f32 {
 /// The push out of a point: the face (1 top, 2 bottom, 3 low B, 4 high B, 5 high A, 6 low A),
 /// its outward normal and the push distance. None when the point is outside the grown box.
 pub fn push(p: Vec3, b: &BoxShape, r: f32) -> Option<(u8, Vec3, f32)> {
+    push_grown(p, b, r, false)
+}
+
+/// `push` with the top-growth flag the follow camera passes (SPEC-0027 Eye pass per-primitive
+/// routines, Box push): the inside test reaches r above the top less 0.1, and a top push moves
+/// by its depth plus r.
+pub fn push_grown(p: Vec3, b: &BoxShape, r: f32, grow: bool) -> Option<(u8, Vec3, f32)> {
+    let g = if grow { r } else { 0.0 };
     let d = [p[0] - b.origin[0], p[1] - b.origin[1], p[2] - b.origin[2]];
     let [vax, aax, bax] = b.axes;
     let (v, a, bb) = (dot(d, vax), dot(d, aax), dot(d, bax));
     let [ev, ea, eb] = b.extents;
-    let inside = -r < a && a < ea + r && -r < bb && bb < eb + r && -r < v && v < ev - TOP_MARGIN;
+    let inside = -r < a && a < ea + r && -r < bb && bb < eb + r && -r < v && v < ev - TOP_MARGIN + g;
     if !inside {
         return None;
     }
@@ -58,7 +66,7 @@ pub fn push(p: Vec3, b: &BoxShape, r: f32) -> Option<(u8, Vec3, f32)> {
         best = faces[0];
     }
     let dist = match best.0 {
-        1 => best.2,
+        1 => best.2 + g,
         2 => (v + BOTTOM_BIAS + 0.5 * r).abs(),
         _ => best.2 + r,
     };
