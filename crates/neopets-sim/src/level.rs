@@ -1789,27 +1789,11 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v
         }
         // SPEC-0039 1344 Init: triggers 0 to 4 (handlers 2, 3, 6, 4, 5), objects 2, 3, 4, 5, 1 and 0
-        // off; thread 7 loads slot 0 with set 0, 1 or 2 by flags 94, 93, 92 (only when flag 92
-        // was set, as that create stores the word they read) or, with 239 and 240, set 3 (only
-        // when 92 was clear); region 1345 + set.
+        // at their start poses. The character set is loaded by thread 7 on its first step, which
+        // runs only while 1344 is current (Update; SPEC-0067 16.3.6), not by Init.
         1344 => {
             let mut v = vec![reg(0, 2), reg(1, 3), reg(2, 6), reg(3, 4), reg(4, 5)];
             v.extend([2, 3, 4, 5, 1, 0].map(|obj| Action::InitObjOn { obj, end: false }));
-            let made = state.flag(92);
-            let set = if state.flag(94) {
-                Some(0)
-            } else if state.flag(93) {
-                Some(1)
-            } else if state.flag(92) {
-                Some(2)
-            } else if state.flag(239) && state.flag(240) {
-                Some(3)
-            } else {
-                None
-            };
-            if let Some(j) = set.filter(|&j| (j < 3) == made) {
-                v.push(Action::LoadRegion { slot: 0, region: Some(1345 + j) });
-            }
             v
         }
         // SPEC-0039 1248 Init: with 79 clear objects 3, 4, 5, 2, 0 and 1 off; objects 30, 29, 28,
@@ -2266,7 +2250,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // the hub, 5 nothing, 6 the hazard damage, 7 the block group (goal), 8 the arm.
         1381 => {
             let mut v = vec![Action::StopEffect { slot: 0 }];
-            for (a, b, c) in [(36, 72, 74), (37, 76, 78), (32, 56, 58)] {
+            for (a, b, c) in [(36, 72, 74), (37, 76, 78), (32, 56, 58), (33, 60, 62), (34, 64, 66), (35, 68, 70)] {
                 v.extend([Action::InitObjOn { obj: a, end: false }, Action::InitObjOn { obj: b, end: false }, Action::InitObjOn { obj: c, end: false }, Action::LoopAnim { obj: a, speed: 0.4 }]);
             }
             for k in 0..6 {
@@ -2730,7 +2714,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([reg(1, 1), reg(0, 1)]);
                 v.extend([14, 0].map(|obj| Action::InitObjOn { obj, end: false }));
                 v.extend([reg(2, 2), reg(3, 2), reg(4, 2)]);
-                v.push(Action::InitObjOn { obj: 1, end: false });
+                // The seven gear objects the update animates (SPEC-0041 1324 Init step 4).
+                v.extend((1..=7).map(|obj| Action::InitObjOn { obj, end: false }));
                 v.push(Action::ReturnCamera { preset: -1, release: true });
                 v.extend((0..3).map(|block| Action::MoveBlock { block, locator: 6 + block }));
             }
@@ -2759,7 +2744,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 }
             }
             if f(92) {
-                v.push(Action::InitObjOn { obj: 2, end: false });
+                // After the bed the group-6 sparkles (records 3 to 8) are stopped (SPEC-0044 1327).
+                v.extend([Action::GroupEffectsStop { group: 6 }, Action::InitObjOn { obj: 2, end: false }]);
             } else {
                 v.extend([Action::GroupEffects { group: 6 }, Action::InitObjOn { obj: 1, end: false }, Action::InitObjOn { obj: 0, end: false }]);
             }
@@ -5664,15 +5650,27 @@ fn tiles_1174(s: &mut GameState) -> Vec<Action> {
         v.push(Action::DeactivateObj { obj: 7 });
         v.extend((15..=21).map(|slot| Action::StartEffect { slot, camera: false }));
     }
-    // Tile 42's timer record: object 6 for 0.85 s, then sound 8 at locator 79.
-    if s.word(1174, 100 + 6) != 0 {
-        if s.word(1174, 160) == 0 {
-            s.set_word(1174, 160, now);
-            v.push(Action::PlayAnim { obj: 6, speed: 1.0, wait: false });
-        } else if s.word(1174, 161) == 0 && now - s.word(1174, 160) > 51 {
-            s.set_word(1174, 161, 1);
-            v.push(Action::PlaySound { cue: 8, locator: Some(79) });
-        }
+    // Rail A's timer record (SPEC-0044 1174 Rail A state machine): tile 42 crumbling stamps the
+    // timer once; more than 0.85 s later, state 1: object 6 off, the falling pieces 9 to 12 on
+    // and played once, sound 8 at locator 79; when none of them still plays, state 2, and on the
+    // passes after that all five are off. Words: 160 the stamp, 161 the state, 162 the timer
+    // running, 163 the state-1 entry tick.
+    let rail = s.word(1174, 161);
+    if s.word(1174, 100 + 6) != 0 && rail == 0 && s.word(1174, 162) == 0 {
+        s.set_word(1174, 160, now);
+        s.set_word(1174, 162, 1);
+    } else if rail == 0 && s.word(1174, 162) == 1 && now - s.word(1174, 160) > 51 {
+        s.set_word(1174, 162, 2);
+        s.set_word(1174, 161, 1);
+        s.set_word(1174, 163, now);
+        v.push(Action::DeactivateObj { obj: 6 });
+        v.extend((9..=12).flat_map(|obj| [Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 1.0, wait: false }]));
+        v.push(Action::PlaySound { cue: 8, locator: Some(79) });
+    } else if rail == 1 && now > s.word(1174, 163) + 1 && !(9..=12).any(|obj| s.animating.contains(&obj)) {
+        s.set_word(1174, 161, 2);
+    } else if rail == 2 {
+        s.set_word(1174, 161, 3);
+        v.extend([6, 9, 10, 11, 12].map(|obj| Action::DeactivateObj { obj }));
     }
     // The two-hit barrier: past 2.5 s from the break (the longest piece ends at 2.133 s), stage bit
     // 17 and all four objects hidden. The alpha ramp is not drawn.
@@ -6372,6 +6370,37 @@ const TIMED_1381: [usize; 19] = [84, 88, 91, 98, 101, 105, 108, 112, 113, 122, 1
 
 /// SPEC-0042 1381's return-to-hub routine: 0.5 s, sound 5 three times and 169, the hero at
 /// locator 0 with the normal camera, effect 0, 1.5 s; the pad-3 hazard off.
+/// SPEC-0042 1381 station k's solve scene: the in-area word cleared, the loop object stopped,
+/// the two pieces at 0.5 (the second waited), 170 + 3k and 171 + 3k once, the first camera
+/// track (waited), 172 + 3k hidden, 50 + k once with the second track (waited), 0.5 s, the
+/// camera back, 38 + k hidden, 44 + k shown at its start pose, 50 + k hidden, block k on and
+/// flag 708 + k. The block's four effects are not attached here.
+fn station_1381(k: usize, s: &mut GameState) -> Vec<Action> {
+    let lp = [36, 37, 32, 33, 34, 35][k];
+    let (p0, p1) = [(72, 74), (76, 78), (56, 58), (60, 62), (64, 66), (68, 70)][k];
+    let (c0, c1) = [(1, 2), (5, 6), (8, 9), (11, 12), (14, 15), (17, 18)][k];
+    s.set_word(1381, 10 + k as u8, 0);
+    let cam = |track| Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 };
+    s.set(708 + k as u16, true);
+    vec![
+        Action::StopAnim { obj: lp },
+        Action::PlayAnim { obj: p0, speed: 0.5, wait: false },
+        Action::PlayAnim { obj: p1, speed: 0.5, wait: true },
+        Action::PlayAnim { obj: 170 + 3 * k, speed: 1.0, wait: false },
+        Action::PlayAnim { obj: 171 + 3 * k, speed: 1.0, wait: false },
+        cam(c0),
+        Action::DeactivateObj { obj: 172 + 3 * k },
+        Action::PlayAnim { obj: 50 + k, speed: 1.0, wait: false },
+        cam(c1),
+        wait(0.5),
+        release_camera(),
+        Action::DeactivateObj { obj: 38 + k },
+        Action::InitObjOn { obj: 44 + k, end: false },
+        Action::DeactivateObj { obj: 50 + k },
+        Action::ActivateBlock { block: k, on: true },
+    ]
+}
+
 fn hub_return_1381(s: &mut GameState) -> Vec<Action> {
     s.set_word(1381, 1, 0);
     vec![
@@ -9250,8 +9279,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             if let Some(k) = TARGETS_1381.iter().position(|&t| t == call.index) {
                 if state.word(pack, 10 + k as u8) != 0 {
                     if !state.flag(708 + k as u16) {
-                        state.set(708 + k as u16, true);
-                        out.actions.extend([Action::DeactivateObj { obj: 50 + k }, Action::ActivateBlock { block: k, on: true }]);
+                        out.actions.extend(station_1381(k, state));
                     }
                     out.actions.extend(hub_return_1381(state));
                 }
@@ -10206,7 +10234,9 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // Routine 2 (trigger 5, the petpet ritual; 594 clear, a live kind-3 petpet): object 1 off
         // and 0 on, hero animation 0, a fade to locator 10, camera 5, the ritual word.
         (1300, 2) if call.object && call.state == 1 && !state.flag(594) && state.hero.pet_kind == Some(3) && state.word(pack, W1300_RITUAL) == 0 => {
-            state.set_word(pack, W1300_RITUAL, 1);
+            // The module word is set after the two fades and camera 5 (SPEC-0045 1300 routine 2):
+            // a negative count runs down through the fades before the ramp starts.
+            state.set_word(pack, W1300_RITUAL, -ritual_delay());
             out.actions.extend([
                 Action::HoldHero,
                 Action::DeactivateObj { obj: 1 },
@@ -12370,7 +12400,9 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                             state.set_word(pack, 0, 0);
                         }
                         18 => out.actions.extend([Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 }, Action::HeroAnim { anim: 0, wait: false }]),
-                        19 => out.actions.push(Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 }),
+                        // Lever 19: camera 4 starts, object 3 (the west gallery panels) plays once
+                        // with a wait, then 1.0 s (SPEC-0067 16.3.1, SPEC-0045 1098).
+                        19 => out.actions.extend([camera(4), Action::PlayAnim { obj: 3, speed: 1.0, wait: true }, wait(1.0)]),
                         _ => out.actions.extend([Action::PlayAnim { obj: 7, speed: 1.0, wait: false }, Action::PlayCamera { track: 5, wait: true, end: 1, speed: 1.0 }]),
                     }
                     out.actions.push(release_camera());
@@ -12531,6 +12563,30 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
 pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> {
     let mut out = Vec::new();
     match pack {
+        // SPEC-0039 1344 thread 7, first step (only with 1344 current; once per load, module word
+        // 90): slot 0 takes set 0, 1 or 2 by flags 94, 93, 92 (only when flag 92 was set, as that
+        // create stores the word they read) or, with 239 and 240, set 3 (only when 92 was clear);
+        // region 1345 + set.
+        1344 => {
+            if state.word(1344, 90) == 0 {
+                state.set_word(1344, 90, 1);
+                let made = state.flag(92);
+                let set = if state.flag(94) {
+                    Some(0)
+                } else if state.flag(93) {
+                    Some(1)
+                } else if state.flag(92) {
+                    Some(2)
+                } else if state.flag(239) && state.flag(240) {
+                    Some(3)
+                } else {
+                    None
+                };
+                if let Some(j) = set.filter(|&j| (j < 3) == made) {
+                    out.push(Action::LoadRegion { slot: 0, region: Some(1345 + j) });
+                }
+            }
+        }
         1091 => {
             out = sequencer_1091(state);
             out.extend(puzzle_1091(state));
@@ -13571,7 +13627,9 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
             let n = state.word(pack, W1300_RITUAL);
-            if n > 0 {
+            if n < 0 {
+                state.set_word(pack, W1300_RITUAL, if n + 1 == 0 { 1 } else { n + 1 });
+            } else if n > 0 {
                 state.set_word(pack, W1300_RITUAL, n + 1);
                 if n == 1 {
                     out.push(Action::InitObjOn { obj: 2, end: false });
@@ -14733,7 +14791,9 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.push(Action::DeactivateObj { obj: stays });
             }
             v.extend((92..=109).map(|slot| Action::StopEffect { slot }));
-            v.extend((17..=19).chain([7, 8]).map(|obj| Action::InitObjOn { obj, end: false }));
+            // Rail A's timer record at state 0 (object 6 on, 9 to 12 off) and rail B (object 8).
+            v.extend((17..=19).chain([7, 8, 6]).map(|obj| Action::InitObjOn { obj, end: false }));
+            v.extend((9..=12).map(|obj| Action::DeactivateObj { obj }));
             // The two-hit object's pair and its collision bit; the gates at rest.
             v.extend([Action::InitObjOn { obj: 13, end: false }, Action::InitObjOn { obj: 14, end: false }, Action::DeactivateObj { obj: 15 }, Action::DeactivateObj { obj: 16 }]);
             v.push(mask_1174(state, 1, 0));
@@ -14765,27 +14825,32 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             let v = state.blackboard.get(&(2, 123)).copied().unwrap_or(-1);
             vec![Action::MoveHero { locator: if v == 20 { 1 } else { 0 } }, Action::ReturnCamera { preset: -1, release: true }]
         }
-        // SPEC-0042 1381 activate-world restore: each solved station (708 + k; block k activated,
-        // object 50 + k removed for k 1 to 5) and each block piece (714 + k; block k to locator
-        // k + 1, its done word set) put in its solved state; all six pieces with 337 clear:
-        // object 18 on, 19 off. Block 0's four effects are not given.
+        // SPEC-0042 1381 activate-world restore (High): each solved station (708 + k): 170 + 3k
+        // and 171 + 3k at their end pose, 172 + 3k hidden, block k activated, 44 + k shown at its
+        // start pose, 38 + k and 50 + k hidden; each block piece (714 + k): block k to locator
+        // k + 1, 26 + k hidden (its done word set); all six pieces with 337 clear: object 18 at its
+        // end pose, 19 hidden. Block 0's four effects are not given.
         1381 => {
             let mut out = Vec::new();
             for k in 0..6usize {
                 if state.flag(708 + k as u16) {
-                    out.extend([Action::InitObjOn { obj: 170 + 3 * k, end: false }, Action::InitObjOn { obj: 171 + 3 * k, end: false }, Action::DeactivateObj { obj: 172 + 3 * k }, Action::InitObjOn { obj: 44 + k, end: false }, Action::DeactivateObj { obj: 38 + k }]);
-                    if k != 0 {
-                        out.push(Action::DeactivateObj { obj: 50 + k });
-                    }
-                    out.push(Action::ActivateBlock { block: k, on: true });
+                    out.extend([
+                        Action::InitObjOn { obj: 170 + 3 * k, end: true },
+                        Action::InitObjOn { obj: 171 + 3 * k, end: true },
+                        Action::DeactivateObj { obj: 172 + 3 * k },
+                        Action::ActivateBlock { block: k, on: true },
+                        Action::InitObjOn { obj: 44 + k, end: false },
+                        Action::DeactivateObj { obj: 38 + k },
+                        Action::DeactivateObj { obj: 50 + k },
+                    ]);
                 }
                 if state.flag(714 + k as u16) {
                     state.set_word(1381, DONE_1381 + k as u8, 1);
-                    out.extend([Action::MoveBlock { block: k, locator: k + 1 }, Action::DeactivateObj { obj: 26 + k }, Action::DeactivateObj { obj: 20 + k }]);
+                    out.extend([Action::MoveBlock { block: k, locator: k + 1 }, Action::DeactivateObj { obj: 26 + k }]);
                 }
             }
             if (714..=719).all(|f| state.flag(f)) && !state.flag(337) {
-                out.extend([Action::InitObjOn { obj: 18, end: false }, Action::DeactivateObj { obj: 19 }]);
+                out.extend([Action::InitObjOn { obj: 18, end: true }, Action::DeactivateObj { obj: 19 }]);
             }
             out
         }
@@ -15890,6 +15955,11 @@ struct PlateScene {
 const W1300_RITUAL: u8 = 50;
 const RITUAL_TICKS: i32 = 300;
 
+/// The ticks of the ritual's fade out and fade in before camera 5 and the module word.
+fn ritual_delay() -> i32 {
+    (2.0 * FADE * 60.0).round() as i32
+}
+
 /// SPEC-0045 1163 Serving scene. Each guest's Random(0, 1) locator comes from one roll of this
 /// talk, a bit per guest. The hero is held through it; the spec's list has no hold or release,
 /// which its moves imply.
@@ -16462,8 +16532,11 @@ fn castle_init(state: &mut GameState) -> Vec<Action> {
     if castle_stage(state) == 31 {
         state.set_word(1098, 0, 1);
     }
+    // Init stops effect slots 0 to 3; Update restarts 0 to 2 while 642 is clear and 3 while 642
+    // is set and 632 clear (SPEC-0045 1098).
+    let mut out: Vec<Action> = (0..4).map(|slot| Action::StopEffect { slot }).collect();
     // Triggers 7 and 8 set the transition maps 48 and 49 (registered in every case).
-    let mut out = vec![reg(0, 1), reg(7, 7), reg(8, 8), reg(4, 4), reg(5, 5), reg(6, 6), reg(9, 9), reg(10, 10), reg(17, 17), reg(18, 18), reg(19, 19), reg(20, 20)];
+    out.extend([reg(0, 1), reg(7, 7), reg(8, 8), reg(4, 4), reg(5, 5), reg(6, 6), reg(9, 9), reg(10, 10), reg(17, 17), reg(18, 18), reg(19, 19), reg(20, 20)]);
     let (f30, f31) = (state.flag(30), state.flag(31));
     if !f30 && !f31 {
         out.extend([reg(1, 2), reg(11, 11), reg(12, 12), reg(13, 13), reg(14, 14), reg(15, 15)]);
@@ -19728,7 +19801,8 @@ mod tests {
         s.set(708, true);
         s.set(715, true);
         let r = on_activate(1381, &mut s);
-        assert!(r.contains(&Action::ActivateBlock { block: 0, on: true }) && !r.contains(&Action::DeactivateObj { obj: 50 }));
+        assert!(r.contains(&Action::ActivateBlock { block: 0, on: true }) && r.contains(&Action::DeactivateObj { obj: 50 }));
+        assert!(r.contains(&Action::InitObjOn { obj: 170, end: true }) && r.contains(&Action::DeactivateObj { obj: 172 }));
         assert!(r.contains(&Action::MoveBlock { block: 1, locator: 2 }) && s.word(1381, DONE_1381 + 1) == 1);
     }
 
@@ -19952,7 +20026,8 @@ mod tests {
         assert_eq!(s.transition_map, Some(73));
         // 685 and 1098 register their map triggers.
         assert_eq!(on_init(685, &mut s), vec![reg(0, 0), reg(1, 1)]);
-        assert!(on_init(1098, &mut GameState::default()).iter().take(3).eq([reg(0, 1), reg(7, 7), reg(8, 8)].iter()));
+        // (after the stops of effect slots 0 to 3)
+        assert!(on_init(1098, &mut GameState::default()).iter().skip(4).take(3).eq([reg(0, 1), reg(7, 7), reg(8, 8)].iter()));
         on_trigger(1098, 8, call, &mut s);
         assert_eq!(s.transition_map, Some(49));
     }
@@ -20811,11 +20886,14 @@ mod tests {
         // Thread 7: flag 92 set with 94: set 0; flag 92 clear with 239 and 240: set 3.
         s.set(92, true);
         s.set(94, true);
-        assert!(on_init(1344, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1345) }));
+        // The set loads on the thread's first step with 1344 current, not at Init, and once.
+        assert!(!on_init(1344, &mut s).iter().any(|a| matches!(a, Action::LoadRegion { .. })));
+        assert!(on_update(1344, &mut s, false).contains(&Action::LoadRegion { slot: 0, region: Some(1345) }));
+        assert!(on_update(1344, &mut s, false).is_empty());
         let mut t = GameState::default();
         t.set(239, true);
         t.set(240, true);
-        assert!(on_init(1344, &mut t).contains(&Action::LoadRegion { slot: 0, region: Some(1348) }));
+        assert!(on_update(1344, &mut t, false).contains(&Action::LoadRegion { slot: 0, region: Some(1348) }));
         // 1248 Exit: 0 and 2 inactive, 1 active sets 79.
         on_exit(1248, &mut t, &|o| o == 1);
         assert!(t.flag(79));

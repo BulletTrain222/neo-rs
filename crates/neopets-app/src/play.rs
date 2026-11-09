@@ -11854,12 +11854,16 @@ impl Play {
         if let (Some(s), true) = (send, std::env::var_os("NEOPETS_TRACE_RUMBLE").is_some()) {
             println!("      rumble on tick {}: level {} for {} ticks", self.ticks, s.level, s.count);
         }
-        // SPEC-0028 7.1: the resident worlds' animated objects step before the hero update.
+        // SPEC-0028 7.1: the current world's animated objects step before the hero update; a
+        // resident non-current world keeps every object at its last pose (no time step, no pose
+        // evaluation; SPEC-0028 Run-time object changes, SPEC-0067 16.6 item 14).
         let mut object_sounds = Vec::new();
         let current = self.world.pack;
         for w in [&mut self.world].into_iter().chain(self.other.as_mut()) {
-            for (o, m) in w.object_anims.iter_mut().zip(&w.motions) {
-                o.tick(m);
+            if w.pack == current {
+                for (o, m) in w.object_anims.iter_mut().zip(&w.motions) {
+                    o.tick(m);
+                }
             }
             // SPEC-0031 Animated-object sounds: a slot's start plays once (do-not-restart) on
             // the area slot at the object (its rest position stands in for the reference centre),
