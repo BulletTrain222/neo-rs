@@ -12052,7 +12052,12 @@ impl Play {
                 }
             }
             self.landing_break();
-            self.trigger_step();
+            // SPEC-0030 Behavior 1: script steps 2 to 5 (triggers, callbacks, control threads and
+            // Update) are skipped while the hero swap is in progress.
+            let swapping = self.swap.is_some();
+            if !swapping {
+                self.trigger_step();
+            }
             let pack = self.world.pack;
             self.state.entity_hp = self.characters.iter().filter(|c| c.pack == pack).filter_map(|c| Some((c.entity?, c.hp.max(0)))).collect();
             self.state.hero.sub = self.attack.as_ref().map_or(0, |a| a.sub);
@@ -12078,7 +12083,7 @@ impl Play {
             }
             self.state.cloak_worn = self.cloak_worn;
             self.state.hero.hp_fraction = self.hero_hp as f32 / self.hero_max.max(1) as f32;
-            let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
+            let actions = if swapping { Vec::new() } else { level::on_update(self.world.pack, &mut self.state, self.dialogue_open) };
             // NEOPETS_TRACE_WORDS: the current module's words, object 0's time and the hero
             // every 30 ticks.
             if std::env::var_os("NEOPETS_TRACE_WORDS").is_some() && self.ticks % 30 == 0 {
@@ -12094,10 +12099,14 @@ impl Play {
             let talking: Vec<usize> = self.characters.iter().filter(|c| c.pack == pack && self.dialogue_open && self.talk_with == Some(c.id)).filter_map(|c| c.entity).collect();
             let walking: Vec<usize> = self.characters.iter().filter(|c| c.pack == pack && c.script_walk.is_some()).filter_map(|c| c.entity).collect();
             let rng = &mut self.rng;
-            let cmds = level::entity_step(pack, &mut self.state, &|e| talking.contains(&e), &|e| walking.contains(&e), &mut |lo, hi| rng.range(lo, hi));
-            self.entity_commands(pack, cmds);
+            if !swapping {
+                let cmds = level::entity_step(pack, &mut self.state, &|e| talking.contains(&e), &|e| walking.contains(&e), &mut |lo, hi| rng.range(lo, hi));
+                self.entity_commands(pack, cmds);
+            }
         }
-        self.run_threads();
+        if self.swap.is_none() {
+            self.run_threads();
+        }
         if std::env::var_os("NEOPETS_TRACE_NPCWALK").is_some() {
             self.npc_audit_step();
         }
@@ -13491,9 +13500,24 @@ impl Play {
                 [0.0, 1.0, -1.0].iter().all(|&o| world.ground.as_ref().is_none_or(|g| g.segment_clear(add(a, scale(side, o)), add(b, scale(side, o)), true)))
             };
             v.sees = Some(&sees);
-            let body = Cylinder::from_base(p, [0.0, 1.0, 0.0], row.radius, row.height);
+            // SPEC-0038 missile defence: the path against any hurt capsule of the enemy (a posed
+            // bone record of positive radius); the body cylinder stands in for a rig with none.
+            let mut hurt: Vec<Cylinder> = anim
+                .bones()
+                .hurt
+                .iter()
+                .zip(&frames)
+                .filter(|(h, _)| h.2 > 0.0)
+                .map(|(&(base, length, radius), f)| {
+                    let w = place.mul(f);
+                    Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
+                })
+                .collect();
+            if hurt.is_empty() {
+                hurt.push(Cylinder::from_base(p, [0.0, 1.0, 0.0], row.radius, row.height));
+            }
             let look = e.p.defence.hold.max(0) as f32;
-            let meets: Vec<bool> = shot_paths.iter().map(|&(s, vel)| neopets_sim::combat::segment_meets(s, add(s, scale(vel, look)), &body)).collect();
+            let meets: Vec<bool> = shot_paths.iter().map(|&(s, vel)| hurt.iter().any(|b| neopets_sim::combat::segment_meets(s, add(s, scale(vel, look)), b))).collect();
             v.missile_threat = meets.iter().any(|&m| m);
             v.missile_hits = meets.iter().filter(|&&m| m).count() as u8;
             v.missile_last = meets.last().copied().unwrap_or(false);
@@ -20357,8 +20381,8 @@ fn eye_line_clear(world: &World, a: [f32; 3], c: [f32; 3]) -> bool {
     if world.wall_group_faces(a).iter().any(|w| neopets_sim::eye_pass::face_crossed(a, c, w)) {
         return false;
     }
-    let inside = |p: [f32; 3], b: &BoxShape| segment_box(p, p, b.origin, b.axes, b.extents);
-    if world.boxes.iter().any(|b| !(inside(a, b) && inside(c, b)) && segment_box(a, c, b.origin, b.axes, b.extents)) {
+    // Boxes: the five faces (sides and bottom), never the top (SPEC-0027 sweep boxes).
+    if world.boxes.iter().any(|b| neopets_sim::eye_pass::box_fraction(a, c, b).is_some()) {
         return false;
     }
     // The segment against a horizontal circle (height ignored).
@@ -20379,7 +20403,10 @@ fn eye_line_clear(world: &World, a: [f32; 3], c: [f32; 3]) -> bool {
         let f = v.flags;
         match v.shape {
             neopets_sim::trigger::Shape::Sphere { centre, radius } if v.kind == 1 => f & 0b11 != 0 && f & 0b100 == 0 && circle(centre, radius),
-            neopets_sim::trigger::Shape::Cylinder { base, radius, .. } if v.kind == 3 => f & 0b1_0001 != 0 && f & 0b10_0000 == 0 && (base[0] - a[0]).hypot(base[2] - a[2]) < 50.0 && circle(base, radius),
+            // The line against the flat-ended finite cylinder (SPEC-0027 sweep kind 3).
+            neopets_sim::trigger::Shape::Cylinder { base, axis, length, radius } if v.kind == 3 => {
+                f & 0b1_0001 != 0 && f & 0b10_0000 == 0 && (base[0] - a[0]).hypot(base[2] - a[2]) < 50.0 && neopets_sim::eye_pass::segment_cylinder(a, c, base, axis, length.abs(), radius)
+            }
             neopets_sim::trigger::Shape::Rectangle { origin, axes, extents } if matches!(v.kind, 4 | 7) && extents[2] <= 0.0 => {
                 if f & 0b10_0001 == 0 {
                     return false;

@@ -362,24 +362,6 @@ pub fn cylinder_contact(p: Vec3, base: Vec3, axis: Vec3, length: f32, radius: f3
     (e < r && e > 0.0).then(|| (unit(add(scale(out, d - radius), scale(axis, beyond))), r - e))
 }
 
-/// The closest distance between segment a-c and the cylinder's axis segment.
-fn segment_axis_distance(a: Vec3, c: Vec3, base: Vec3, axis: Vec3, length: f32) -> f32 {
-    let u = sub(c, a);
-    let v = scale(axis, length);
-    let w = sub(a, base);
-    let (uu, uv, vv, uw, vw) = (dot(u, u), dot(u, v), dot(v, v), dot(u, w), dot(v, w));
-    let den = uu * vv - uv * uv;
-    let mut s = if den > 1e-9 { ((uv * vw - vv * uw) / den).clamp(0.0, 1.0) } else { 0.0 };
-    let mut t = if vv > 1e-9 { ((uv * s + vw) / vv).clamp(0.0, 1.0) } else { 0.0 };
-    if uu > 1e-9 {
-        s = ((uv * t - uw) / uu).clamp(0.0, 1.0);
-    }
-    if vv > 1e-9 {
-        t = ((uv * s + vw) / vv).clamp(0.0, 1.0);
-    }
-    len(sub(add(a, scale(u, s)), add(base, scale(v, t))))
-}
-
 fn cylinder(st: &mut EyeState, eye: &mut Vec3, base: Vec3, axis: Vec3, length: f32, radius: f32, ctx: &EyeCtx) {
     let Some((n, depth)) = cylinder_contact(*eye, base, axis, length, radius) else { return };
     if st.contact(eye, n, depth) {
@@ -387,7 +369,9 @@ fn cylinder(st: &mut EyeState, eye: &mut Vec3, base: Vec3, axis: Vec3, length: f
     }
     let d = around(*eye, base);
     let near = (base[0] - eye[0]).powi(2) + (base[2] - eye[2]).powi(2) < 2500.0;
-    if near && segment_axis_distance(*eye, ctx.focus, base, axis, length) < radius {
+    // The clear test: the line against the flat-ended finite cylinder, a root strictly inside
+    // (0, segment length) (SPEC-0027 cylinder routine).
+    if near && segment_cylinder(*eye, ctx.focus, base, axis, length, radius) {
         st.probes(*eye, d, ctx);
     } else {
         let d = if dot(ctx.heading, d) > 0.0 { d } else { neg(d) };
@@ -488,7 +472,8 @@ fn boxed(st: &mut EyeState, eye: &mut Vec3, b: &BoxShape, ctx: &EyeCtx) {
         5 => neg(bb),
         _ => bb,
     };
-    if crosses_box(*eye, ctx.focus, b) {
+    // The clear test: the five faces (sides and bottom), never the top (SPEC-0027 box routine).
+    if box_fraction(*eye, ctx.focus, b).is_some() {
         return;
     }
     let s = if dot(s, ctx.heading) > 0.0 { s } else { neg(s) };
@@ -560,7 +545,7 @@ fn ray_sphere(s: Vec3, u: Vec3, l: f32, c: Vec3, r: f32) -> Option<f32> {
 }
 
 /// The ray against a capped finite cylinder: the entry t0 if in (0, len), else the exit t1.
-fn ray_cylinder(s: Vec3, u: Vec3, l: f32, base: Vec3, axis: Vec3, length: f32, radius: f32) -> Option<f32> {
+pub fn ray_cylinder(s: Vec3, u: Vec3, l: f32, base: Vec3, axis: Vec3, length: f32, radius: f32) -> Option<f32> {
     let m = sub(s, base);
     let (mh, uh) = (dot(m, axis), dot(u, axis));
     let (mr, ur) = (sub(m, scale(axis, mh)), sub(u, scale(axis, uh)));
@@ -596,6 +581,14 @@ fn ray_cylinder(s: Vec3, u: Vec3, l: f32, base: Vec3, axis: Vec3, length: f32, r
     [t0, t1].into_iter().find(|&t| t > 0.0 && t < l)
 }
 
+/// The segment from `a` to `c` against the flat-ended finite cylinder (a root strictly inside the
+/// segment).
+pub fn segment_cylinder(a: Vec3, c: Vec3, base: Vec3, axis: Vec3, length: f32, radius: f32) -> bool {
+    let v = sub(c, a);
+    let l = len(v);
+    l > 1e-9 && ray_cylinder(a, scale(v, 1.0 / l), l, base, unit(axis), length, radius).is_some()
+}
+
 /// The exact rectangle crossing (fraction in [0, 1], in-plane coordinates in [0, extent]); the
 /// plane normal is axes[2], the in-plane axes axes[0] and axes[1].
 fn rect_fraction(a: Vec3, c: Vec3, origin: Vec3, axes: [Vec3; 3], extents: [f32; 3]) -> Option<f32> {
@@ -615,7 +608,7 @@ fn rect_fraction(a: Vec3, c: Vec3, origin: Vec3, axes: [Vec3; 3], extents: [f32;
 
 /// The box ray test: the smallest fraction of the five faces the segment crosses (the four sides
 /// and the bottom; never the top), after the ball prefilter of 20 x the largest extent.
-fn box_fraction(s: Vec3, e: Vec3, b: &BoxShape) -> Option<f32> {
+pub fn box_fraction(s: Vec3, e: Vec3, b: &BoxShape) -> Option<f32> {
     let biggest = b.extents.iter().fold(0.0f32, |m, x| m.max(x.abs()));
     let v = sub(e, s);
     let k = (dot(sub(b.origin, s), v) / dot(v, v).max(1e-12)).clamp(0.0, 1.0);

@@ -186,7 +186,19 @@ pub fn finite_overlap(a: &Cylinder, b: &Cylinder) -> bool {
         return along.abs() <= 0.5 * (a.length + b.length) && lateral <= a.radius + b.radius;
     }
     let perp = sub(d, scale(bu, dot(d, bu)));
+    // A zero perpendicular gives no overlap only when B is the larger or equal shape; with A
+    // the smaller one the four rays (using m) still run (SPEC-0018 finite overlap, refined).
     if len(perp) == 0.0 {
+        if a.radius < b.radius && a.length < b.length {
+            let dm = sub(b.center, a.center);
+            let au = unit(a.axis);
+            let mp = sub(dm, scale(au, dot(dm, au)));
+            if len(mp) == 0.0 {
+                return false;
+            }
+            let side = unit(mp);
+            return [a.axis, scale(a.axis, -1.0), side, scale(side, -1.0)].iter().all(|&dir| line_cylinder(a.center, dir, b).iter().any(|&t| t > 0.0));
+        }
         return false;
     }
     let n = unit(perp);

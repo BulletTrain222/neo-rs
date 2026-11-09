@@ -90,8 +90,9 @@ impl Edge {
         if !((a < 0.0 || b < 0.0) && (a.abs() < 0.3 || b.abs() < 0.3)) {
             return None;
         }
-        // 5. Vertical window.
-        let h = self.h(p);
+        // 5. Vertical window, at a fresh read of the character's own position (not p; refined
+        // 2026-11-09).
+        let h = self.h(pos);
         if !(h - 0.2 < pos[1] && pos[1] < h + 3.0) {
             return None;
         }

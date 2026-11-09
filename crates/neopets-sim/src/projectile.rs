@@ -347,6 +347,9 @@ impl Pool {
                     let body = p.s.owner.and_then(|o| (env.owner_body)(o).map(|b| (o, b)));
                     if let Some((o, (base, rb, hb))) = body {
                         if sphere_meets_body(p.position, p.s.radius, base, rb, hb) {
+                            // The owner's impact effect: slot 3 (an unblocked owner; enemies do
+                            // not guard here) (SPEC-0029 Behavior 9).
+                            effect(p, 3, p.position, &mut out);
                             out.push(Event::Owner { id: o, damage: p.s.damage.max(0.0) });
                             *slot = None;
                             continue;

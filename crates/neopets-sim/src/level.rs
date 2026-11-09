@@ -2116,8 +2116,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0042 1077 (run as pack 1129) Init: 35; by 38 objects 24 and 46 (and 12), by 36
         // objects 27, 28 and 44, by 306 objects 34, 25 and 26; Z0, L2, L21 and L22 on triggers 0,
         // 2, 21 and 22. The spec leaves the registrations' branch tests open (Low); they are made
-        // on every load here. Threads A to D, the object moves to locator 24 and the helper's
-        // object range are not built.
+        // on every load here, and so are the followers and threads A and D (the spec's test vector
+        // has the platform cycle with 38, 36 and 306 clear). Threads B and C (Low) and the
+        // helper's object range are not built. Words: 10 the cycle word, 11 thread A busy, 12 the
+        // thread D starts (bit 0 argument 0, bit 1 argument 1).
         1077 | 1129 => {
             state.set(35, true);
             let f = |n| state.flag(n);
@@ -2138,6 +2140,13 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                     }
                 }
             }
+            // Followers: objects 32 and 33 ride locators 1 and 2 of platform 24 (follow true;
+            // SPEC-0042 1077 Init common steps and Linked object changes).
+            v.extend([Action::AttachObj { obj: 32, host: 24, locator: 1 }, Action::AttachObj { obj: 33, host: 24, locator: 2 }]);
+            // The cycle word: file value 1, cleared by Init when 38 is set (SPEC-0042 1077, lever 22
+            // and Linked object changes, on reload).
+            let cycle = !f(38) as i32;
+            state.set_word(pack, 10, cycle);
             v.extend([reg(0, 0), reg(2, 2), reg(21, 21), reg(22, 22)]);
             v
         }
@@ -2335,6 +2344,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             let mut snd: Vec<(usize, i32, f32)> = [50, 51, 52, 53, 54, 55, 58, 62, 66, 70, 74, 78, 170, 173, 176, 179, 182, 185].map(|o| (o, 7, 0.0)).to_vec();
             snd.push((18, 8, 0.0));
             v.extend(obj_sounds(&snd));
+            // Not built: the start routine of the SPEC-0027 arrival table ("load to 0", (10, pi),
+            // grab control, effect). SPEC-0042 does not say when it runs, and moving the hero at
+            // every Init would override save loads and door landings here.
             v
         }
         // SPEC-0041 1090 Init: 314 and 42; the hurt triggers of bank A (1 to 7) and bank B (8 to
@@ -4514,21 +4526,48 @@ fn sequencer_1091(s: &mut GameState) -> Vec<Action> {
 
 /// SPEC-0014 Hazards (R-0161): one run of the six-drop sequence and its chains, as one timeline. Drop k
 /// starts at tick 20k and ends 39 later, when its carrier plays for 79; 2 ticks after that the burst
-/// word is on for 10 ticks and, on the first run, vent k's decal comes on.
+/// word is on for 10 ticks and, on the first run, vent k's decal comes on. The vent steps hold the
+/// Update (SPEC-0044 864), so carriers 4 and 5 start at ticks 131 and 151, not 119 and 139.
 fn drops_864(first: bool) -> Vec<Action> {
     let mut events = Vec::new();
+    // The stage thread starts drop k at 20k; it finishes 39 ticks later and a carrier 79 ticks after
+    // its start (SPEC-0044 864 Linked object changes).
+    let mut drop_done = [0u32; 6];
     for k in 0..6usize {
         let t = 20 * k as u32;
-        let (drop, carrier) = (18 + 2 * k, 17 + 2 * k);
-        events.push((t, Action::PlayAnim { obj: drop, speed: 3.0, wait: false }));
-        events.push((t + 39, Action::SetObjTime { obj: drop, seconds: 0.0 }));
-        events.push((t + 39, Action::PlayAnim { obj: carrier, speed: 3.0, wait: false }));
-        events.push((t + 118, Action::SetObjTime { obj: carrier, seconds: 0.0 }));
-        events.push((t + 120, Action::Bits { word: 14, set: 1, clear: 0 }));
-        events.push((t + 130, Action::Bits { word: 14, set: 0, clear: 1 }));
-        if first {
-            events.push((t + 130, Action::InitObjOn { obj: 29 + k, end: false }));
+        events.push((t, Action::PlayAnim { obj: 18 + 2 * k, speed: 3.0, wait: false }));
+        drop_done[k] = t + 39;
+    }
+    // The Update, one run a tick: the drop steps, then the vent steps. A vent step yields 2 and 10
+    // ticks and no new run starts meanwhile, so it holds the Update for 12 ticks; the held run goes
+    // on with the later vents after the resume, and a drop that finishes inside the hold (drop
+    // k + 4 inside vent k's) is handled by the first run after it, its carrier starting late
+    // (SPEC-0044 864 Update and Linked object changes, vent step).
+    let (mut dropped, mut vented) = ([false; 6], [false; 6]);
+    let mut carrier_done = [u32::MAX; 6];
+    let mut t = 0u32;
+    while vented.iter().any(|v| !v) {
+        for k in 0..6 {
+            if !dropped[k] && drop_done[k] <= t {
+                dropped[k] = true;
+                carrier_done[k] = t + 79;
+                events.push((t, Action::SetObjTime { obj: 18 + 2 * k, seconds: 0.0 }));
+                events.push((t, Action::PlayAnim { obj: 17 + 2 * k, speed: 3.0, wait: false }));
+            }
         }
+        for k in 0..6 {
+            if !vented[k] && carrier_done[k] <= t {
+                vented[k] = true;
+                events.push((t, Action::SetObjTime { obj: 17 + 2 * k, seconds: 0.0 }));
+                events.push((t + 2, Action::Bits { word: 14, set: 1, clear: 0 }));
+                t += 12;
+                events.push((t, Action::Bits { word: 14, set: 0, clear: 1 }));
+                if first {
+                    events.push((t, Action::InitObjOn { obj: 29 + k, end: false }));
+                }
+            }
+        }
+        t += 1;
     }
     events.sort_by_key(|e| e.0);
     let (mut v, mut now) = (Vec::new(), 0);
@@ -4777,8 +4816,8 @@ fn loader_822(s: &GameState) -> Vec<Action> {
 
 /// SPEC-0041 985's threads: CB3 (the Gnarfas fight; 281 clear at load) and CB6 (the glade fight's
 /// level-state chain; 281 set). The cutscene helpers' cameras and entity animations are Medium in
-/// the spec and given in order; the boss-fight tweaks, collision masks and navmesh assignments
-/// are not built.
+/// the spec and given in order; the collision masks follow SPEC-0041 985's reload behaviour; the
+/// boss-fight tweaks and navmesh assignments are not built.
 fn thread_985(s: &mut GameState) -> Vec<Action> {
     let p = 985;
     if s.word(p, 4) != 0 {
@@ -4805,6 +4844,9 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
             s.set_word(p, 1, a | 3);
             v.extend((7..=12).map(|slot| Action::StopEffect { slot }));
             v.extend([Action::DeactivateEntity { entity: 7 }, Action::DeactivateEntity { entity: 8 }]);
+            // The fight end clears bit 1 only: world mask word 2, the north-east wall gone and the
+            // south-west wall kept (SPEC-0041 985 rule 3 and reload behaviour; SPEC-0018 pack 985).
+            v.push(Action::CollisMask { mask: 2 });
         } else if s.flag(214) {
             if a & 2 != 0 && !s.movies.contains(&13) {
                 s.queue_movie(13);
@@ -4880,6 +4922,8 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
         s.set(284, true);
         s.set(301, true);
         v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, anim(7), Action::Converse { entity: 0, line: 13 }, anim(24), Action::FadeOut { seconds: FADE, wait: true }, Action::ReturnCamera { preset: -1, release: true }]);
+        // The finale clears bit 1 only (world mask word 2; SPEC-0041 985 Arena facts and H14).
+        v.push(Action::CollisMask { mask: 2 });
         v.extend((0..=4).map(|entity| Action::DeactivateEntity { entity }));
         v.extend((7..=12).map(|slot| Action::StopEffect { slot }));
         v.extend([Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::FadeIn { seconds: FADE, wait: true }, Action::LevelState { flag: 8, on: true }]);
@@ -4898,6 +4942,45 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
             v.extend([Action::GiveItem { item: 30, count: 1 }, Action::ReplaceExterior { slot: 74, plane: -1 }]);
             busy(s, &mut v);
         }
+    }
+    v
+}
+
+/// SPEC-0042 1077 (play pack 1129) threads A and D, Linked object changes: while the cycle word
+/// (word 10) is set at the cycle's start, thread A plays platform 24 at +0.1 (wait), starts D(0),
+/// plays 24 at -0.3 (wait), starts D(1) and waits 5.0 s. D(0): group 5 (objects 0 to 11) off,
+/// group 6 (12 to 23) on at its start pose and played once at 0.3, then, when object 12 stops,
+/// group 6 off. D(1): group 5 on at its start pose and played once at 0.1, left at its end pose. A
+/// thread D start is a control thread, so its change begins on the next tick (word 12, read here).
+/// Word 11 keeps thread A from starting twice.
+fn thread_1129(s: &mut GameState, pack: u32) -> Vec<Action> {
+    let mut v = Vec::new();
+    let d = s.word(pack, 12);
+    if d != 0 {
+        s.set_word(pack, 12, 0);
+        // A D run is its own thread (the host makes each Update list a thread), so D(0)'s poll of
+        // object 12 runs beside thread A's backward play.
+        if d & 1 != 0 {
+            v.extend((0..=11).map(|obj| Action::DeactivateObj { obj }));
+            v.extend((12..=23).flat_map(|obj| [Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 0.3, wait: false }]));
+            v.push(Action::WaitObj { obj: 12 });
+            v.extend((12..=23).map(|obj| Action::DeactivateObj { obj }));
+        }
+        if d & 2 != 0 {
+            v.extend((0..=11).flat_map(|obj| [Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 0.1, wait: false }]));
+        }
+        return v;
+    }
+    if s.word(pack, 11) == 0 && s.word(pack, 10) != 0 {
+        s.set_word(pack, 11, 1);
+        v.extend([
+            Action::PlayAnim { obj: 24, speed: 0.1, wait: true },
+            Action::Bits { word: 12, set: 1, clear: 0 },
+            Action::PlayAnim { obj: 24, speed: -0.3, wait: true },
+            Action::Bits { word: 12, set: 2, clear: 0 },
+            wait(5.0),
+            Action::Bits { word: 11, set: 0, clear: 1 },
+        ]);
     }
     v
 }
@@ -9141,7 +9224,10 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // L22 (the button; here once, 308 clear): 38 and 308, object 24 stopped, the walk to
         // locator 28, object 46 with sound 7, object 24 set to its end and played, sound 13 and
         // camera 7.
-        (1077 | 1129, 22) if call.object && !state.flag(308) && call.square && !state.talking => {
+        // L22 needs the cycle word (word 10) and clears it as it starts, so thread A's cycle ends at
+        // its next test and the lever works once per load (SPEC-0042 1077, lever 22).
+        (1077 | 1129, 22) if call.object && !state.flag(308) && state.word(pack, 10) != 0 && call.square && !state.talking => {
+            state.set_word(pack, 10, 0);
             state.set(38, true);
             state.set(308, true);
             out.actions.extend([
@@ -13459,6 +13545,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         // SPEC-0041 985 Update: the thread of the load's branch.
         985 => out.extend(thread_985(state)),
+        // SPEC-0042 1077 (pack 1129): the module's Update is empty; threads A and D run from here.
+        1077 | 1129 => out.extend(thread_1129(state, pack)),
         // SPEC-0041 1130 Update: message 4 once per load (word 30) when breakable 0 is broken.
         1130 if state.word(pack, 30) == 0 && state.breakables.contains_key(&0) && !breakable_intact(state, 0) => {
             state.set_word(pack, 30, 1);
@@ -14499,7 +14587,10 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         950 => {
             if state.word(pack, 1) == 0 {
                 state.set_word(pack, 1, 1);
-                out.extend([Action::LongFall, Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 }, wait(0.5), Action::ReturnCamera { preset: 10, release: true }]);
+                // Step 4's SetToNormalCamera(10, flag 0) is the (int, bool) record, row 33, which is
+                // ReturnToNormalCamera(10, false) (SPEC-0032 950 thread F; SPEC-0030 SetToNormalCamera
+                // overloads): release off.
+                out.extend([Action::LongFall, Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 }, wait(0.5), Action::ReturnCamera { preset: 10, release: false }]);
             }
         }
         // SPEC-0041 1392 Update, the fall-in (once per load while 696 is clear): the hero to
@@ -15275,11 +15366,28 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 Vec::new()
             }
         }
-        // SPEC-0044 864 arrival: the value for eW 60 is read and reset; the plain exit is armed.
+        // SPEC-0044 864 arrival: the value for eW 60 is read and reset; 50 (up from eW 50) puts the
+        // hero at locator 3, one tick, SetToNormalCamera(5.0, 0.0) and the walk to point 4 (wait,
+        // control); any other value but -1 only the normal camera; the plain exit is armed.
         864 => {
-            state.take_message(2, 60);
+            let v = state.take_message(2, 60);
             state.set_word(864, 5, 1);
-            Vec::new()
+            let camera = Action::NormalCamera { distance: 5.0, angle: 0.0, release: true };
+            match v {
+                50 => vec![Action::MoveHero { locator: 3 }, Action::Sleep { ticks: 1 }, camera, Action::WalkHero { locator: 4, wait: true, orient: false }],
+                -1 => Vec::new(),
+                _ => vec![camera],
+            }
+        }
+        // SPEC-0027 arrival table 956: value 250 (back from interior eW 76, pack 984; posted by the
+        // teleport, SPEC-0043 956) puts the hero at locator 45 with SetToNormalCamera(5, 0); a plain
+        // load makes no call. The reset of the value is taken as the other arrivals' (not stated).
+        956 => {
+            if state.take_message(2, 74) == 250 {
+                vec![Action::MoveHero { locator: 45 }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }]
+            } else {
+                Vec::new()
+            }
         }
         // SPEC-0041 985 arrivals: CB1 (281 clear at load: the hero at locator 9, the camera, 212;
         // with 214 clear level states 0 to 2 cleared and the boss-fight refill of instance 1;
@@ -15295,10 +15403,14 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                     for l in 0..=2 {
                         state.set_level(l, false);
                     }
-                    v.push(Action::BossFight { instance: 1 });
+                    // The arena walls, bits 1 and 2 (world mask word 3), only while 214 is clear
+                    // (SPEC-0041 985 CB1 and reload behaviour; SPEC-0018 pack 985 gates).
+                    v.extend([Action::CollisMask { mask: 3 }, Action::BossFight { instance: 1 }]);
                 }
                 state.set_word(985, 1, 0);
             } else {
+                // CB4: both arena walls with no flag test (SPEC-0041 985 CB4 and reload behaviour).
+                v.push(Action::CollisMask { mask: 3 });
                 state.set_word(985, 2, 1);
             }
             v
@@ -20054,6 +20166,29 @@ mod tests {
         assert!(s.flag(306));
         // Z0 loads eW 90 (pack 1023).
         assert_eq!(on_trigger(1129, 0, press(0), &mut s).actions[0], Action::ReplaceExterior { slot: 90, plane: -1 });
+        // SPEC-0042 1077 Linked object changes: the followers, thread A's cycle and thread D.
+        let mut s = GameState::default();
+        let v = on_init(1129, &mut s);
+        assert!(v.contains(&Action::AttachObj { obj: 32, host: 24, locator: 1 }) && v.contains(&Action::AttachObj { obj: 33, host: 24, locator: 2 }));
+        let a = on_update(1129, &mut s, false);
+        assert_eq!(a[0], Action::PlayAnim { obj: 24, speed: 0.1, wait: true });
+        assert!(a.contains(&Action::PlayAnim { obj: 24, speed: -0.3, wait: true }) && a.contains(&wait(5.0)));
+        assert!(on_update(1129, &mut s, false).is_empty(), "thread A runs once at a time");
+        s.set_word(1129, 12, 1);
+        let d0 = on_update(1129, &mut s, false);
+        assert!(d0.contains(&Action::DeactivateObj { obj: 0 }) && d0.contains(&Action::PlayAnim { obj: 23, speed: 0.3, wait: false }));
+        assert_eq!(d0.last(), Some(&Action::DeactivateObj { obj: 23 }));
+        s.set_word(1129, 12, 2);
+        assert!(on_update(1129, &mut s, false).contains(&Action::PlayAnim { obj: 11, speed: 0.1, wait: false }));
+        // Lever 22 clears the cycle word: no new cycle after the running one ends.
+        on_trigger(1129, 22, press(22), &mut s);
+        s.set_word(1129, 11, 0);
+        assert!(on_update(1129, &mut s, false).is_empty());
+        // A load with 38 set has no cycle.
+        let mut s = GameState::default();
+        s.set(38, true);
+        on_init(1129, &mut s);
+        assert!(on_update(1129, &mut s, false).is_empty());
     }
 
     #[test]
@@ -20194,6 +20329,29 @@ mod tests {
         assert!(on_update(864, &mut t, false).is_empty());
         t.set_word(864, 6, 0);
         assert!(!on_update(864, &mut t, false).iter().any(|a| matches!(a, Action::PlayAnim { .. })));
+        // SPEC-0044 864 vent step: vent 0's 12-tick hold (118 to 130) delays drop 4's carrier from
+        // tick 119 to 131, and vent 1's (138 to 150) drop 5's from 139 to 151.
+        let tl = drops_864(true);
+        let tick_of = |a: Action| {
+            let mut now = 0;
+            for x in &tl {
+                if let Action::Sleep { ticks } = x {
+                    now += ticks;
+                } else if *x == a {
+                    return now;
+                }
+            }
+            panic!("missing {a:?}")
+        };
+        let carrier = |obj| Action::PlayAnim { obj, speed: 3.0, wait: false };
+        assert_eq!([17, 19, 21, 23, 25, 27].map(|o| tick_of(carrier(o))), [39, 59, 79, 99, 131, 151]);
+        assert_eq!(tick_of(Action::SetObjTime { obj: 25, seconds: 0.0 }), 210);
+        assert_eq!(tick_of(Action::InitObjOn { obj: 34, end: false }), 242);
+        // The arrival from eW 50 (value 50): locator 3, one tick, the normal camera, the walk to 4.
+        let mut a = GameState::default();
+        a.blackboard.insert((2, 60), 50);
+        assert_eq!(on_activate(864, &mut a), vec![Action::MoveHero { locator: 3 }, Action::Sleep { ticks: 1 }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }, Action::WalkHero { locator: 4, wait: true, orient: false }]);
+        assert!(on_activate(864, &mut a).is_empty());
         // The story exit: flags 58 and 288 to 292 and the load of eW 50.
         assert!(on_trigger(864, 22, inside(22), &mut s).actions.contains(&Action::ReplaceExterior { slot: 50, plane: -1 }));
         assert!(s.flag(58) && s.flag(290));
@@ -20207,13 +20365,16 @@ mod tests {
         // state 1); level state 2 the fight end (214); then movie 13; then trigger 4 (A2) sets 64.
         let mut s = GameState::default();
         on_init(985, &mut s);
-        on_activate(985, &mut s);
+        // SPEC-0041 985 reload behaviour: the walls (mask 3) while 214 is clear; the fight end
+        // clears bit 1 only (mask 2); an arrival with 214 set has no wall call.
+        assert!(on_activate(985, &mut s).contains(&Action::CollisMask { mask: 3 }));
         s.set_level(0, true);
         assert!(on_update(985, &mut s, false).contains(&Action::Message { line: 14 }) && s.flag(213));
         s.set_word(985, 4, 0);
         s.set_level(2, true);
-        on_update(985, &mut s, false);
+        assert!(on_update(985, &mut s, false).contains(&Action::CollisMask { mask: 2 }));
         assert!(s.flag(214));
+        assert!(!on_activate(985, &mut s.clone()).iter().any(|a| matches!(a, Action::CollisMask { .. })));
         assert!(on_update(985, &mut s, false).contains(&Action::MoveHero { locator: 26 }));
         s.set_word(985, 4, 0);
         on_trigger(985, 2, TriggerCall { index: 4, state: 1, object: true, square: false, block: -1 }, &mut s);
@@ -20223,7 +20384,7 @@ mod tests {
         let mut s = GameState::default();
         s.set(281, true);
         on_init(985, &mut s);
-        on_activate(985, &mut s);
+        assert!(on_activate(985, &mut s).contains(&Action::CollisMask { mask: 3 }));
         let intro = on_update(985, &mut s, false);
         assert!(intro.contains(&Action::Converse { entity: 0, line: 5 }) && !s.level(0));
         let release = intro.iter().position(|a| *a == Action::ReleaseEntity { entity: 0 }).unwrap();
@@ -20233,13 +20394,24 @@ mod tests {
         s.set_level(7, true);
         let finale = on_update(985, &mut s, false);
         assert!(s.flag(284) && finale.last() == Some(&Action::Bits { word: 4, set: 0, clear: 1 }));
-        assert!(finale.contains(&Action::LevelState { flag: 8, on: true }));
+        assert!(finale.contains(&Action::LevelState { flag: 8, on: true }) && finale.contains(&Action::CollisMask { mask: 2 }));
         // The scene's last call (applied by the host).
         s.set_level(8, true);
         s.set_word(985, 4, 0);
         on_trigger(985, 5, TriggerCall { index: 4, state: 1, object: true, square: false, block: -1 }, &mut s);
         on_update(985, &mut s, false);
         assert!(on_update(985, &mut s, false).contains(&Action::GiveItem { item: 30, count: 1 }) && s.flag(67));
+    }
+
+    #[test]
+    fn arrivals_956_1381_950() {
+        // SPEC-0027 arrival table 956: 250 to locator 45 with (5, 0); a plain load makes no call.
+        let mut s = GameState::default();
+        s.blackboard.insert((2, 74), 250);
+        assert_eq!(on_activate(956, &mut s), vec![Action::MoveHero { locator: 45 }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }]);
+        assert!(on_activate(956, &mut s).is_empty());
+        // SPEC-0032 950 thread F: SetToNormalCamera(10, flag 0) is ReturnToNormalCamera(10, false).
+        assert_eq!(on_update(950, &mut GameState::default(), false).last(), Some(&Action::ReturnCamera { preset: 10, release: false }));
     }
 
     #[test]

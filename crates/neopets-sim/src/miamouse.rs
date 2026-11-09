@@ -221,8 +221,10 @@ impl Miamouse {
                     if mesh.is_some_and(|m| m.locate_full(a).is_some()) {
                         self.dest = Some(a);
                     } else {
+                        // A non-walkable probe: the radius-10 pick and clip 0 (SPEC-0029 Miamouse).
                         self.sub = 1;
                         self.dest = Some(far_pick(mesh, v.hero, 10.0, rng));
+                        return CLIP_IDLE;
                     }
                 } else {
                     self.sub = 2;
