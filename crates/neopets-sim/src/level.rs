@@ -1663,6 +1663,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if state.flag(696) {
                 v.extend([11, 13, 15].map(|obj| Action::InitObjOn { obj, end: false }));
                 v.extend([20, 22, 24].map(|obj| Action::InitObjOn { obj, end: true }));
+                // All three levers count as pulled: their words are 1 (SPEC-0041 1392 Reload).
+                for k in 0..3u8 {
+                    state.set_word(pack, 20 + k, 1);
+                }
             } else {
                 v.extend([20, 22, 24].map(|obj| Action::InitObjOn { obj, end: false }));
                 v.extend((13..=18).map(|slot| Action::StopEffect { slot }));
@@ -1763,7 +1767,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // CB7 on trigger 4 (the object-swap callbacks: CB1 on 0, CB2 on 1, CB5 on 2, CB6 on 3);
         // the teleport and the arrival are fixed rules.
         1247 => {
-            let mut v = vec![Action::StopEffect { slot: 0 }];
+            // Init stops placed effects 0 to 23 in both layouts (SPEC-0041 1247).
+            let mut v: Vec<Action> = (0..=23).map(|slot| Action::StopEffect { slot }).collect();
             if state.flag(78) {
                 v.extend([1, 0, 7, 9, 11, 12, 15, 17, 19, 21, 23, 25, 27, 28, 31, 33, 35, 4].map(|obj| Action::InitObjOn { obj, end: false }));
             } else {
@@ -1924,7 +1929,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0043 1173 Init: object 1 off; routine 2 on trigger 1 and routine 3 on trigger 0;
         // teleport 0 (kind 13), entity 0's routine and the arrival are fixed rules.
-        1173 => vec![Action::InitObjOn { obj: 1, end: false }, reg(1, 2), reg(0, 3)],
+        // Object 0 at its end pose with flag 630 set, else at its start (SPEC-0043 1173 reload).
+        1173 => vec![Action::InitObjOn { obj: 1, end: false }, Action::InitObjOn { obj: 0, end: state.flag(630) }, reg(1, 2), reg(0, 3)],
         // SPEC-0039 1405, 1407, 1417, 1419 and 1425 Init: their blackboard values (1417: 20 for
         // eW 159; 1425: 50 for eW 160); 1407 sets flag 100 first; the thread loads slot 0 with set
         // 0 (region P + 1) and returns the camera under each pack's gate (104, always, 102, 100,
@@ -6045,6 +6051,13 @@ fn plate2_1324(index: u16, s: &mut GameState) -> Vec<Action> {
     // Then (SPEC-0041, R-0095 answered) a fade out, the normal camera, a fade in without a wait
     // and a second normal-camera return; the live path never reaches the FMV-23 scene.
     v.extend([Action::HeroAnim { anim: 0, wait: false }, Action::FadeIn { seconds: 0.5, wait: false }, Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 }, wait(1.0)]);
+    // The second stage-2 mark with stage 1 already finished runs the solved helper after its
+    // own camera and 1.0 s (SPEC-0041 1324 Order of the two stages).
+    if s.word(1324, 10) != 0 && s.word(1324, 8) != 0 && s.word(1324, 9) != 0 {
+        v.push(Action::ReturnCamera { preset: -1, release: true });
+        v.extend(solved_1324());
+        return v;
+    }
     v.extend([
         Action::FadeOut { seconds: 0.5, wait: true },
         Action::ReturnCamera { preset: -1, release: true },
@@ -6304,8 +6317,10 @@ fn obj_sounds(list: &[(usize, i32, f32)]) -> Vec<Action> {
 /// SPEC-0041 1324's solved-scene helper (see the stage-1 plate callback).
 /// The scene-done word is flag 239 itself here (Init and Update read the flag).
 fn solved_1324() -> Vec<Action> {
+    // The helper starts sound 5 (the third bell plays 4 and 5 before its camera; SPEC-0041
+    // 1324 Order independence).
     let pair = [Action::PlaySound { cue: 4, locator: None }, Action::PlaySound { cue: 5, locator: None }];
-    let mut v = pair.to_vec();
+    let mut v = vec![Action::PlaySound { cue: 5, locator: None }];
     v.extend([
         wait(2.0),
         Action::SetFlag { flag: 239, on: true },
@@ -6871,7 +6886,9 @@ fn practice_1327(s: &mut GameState) -> Vec<Action> {
     }
     let step = (229..=233).rev().find(|&f| s.flag(f));
     let mut out = Vec::new();
-    if step.is_some() && s.word(p, 40) == 0 {
+    // The target set is loaded by step 230 and reloaded once per pack load at the first of
+    // steps 231 to 233 (not during lesson 1; SPEC-0044 1327).
+    if matches!(step, Some(231..=233)) && s.word(p, 40) == 0 {
         s.set_word(p, 40, 1);
         out.extend([Action::LoadRegion { slot: 2, region: None }, Action::LoadRegion { slot: 2, region: Some(1328) }]);
     }
@@ -6887,6 +6904,7 @@ fn practice_1327(s: &mut GameState) -> Vec<Action> {
         }
         Some(230) if s.word(p, 42) != 230 => {
             s.set_word(p, 42, 230);
+            s.set_word(p, 40, 1);
             s.set_word(p, 41, 1);
             out.extend([
                 Action::LoadRegion { slot: 2, region: None },
@@ -9167,11 +9185,17 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             state.set_word(pack, 1, state.word(pack, 1) | 1 << 14);
             state.set(219, true);
             state.set(220, true);
-            state.set(221, true);
-            for m in [16, 89, 18] {
-                state.queue_movie(m);
-            }
-            out.actions.extend([Action::FadeOut { seconds: 0.3, wait: true }, Action::ActStart { stage: 2 }, Action::ReplaceExterior { slot: 151, plane: -1 }]);
+            // The 0.3 s fade first (waited), then in one tick: movie 16 queued, act start 2,
+            // movie 89, flag 221, movie 18 and the return world eW 151 (SPEC-0044 1174 trigger 1).
+            out.actions.extend([
+                Action::FadeOut { seconds: 0.3, wait: true },
+                Action::PlayFmv { movie: 16 },
+                Action::ActStart { stage: 2 },
+                Action::PlayFmv { movie: 89 },
+                Action::SetFlag { flag: 221, on: true },
+                Action::PlayFmv { movie: 18 },
+                Action::ReplaceExterior { slot: 151, plane: -1 },
+            ]);
         }
         // The section triggers (2, 3, 4; the hero's own contact): bits 6, 10 and 12, once each.
         (1174, 2) if call.object => {
@@ -9276,12 +9300,16 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (1324, 1) if call.block >= 0 && !state.flag(239) && call.state == 1 => out.actions.extend(plate2_1324(call.index, state)),
         (1324, 1) if call.block >= 0 && !state.flag(239) && call.state == 3 => {
             state.set_word(pack, if call.index == 1 { 8 } else { 9 }, 0);
+            // Clearing mark A (plate 1) leaves B: object 10; clearing mark B leaves A: object 11;
+            // none left: 14. This path does not rewrite the beam word (SPEC-0041 1324 state 3).
             let beam = match (state.word(pack, 8) != 0, state.word(pack, 9) != 0) {
                 (false, false) => 14,
-                (true, _) => 10,
-                (false, true) => 11,
+                (false, true) => 10,
+                (true, _) => 11,
             };
+            let word = state.word(pack, 1);
             out.actions.extend(beam_1324(state, beam, None));
+            state.set_word(pack, 1, word);
         }
         // SPEC-0041 1324 trigger callback 2 (the stage-1 plates 2 to 4), entered by a block: the
         // block placed and the plate pressed; the plate object swapped (15/16, 17/18, 19/20) with
@@ -9345,7 +9373,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     out.actions.push(Action::PlaySound { cue: 5, locator: None });
                 }
                 state.set_word(pack, 10, 1);
-                out.actions.push(Action::PlayCamera { track: 8, wait: true, end: 1, speed: 0.5 });
+                // Track 8 with wait, end mode 0 (SPEC-0041 1324).
+                out.actions.push(Action::PlayCamera { track: 8, wait: true, end: 0, speed: 0.5 });
                 // With one stage-2 mark, that plate's handler runs again; with both, after the
                 // camera's return, the solved-scene helper (SPEC-0041 1324, R-0103): the paired
                 // sounds, 2.0 s, flag 239 and the scene-done word, a 2.0 s fade out, sounds 4 and 5
@@ -11536,7 +11565,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         }
         // SPEC-0045 758 breakable routine 27 (triggers 16 to 19): breakable 19 broken while it is
         // intact (every index names 19).
-        (758, 27) if call.state != 0 && breakable_intact(state, 19) => out.actions.push(Action::Break { id: 19 }),
+        // Script triggers 16 to 19 map one to one to breakables 17 to 20 (SPEC-0045 758).
+        (758, 27) if call.state != 0 && breakable_intact(state, call.index as usize + 1) => out.actions.push(Action::Break { id: call.index as usize + 1 }),
         // SPEC-0045 758 routine 34, the signs: the Square context 3 while inside; a press shows the
         // index's line.
         (758, 34) if call.state != 0 => {
@@ -14171,7 +14201,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     out.push(Action::LoadRegion { slot, region: None });
                 }
             }
-            let running = state.flag(470);
+            // A game runs while flag 470 or 474 is set (SPEC-0045 934 Update).
+            let running = state.flag(470) || state.flag(474);
             out.push(if running { Action::InitObjOn { obj: 0, end: false } } else { Action::DeactivateObj { obj: 0 } });
             if running {
                 state.set_word(pack, 12, 1);
@@ -17326,8 +17357,10 @@ pub fn on_breakable(pack: u32, script: i16, id: usize, open: bool, s: &mut GameS
             if !open || !s.flag(174) {
                 return Some(Vec::new());
             }
+            // With the nest's flag already set a hit does nothing (the revived last member
+            // stays; SPEC-0044 1056 reload).
             if s.flag(flag) {
-                return Some(vec![Action::Break { id }]);
+                return Some(Vec::new());
             }
             if s.flag(179) {
                 return Some(Vec::new());
@@ -18879,13 +18912,15 @@ mod tests {
         }
         assert_eq!((s.word(1324, 1), s.word(1324, 6)), (14, 240));
         // Plates 3 and 4: with mark B only, the third press runs plate 0's handler again; mark A
-        // then completes both marks, which reaches no FMV scene and sets no flag (SPEC-0041, R-0095).
+        // then completes both marks with stage 1 finished, which runs the solved scene (SPEC-0041
+        // 1324 Order of the two stages).
         on_trigger(1324, 2, call(3, 1, 1), &mut s);
         let out = on_trigger(1324, 2, call(4, 1, 2), &mut s).actions;
         assert!(out.contains(&Action::InitObjOn { obj: 22, end: false }) && out.contains(&Action::MoveBlock { block: 4, locator: 1 }));
         assert!(!s.flag(239));
         let out = on_trigger(1324, 1, call(1, 1, 0), &mut s).actions;
-        assert!(!out.contains(&Action::SetFlag { flag: 239, on: true }) && out.ends_with(&[Action::FadeIn { seconds: 0.5, wait: false }, Action::ReturnCamera { preset: -1, release: true }]));
+        assert!(out.contains(&Action::SetFlag { flag: 239, on: true }) && out.contains(&Action::PlayFmv { movie: 23 }));
+        assert!(!out.contains(&Action::MoveHero { locator: 10 }), "stage 1 finished: the hero is not moved");
         // Leaving plate 1 clears mark A; mark B left gives beam 11.
         on_trigger(1324, 1, call(1, 3, 0), &mut s);
         assert_eq!(s.word(1324, 8), 0);
@@ -18984,7 +19019,8 @@ mod tests {
         }
         on_update(1327, &mut s, false);
         assert!(on_talk(1327, 43, &mut s).contains(&Action::Talk { line: 66 }) && s.flag(229));
-        assert!(on_update(1327, &mut s, false).contains(&Action::LoadRegion { slot: 2, region: Some(1328) }));
+        // The book does not exist during lesson 1 (step 229): no load yet.
+        assert!(!on_update(1327, &mut s, false).iter().any(|a| matches!(a, Action::LoadRegion { .. })));
         assert!(s.undamageable_now.contains(&0));
         s.hero.fire = true;
         on_update(1327, &mut s, false);
@@ -19775,7 +19811,9 @@ mod tests {
         assert!(on_trigger(1174, 30, inside, &mut s).actions.is_empty());
         // Trigger 1: the Act 2 start (219 to 221, act start 2, eW 151), once.
         let out = on_trigger(1174, 1, TriggerCall { index: 1, state: 1, object: false, square: false, block: -1 }, &mut s).actions;
-        assert!(out.contains(&Action::ActStart { stage: 2 }) && out.contains(&Action::ReplaceExterior { slot: 151, plane: -1 }) && s.flag(221));
+        assert!(out.contains(&Action::ActStart { stage: 2 }) && out.contains(&Action::ReplaceExterior { slot: 151, plane: -1 }) && out.contains(&Action::SetFlag { flag: 221, on: true }));
+        // The order: the fade, 16, the act start, 89, 221, 18, the return world.
+        assert_eq!(&out[..3], &[Action::FadeOut { seconds: 0.3, wait: true }, Action::PlayFmv { movie: 16 }, Action::ActStart { stage: 2 }]);
         assert!(on_trigger(1174, 1, TriggerCall { index: 1, state: 2, object: true, square: false, block: -1 }, &mut s).actions.is_empty());
     }
 
@@ -20247,8 +20285,8 @@ mod tests {
             assert!(s.flag(flag));
         }
         assert!(s.flag(179));
-        // A nest marked but still standing breaks on the next hit.
-        assert_eq!(on_breakable(1056, 24, 9, true, &mut s), Some(vec![Action::Break { id: 9 }]));
+        // A nest whose flag is set (a revived last member after a reload) does nothing on a hit.
+        assert_eq!(on_breakable(1056, 24, 9, true, &mut s), Some(Vec::new()));
         // Prunella then sets 501, once.
         assert_eq!(on_talk(1056, proximity_routine(1056, 0).unwrap(), &mut s), vec![Action::Talk { line: 155 }]);
         assert!(s.flag(501));
@@ -21721,13 +21759,13 @@ mod tests {
         s.breakables.insert(0, 2);
         assert_eq!(on_update(1130, &mut s, false), vec![Action::Message { line: 4 }]);
         assert!(on_update(1130, &mut s, false).is_empty());
-        // 758: triggers 16 to 19 break breakable 19 while it is intact.
+        // 758: triggers 16 to 19 break breakables 17 to 20 one to one while intact.
         let mut s = GameState::default();
         assert!(on_init(758, &mut s).contains(&Action::RegisterTrigger { index: 17, routine: 27 }));
         let fire = TriggerCall { index: 17, state: 1, object: true, square: false, block: -1 };
-        s.breakables.insert(19, 1);
-        assert_eq!(on_trigger(758, 27, fire, &mut s).actions, vec![Action::Break { id: 19 }]);
-        s.breakables.insert(19, 2);
+        s.breakables.insert(18, 1);
+        assert_eq!(on_trigger(758, 27, fire, &mut s).actions, vec![Action::Break { id: 18 }]);
+        s.breakables.insert(18, 2);
         assert!(on_trigger(758, 27, fire, &mut s).actions.is_empty());
     }
 

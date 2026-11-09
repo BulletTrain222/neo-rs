@@ -2982,7 +2982,13 @@ impl Play {
         let world = &self.world;
         self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
         self.fade = Default::default();
-        self.bars = Default::default();
+        // The bar progress is cleared only when the bars are not held: bars a LetterBoxOn holds
+        // stay up after the movie (SPEC-0026 hand-off step 3, corrected 2026-11-09).
+        if !self.bars.held {
+            self.bars = Default::default();
+        }
+        // The hand-off re-opens the dialogue box with default arguments, which clears any box.
+        self.textbox = Default::default();
     }
 
     /// SPEC-0027 Camera initialisation at a world load: a scripted play of the world left
@@ -5536,8 +5542,9 @@ impl Play {
                 }
             }
             Some((h, false)) => {
-                // Stages 2 and 3 (R-0042): the named hero is bound and spawned as at a new game
-                // at entry 0 of the current world; nothing writes its action state.
+                // Stages 2 and 3 (R-0042; SPEC-0053 correction): the named hero is bound and
+                // spawned as at a new game at entry 0 of the current world; its creation routine
+                // sets action state 1 and clears its statuses.
                 self.swap = None;
                 if h != self.hero_index {
                     self.exchange_heroes();
@@ -5545,6 +5552,8 @@ impl Play {
                 if let Some(&e) = self.world.entries.first() {
                     self.arrive(e);
                 }
+                self.loco.state = hero_states::STANCE;
+                self.statuses.clear_all();
             }
             None => {}
         }
@@ -5562,19 +5571,32 @@ impl Play {
                         self.give(id);
                     }
                 }
-                self.state.neopoints += 1150;
+                // Coin 135 x 1150 through the normal add: cue 0xA5 and the price caption.
+                self.party_add(135, 1150);
+                // The act start also clears the party weapon-drawn flag.
+                self.set_weapon_drawn(false);
             }
             // Stage 3 (SPEC-0025 Item lists): the stash merges back (an item the party does not
             // hold takes the stash's count; Medium for the per-entry reading), the wallets add,
             // and the stash is cleared.
             3 => {
-                let s = &mut self.state;
-                for (id, n) in std::mem::take(&mut s.stash) {
-                    let e = s.items.entry(id).or_insert(0);
-                    if *e == 0 {
-                        *e = n;
+                // The equipment lists (types 1 to 7: body, shield, weapon, cloak) take the stash
+                // entry only where the party has none; every other item with a count goes through
+                // the normal add (carry limits apply; a Mote held in both gains the stash charge;
+                // SPEC-0053 Act start 3 in order).
+                let stash = std::mem::take(&mut self.state.stash);
+                for (id, n) in stash {
+                    let equipment = self.items.get(id).is_some_and(|i| (1..=7).contains(&i.kind));
+                    if equipment {
+                        let e = self.state.items.entry(id).or_insert(0);
+                        if *e == 0 {
+                            *e = n;
+                        }
+                    } else if n > 0 {
+                        self.party_add(id, n as i32);
                     }
                 }
+                let s = &mut self.state;
                 s.neopoints += std::mem::take(&mut s.stash_neopoints);
                 self.equipment_step();
             }
@@ -5587,11 +5609,14 @@ impl Play {
             if heal & (1 << hero) == 0 {
                 continue;
             }
+            // The heal sets both pools to their maxima and clears the statuses (SPEC-0053 3.7).
             if hero == self.hero_index {
                 self.hero_hp = self.hero_max;
+                self.hero_mp = self.hero_mp_max;
                 self.statuses.clear_all();
             } else if let Some(p) = self.parked.as_mut() {
                 p.hp = p.hp_max;
+                p.mp = p.mp_max;
             }
         }
         self.last_swap = format!("act start {stage}: mode {mode}, hero {} on tick {}", self.hero_index, self.ticks);
