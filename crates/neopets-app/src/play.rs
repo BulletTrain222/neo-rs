@@ -302,6 +302,20 @@ impl World {
     pub fn load(disc: &mut Disc, index: &ArchiveIndex, boot: &BootTravel, pack: u32) -> Result<(Self, Vec<u8>), String> {
         let bytes = index.read(disc, pack)?;
         let chain = resource::walk_chunks(&bytes, None)?;
+        // NEOPETS_TRACE_TOPCHUNKS: the pack's top-level chunks (diagnostic).
+        if std::env::var_os("NEOPETS_TRACE_TOPCHUNKS").is_some() {
+            for c in &chain.chunks {
+                let head: Vec<String> = bytes[c.payload.clone()].iter().take(16).map(|b| format!("{b:02x}")).collect();
+                println!("TOPCHUNK {pack} kind {} role {} size {:#x} at {:#x} head {}", c.kind, c.role_id, c.size, c.offset, head.join(" "));
+                if c.kind == 8 {
+                    if let Ok(inner) = resource::walk_chunks(&bytes[c.payload.clone()], None) {
+                        for k in &inner.chunks {
+                            println!("  CHILD kind {} role {} size {:#x}", k.kind, k.role_id, k.size);
+                        }
+                    }
+                }
+            }
+        }
         // SPEC-0006 World buffers: 1429, 1430 and 1431 export Interior entry points but only ever
         // load into E, from 1427. Their modules get no calls there and their doors keep the default
         // rule, so the hero can walk back into 1427.
@@ -10174,12 +10188,35 @@ impl Play {
                 // back without its bandits.
                 // Also the movie hand-off's reload of the exterior behind a transition or an
                 // interior (SPEC-0026 step 2).
+                // A resident world reloaded is released first: its characters, its kills since
+                // the load (no store), its slot regions and threads go (SPEC-0026 What the reload
+                // of W rebuilds; SPEC-0067 16.4 item 4: a movie reload of 1344 forgets its minions).
+                if self.other.as_ref().is_some_and(|o| o.pack == world.pack) {
+                    self.forget_world(world.pack);
+                }
                 if self.world.buffer == Buffer::Exterior || world.buffer == Buffer::Exterior {
                     self.other = Some(world);
                     self.init_other();
                 }
             }
         }
+    }
+
+    /// The release of a resident world that is about to be reloaded (SPEC-0026 hand-off step 3):
+    /// its characters (not the petpet), the kills it holds that were never stored, its slot
+    /// regions and arrivals, its script threads and its pending holds.
+    fn forget_world(&mut self, pack: u32) {
+        let pet = self.pet_char;
+        self.characters.retain(|c| c.pack != pack || Some(c.id) == pet);
+        self.killed.retain(|(p, _)| *p != pack);
+        self.kill_live.retain(|(p, _)| *p != pack);
+        self.kills_loaded.remove(&pack);
+        self.slot_regions.retain(|(p, _), _| *p != pack);
+        self.slot_arrived.retain(|(p, _)| *p != pack);
+        self.threads.retain(|t| t.pack != pack);
+        self.pending_off.retain(|(p, _)| *p != pack);
+        self.pending_holds.retain(|(p, _), _| *p != pack);
+        self.max_active.remove(&pack);
     }
 
     /// SPEC-0028 Trigger pass for the selected hero's body (the grid cell lists are not
@@ -10270,6 +10307,20 @@ impl Play {
                 firers.entry(v.index).or_insert(e);
                 if !fired.contains(&v.index) {
                     fired.push(v.index);
+                }
+            }
+        }
+        // Volumes whose routine tests no object word fire for any actor body inside (SPEC-0043
+        // 1335 triggers 8 and 9), with object 0.
+        let any_actor = level::actor_triggers(pack);
+        if !any_actor.is_empty() {
+            let bodies: Vec<[f32; 3]> = self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none()).map(|c| c.position).collect();
+            for v in self.world.volumes.iter().filter(|v| any_actor.contains(&v.index)) {
+                if bodies.iter().any(|&b| v.touches(b)) {
+                    self.world.records.entry(v.index).or_default().fire(frame, false, -1);
+                    if !fired.contains(&v.index) {
+                        fired.push(v.index);
+                    }
                 }
             }
         }
@@ -19103,8 +19154,7 @@ impl Play {
     /// SPEC-0028 Pack 1299 looping-door puzzle, per tick: the hero's vertical travel joins the accumulator, placed objects
     /// 0 to 5 spin, and every placed object takes the offset. A touch of a pad is a crossing to the other pad. Where he
     /// lands is this build's default (R-0221): he moves by the difference of the pads' centres, and it takes leaving the
-    /// pads to touch one again. The camera follows by `arrive`. Node 401's mask is kept but not drawn: no draw
-    /// path filters on a node's own mask word yet.
+    /// pads to touch one again. The camera follows by `arrive`. Node 401 is drawn with the mask (main.rs, MaskTree).
     fn stairs_step(&mut self) {
         let Some((a, b)) = self.world.pads else {
             self.stairs = None;
@@ -19164,6 +19214,19 @@ impl Play {
             self.loco.teleport(at, f);
             self.camera.eye[1] += dy;
             self.camera.focus[1] += dy;
+            // Step 4, the characters: each of the world's active characters moves by (0, dy, 0)
+            // when dy > 0 and it stands strictly below M, or dy < 0 and strictly above M (M the
+            // pads' midpoint height, 24.1535 on disc).
+            let m = 0.5 * (a.p[1] + b.p[1]);
+            for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive) {
+                let y = c.position[1];
+                if (dy > 0.0 && y < m) || (dy < 0.0 && y > m) {
+                    c.position[1] += dy;
+                    if let Some(wk) = c.walker.as_mut() {
+                        wk.body.position = c.position;
+                    }
+                }
+            }
         }
         let dt = 1.0 / 60.0;
         for (k, rate) in SPIN.iter().enumerate() {
@@ -19172,6 +19235,12 @@ impl Play {
         for k in 0..self.world.objects.len() {
             self.obj_offset.insert((pack, k), offset);
         }
+    }
+
+    /// The looping-door puzzle's display node 401 and its mask word, while the current world has
+    /// the puzzle (SPEC-0046 The pack 1299 mask tree).
+    pub fn mask_tree(&self) -> Option<(u32, u32)> {
+        self.stairs.as_ref().filter(|s| s.0 == self.world.pack).map(|s| (s.0, s.1.mask))
     }
 
     /// The story checker (diagnostic): the hero beside the nearest character of that name, or else the nearest with any of

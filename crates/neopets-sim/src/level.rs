@@ -2727,7 +2727,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0044 1327 Init: the slot thread (94: none; 93: set 4; 92: swap mode 1 and set 2;
         // else swap mode 1, set 1, and set 5 into the second store with 222 set and 234 clear, or
         // 235; region 1328 + set); with 92 clear group 6's effects and objects 1 and 0, else
-        // object 2. The animated-object offset loop of groups 0 to 5 is not built.
+        // object 2; the six bobbing pairs (objects 3 to 14) shown, their loop run by Update.
         1327 => {
             let f = |n| state.flag(n);
             let load = |slot: u8, j: u32| Action::LoadRegion { slot, region: Some(1328 + j) };
@@ -2749,6 +2749,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             } else {
                 v.extend([Action::GroupEffects { group: 6 }, Action::InitObjOn { obj: 1, end: false }, Action::InitObjOn { obj: 0, end: false }]);
             }
+            v.extend((3..=14).map(|obj| Action::InitObjOn { obj, end: false }));
+            bob_init_1327(state);
             v
         }
         // SPEC-0045 1300 Init: 91 and 221 on the first visit; objects by 594 and 400; effect 8 by
@@ -4005,6 +4007,15 @@ fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
 /// SPEC-0043 1398 thread 6: slot 0 emptied and loaded with set j (region 1399 + j).
 /// SPEC-0030 row 276 (CollideEntityWithTriggers) as each module's Update calls it: the entities
 /// whose bodies fire the current world's triggers each tick (with object 0).
+/// Script triggers whose routines test no object word, so any actor body inside fires them
+/// (SPEC-0043 1335 Volumes: triggers 8 and 9).
+pub fn actor_triggers(pack: u32) -> &'static [u16] {
+    match pack {
+        1335 => &[8, 9],
+        _ => &[],
+    }
+}
+
 pub fn collide_entities(pack: u32) -> &'static [usize] {
     match pack {
         // SPEC-0043 1398 Update step 1: entities 16 to 21 and 9 to 12.
@@ -6754,10 +6765,85 @@ fn talk_1327(routine: u8, s: &mut GameState) -> Vec<Action> {
     }
 }
 
+/// SPEC-0044 1327 Animated-object loop: per group k (objects 3 + 2k and 4 + 2k), the (b, a) of
+/// members A and B; group 0 changes with flag 92.
+fn bob_values_1327(s: &GameState) -> [[(f32, f32); 2]; 6] {
+    let g0 = if s.flag(92) { [(0.0, 22.0), (22.0, 18.0)] } else { [(20.0, 10.0), (22.0, 10.0)] };
+    [g0, [(15.0, 9.0), (8.0, 9.0)], [(12.0, 15.0), (10.0, 15.0)], [(12.0, 10.0), (10.0, 10.0)], [(14.0, 11.0), (9.0, 11.0)], [(22.0, 10.0), (12.0, 10.0)]]
+}
+
+/// The leg length L and the pause at each end, in ticks.
+const BOB_LEG_1327: i32 = 200;
+const BOB_PAUSE_1327: i32 = 100;
+
+/// The ease-in, ease-out curve: f(0) = b, f(L) = b + a.
+fn bob_offset(n: i32, b: f32, a: f32) -> f32 {
+    let (n, l) = (n as f32, BOB_LEG_1327 as f32);
+    if n < l / 2.0 {
+        b + 2.0 * a * n * n / (l * l)
+    } else {
+        let m = n - l / 2.0;
+        b + a / 2.0 + 2.0 * a * m / l - 2.0 * a * m * m / (l * l)
+    }
+}
+
+/// Init's set-up of the twelve members: A at step 0 going up, B at step L going down, each
+/// waiting Random(0, 300) first (a module-word generator stands in for the host's draw).
+/// Words per member m: 100 + 4m the step, +1 the direction, +2 the wait, +3 the first delay
+/// still running; word 99 the generator.
+fn bob_init_1327(s: &mut GameState) {
+    let mut seed = (s.hero.tick as u32).wrapping_mul(2_654_435_761).wrapping_add(12_345);
+    for m in 0..12u8 {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        let delay = ((seed >> 16) % 301) as i32;
+        let a_side = m % 2 == 0;
+        s.set_word(1327, 100 + 4 * m, if a_side { 0 } else { BOB_LEG_1327 });
+        s.set_word(1327, 101 + 4 * m, if a_side { 1 } else { -1 });
+        s.set_word(1327, 102 + 4 * m, delay);
+        s.set_word(1327, 103 + 4 * m, 1);
+    }
+}
+
+/// One Update step of the loop: each member waits, or moves one step and turns at an end with
+/// a 100-tick pause; its vertical offset follows the curve. Quirk: member B is drawn at A's base
+/// until its first delay ends.
+fn bob_1327(s: &mut GameState) -> Vec<Action> {
+    let values = bob_values_1327(s);
+    let mut out = Vec::new();
+    for m in 0..12u8 {
+        let (k, side) = ((m / 2) as usize, (m % 2) as usize);
+        let (b, a) = values[k][side];
+        let (mut n, mut dir, mut wait) = (s.word(1327, 100 + 4 * m), s.word(1327, 101 + 4 * m), s.word(1327, 102 + 4 * m));
+        let first = s.word(1327, 103 + 4 * m) != 0;
+        if dir == 0 {
+            continue;
+        }
+        if wait > 0 {
+            wait -= 1;
+        } else {
+            if first {
+                s.set_word(1327, 103 + 4 * m, 0);
+            }
+            n += dir;
+            if n <= 0 || n >= BOB_LEG_1327 {
+                n = n.clamp(0, BOB_LEG_1327);
+                dir = -dir;
+                wait = BOB_PAUSE_1327;
+            }
+        }
+        s.set_word(1327, 100 + 4 * m, n);
+        s.set_word(1327, 101 + 4 * m, dir);
+        s.set_word(1327, 102 + 4 * m, wait);
+        let y = if side == 1 && s.word(1327, 103 + 4 * m) != 0 { values[k][0].0 } else { bob_offset(n, b, a) };
+        out.push(Action::ObjOffset { obj: 3 + m as usize, y });
+    }
+    out
+}
+
 /// SPEC-0044 1327's target-practice thread (228 set, 234 clear; the step is the highest set of
 /// 229 to 233; the trainer's talk after each step). Words: 40 the target set loaded, 41 busy,
 /// 42 the step a wait belongs to, 43 the hold count, 44 the press count, 45 its 30-tick clock.
-/// In steps 231 and 233 Roberta's hit points are refilled every tick (233: until AI 0 is dead).
+/// In steps 231 to 233 Roberta's hit points are refilled every tick (233: until AI 0 is dead).
 fn practice_1327(s: &mut GameState) -> Vec<Action> {
     let p = 1327;
     if !s.flag(228) || s.flag(234) || s.word(p, 41) != 0 {
@@ -6802,33 +6888,51 @@ fn practice_1327(s: &mut GameState) -> Vec<Action> {
                 out.push(Action::ActivateEntity { entity: 0 });
             }
             out.push(Action::RefillHealth);
-            let held = if s.hero.fire_held { s.word(p, 43) + 1 } else { 0 };
-            s.set_word(p, 43, held);
-            if held >= 31 {
+            // Consecutive held ticks; a release after fewer than 31 resets the count, the first
+            // release after 31 or more ends the step (SPEC-0044 1327 step 231, test vector 4).
+            let count = s.word(p, 43);
+            if s.hero.fire_held {
+                s.set_word(p, 43, count + 1);
+            } else if count >= 31 {
+                s.set_word(p, 43, 0);
                 s.set(232, true);
                 s.set_word(p, 41, 1);
                 out.extend([wait(1.5), Action::HitPointsPercent { entity: 0, percent: 100.0 }]);
                 out.extend(talk(s));
                 busy(&mut out);
+            } else {
+                s.set_word(p, 43, 0);
             }
         }
         Some(232) => {
-            let mut n = s.word(p, 44) + s.hero.fire as i32;
-            let clock = s.word(p, 45) + 1;
-            if clock >= 30 {
-                n = (n - 1).max(0);
-                s.set_word(p, 45, 0);
-            } else {
-                s.set_word(p, 45, clock);
+            // Each tick, in order: refill; c = 3 ends the loop after this tick; at m = 0 the
+            // count decays and m = 30; m - 1; then a new Circle or R2 press counts once.
+            if s.word(p, 42) != 232 {
+                s.set_word(p, 42, 232);
+                s.set_word(p, 44, 0);
+                s.set_word(p, 45, 30);
             }
-            s.set_word(p, 44, n);
-            if n >= 3 {
+            out.push(Action::RefillHealth);
+            let mut c = s.word(p, 44);
+            if c >= 3 {
                 s.set(233, true);
                 s.set_word(p, 41, 1);
                 out.extend([wait(1.0), Action::HitPointsPercent { entity: 0, percent: 100.0 }]);
                 out.extend(talk(s));
                 out.push(Action::GiveItem { item: 160, count: 100 });
                 busy(&mut out);
+            } else {
+                let mut m = s.word(p, 45);
+                if m == 0 {
+                    c = (c - 1).max(0);
+                    m = 30;
+                }
+                m -= 1;
+                if s.hero.fire {
+                    c += 1;
+                }
+                s.set_word(p, 44, c);
+                s.set_word(p, 45, m);
             }
         }
         Some(233) => {
@@ -13615,6 +13719,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             if state.flag(228) && !state.flag(233) {
                 state.undamageable_now.insert(0);
             }
+            out.extend(bob_1327(state));
             out.extend(practice_1327(state));
         }
         // SPEC-0045 1300 Update: items 11, 10 and 62 held set 225, 226 and 227. The petpet ritual:
@@ -18873,19 +18978,30 @@ mod tests {
         on_update(1327, &mut s, false);
         assert!(s.flag(231));
         s.hit_now.clear();
+        // Held 30 ticks then released: the count resets; held 31 then released: 232.
+        s.hero.fire_held = true;
+        for _ in 0..30 {
+            on_update(1327, &mut s, false);
+        }
+        s.hero.fire_held = false;
+        on_update(1327, &mut s, false);
+        assert!(!s.flag(232) && s.word(1327, 43) == 0);
         s.hero.fire_held = true;
         for _ in 0..31 {
             on_update(1327, &mut s, false);
         }
-        assert!(s.flag(232));
-        // Three quick presses to 233 (item 160 x100); the target's death ends it (235).
-        s.set_word(1327, 41, 0);
+        assert!(!s.flag(232), "the hold must be released");
         s.hero.fire_held = false;
-        for _ in 0..3 {
-            s.hero.fire = true;
-            on_update(1327, &mut s, false);
+        let out = on_update(1327, &mut s, false);
+        assert!(s.flag(232) && out.contains(&Action::RefillHealth));
+        // Step 232: presses on loop ticks 5, 15 and 25 give 3 on tick 25; the loop ends on 26.
+        s.set_word(1327, 41, 0);
+        for tick in 1..=26 {
+            s.hero.fire = matches!(tick, 5 | 15 | 25);
+            let out = on_update(1327, &mut s, false);
+            assert!(out.contains(&Action::RefillHealth));
+            assert_eq!(s.flag(233), tick == 26, "tick {tick}");
         }
-        assert!(s.flag(233));
         s.set_word(1327, 41, 0);
         s.hero.fire = false;
         s.ai_dead.insert(0);
@@ -22507,5 +22623,40 @@ mod tests {
         s.items.insert(36, 1);
         s.blackboard.insert((2, 68), 50);
         assert_eq!(on_activate(909, &mut s)[0], Action::MoveHero { locator: 4 });
+    }
+}
+
+#[cfg(test)]
+mod bob_1327_tests {
+    use super::*;
+
+    #[test]
+    fn bobbing_pairs_ease_and_pause() {
+        // SPEC-0044 1327 Animated-object loop: f(0) = b, f(L) = b + a, mid-leg b + a / 2.
+        assert_eq!(bob_offset(0, 20.0, 10.0), 20.0);
+        assert!((bob_offset(200, 20.0, 10.0) - 30.0).abs() < 1e-4 && (bob_offset(100, 20.0, 10.0) - 25.0).abs() < 1e-4);
+        let mut s = GameState::default();
+        let init = on_init(1327, &mut s);
+        assert!((3..=14).all(|obj| init.contains(&Action::InitObjOn { obj, end: false })));
+        // No delays: group 0's A rises from 20 and B (start L, going down) is drawn at A's base
+        // until its delay ends, then at its own b + a.
+        for m in 0..12u8 {
+            s.set_word(1327, 102 + 4 * m, 0);
+        }
+        s.set_word(1327, 102 + 4, 5);
+        let out = bob_1327(&mut s);
+        assert!(out.contains(&Action::ObjOffset { obj: 3, y: bob_offset(1, 20.0, 10.0) }));
+        assert!(out.contains(&Action::ObjOffset { obj: 4, y: 20.0 }));
+        for _ in 0..5 {
+            bob_1327(&mut s);
+        }
+        let out = bob_1327(&mut s);
+        assert!(out.iter().any(|a| matches!(a, Action::ObjOffset { obj: 4, y } if (*y - 31.99).abs() < 0.05)));
+        // A reaches the top after 200 moving ticks and waits 100 there.
+        for _ in 0..200 {
+            bob_1327(&mut s);
+        }
+        assert_eq!(s.word(1327, 101), -1);
+        assert!(s.word(1327, 102) > 0);
     }
 }

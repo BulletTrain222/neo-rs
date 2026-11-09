@@ -2447,6 +2447,7 @@ fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, par
                 WorldPart::Foliage(_) => "foliage",
                 WorldPart::Objects(..) => "objects",
                 WorldPart::Stage => "stage",
+                WorldPart::MaskTree(..) => "mask tree",
             }).or_else(|| chars.contains(x).then_some("characters"))
         });
         *n.entry(kind.unwrap_or("other")).or_default() += 1;
@@ -2475,6 +2476,10 @@ enum WorldPart {
     Objects(u32, u32),
     /// The developer test stage's floor and ring (stage_view.rs; this build's own art).
     Stage,
+    /// Pack 1299's display node 401 (the role-401 tree of its type-8 container), drawn with the
+    /// looping-door puzzle's own mask word, not the display word or the story layers
+    /// (SPEC-0046 The pack 1299 mask tree; SPEC-0028).
+    MaskTree(u32, u32),
 }
 
 /// A placed object's root entity: (pack, object index).
@@ -2585,6 +2590,9 @@ fn sync_worlds(
         if p.foliage.contains_key(&o.pack) && !no_foliage {
             want.push(WorldPart::Foliage(o.pack));
         }
+    }
+    if let Some((pack, m)) = p.mask_tree() {
+        want.push(WorldPart::MaskTree(pack, m));
     }
     let slot = p.boot.areas.slot_of(p.world.pack);
     // NEOPETS_PERF_NODOME: no sky dome (diagnostic, to measure its cost).
@@ -2781,6 +2789,16 @@ fn sync_worlds(
                 })
             }
             WorldPart::Dome(d) => archive_view::dome(disc, index, d),
+            WorldPart::MaskTree(pack, m) => index.read(disc, pack).and_then(|bytes| {
+                let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
+                let data = neopets_data::model::build_masked(&bytes, &chain.chunks, None, Some(&[401]), Some(m))?;
+                // NEOPETS_TRACE_MASKTREE: the parts the mask keeps and their bounds (diagnostic).
+                if std::env::var_os("NEOPETS_TRACE_MASKTREE").is_some() {
+                    let (lo, hi) = data.parts.iter().flat_map(|p| p.positions.iter()).fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), q| (std::array::from_fn(|k| lo[k].min(q[k])), std::array::from_fn(|k| hi[k].max(q[k]))));
+                    println!("MASKTREE {pack} mask {m:#x}: {} parts, box {lo:?}..{hi:?}", data.parts.len());
+                }
+                Ok((!data.parts.is_empty()).then_some(data))
+            }),
             WorldPart::Foliage(_) | WorldPart::Objects(..) | WorldPart::Stage => Ok(None),
         };
         match model {
