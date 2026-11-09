@@ -3690,6 +3690,14 @@ impl Play {
                     }
                 }
                 Action::InitObjOn { .. } | Action::PlayAnim { .. } | Action::LoopAnim { .. } | Action::StopAnim { .. } | Action::DeactivateObj { .. } => {}
+                Action::RewindObj { obj } => {
+                    let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
+                    if let Some(w) = w.filter(|w| obj < w.object_anims.len() && w.object_anims[obj].time > 0.0) {
+                        self.obj_offset.remove(&(pack, obj));
+                        self.obj_yaw.remove(&(pack, obj));
+                        w.object_anims[obj].play(&w.motions[obj], -1.0);
+                    }
+                }
                 Action::WheelLights { even } => {
                     let mut w = level::wheel_of(pack, &self.state);
                     w.light_show(if even { 0 } else { 5 });
