@@ -2874,17 +2874,45 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 }
                 v.extend([load(5, 2), load(0, 14)]);
             } else {
+                // SPEC-0045 1300 slot thread, first arrival (black fades): sets 5, 7 and 10; the
+                // walk of entity 9 under camera 12; then the slot that held set 5 is reset and
+                // sets 10, 7 and 6 are loaded (entity 10 is the Seradar of set 6) under camera 13;
+                // entity 10 walks to locator 41; the camera returns and sets 10 and 7 are loaded
+                // again.
+                let out_ = Action::FadeOut { seconds: 1.0, wait: true };
+                let in_ = Action::FadeIn { seconds: 1.0, wait: false };
                 v.extend([load(3, 5), load(2, 7), load(4, 10), Action::WaitLoads]);
                 v.extend([
-                    Action::HoldHero,
+                    out_,
                     Action::HeroAnim { anim: 0, wait: false },
+                    Action::HoldHero,
                     Action::PlayCamera { track: 12, wait: false, end: 1, speed: 1.0 },
-                    Action::WalkEntity { entity: 9, locator: 42, wait: false, orient: false, stop: 1.1 },
+                    in_,
+                    Action::WalkEntity { entity: 9, locator: 42, wait: false, orient: true, stop: 1.1 },
                     wait(2.0),
+                    out_,
+                    Action::LoadRegion { slot: 3, region: None },
+                    Action::LoadRegion { slot: 4, region: None },
+                    load(4, 10),
+                    Action::LoadRegion { slot: 2, region: None },
+                    load(2, 7),
+                    load(3, 6),
                     Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 },
+                    Action::WaitLoads,
                     wait(0.5),
-                    Action::WalkEntity { entity: 10, locator: 41, wait: true, orient: false, stop: 1.1 },
+                    in_,
+                    // The spec waits on this walk; this build's Seradar of set 6 stops short of
+                    // locator 41 (its walk never ends on the navmesh here), so the walk is not
+                    // waited on and the scene goes on while he walks (deviation, see STATUS).
+                    Action::WalkEntity { entity: 10, locator: 41, wait: false, orient: true, stop: 1.1 },
+                    wait(2.0),
+                    out_,
                     Action::ReturnCamera { preset: -1, release: true },
+                    Action::LoadRegion { slot: 4, region: None },
+                    load(4, 10),
+                    Action::LoadRegion { slot: 2, region: None },
+                    load(2, 7),
+                    in_,
                 ]);
                 // The same tail: Painter Howell (set 14) stands from here on, in the visit where
                 // the council scene later sets 222.
@@ -4844,16 +4872,48 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
 
 /// SPEC-0044 1174's barrier groups: their effects and object (the seventh has no trigger; group
 /// g's damage trigger is taken as 30 + g).
-const BARRIERS_1174: [(&[usize], Option<usize>); 7] = [(&[50, 51, 52, 53], Some(5)), (&[42, 43, 44, 45, 46, 47, 48, 49], None), (&[35, 36, 37, 38], Some(4)), (&[32, 33, 34], None), (&[39, 40], None), (&[29, 30], None), (&[22, 23], None)];
+/// SPEC-0044 1174 barrier groups: effects, object, damage trigger and the cue-4 loop's locators.
+type Barrier = (&'static [usize], Option<usize>, Option<u16>, &'static [usize]);
+const BARRIERS_1174: [Barrier; 7] = [
+    (&[50, 51, 52, 53], Some(5), Some(35), &[6, 7]),
+    (&[42, 43, 44, 45, 46, 47, 48, 49], None, Some(34), &[8, 9, 10, 11]),
+    (&[35, 36, 37, 38], Some(4), Some(32), &[12]),
+    (&[32, 33, 34], None, Some(31), &[13]),
+    (&[39, 40], None, Some(33), &[15]),
+    (&[29, 30], None, Some(30), &[14]),
+    (&[22, 23], None, None, &[]),
+];
+/// The barrier damage stamp, one word shared by all groups (the tick of the last hit).
+const BARRIER_STAMP_1174: u8 = 26;
 
-/// A barrier group raised (its effects, its object, its damage trigger) or lowered.
+/// A barrier group raised (its effects, its object, its damage trigger and its flame-wall loop
+/// at each sound locator) or lowered (the same items stopped, the voices killed).
 fn barrier_1174(s: &mut GameState, g: usize, up: bool) -> Vec<Action> {
-    let (fx, obj) = BARRIERS_1174[g];
+    let (fx, obj, trigger, sounds) = BARRIERS_1174[g];
     let mut v: Vec<Action> = fx.iter().map(|&slot| if up { Action::StartEffect { slot, camera: false } } else { Action::StopEffect { slot } }).collect();
     v.extend(obj.map(|obj| if up { Action::InitObjOn { obj, end: false } } else { Action::DeactivateObj { obj } }));
-    if g < 6 {
+    if let Some(t) = trigger {
+        let was = s.word(1174, 10 + g as u8) != 0;
         s.set_word(1174, 10 + g as u8, up as i32);
-        v.push(reg_at(30 + g as u16, if up { 30 } else { 31 }));
+        v.push(reg_at(t, if up { 30 } else { 31 }));
+        for &l in sounds {
+            if up {
+                v.push(Action::LoopSound { cue: 4, locator: Some(l) });
+            } else if was {
+                v.push(Action::KillSound { cue: 4, locator: Some(l) });
+            }
+        }
+    }
+    v
+}
+
+/// The per-tick object thread's visit of every raised group's flame-wall loop.
+fn barrier_sounds_1174(s: &GameState) -> Vec<Action> {
+    let mut v = Vec::new();
+    for (g, &(_, _, trigger, sounds)) in BARRIERS_1174.iter().enumerate() {
+        if trigger.is_some() && s.word(1174, 10 + g as u8) != 0 {
+            v.extend(sounds.iter().map(|&l| Action::VisitLoopSound { cue: 4, locator: Some(l) }));
+        }
     }
     v
 }
@@ -5875,6 +5935,8 @@ fn stage_1174(s: &mut GameState) -> Vec<Action> {
     }
     if has(6) && !has(7) {
         set(s, 7);
+        // The section 1 helper stamps the shared damage clock as it raises its groups.
+        s.set_word(1174, BARRIER_STAMP_1174, s.hero.tick as i32);
         for g in [0, 1, 6] {
             v.extend(barrier_1174(s, g, true));
         }
@@ -6284,46 +6346,46 @@ fn plate_1393(i: usize, s: &mut GameState) -> Vec<Action> {
     v
 }
 
-/// A room alarm (SPEC-0044 1393). "Under the room's gate-state conditions" is taken as the
-/// gates not yet closed by an alarm (since the load or the room's last entry), which also stops
-/// the 10-tick thread from raising it again: sound 5, the guards aggressive and visible, the door closed if open,
-/// the gate-state word cleared, the even gate arrangement, the statue pair toggled (+0x10 on and
-/// played, +0x14 off), on the first alarm the room camera for 2 s, and the turn of +0x14 toward the hero
-/// (its rate is not given: `ALIGN_1393`).
+/// A room alarm (SPEC-0044 1393): separate tests on every call. Gate-state 1: sound 5 and the
+/// guards visible and aggressive. The door open and no plate standing: the door closes. Gate-state
+/// 1: the even gate arrangement, the waking statue (+0x10) shown and played, the static one
+/// (+0x14) hidden, gate-state 0. The once-only latch clear: the room camera, 2.0 s, the static
+/// statue back in place of the waking one, the camera returned, the latch set. Gate-state 0: the
+/// static statue turns toward the hero at rate 0.015.
 fn alarm_1393(i: usize, s: &mut GameState) -> Vec<Action> {
     let r = &ROOMS_1393[i];
-    if s.word(1393, W1393_GATE + i as u8) != 1 {
-        return Vec::new();
-    }
-    let mut v = vec![Action::PlaySound { cue: 5, locator: None }];
-    for &(entity, _) in r.guards {
-        v.extend([Action::Agro { entity }, Action::DisableInvisibility { entity }]);
+    let mut v = Vec::new();
+    let gate = s.word(1393, W1393_GATE + i as u8) == 1;
+    if gate {
+        v.push(Action::PlaySound { cue: 5, locator: None });
+        for &(entity, _) in r.guards {
+            v.extend([Action::Agro { entity }, Action::DisableInvisibility { entity }]);
+        }
     }
     if s.word(1393, W1393_OPEN + i as u8) != 0 && s.word(1393, W1393_STAND + i as u8) == 0 {
         v.extend(close_1393(i, s, false));
     }
-    s.set_word(1393, W1393_GATE + i as u8, 0);
-    v.extend(gates_1393(r, false));
-    v.extend([
-        Action::InitObjOn { obj: r.statue.0, end: false },
-        Action::PlayAnim { obj: r.statue.0, speed: 1.0, wait: false },
-        Action::DeactivateObj { obj: r.statue.1 },
-    ]);
+    if gate {
+        s.set_word(1393, W1393_GATE + i as u8, 0);
+        v.extend(gates_1393(r, false));
+        v.extend([
+            Action::InitObjOn { obj: r.statue.0, end: false },
+            Action::PlayAnim { obj: r.statue.0, speed: 1.0, wait: false },
+            Action::DeactivateObj { obj: r.statue.1 },
+        ]);
+    }
     if s.word(1393, W1393_ALARMED + i as u8) == 0 {
         s.set_word(1393, W1393_ALARMED + i as u8, 1);
-        v.extend([camera(r.camera), wait(2.0), release_camera()]);
-    } else {
-        v.push(wait(2.0));
+        v.extend([camera(r.camera), wait(2.0), Action::InitObjOn { obj: r.statue.1, end: false }, Action::DeactivateObj { obj: r.statue.0 }, release_camera()]);
     }
-    // The waking statue (+0x10) gives way to the static one (+0x14) after 2.0 s, and only the
-    // static one turns toward the hero (SPEC-0044 1393, resolved).
-    v.extend([Action::InitObjOn { obj: r.statue.1, end: false }, Action::DeactivateObj { obj: r.statue.0 }]);
-    v.push(Action::AlignObj { obj: r.statue.1, t: ALIGN_1393 });
+    if s.word(1393, W1393_GATE + i as u8) == 0 {
+        v.push(Action::AlignObj { obj: r.statue.1, t: ALIGN_1393 });
+    }
     v
 }
 
-/// The statues' turn fraction a call: the spec names axis 2 only; pack 1246's one listed call uses 0.05.
-const ALIGN_1393: f32 = 0.05;
+/// The statues' turn rate toward the hero (axis 2; SPEC-0044 1393).
+const ALIGN_1393: f32 = 0.015;
 
 /// SPEC-0044 1393 trigger callbacks (registered with the trigger index as the routine).
 fn trigger_1393(call: TriggerCall, s: &mut GameState) -> Vec<Action> {
@@ -6333,32 +6395,58 @@ fn trigger_1393(call: TriggerCall, s: &mut GameState) -> Vec<Action> {
         // guards' patrol data (the zeroed shared record).
         0 if call.state == 1 && call.object && !area && s.word(1393, W1393_LATCH) == 0 => {
             s.set_word(1393, W1393_LATCH, 1);
-            let cam = |track| Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 };
-            let mut v = vec![fade_out()];
-            for &(entity, locator) in ROOMS_1393[0].guards {
+            // SPEC-0044 1393 trigger 0, in order: 0.5 s fade out; the guards set aggressive,
+            // behaviour 6, home and off; the hero to locator 4; the plate lever to its end pose
+            // (+10.0, waited); 0.2 s fade in; camera 8 (waited), 1.5 s; camera 10, 1.0 s; the walk
+            // to point 5; the entry lever +0.75 then -0.75 (both waited), 1.0 s; the room camera,
+            // 1.0 s; the open gate pose (49 and 51 on and played, 48 and 50 off); 3.0 s; camera 9,
+            // 1.0 s; the plate lever back at -0.5 (waited), 1.0 s; the camera returned.
+            let r = &ROOMS_1393[0];
+            let cam = |track, wait| Action::PlayCamera { track, wait, end: 1, speed: 1.0 };
+            let play = |obj, speed| Action::PlayAnim { obj, speed, wait: true };
+            let mut v = vec![Action::FadeOut { seconds: 0.5, wait: true }];
+            for &(entity, locator) in r.guards {
                 v.extend([Action::Agro { entity }, Action::AiBehavior { entity, code: 6 }, Action::MoveEntity { entity, locator, face: true }, Action::DeactivateEntity { entity }]);
             }
             v.extend([
                 Action::MoveHero { locator: 4 },
-                Action::PlayAnim { obj: 49, speed: 1.0, wait: false },
-                Action::PlayAnim { obj: 51, speed: 1.0, wait: false },
-                fade_in(),
-                cam(8),
-                cam(10),
+                play(r.plate, 10.0),
+                Action::FadeIn { seconds: 0.2, wait: false },
+                cam(8, true),
+                wait(1.5),
+                cam(10, false),
+                wait(1.0),
                 Action::WalkHero { locator: 5, wait: true, orient: true },
-                cam(ROOMS_1393[0].camera),
+                play(r.entry, 0.75),
+                play(r.entry, -0.75),
+                wait(1.0),
+                cam(r.camera, false),
+                wait(1.0),
                 Action::InitObjOn { obj: 49, end: false },
                 Action::InitObjOn { obj: 51, end: false },
                 Action::DeactivateObj { obj: 48 },
                 Action::DeactivateObj { obj: 50 },
-                cam(9),
+                Action::PlayAnim { obj: 49, speed: 1.0, wait: false },
+                Action::PlayAnim { obj: 51, speed: 1.0, wait: false },
+                wait(3.0),
+                cam(9, false),
+                wait(1.0),
+                play(r.plate, -0.5),
+                wait(1.0),
                 release_camera(),
             ]);
-            for &(entity, _) in ROOMS_1393[0].guards {
-                v.push(Action::EntityAnim { entity, anim: 81, looped: false, wait: false });
+            for &(entity, locator) in r.guards {
+                v.extend([
+                    Action::EntityAnim { entity, anim: 81, looped: false, wait: true },
+                    Action::DeactivateEntity { entity },
+                    Action::MoveEntity { entity, locator, face: true },
+                    Action::ActivateEntity { entity },
+                    Action::MoveEntity { entity, locator, face: true },
+                ]);
                 if s.cloak_worn {
                     v.push(Action::EntityAnim { entity, anim: 82, looped: false, wait: false });
                 }
+                v.push(Action::AiBehavior { entity, code: 6 });
             }
             v.push(Action::SetFlag { flag: 697, on: true });
             // The raw store of trigger 0: room 0's gate-state becomes 1, so its plate and alarm
@@ -6402,10 +6490,9 @@ fn trigger_1393(call: TriggerCall, s: &mut GameState) -> Vec<Action> {
                 18 => 2,
                 _ => 3,
             };
-            if s.word(1393, W1393_GATE + i as u8) != 0 {
-                return Vec::new();
-            }
-            vec![Action::AlignObj { obj: ROOMS_1393[i].statue.1, t: ALIGN_1393 }]
+            // Trigger 21 aligns the statues of rooms 3 and 4.
+            let rooms: &[usize] = if call.index == 21 { &[3, 4] } else { std::slice::from_ref(&i) };
+            rooms.iter().filter(|&&k| k < ROOMS_1393.len() && s.word(1393, W1393_GATE + k as u8) == 0).map(|&k| Action::AlignObj { obj: ROOMS_1393[k].statue.1, t: ALIGN_1393 }).collect()
         }
         // Plate standing (triggers 3, 10, 17 for rooms 0 to 2): the word is 1 while the hero is
         // inside and 0 once he leaves.
@@ -9409,13 +9496,15 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             act1_update(state, call.index, false);
             out.actions.extend([Action::SetBreakableActive { id: 3 + k, on: true }, Action::Break { id: 3 + k }, Action::PlaySound { cue: 9, locator: Some(65 + k) }]);
         }
-        // A raised barrier group's trigger (30 to 35): 3 damage at most once every 1.5 s.
+        // A raised barrier group's trigger (30 to 35; each group its own box): 3 damage when more
+        // than 1.5 s have passed since the last hit from any group (one shared stamp).
         (1174, 30) if call.object && call.state != 0 => {
-            let i = call.index.saturating_sub(30).min(5) as u8;
             let now = state.hero.tick as i32;
-            if state.word(pack, 10 + i) != 0 && now >= state.word(pack, 20 + i) {
-                state.set_word(pack, 20 + i, now + 90);
-                out.actions.push(Action::DamageHero { amount: 3 });
+            if let Some(g) = BARRIERS_1174.iter().position(|b| b.2 == Some(call.index)) {
+                if state.word(pack, 10 + g as u8) != 0 && now - state.word(pack, BARRIER_STAMP_1174) > 90 {
+                    state.set_word(pack, BARRIER_STAMP_1174, now);
+                    out.actions.push(Action::DamageHero { amount: 3 });
+                }
             }
         }
         // SPEC-0041 1428 CB2 (trigger 4): S0, which starts THREAD-A.
@@ -10379,7 +10468,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     if call.square && !state.talking {
                         state.set(d.flag, true);
                         out.actions.extend([Action::HoldHero, Action::WalkHero { locator: d.locator, wait: true, orient: true }, Action::HeroAnim { anim: 140, wait: false }]);
-                        out.actions.extend(d.lever.iter().map(|&obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));
+                        // The lever animation object plays with a wait, the other two without.
+                        out.actions.extend(d.lever.iter().enumerate().map(|(k, &obj)| Action::PlayAnim { obj, speed: 1.0, wait: k == 0 }));
+                        // Each door: wait for the closed-state object to stop, then the swap.
+                        for &(closed, _) in d.doors {
+                            out.actions.push(Action::WaitObj { obj: closed });
+                        }
                         out.actions.extend(open_1078(d));
                         out.actions.push(Action::ReturnCamera { preset: -1, release: true });
                     } else {
@@ -13438,6 +13532,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         1174 => {
             out.extend(tiles_1174(state));
             out.extend(stage_1174(state));
+            out.extend(barrier_sounds_1174(state));
         }
         // SPEC-0041 1428 Update (322 set): the update helper and THREAD-A.
         1428 if state.flag(322) => out.extend(arena_1428(state)),
@@ -13759,11 +13854,24 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     if state.flag(d.flag) {
                         continue;
                     }
-                    if state.word(pack, 60 + r as u8) != 0 {
-                        out.push(Action::PlayCamera { track: d.cameras[0], wait: false, end: 1, speed: 1.0 });
+                    // SPEC-0041 1078 plate release, per door: wait for the open-state object to
+                    // stop, swap it for the closed-state object and play that once (the camera
+                    // again when it was shown this time); then the plate's down object waited
+                    // for and swapped for the up object, played; the group's effects stopped.
+                    let cam = state.word(pack, 60 + r as u8) != 0;
+                    for (k, &(closed, open)) in d.doors.iter().enumerate() {
+                        out.extend([Action::WaitObj { obj: open }, Action::DeactivateObj { obj: open }, Action::InitObjOn { obj: closed, end: false }, Action::PlayAnim { obj: closed, speed: 1.0, wait: false }]);
+                        if cam {
+                            out.push(Action::PlayCamera { track: d.cameras[k.min(1)], wait: false, end: 1, speed: 1.0 });
+                        }
                     }
-                    out.extend(d.doors.iter().flat_map(|&(shown, hidden)| [Action::DeactivateObj { obj: hidden }, Action::InitObjOn { obj: shown, end: false }]));
-                    out.extend([Action::DeactivateObj { obj: d.plate.0 }, Action::InitObjOn { obj: d.plate.1, end: false }, Action::GroupEffectsStop { group: d.group }]);
+                    out.extend([
+                        Action::WaitObj { obj: d.plate.0 },
+                        Action::DeactivateObj { obj: d.plate.0 },
+                        Action::InitObjOn { obj: d.plate.1, end: false },
+                        Action::PlayAnim { obj: d.plate.1, speed: 1.0, wait: false },
+                        Action::GroupEffectsStop { group: d.group },
+                    ]);
                     if state.word(pack, 60 + r as u8) != 0 {
                         out.extend([wait(1.5), Action::ReturnCamera { preset: -1, release: true }]);
                     }
@@ -20049,10 +20157,13 @@ mod tests {
         on_update(1174, &mut s, false);
         assert!(s.word(1174, 1) & (1 << 5) != 0);
         // Section 1 (trigger 2): the barriers 50 to 53, 42 to 49 and 22, 23 raised; inside trigger
-        // 30 the hero takes 3, at most once every 1.5 s.
+        // 35 (the 50 to 53 group's box) the hero takes 3, at most once every 1.5 s; trigger 30
+        // belongs to the 29 and 30 group, still lowered.
         on_trigger(1174, 2, TriggerCall { index: 2, state: 1, object: true, square: false, block: -1 }, &mut s);
-        assert!(on_update(1174, &mut s, false).contains(&Action::StartEffect { slot: 50, camera: false }));
-        let inside = TriggerCall { index: 30, state: 2, object: true, square: false, block: -1 };
+        let raised = on_update(1174, &mut s, false);
+        assert!(raised.contains(&Action::StartEffect { slot: 50, camera: false }) && raised.contains(&Action::LoopSound { cue: 4, locator: Some(6) }));
+        assert!(on_trigger(1174, 30, TriggerCall { index: 30, state: 2, object: true, square: false, block: -1 }, &mut s).actions.is_empty());
+        let inside = TriggerCall { index: 35, state: 2, object: true, square: false, block: -1 };
         s.hero.tick = 500;
         assert_eq!(on_trigger(1174, 30, inside, &mut s).actions, vec![Action::DamageHero { amount: 3 }]);
         s.hero.tick = 550;
