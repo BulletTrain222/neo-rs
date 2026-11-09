@@ -198,6 +198,19 @@ pub fn records(p: &[u8]) -> Records {
         if at + len > p.len() {
             break;
         }
+        // SPEC-0006 per-block caps: 40 placements, 120 item points, 40 animation tables and 40
+        // effect lists (8 save points below); a record over its cap is stepped over.
+        let capped = match kind {
+            3 => out.placements.len() >= 40,
+            8 => out.items.len() >= 120,
+            2 => out.tables.len() >= 40,
+            16 => out.effect_lists.len() >= 40,
+            _ => false,
+        };
+        if capped {
+            at += len;
+            continue;
+        }
         match kind {
             3 => {
                 let v = |o: usize| [f32_at(p, data + o).unwrap_or(0.0), f32_at(p, data + o + 4).unwrap_or(0.0), f32_at(p, data + o + 8).unwrap_or(0.0)];

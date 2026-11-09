@@ -58,6 +58,14 @@ impl Edge {
         q
     }
 
+    /// The climb target of states 35 and 47: the projected point at the edge height taken at the
+    /// hero's current position (SPEC-0033 state 47; SPEC-0036 state 35).
+    pub fn climb_target(&self, p: Vec3, inset: f32, dy: f32) -> Vec3 {
+        let mut q = self.target(p, inset, dy);
+        q[1] = self.h(p) + dy;
+        q
+    }
+
     /// The ledge-drop edge test (Behavior 49), gates 2 to 8, for a character at `pos` with
     /// velocity `v`, forward row `forward`, radius `r` and action state `state`. `Some(true)` is
     /// an accept (a negative type), `Some(false)` passes on to the drop rule, None rejects.
@@ -402,15 +410,16 @@ impl Ledge {
         match self.state {
             HANG => self.hang(&mut step, hero, side, forward, gap, clip),
             CLIMB_FALL => {
-                let target = self.edge.target(hero, -CLIMB_FRONT, -0.75);
+                let target = self.edge.climb_target(hero, -CLIMB_FRONT, -0.75);
                 self.climb(&mut step, hero, target, 0.25, 0.25, 75, forward, clip);
             }
             _ => {
-                let target = self.edge.target(hero, -CLIMB_FRONT, -1.1);
+                let target = self.edge.climb_target(hero, -CLIMB_FRONT, -1.1);
                 self.climb(&mut step, hero, target, 0.2, 0.2, 134, forward, clip);
-                // A non-positive gap ends the approach.
+                // A non-positive gap snaps to the target and ends the approach.
                 if self.sub < 2 && gap <= 0.0 {
                     self.sub = 2;
+                    step.place = Some(target);
                     step.request = Some(134);
                 }
             }

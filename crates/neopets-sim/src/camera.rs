@@ -184,6 +184,10 @@ pub struct FollowCamera {
     pub eye_state: EyeState,
     /// The previous tick's final eye (0xF0).
     pub prev_eye: Vec3,
+    /// The eye motion direction (0x100): unit(eye after the spin step - previous eye), written
+    /// before the spring; cleared by camera reset (so by the pull-in setter and the recentre) and
+    /// by the clearance slide. The eye pass reads it as its heading (SPEC-0027 L80).
+    pub heading: Vec3,
 }
 
 impl FollowCamera {
@@ -213,6 +217,7 @@ impl FollowCamera {
             blocked: 0,
             eye_state: EyeState::default(),
             prev_eye: [0.0; 3],
+            heading: [0.0; 3],
         };
         cam.select_profile(hero);
         let d = cam.target_distance(0.0);
@@ -272,6 +277,7 @@ impl FollowCamera {
         self.elevation_target = p[2];
         self.manual = p[2];
         self.prev_eye = self.eye;
+        self.heading = [0.0; 3];
         self.eye_state.swing_ticks = 0;
     }
 
@@ -405,6 +411,10 @@ impl FollowCamera {
                 self.velocity = [0.0; 3];
             }
         }
+        // The eye motion direction, before the spring.
+        let m = sub(self.eye, self.prev_eye);
+        let ml = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+        self.heading = if ml > 1e-9 { m.map(|c| c / ml) } else { [0.0; 3] };
         // Step 10: spring toward T = F + sphere(P).
         let t = add(self.focus, sphere(self.target));
         let (k, damping) = (p.stiffness, p.damping());
@@ -425,7 +435,7 @@ impl FollowCamera {
         self.clear_ground(&ground);
         let prims = gather(self.eye);
         let (forward, first) = self.rows();
-        let ctx = EyeCtx { focus: self.focus, forward, first, moving: hero.moving, hold: self.hold > 0, heading: self.velocity, clear: &clear };
+        let ctx = EyeCtx { focus: self.focus, forward, first, moving: hero.moving, hold: self.hold > 0, heading: self.heading, clear: &clear };
         eye_pass(&mut self.eye_state, &mut self.eye, &mut self.velocity, &prims, &ctx);
         if self.eye_state.finish(&mut self.eye, self.prev_eye) {
             self.recentre(hero, &ground, &push, &clear);
@@ -485,6 +495,9 @@ impl FollowCamera {
         if f[1] > e[1] && h + CLEARANCE < f[1] {
             let t = (h + CLEARANCE - e[1]) / (f[1] - e[1]);
             self.eye = add(e, sub(f, e).map(|c| c * t));
+            // The slide writes the previous eye too and clears the motion direction.
+            self.prev_eye = self.eye;
+            self.heading = [0.0; 3];
             let p = polar(sub(self.eye, f));
             self.current = p;
             self.target = p;

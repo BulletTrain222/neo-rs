@@ -106,6 +106,8 @@ pub struct Hang {
     /// current clip (the attach keeps a playing 115 or 117).
     pub cross: bool,
     pub playing: u32,
+    /// The current clip's track has finished (SPEC-0033 grab line code pass (b), (c)).
+    pub finished: bool,
 }
 
 /// The leap search (Behavior 9, Search): the nearest other line by side distance whose axis is
@@ -143,7 +145,7 @@ pub fn search(lines: &[Line], current: usize, p: Vec3, f: Vec3, b1: Vec3, side: 
 
 impl Hang {
     pub fn new(line: usize) -> Self {
-        Self { line, mode: 0, target: None, side: 0, side_vel: [0.0; 3], vy: 0.0, cross: false, playing: 0 }
+        Self { line, mode: 0, target: None, side: 0, side_vel: [0.0; 3], vy: 0.0, cross: false, playing: 0, finished: false }
     }
 
     /// The search in mode 1 (Cross held with the side stick): a found line becomes the pending
@@ -177,6 +179,9 @@ impl Hang {
             }
             3 => {
                 let Some(t) = self.target.and_then(|t| lines.get(t)) else { return Step { let_go: true, ..Step::default() } };
+                // The falling check reads the vertical velocity before this tick's move and
+                // subtraction (SPEC-0033 grab line code pass (c)).
+                let vy0 = self.vy;
                 let mut q: Vec3 = std::array::from_fn(|k| p[k] + STEP * l.u[k] + self.side_vel[k]);
                 q[1] += self.vy;
                 self.vy -= 0.02;
@@ -184,7 +189,9 @@ impl Hang {
                 let b1 = self.side_vel;
                 let bl = dot(b1, b1).sqrt().max(1e-6);
                 let gapside = dot([t.a[0] - q[0], 0.0, t.a[2] - q[2]], b1.map(|c| c / bl));
-                let request = if self.vy < -0.25 { fall } else if self.side == 0 { 114 } else { 116 };
+                let launch = if self.side == 0 { 114 } else { 116 };
+                // A finished launch clip asks 65 first; else the falling clip below -0.25.
+                let request = if self.playing == launch && self.finished { 65 } else if vy0 < -0.25 { fall } else { launch };
                 if gapside.abs() <= 0.1 || gapside < 0.0 {
                     self.line = self.target.take().unwrap_or(self.line);
                     self.mode = 0;
@@ -211,7 +218,22 @@ impl Hang {
                 if square || gap <= 0.0 || !within {
                     return Step { place: None, request: 0, let_go: true };
                 }
-                Step { place: Some(q), request: if self.cross { 113 } else { 112 }, let_go: false }
+                // Mode 1 clips (code pass (b)): with 113, 115 or 117 current a finished track asks
+                // 112 and an unfinished one 113 only while Cross is held (else it keeps playing);
+                // otherwise Cross asks 113, else 112.
+                let request = match self.playing {
+                    113 | 115 | 117 if self.finished => 112,
+                    113 | 115 | 117 => {
+                        if self.cross {
+                            113
+                        } else {
+                            self.playing
+                        }
+                    }
+                    _ if self.cross => 113,
+                    _ => 112,
+                };
+                Step { place: Some(q), request, let_go: false }
             }
         }
     }

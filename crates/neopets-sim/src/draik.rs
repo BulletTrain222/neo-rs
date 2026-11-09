@@ -222,6 +222,8 @@ pub struct View<'a> {
     pub clip: (u32, bool),
     pub frame_bits: u32,
     pub level: &'a dyn Fn(u16) -> bool,
+    /// The hero's action state (48, the long fall, is not hit by a wind hazard).
+    pub hero_state: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -513,7 +515,9 @@ impl Draik {
                         a.anim = Some(n);
                         a.travel = Move::Turn(0.1);
                         if ended(n) {
-                            Breath::Beam { left: draw(rng, if ice { w.ice } else { w.fire }), length: 0.0, end: v.mouth, gap: 0 }
+                            // The ice beam's end starts at the hero's feet; the fire beam grows out
+                            // of the mouth (SPEC-0029 Draik breath).
+                            Breath::Beam { left: draw(rng, if ice { w.ice } else { w.fire }), length: 0.0, end: if ice { v.hero } else { v.mouth }, gap: 0 }
                         } else {
                             step
                         }
@@ -722,19 +726,18 @@ impl Draik {
         a
     }
 
-    /// The wind hazards: life, the target renewed every 60 ticks within 5 of the hero, the
-    /// slide, and the throw within 4.0 (once per hazard).
+    /// The wind hazards (SPEC-0029 Draik): life, the target renewed within 5 of the hero when
+    /// the remaining life is a multiple of 60, the slide, and on every tick within 4.0 of a hero
+    /// not in the long fall (state 48) the damage and the throw (a hit does not remove it).
     fn hazards_tick(&mut self, v: &View, w: &Words, rng: &mut Rng, a: &mut Act) {
         for h in &mut self.hazards {
             h.life -= 1;
-            h.renew -= 1;
-            if h.renew <= 0 {
-                h.renew = 60;
+            if h.life % 60 == 0 {
                 h.target = [v.hero[0] + rng.frange(-5.0, 5.0), v.hero[1], v.hero[2] + rng.frange(-5.0, 5.0)];
             }
             let t = [h.target[0], h.position[1], h.target[2]];
             h.position = toward(h.position, t, w.hazard_slide);
-            if !h.thrown && hdist(h.position, v.hero) < 4.0 {
+            if v.hero_state != 48 && hdist(h.position, v.hero) < 4.0 {
                 h.thrown = true;
                 let d = hdist(h.position, v.hero).max(1e-6);
                 let u = [(v.hero[0] - h.position[0]) / d, 0.0, (v.hero[2] - h.position[2]) / d];
@@ -810,6 +813,7 @@ mod tests {
             clip: (1, false),
             frame_bits: 0,
             level,
+            hero_state: 1,
         }
     }
 
@@ -1011,7 +1015,7 @@ mod tests {
         let never = |_: Vec3, _: Vec3| false;
         let mut k = Draik::new(&w, &mut rng);
         k.hazards.push(Hazard { position: [0.0, 0.0, 10.0], target: [0.0, 0.0, 20.0], renew: 60, life: 600, thrown: false });
-        // The hazard slides 0.1 per tick; within 4.0 of the hero it throws once for 10 at 10.0.
+        // The hazard slides 0.1 per tick; within 4.0 of the hero it throws for 10 at 10.0.
         let v = view(&no, &never, 30.0);
         let mut k2 = k.clone();
         k2.hazards[0].position = [0.0, 0.0, 26.5];
@@ -1019,7 +1023,10 @@ mod tests {
         assert_eq!(a.hero_damage.len(), 1);
         assert_eq!(a.hero_damage[0].0, 10);
         assert_eq!(a.hero_damage[0].1.map(|(_, s)| s), Some(10.0));
-        assert!(k2.tick(&v, &w, 1, &mut rng).hero_damage.is_empty());
+        // A thrown hero in the long fall (state 48) is not hit again.
+        let mut falling = view(&no, &never, 30.0);
+        falling.hero_state = 48;
+        assert!(k2.tick(&falling, &w, 1, &mut rng).hero_damage.is_empty());
         k.tick(&v, &w, 1, &mut rng);
         assert!((k.hazards[0].position[2] - 10.1).abs() < 1e-4);
     }

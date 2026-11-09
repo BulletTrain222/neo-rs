@@ -2942,6 +2942,11 @@ impl Play {
         if self.resident(target) {
             return;
         }
+        // SPEC-0039 1344 (default for a rewrite): a request naming pack 1428 is ignored while
+        // flag 248 is clear (its cells lie behind 1344's shut gates in Act 2).
+        if target == 1428 && !self.state.flag(248) {
+            return;
+        }
         match self.kinds.get(&target) {
             Some(&k) => {
                 if buffers::stream_buffer(self.world.buffer, k == Kind::Transition).is_some() {
@@ -2962,14 +2967,19 @@ impl Play {
     }
 
     /// Move the hero to a landing in the current world and put the camera behind it.
-    fn arrive(&mut self, (l, g): ([f32; 3], [f32; 3])) {
-        self.loco.teleport(l, g);
-        // The traversal holds of the world left behind end with the arrival.
-        (self.ladder, self.ledge, self.hang, self.climb, self.panel, self.hold) = (None, None, None, None, None, None);
+    fn arrive(&mut self, pose: ([f32; 3], [f32; 3])) {
+        self.place_hero(pose);
         let f = followed(&self.loco, &self.world);
         let trunks = self.near_trunks(self.camera.eye);
         let world = &self.world;
         self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
+    }
+
+    /// The hero placed at a pose with no camera placement (SPEC-0027: MoveHero moves no camera).
+    fn place_hero(&mut self, (l, g): ([f32; 3], [f32; 3])) {
+        self.loco.teleport(l, g);
+        // The traversal holds of the world left behind end with the arrival.
+        (self.ladder, self.ledge, self.hang, self.climb, self.panel, self.hold) = (None, None, None, None, None, None);
     }
 
     /// Make the other world current and land on its plane k (teleport landing).
@@ -3552,7 +3562,9 @@ impl Play {
                     if let Some(&(l, g)) = self.world.entries.get(locator) {
                         let p = self.world.pack;
                         let y = if level::move_hero_unprobed(p, locator) { l[1] } else { self.ground_in(p, l[0], l[2], l[1] + 4.0).unwrap_or(l[1]) };
-                        self.arrive(([l[0], y, l[2]], g));
+                        // MoveHero moves no camera (SPEC-0027 Return to normal): the script's
+                        // SetToNormalCamera places it, or the follow camera glides in.
+                        self.place_hero(([l[0], y, l[2]], g));
                         self.last_door = format!("script: hero moved to locator {locator} of {p}");
                     }
                 }
@@ -3570,7 +3582,7 @@ impl Play {
                 Action::MoveHeroProbed { locator } => {
                     if let Some(&(l, g)) = self.world.entries.get(locator) {
                         let y = self.ground_in(pack, l[0], l[2], l[1] + 4.0).unwrap_or(l[1]);
-                        self.arrive(([l[0], y, l[2]], g));
+                        self.place_hero(([l[0], y, l[2]], g));
                         self.last_door = format!("script: hero moved to locator {locator} of {} on the ground", self.world.pack);
                     }
                 }
@@ -3631,13 +3643,11 @@ impl Play {
                     return (wait && keyed).then_some(Wait::Camera);
                 }
                 Action::ReturnCamera { preset, release } => {
-                    // The follow camera takes over behind the hero; a preset inside the locator
-                    // table places the camera at that locator (SPEC-0030 row 35).
+                    // SPEC-0027 Return to normal, after a scripted play (mode 0): the play stops
+                    // and with preset -1 nothing is placed; the follow camera resumes from the eye
+                    // it had and glides in. A preset inside the locator table places the camera
+                    // at that locator (SPEC-0030 row 35).
                     self.cut = None;
-                    let f = followed(&self.loco, &self.world);
-                    let trunks = self.near_trunks(self.camera.eye);
-                    let world = &self.world;
-                    self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
                     if let Some((at, _)) = usize::try_from(preset).ok().and_then(|k| self.locator(pack, k)) {
                         self.camera.eye = at;
                         self.camera.reset();
@@ -4790,9 +4800,11 @@ impl Play {
         let add_ok = limit == 0 || held < limit;
         match neopets_sim::shop::decide(it.price, self.state.neopoints, add_ok) {
             neopets_sim::shop::Buy::NeedMore(n) => {
-                // The need-more text of SPEC-0050 (its currency glyph is not given; R-0030).
-                let text = format!("I need another {n}!").into_bytes();
-                self.open_text(b"Tor", &text);
+                // The need-more text of SPEC-0050: the shortfall, character code 36 (the
+                // NeoPoints glyph) and "!", spoken by the active hero, with stinger 9.
+                let text = format!("I need another {n}$!").into_bytes();
+                self.open_text(self.hero_name(), &text);
+                self.stinger(9);
                 self.last_pickup = format!("buy refused: need {n} more NP for item {} on tick {}", it.id, self.ticks);
             }
             neopets_sim::shop::Buy::Bought => {
@@ -4824,7 +4836,11 @@ impl Play {
                 self.last_pickup = format!("bought item {} for {} NP (wallet {}) on tick {}", it.id, it.price, self.state.neopoints, self.ticks);
             }
             other => {
-                // The never-affordable and can't-buy-now texts are not given (R-0030).
+                // The never-affordable and can't-buy-now messages (SPEC-0050 Exact strings), in
+                // the active hero's name, with stinger 9.
+                let text: &[u8] = if other == neopets_sim::shop::Buy::NeverAffordable { b"I could never afford that!" } else { b"I can't buy that now!" };
+                self.open_text(self.hero_name(), text);
+                self.stinger(9);
                 self.last_pickup = format!("buy refused ({other:?}) for item {} on tick {}", it.id, self.ticks);
             }
         }
@@ -6425,6 +6441,7 @@ impl Play {
         }
         h.cross = input.cross_held;
         h.playing = self.hero.clip_state().action;
+        h.finished = self.hero.clip_state().finished;
         // Test 4: the touched flag in the slide with the cooldown expired lets go, then the
         // long-fall landing (state 48); the attach's 60-tick cooldown keeps it off at first.
         if launch.is_none() && h.mode == 1 && self.touched && self.line_cooldown < 1 {
@@ -11613,7 +11630,13 @@ impl Play {
         // SPEC-0033 Behavior 4A.1: the kind word of the patch under the feet, not its surface code.
         let feet = self.loco.position();
         self.loco.slow_patch = matches!(self.world.probe(feet[0], feet[2], feet[1] + 2.5).kind, Some(1 | 6));
+        let arriving = self.loco.state == hero_states::ARRIVAL;
         self.loco.update(&input, forward, left, self.hero.clip_state());
+        // SPEC-0040 state 59: music stinger 0 plays when the arrival clip ends (the death effect
+        // the state also spawns is not identified).
+        if arriving && self.loco.state == hero_states::STANCE {
+            self.stinger(0);
+        }
         // An air attack's start: the hit list cleared and the weapon drawn.
         if air_before == 0 && self.loco.air_sub != 0 {
             self.hit_list.clear();
@@ -12607,6 +12630,13 @@ impl Play {
             return;
         }
         let tor = self.hero_index == 0;
+        // Roberta's leap (sub-state 8) clears the auto-facing flag every tick and her landing
+        // (13) does its own turn, so the attack turn does not run there; the forced id is Tor's
+        // only (SPEC-0040 Behavior 20 item 7, SPEC-0036 Leap).
+        if !tor && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 8 | 13)) {
+            return;
+        }
+        let forced = forced.filter(|_| tor);
         let f = self.loco.facing;
         let target = forced.and_then(|id| self.aim_point(id)).or_else(|| self.targets.records.first().filter(|r| r.flag).and_then(|r| self.aim_point(r.id))).or_else(|| {
             if !tor {
@@ -12684,7 +12714,9 @@ impl Play {
             let at = c.stand_in_body().map(|b| b.center).or_else(|| Self::attach_point(c, 7)).unwrap_or(c.position);
             let d = unit([at[0] - eye[0], 0.0, at[2] - eye[2]]);
             let side = [d[2], 0.0, -d[0]];
-            let clear = |o: f32| self.world.ground.as_ref().is_none_or(|g| g.segment_clear(add(eye, scale(side, o)), add(at, scale(side, o)), true));
+            // The three segments start at the eye and 1.0 to each side and all end at the aim
+            // point (SPEC-0036 target chooser).
+            let clear = |o: f32| self.world.ground.as_ref().is_none_or(|g| g.segment_clear(add(eye, scale(side, o)), at, true));
             if clear(0.0) && clear(1.0) && clear(-1.0) {
                 found.push(c.id);
             }
@@ -15946,6 +15978,7 @@ impl Play {
         use neopets_sim::combat::Cylinder;
         let pack = self.world.pack;
         let hero = self.loco.position();
+        let hero_state = self.loco.state;
         let hf = self.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.draik.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         if ids.is_empty() {
@@ -16039,6 +16072,7 @@ impl Play {
                 clip: (clip.action, clip.progress >= 0.99),
                 frame_bits: bits,
                 level: &level,
+                hero_state: hero_state,
             };
             let Some(k) = c.draik.as_mut() else { continue };
             let before = k.state;
@@ -20724,10 +20758,14 @@ fn align_z_to(m: [f32; 16], point: [f32; 3], t: f32) -> [f32; 16] {
     let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     let x = unit(cross(y0, z));
     let y = cross(z, x);
+    // The three rows are scaled by the chosen column's original length, w set to 0 (SPEC-0030
+    // row 179).
+    let s = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
     let mut out = m;
-    out[..3].copy_from_slice(&x);
-    out[4..7].copy_from_slice(&y);
-    out[8..11].copy_from_slice(&z);
+    out[..3].copy_from_slice(&x.map(|v| v * s));
+    out[4..7].copy_from_slice(&y.map(|v| v * s));
+    out[8..11].copy_from_slice(&z.map(|v| v * s));
+    (out[3], out[7], out[11]) = (0.0, 0.0, 0.0);
     out
 }
 

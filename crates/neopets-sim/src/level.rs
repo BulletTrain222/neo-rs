@@ -1979,7 +1979,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if !state.flag(569) {
                 v.push(Action::LoadRegion { slot: 1, region: Some(747) });
             }
-            v.push(Action::ReturnCamera { preset: -1, release: true });
+            // SetToNormalCamera (SPEC-0027 arrival table, 745 start routine).
+            v.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             v
         }
         // SPEC-0043 1173 Init: object 1 off; routine 2 on trigger 1 and routine 3 on trigger 0;
@@ -2002,7 +2003,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 _ => {}
             }
             if gate_1405(pack, state) {
-                vec![Action::LoadRegion { slot: 0, region: Some(pack + 1) }, Action::ReturnCamera { preset: -1, release: true }]
+                // SetToNormalCamera (SPEC-0039 1405 to 1425 threads).
+                vec![Action::LoadRegion { slot: 0, region: Some(pack + 1) }, Action::NormalCamera { distance: 15.0, angle: 0.0, release: true }]
             } else {
                 Vec::new()
             }
@@ -2062,9 +2064,11 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // (registered under 102), the teleports and the arrival are fixed rules.
         1414 => {
             if state.flag(102) {
-                vec![Action::LoadRegion { slot: 0, region: Some(1416) }, Action::ReturnCamera { preset: -1, release: true }]
+                // SetToNormalCamera (SPEC-0041 1414 thread).
+                vec![Action::LoadRegion { slot: 0, region: Some(1416) }, Action::NormalCamera { distance: 15.0, angle: 0.0, release: true }]
             } else {
-                vec![Action::LoadRegion { slot: 0, region: Some(1415) }, Action::WaitLoads, wait(3.0), Action::Agro { entity: 0 }, Action::DisableInvisibility { entity: 0 }, Action::Agro { entity: 1 }, Action::DisableInvisibility { entity: 1 }, Action::ReturnCamera { preset: -1, release: true }]
+                // SetToNormalCamera (SPEC-0041 1414 thread).
+                vec![Action::LoadRegion { slot: 0, region: Some(1415) }, Action::WaitLoads, wait(3.0), Action::Agro { entity: 0 }, Action::DisableInvisibility { entity: 0 }, Action::Agro { entity: 1 }, Action::DisableInvisibility { entity: 1 }, Action::NormalCamera { distance: 15.0, angle: 0.0, release: true }]
             }
         }
         // SPEC-0041 1409, 1421 and 1423 Init: their blackboard value (30 for world 160, 30 for
@@ -2084,7 +2088,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if pack == 1409 && state.flag(106) {
                 out.push(Action::LoadRegion { slot: 0, region: Some(1410) });
             }
-            out.push(Action::ReturnCamera { preset: -1, release: true });
+            // SetToNormalCamera (SPEC-0041 1409 thread; SPEC-0027 arrival table 1421, 1423).
+            out.push(Action::NormalCamera { distance: 15.0, angle: 0.0, release: true });
             out
         }
         // SPEC-0043 750 Init: the control thread loads slot 0 with set 0 (region 751) while flag
@@ -2499,7 +2504,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             } else if state.flag(30) {
                 v.push(Action::LoadRegion { slot: 0, region: Some(1157) });
             }
-            v.push(Action::ReturnCamera { preset: -1, release: true });
+            // SetToNormalCamera (SPEC-0032 1156 thread C).
+            v.push(Action::NormalCamera { distance: 10.0, angle: 0.0, release: true });
             v
         }
         // SPEC-0032 1159 Init, thread C: slot 0 loads set 2 (31), 1 (30) or 0 (with entity 0
@@ -2513,7 +2519,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             } else {
                 v.extend([Action::LoadRegion { slot: 0, region: Some(1160) }, Action::EntityAnim { entity: 0, anim: 97, looped: true, wait: false }]);
             }
-            v.push(Action::ReturnCamera { preset: -1, release: true });
+            // SetToNormalCamera (SPEC-0032 1159 thread C).
+            v.push(Action::NormalCamera { distance: 10.0, angle: 0.0, release: true });
             v
         }
         // SPEC-0032 1170 Init: S0 on trigger 0 (teleport 0 and the arrival are their callbacks).
@@ -2796,7 +2803,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([reg(2, 2), reg(3, 2), reg(4, 2)]);
                 // The seven gear objects the update animates (SPEC-0041 1324 Init step 4).
                 v.extend((1..=7).map(|obj| Action::InitObjOn { obj, end: false }));
-                v.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0041 1324 thread body).
+                v.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
                 v.extend((0..3).map(|block| Action::MoveBlock { block, locator: 6 + block }));
             }
             v
@@ -3039,7 +3047,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             // SPEC-0031 R-0111: the nine object sounds after the state-106 join.
             v.extend(obj_sounds(&[(1, 7, 0.0), (2, 7, 0.0), (5, 7, 0.0), (6, 7, 0.0), (7, 7, 0.0), (9, 7, 0.0), (3, 8, 0.0), (4, 8, 0.0), (8, 8, 0.0)]));
-            v.extend([Action::LoadRegion { slot: 1, region: Some(1404) }, Action::ReturnCamera { preset: -1, release: true }]);
+            // SetToNormalCamera (SPEC-0043 1398 Init thread).
+            v.extend([Action::LoadRegion { slot: 1, region: Some(1404) }, Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }]);
             v
         }
         // SPEC-0042 714 Init: P on trigger 0; with 220 set and 301 clear F on 2; with 301 and 284
@@ -3199,12 +3208,14 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // on-enter, proximity and entity-control set-ups are fixed rules.
         749 => {
             state.blackboard.insert((2, 20), 40);
-            vec![Action::ReturnCamera { preset: -1, release: true }]
+            // SetToNormalCamera (SPEC-0043 749 thread B).
+            vec![Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }]
         }
         // SPEC-0043 748 and 752: value 20 or 30 for eW 20 and the normal camera.
         748 | 752 => {
             state.blackboard.insert((2, 20), if pack == 748 { 20 } else { 30 });
-            vec![Action::ReturnCamera { preset: -1, release: true }]
+            // SetToNormalCamera (SPEC-0043 748 and 752 thread B).
+            vec![Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }]
         }
         // SPEC-0044 722 Init: triggers 0 to 2 (the bets) and 3 to 7 (the signs); the slot-load
         // thread (region 723 + set): with 76 set 3 into A, with 562 also 4 into B and 0 into E,
@@ -3231,24 +3242,28 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0041 859 thread A: set 0 (region 860) with 507; the normal camera.
         859 => {
             let mut v: Vec<Action> = state.flag(507).then_some(Action::LoadRegion { slot: 0, region: Some(860) }).into_iter().collect();
-            v.push(Action::ReturnCamera { preset: -1, release: true });
+            // SetToNormalCamera (SPEC-0042 859 thread A).
+            v.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             v
         }
         // SPEC-0039 1131 thread 1: set 0 (region 1132) with 203; the normal camera.
         1131 => {
             let mut v: Vec<Action> = state.flag(203).then_some(Action::LoadRegion { slot: 0, region: Some(1132) }).into_iter().collect();
-            v.push(Action::ReturnCamera { preset: -1, release: true });
+            // SetToNormalCamera (SPEC-0039 1131 thread 1).
+            v.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             v
         }
         // SPEC-0039 1136 and 1143 thread 1: set 1 with flag 10, else set 0; the normal camera.
         1136 | 1143 => {
-            let mut v = vec![Action::LoadRegion { slot: 0, region: Some(pack + 1 + state.flag(10) as u32) }, Action::ReturnCamera { preset: -1, release: true }];
+            // SetToNormalCamera (SPEC-0039 1136 and 1143 thread 1).
+            let mut v = vec![Action::LoadRegion { slot: 0, region: Some(pack + 1 + state.flag(10) as u32) }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }];
             v.extend(arrival_line(pack, state));
             v
         }
-        // SPEC-0039 1172 thread 1: the normal camera with flag 10.
+        // SPEC-0039 1172 thread 1: SetToNormalCamera(5.0, 0.0, true) in every case (the flag-10
+        // test only picks a debug line).
         1172 => {
-            let mut v = if state.flag(10) { vec![Action::ReturnCamera { preset: -1, release: true }] } else { Vec::new() };
+            let mut v = vec![Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }];
             v.extend(arrival_line(pack, state));
             v
         }
@@ -3260,7 +3275,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         750 => {
             state.blackboard.insert((2, 20), 50);
             let mut v: Vec<Action> = (!state.flag(76)).then_some(Action::LoadRegion { slot: 0, region: Some(751) }).into_iter().collect();
-            v.push(Action::ReturnCamera { preset: -1, release: true });
+            // SetToNormalCamera (SPEC-0043 750; SPEC-0027 arrival table).
+            v.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             v
         }
         // SPEC-0037 1225 and 1220 Init: thread A loads slot 0 with set 3, 2, 1 or 0 by the first
@@ -3330,11 +3346,13 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 _ => 4,
             };
             let say = if pack == 857 { Action::Message { line } } else { Action::Converse { entity: 0, line } };
-            vec![say, Action::ReturnCamera { preset: -1, release: true }]
+            // SetToNormalCamera (SPEC-0037 thread B; SPEC-0027 arrival table 855 to 858, 1433).
+            vec![say, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }]
         }
         // SPEC-0039 984 Init: the proximity and on-enter callbacks are fixed rules; the four
         // item-ask callbacks never fire (SPEC-0030 row 257); thread 7 returns the normal camera.
-        984 => vec![Action::ReturnCamera { preset: -1, release: true }],
+        // SetToNormalCamera (SPEC-0039 984 thread 7).
+        984 => vec![Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }],
         // SPEC-0044 1017 Init: flag 85; thread K1 loads slot 0 with set 1 (flag 86) or 0 (region
         // 1018 + set); 297 set when clear, with thread K2's opening cutscene; with 298 set and 300
         // clear thread K3's scene (R-0056). Proximity routines, teleports 0 and 1 (context 13) and
@@ -3546,6 +3564,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                     out.push(Action::LoadRegion { slot: 0, region: Some(953) });
                 }
             }
+            // Thread step 3, in every case: SetToNormalCamera(10.0, 0.0, true) (SPEC-0041 951).
+            out.push(Action::NormalCamera { distance: 10.0, angle: 0.0, release: true });
             out
         }
         678 | 686 | 691 => road_init(pack, state),
@@ -3599,16 +3619,28 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0039 1140's threads: set 1 with flag 10, else set 0 (Medium); the normal camera.
         1140 => {
             state.set_word(pack, 0, state.flag(10) as i32);
-            let mut v = vec![Action::LoadRegion { slot: 0, region: Some(1141 + state.flag(10) as u32) }, Action::ReturnCamera { preset: -1, release: true }];
+            // SetToNormalCamera (SPEC-0039 1140 thread 1).
+            let mut v = vec![Action::LoadRegion { slot: 0, region: Some(1141 + state.flag(10) as u32) }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }];
             v.extend(arrival_line(pack, state));
             v
         }
-        // SPEC-0039 1148 thread 1: set 0 (region 1149) when flag 496 is set.
-        1148 if state.flag(496) => vec![Action::LoadRegion { slot: 0, region: Some(1149) }],
-        // SPEC-0042 1150 thread T: set 0 (region 1151) while flag 142 is clear.
-        1150 if !state.flag(142) => vec![Action::LoadRegion { slot: 0, region: Some(1151) }],
-        // SPEC-0039 1133 thread 1: set 1 with flag 10, else set 0.
-        1133 => vec![Action::LoadRegion { slot: 0, region: Some(1133 + 1 + state.flag(10) as u32) }],
+        // SPEC-0039 1148 thread 1: set 0 (region 1149) when flag 496 is set; then in every case
+        // SetToNormalCamera(5.0, 0.0, true).
+        1148 => {
+            let mut v: Vec<Action> = state.flag(496).then_some(Action::LoadRegion { slot: 0, region: Some(1149) }).into_iter().collect();
+            v.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
+            v
+        }
+        // SPEC-0042 1150 thread T: set 0 (region 1151) while flag 142 is clear; then in both
+        // cases SetToNormalCamera(5.0, ..., true) (SPEC-0027 arrival table: (5, 0)).
+        1150 => {
+            let mut v: Vec<Action> = (!state.flag(142)).then_some(Action::LoadRegion { slot: 0, region: Some(1151) }).into_iter().collect();
+            v.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
+            v
+        }
+        // SPEC-0039 1133 thread 1: set 1 with flag 10, else set 0; then SetToNormalCamera(5.0,
+        // 0.0, true) in every case.
+        1133 => vec![Action::LoadRegion { slot: 0, region: Some(1133 + 1 + state.flag(10) as u32) }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }],
         _ => Vec::new(),
     }
 }
@@ -4990,7 +5022,8 @@ fn fight_1432(state: &mut GameState) -> Vec<Action> {
             Action::FadeOut { seconds: FADE, wait: true },
             Action::FadeOut { seconds: 0.0, wait: true },
             Action::MoveHero { locator: 3 },
-            Action::ReturnCamera { preset: -1, release: false },
+            // SetToNormalCamera (SPEC-0039 1432 entry sequence: (10.0, 3.14, flag 0)).
+            Action::NormalCamera { distance: 10.0, angle: std::f32::consts::PI, release: false },
             Action::MoveEntity { entity: 0, locator: 2, face: false },
             // The move's control option is taken as 1 (free control after the move; not given).
             Action::ReleaseEntity { entity: 0 },
@@ -5077,7 +5110,8 @@ fn fight_1432(state: &mut GameState) -> Vec<Action> {
             Action::MoveHero { locator: 1 },
             Action::LetterBox { on: false, seconds: 0.7, wait: false },
             wait(1.0),
-            Action::ReturnCamera { preset: -1, release: true },
+            // SetToNormalCamera (SPEC-0039 1432 fight start step: (10.0, 3.14, flag 1)).
+            Action::NormalCamera { distance: 10.0, angle: std::f32::consts::PI, release: true },
             done(10),
             release,
         ];
@@ -5930,7 +5964,8 @@ fn stage_1174(s: &mut GameState) -> Vec<Action> {
         // tile step), not for the track's end; the normal camera, one tick, object 8 off (user's
         // report 93: the pillar's fall showed no scene).
         s.set_word(p, 192, (s.word(p, 107) == 1) as i32);
-        v.extend([lvl4(true), Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 }, Action::WaitWord { word: 192 }, Action::ReturnCamera { preset: -1, release: true }, Action::Sleep { ticks: 1 }, Action::DeactivateObj { obj: 8 }, lvl4(false), Action::Bits { word: 2, set: 0, clear: 1 }]);
+        // SetToNormalCamera (SPEC-0044 1174 bit 8: camera back to normal (3.0, 3.14)).
+        v.extend([lvl4(true), Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 }, Action::WaitWord { word: 192 }, Action::NormalCamera { distance: 3.0, angle: std::f32::consts::PI, release: true }, Action::Sleep { ticks: 1 }, Action::DeactivateObj { obj: 8 }, lvl4(false), Action::Bits { word: 2, set: 0, clear: 1 }]);
         return v;
     }
     if has(6) && !has(7) {
@@ -6105,7 +6140,8 @@ fn arena_1428(s: &mut GameState) -> Vec<Action> {
             Action::MoveEntity { entity: 0, locator: 1, face: true },
             Action::MoveEntity { entity: 1, locator: 2, face: true },
             Action::MoveHero { locator: 3 },
-            Action::ReturnCamera { preset: -1, release: true },
+            // SetToNormalCamera (SPEC-0041 1428 boss-room return step 10).
+            Action::NormalCamera { distance: 10.0, angle: std::f32::consts::PI, release: true },
             Action::BossFight { instance: 12 },
             Action::FadeIn { seconds: 1.0, wait: true },
             Action::InitObjOn { obj: 3, end: false },
@@ -6701,10 +6737,13 @@ fn hub_return_1381(s: &mut GameState) -> Vec<Action> {
         Action::PlaySound { cue: 5, locator: None },
         Action::PlaySound { cue: 169, locator: None },
         Action::MoveHero { locator: 0 },
+        // SetToNormalCamera(10.0, pi, true) after the move (SPEC-0042 1381 return-to-hub routine).
+        Action::NormalCamera { distance: 10.0, angle: std::f32::consts::PI, release: true },
         Action::HoldHero,
         Action::Sleep { ticks: 1 },
         Action::StartEffect { slot: 0, camera: true },
         wait(1.5),
+        // RestorePlayerControl: a return that places no eye frees the hero.
         Action::ReturnCamera { preset: -1, release: true },
     ]
 }
@@ -7243,7 +7282,8 @@ fn practice_1327(s: &mut GameState) -> Vec<Action> {
                     Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
                     Action::Message { line: 77 },
                     wait(0.3),
-                    Action::ReturnCamera { preset: -1, release: true },
+                    // SetToNormalCamera (SPEC-0044 1327 step 233; SPEC-0067 the lesson end 10.0).
+                    Action::NormalCamera { distance: 10.0, angle: 0.0, release: true },
                     Action::LoadRegion { slot: 3, region: None },
                 ]);
                 out.extend(talk(s));
@@ -11098,7 +11138,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             Action::MoveHero { locator: 34 },
             Action::FadeIn { seconds: 0.5, wait: true },
             Action::StartEffect { slot: 16, camera: false },
-            Action::ReturnCamera { preset: -1, release: true },
+            // SetToNormalCamera (SPEC-0043 1398 trigger 37: (15.0, 3.14159)).
+            Action::NormalCamera { distance: 15.0, angle: std::f32::consts::PI, release: true },
         ]),
         // SPEC-0042 714 F (trigger 2, entering, 301 clear): 301 set, movie 48, 30 ticks, line 1, and with flag 5 clear 30 ticks and line 2.
         (714, 2) if call.object && call.state == 1 && !state.flag(301) => {
@@ -11129,7 +11170,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (906, 0 | 1) if call.state == 1 => out.actions.extend([
             Action::LongFall,
             Action::PlayCamera { track: routine as usize, wait: true, end: 0, speed: 1.0 },
-            Action::ReturnCamera { preset: -1, release: true },
+            // SetToNormalCamera (SPEC-0037 906 L0 and L1).
+            Action::NormalCamera { distance: 0.3, angle: 0.0, release: true },
         ]),
         // SPEC-0037 1427 E0 to E4: helper H sets the pending slot 187 + routine once per tick
         // (any state, no object test).
@@ -11150,7 +11192,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             wait(4.0),
             Action::HoldHero,
             Action::WaitObj { obj: 0 },
-            Action::ReturnCamera { preset: -1, release: true },
+            // SetToNormalCamera (SPEC-0037 1391 S2 step 6: (10.0, 3.14159)).
+            Action::NormalCamera { distance: 10.0, angle: std::f32::consts::PI, release: true },
         ]),
         // S1 (trigger 1, any state): the pending slot 165.
         (1391, 1) if call.object => out.actions.push(Action::LoadOverride { slot: 165 }),
@@ -11285,7 +11328,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
                     Action::WaitObj { obj: 7 },
                     wait(1.0),
-                    Action::ReturnCamera { preset: -1, release: true },
+                    // SetToNormalCamera (SPEC-0042 1250 flag-275 sequence: (15.0, pi)).
+                    Action::NormalCamera { distance: 15.0, angle: std::f32::consts::PI, release: true },
                 ]);
             }
         }
@@ -12038,7 +12082,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::InitObjOn { obj: 2, end: false },
                 Action::PlayAnim { obj: 2, speed: 1.0, wait: false },
                 Action::InitObjOn { obj: 0, end: false },
-                Action::ReturnCamera { preset: -1, release: true },
+                // SetToNormalCamera (SPEC-0041 1130 trigger index 2).
+                Action::NormalCamera { distance: 10.0, angle: 0.0, release: true },
             ]);
         }
         // 1130 levers (callbacks 1 to 3 on triggers 5 to 7) and the test button (callback 4 on
@@ -12141,7 +12186,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (753, 3) if call.object => {
             if !state.movies.contains(&36) {
                 state.queue_movie(36);
-                out.actions.extend([Action::MoveHero { locator: 3 }, Action::ReturnCamera { preset: -1, release: true }]);
+                // SetToNormalCamera (SPEC-0039 753 trigger 1: (5.0, 3.14)).
+                out.actions.extend([Action::MoveHero { locator: 3 }, Action::NormalCamera { distance: 5.0, angle: std::f32::consts::PI, release: true }]);
                 out.actions.extend((15..=48).map(|slot| Action::StartEffect { slot, camera: false }));
                 state.set_level(1, true);
             }
@@ -13508,7 +13554,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                         Action::PlaySound { cue: 7, locator: None },
                     ]);
                     out.extend((2..=5).map(|obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));
-                    out.extend([wait(4.0), Action::SetFlag { flag: 45, on: true }, Action::SetFlag { flag: 316, on: true }, Action::ReturnCamera { preset: -1, release: true }, Action::LevelState { flag: 14, on: true }]);
+                    // SetToNormalCamera (SPEC-0041 1096 finale: (5.0, 3.14)).
+                    out.extend([wait(4.0), Action::SetFlag { flag: 45, on: true }, Action::SetFlag { flag: 316, on: true }, Action::NormalCamera { distance: 5.0, angle: std::f32::consts::PI, release: true }, Action::LevelState { flag: 14, on: true }]);
                 }
             } else if state.flag(45) && l(15) && !l(16) && !dialog {
                 state.set_level(16, true);
@@ -13522,7 +13569,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     Action::Sleep { ticks: 60 },
                     Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 },
                     Action::Sleep { ticks: 60 },
-                    Action::ReturnCamera { preset: -1, release: true },
+                    // SetToNormalCamera (SPEC-0041 1096 dialog and camera helper: (5.0, 3.14)).
+                    Action::NormalCamera { distance: 5.0, angle: std::f32::consts::PI, release: true },
                     // R-0192: the Rope Gun anchor comes back after the item 117 scene.
                     Action::TargetActive { target: 1, on: true },
                 ]);
@@ -13742,7 +13790,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     state.set_word(pack, 4, 1);
                     state.queue_movie(52);
                     state.set_level(4, false);
-                    out.extend([Action::HoldHero, Action::FadeOut { seconds: 0.1, wait: true }, Action::BossFight { instance: 11 }, Action::MoveHero { locator: 26 }, Action::ReturnCamera { preset: -1, release: true }]);
+                    // SetToNormalCamera (SPEC-0043 1122 entry: (8.0, 3.14)).
+                    out.extend([Action::HoldHero, Action::FadeOut { seconds: 0.1, wait: true }, Action::BossFight { instance: 11 }, Action::MoveHero { locator: 26 }, Action::NormalCamera { distance: 8.0, angle: std::f32::consts::PI, release: true }]);
                     out.extend((4..=18).map(|entity| Action::DeactivateEntity { entity }));
                     out.extend([Action::InitObjOn { obj: 3, end: false }, Action::Equip { on: true }, Action::FadeIn { seconds: 0.5, wait: true }, wait(0.5), Action::Bits { word: 4, set: 0, clear: 1 }]);
                 } else if b & 4 != 0 && b & 8 == 0 {
@@ -15076,12 +15125,14 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         let v = state.blackboard.get(&(2, 81)).copied().unwrap_or(-1);
         if v == own {
             state.take_message(2, 81);
-            return vec![Action::MoveHero { locator: 0 }, Action::ReturnCamera { preset: -1, release: true }];
+            // SetToNormalCamera (SPEC-0027 arrival table 1005 to 1020).
+            return vec![Action::MoveHero { locator: 0 }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }];
         }
         if pack == 1014 {
             state.take_message(2, 81);
             if v != -1 {
-                return vec![Action::ReturnCamera { preset: -1, release: true }];
+                // SetToNormalCamera (SPEC-0043 1014).
+                return vec![Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }];
             }
         }
         return Vec::new();
@@ -15094,10 +15145,18 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.set_word(934, 13, 0);
             vec![Action::InitObjOn { obj: 10, end: false }, Action::InitObjOn { obj: 11, end: false }]
         }
-        // SPEC-0044 1411's arrival reads and resets its value for eW 178.
+        // SPEC-0044 1411's arrival reads and resets its value for eW 178: 10 moves the hero to
+        // locator 1, and any value but -1 runs SetToNormalCamera(10.0, 0.0, true).
         1411 => {
-            state.take_message(2, 178);
-            Vec::new()
+            let v = state.take_message(2, 178);
+            let mut out = Vec::new();
+            if v == 10 {
+                out.push(Action::MoveHero { locator: 1 });
+            }
+            if v != -1 {
+                out.push(Action::NormalCamera { distance: 10.0, angle: 0.0, release: true });
+            }
+            out
         }
         // SPEC-0044 722 arrival: value 10 to 50 for eW 20 moves the hero to locator 110 to 106
         // with the normal camera; with 76 and 562 2 s, new odds and the racers at locators 1 to 3.
@@ -15108,7 +15167,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.push(Action::MoveHero { locator: 110 - (value as usize / 10 - 1) });
             }
             if value != -1 {
-                v.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0027 arrival table 722).
+                v.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             }
             if state.flag(76) && state.flag(562) {
                 odds_722(state);
@@ -15119,10 +15179,12 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0037 906 A (every activation): a black cut, the hero to locator 0, the normal
         // camera, a 1 s fade in.
-        906 => vec![Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 0 }, Action::ReturnCamera { preset: -1, release: true }, Action::FadeIn { seconds: 1.0, wait: false }],
+        // SetToNormalCamera (SPEC-0037 906 A).
+        906 => vec![Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 0 }, Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }, Action::FadeIn { seconds: 1.0, wait: false }],
         // SPEC-0042 1250 A: value 40 for eW 141 moves the hero to locator 26 with the normal
         // camera.
-        1250 if state.take_message(2, 141) == 40 => vec![Action::MoveHero { locator: 26 }, Action::ReturnCamera { preset: -1, release: true }],
+        // SetToNormalCamera (SPEC-0042 1250 A).
+        1250 if state.take_message(2, 141) == 40 => vec![Action::MoveHero { locator: 26 }, Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }],
         // SPEC-0039 1257 handler 6: value 20, 10 or 30 for eW 147 moves the hero to locator 2, 0
         // or 1; then any value but -1 sets the normal camera (distance 15). The value is reset.
         1257 => {
@@ -15140,7 +15202,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0037 776 A: value 10 for eW 31 moves the hero to locator 1 with the normal camera;
         // the value is reset.
-        776 if state.take_message(2, 31) == 10 => vec![Action::MoveHero { locator: 1 }, Action::ReturnCamera { preset: -1, release: true }],
+        // SetToNormalCamera (SPEC-0037 776 A).
+        776 if state.take_message(2, 31) == 10 => vec![Action::MoveHero { locator: 1 }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }],
         // SPEC-0041 1363 W14 (eW 160): value 10, 20, 30, 40 or 50 moves the hero to locator 1,
         // 3, 5, 2 or 4; any value but -1 returns the camera.
         1363 => {
@@ -15157,7 +15220,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             .into_iter()
             .collect();
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0041 1363 W14).
+                out.push(Action::NormalCamera { distance: 15.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15168,7 +15232,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             let v = state.take_message(2, 109);
             let mut out = Vec::new();
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0042 1077 A; the angle is 180.0 read as radians (SPEC-0030 SetToNormalCamera overloads)).
+                out.push(Action::NormalCamera { distance: 10.0, angle: 180.0, release: true });
             }
             match v {
                 20 => out.push(Action::MoveHero { locator: 0 }),
@@ -15189,7 +15254,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::MoveHero { locator: 10 });
             }
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0042 986 A).
+                out.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15221,7 +15287,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         // CB4 (281 set: the hero at locator 9, the camera; step word B = B0; the arrival word).
         985 => {
             state.set_word(985, 3, 1);
-            let mut v = vec![Action::MoveHero { locator: 9 }, Action::ReturnCamera { preset: -1, release: true }];
+            // SetToNormalCamera (SPEC-0027 arrival table 985: (3, 3.14)).
+            let mut v = vec![Action::MoveHero { locator: 9 }, Action::NormalCamera { distance: 3.0, angle: std::f32::consts::PI, release: true }];
             if state.word(985, 9) == 1 {
                 state.set(212, true);
                 if !state.flag(214) {
@@ -15246,7 +15313,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.extend((0..=5).map(|obj| Action::InitObjOn { obj, end: false }));
             // R-0192: aim target 1, a Rope Gun anchor, is off for the fight.
             v.push(Action::TargetActive { target: 1, on: false });
-            v.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 10 }, Action::ReturnCamera { preset: -1, release: true }, Action::DeactivateObj { obj: 14 }, Action::ActivateEntity { entity: 0 }, Action::BossFight { instance: 6 }]);
+            // SetToNormalCamera (SPEC-0041 1096 CB8 step 9: (5.0, 3.14)).
+            v.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 10 }, Action::NormalCamera { distance: 5.0, angle: std::f32::consts::PI, release: true }, Action::DeactivateObj { obj: 14 }, Action::ActivateEntity { entity: 0 }, Action::BossFight { instance: 6 }]);
             // The two item dispensers of CB7 enabled: nothing placed or picked yet.
             state.set_word(1096, 40, 1);
             for k in 0..2u8 {
@@ -15287,7 +15355,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.set_word(1174, 177, 0);
             state.act1_indices = [-1; 4];
             section_1174(state, 0);
-            v.extend([Action::ReturnCamera { preset: -1, release: true }, Action::MoveHero { locator: 0 }]);
+            // SetToNormalCamera (SPEC-0044 1174 arrival: (6.0, 3.14), before the move).
+            v.extend([Action::NormalCamera { distance: 6.0, angle: std::f32::consts::PI, release: true }, Action::MoveHero { locator: 0 }]);
             v
         }
         // SPEC-0042 1397 A: the value for eW 173, read and cleared: 60 the hero to locator 1, 40 to
@@ -15295,13 +15364,15 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         1397 => match state.take_message(2, 173) {
             60 => vec![Action::MoveHero { locator: 1 }],
             40 => vec![Action::MoveHero { locator: 0 }],
-            _ => vec![Action::ReturnCamera { preset: -1, release: true }],
+            // SetToNormalCamera (SPEC-0042 1397 A).
+            _ => vec![Action::NormalCamera { distance: 15.0, angle: 0.0, release: true }],
         },
         // SPEC-0032 1170 A0: the value for eW 123 (20: the hero to locator 1, else 0) and the
         // normal camera.
         1170 => {
             let v = state.blackboard.get(&(2, 123)).copied().unwrap_or(-1);
-            vec![Action::MoveHero { locator: if v == 20 { 1 } else { 0 } }, Action::ReturnCamera { preset: -1, release: true }]
+            // SetToNormalCamera (SPEC-0032 1170 A0).
+            vec![Action::MoveHero { locator: if v == 20 { 1 } else { 0 } }, Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }]
         }
         // SPEC-0042 1381 activate-world restore (High): each solved station (708 + k): 170 + 3k
         // and 171 + 3k at their end pose, 172 + 3k hidden, block k activated, 44 + k shown at its
@@ -15337,10 +15408,23 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.set_level(2, true);
             Vec::new()
         }
-        // SPEC-0044 893 arrival: the value for eW 65 is read and reset.
+        // SPEC-0044 893 arrival: the value for eW 65 is read and reset; 10 moves the hero to
+        // locator 1; any value but -1 cuts to black, runs SetToNormalCamera(10.0, 0.0, true) and
+        // fades in over 1.0 s without wait.
         893 => {
-            state.take_message(2, 65);
-            Vec::new()
+            let v = state.take_message(2, 65);
+            let mut out = Vec::new();
+            if v == 10 {
+                out.push(Action::MoveHero { locator: 1 });
+            }
+            if v != -1 {
+                out.extend([
+                    Action::FadeOut { seconds: 0.0, wait: true },
+                    Action::NormalCamera { distance: 10.0, angle: 0.0, release: true },
+                    Action::FadeIn { seconds: 1.0, wait: false },
+                ]);
+            }
+            out
         }
         // SPEC-0045 1217 activate-world routines 3 and 4 (Act 3).
         1217 => burrows_activate(state),
@@ -15363,7 +15447,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         // camera; the value is reset.
         777 => {
             let v = state.take_message(2, 31);
-            if v == 70 { vec![Action::MoveHero { locator: 0 }, Action::ReturnCamera { preset: -1, release: true }] } else { Vec::new() }
+            // SetToNormalCamera (SPEC-0045 777).
+            if v == 70 { vec![Action::MoveHero { locator: 0 }, Action::NormalCamera { distance: 15.0, angle: 0.0, release: true }] } else { Vec::new() }
         }
         // SPEC-0044 735 arrival (eW 22): 10, 20, 30, 40, 60 and 70 move the hero to locator 10, 12,
         // 14, 8, 9 and 7 with the normal camera and a fade in; 80 to locator 4 with the long fall;
@@ -15385,7 +15470,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             if let Some(locator) = at {
                 out.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator }]);
                 if v != 80 {
-                    out.push(Action::ReturnCamera { preset: -1, release: true });
+                    // SetToNormalCamera (SPEC-0044 735 arrival).
+                    out.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
                 } else {
                     out.push(Action::LongFall);
                 }
@@ -15409,7 +15495,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 _ => Vec::new(),
             };
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0044 1327; SPEC-0067 arrival 10.0).
+                out.push(Action::NormalCamera { distance: 10.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15435,8 +15522,13 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 _ => None,
             };
             out.extend(locator.map(|locator| Action::MoveHero { locator }));
-            if v != -1 {
+            // SPEC-0027 arrival table and SPEC-0045 1300: SetToNormalCamera(15.0, 0.0, true) for
+            // every value but -1 and 60; value 60 (back from the shop) is ReturnToNormalCamera(-1,
+            // true), which places no eye.
+            if v == 60 {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
+            } else if v != -1 {
+                out.push(Action::NormalCamera { distance: 15.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15451,7 +15543,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 _ => Vec::new(),
             };
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0043 1335).
+                out.push(Action::NormalCamera { distance: 10.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15477,13 +15570,15 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             state.blackboard.insert((1, 157), 0);
             if v != -1 && v != 20 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0042 1350; SPEC-0027 arrival table).
+                out.push(Action::NormalCamera { distance: 10.0, angle: 0.0, release: true });
             }
             out
         }
         // SPEC-0041 1371 W: value 60 for eW 163 moves the hero to locator 16 and returns the
         // camera; the value is reset.
-        1371 if state.take_message(2, 163) == 60 => vec![Action::MoveHero { locator: 16 }, Action::ReturnCamera { preset: -1, release: true }],
+        // SetToNormalCamera (SPEC-0041 1371 W).
+        1371 if state.take_message(2, 163) == 60 => vec![Action::MoveHero { locator: 16 }, Action::NormalCamera { distance: 15.0, angle: 0.0, release: true }],
         // SPEC-0045 758 activate-world: the value for eW 31 moves the hero to its return locator
         // (10: 8, 20: 9, 30: 10, 40: 6, 50: 7, 60: 11, 70: 12, 80: 13); any value but -1 returns
         // the camera.
@@ -15502,7 +15597,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             };
             let mut out: Vec<Action> = locator.map(|locator| Action::MoveHero { locator }).into_iter().collect();
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0045 758).
+                out.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15511,7 +15607,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         1247 | 1249 => {
             let want = if pack == 1247 { 10 } else { 30 };
             if state.take_message(2, 147) == want {
-                vec![Action::MoveHero { locator: 0 }, Action::ReturnCamera { preset: -1, release: true }]
+                // SetToNormalCamera (SPEC-0027 arrival table 1247 and 1249).
+                vec![Action::MoveHero { locator: 0 }, Action::NormalCamera { distance: 15.0, angle: 0.0, release: true }]
             } else {
                 Vec::new()
             }
@@ -15525,7 +15622,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::MoveHero { locator: 5 });
             }
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0039 1248).
+                out.push(Action::NormalCamera { distance: 15.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15542,7 +15640,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 }
             }
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0039 753 handler 7).
+                out.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15556,7 +15655,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 _ => Vec::new(),
             };
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0041 1353 W).
+                out.push(Action::NormalCamera { distance: 10.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15571,7 +15671,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 _ => {}
             }
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0043 1358).
+                out.push(Action::NormalCamera { distance: 15.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15587,7 +15688,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 }
                 _ => Vec::new(),
             };
-            out.push(Action::ReturnCamera { preset: -1, release: true });
+            // SetToNormalCamera (SPEC-0043 1173).
+            out.push(Action::NormalCamera { distance: 20.0, angle: 0.0, release: true });
             out
         }
         // SPEC-0039 1139 activate-world: the value for eW 114; 10 places the hero at locator 1,
@@ -15598,7 +15700,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 20 => vec![Action::MoveHero { locator: 0 }],
                 _ => Vec::new(),
             };
-            out.push(Action::ReturnCamera { preset: -1, release: true });
+            // SetToNormalCamera (SPEC-0039 1139 handler 6).
+            out.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             out
         }
         // SPEC-0039 732 activate-world: the value for eW 21 (10, 20, 30, 40, 60 give locators 1
@@ -15619,13 +15722,15 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             if let Some((_, track)) = pick {
                 out.extend([Action::LongFall, Action::PlayTarget { track, wait: false, end: 1, speed: 1.0, target: CameraTarget::Hero }, wait(1.5)]);
             }
-            out.push(Action::ReturnCamera { preset: -1, release: true });
+            // SetToNormalCamera (SPEC-0039 732 handler 2).
+            out.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             out
         }
         // SPEC-0041 1414 activate-world: the value for eW 180; 50 places the hero at locator 13
         // with the normal camera, 10 at locator 12; the value is reset on every path.
         1414 => match state.take_message(2, 180) {
-            50 => vec![Action::MoveHero { locator: 13 }, Action::ReturnCamera { preset: -1, release: true }],
+            // SetToNormalCamera (SPEC-0041 1414 activate-world).
+            50 => vec![Action::MoveHero { locator: 13 }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }],
             10 => vec![Action::MoveHero { locator: 12 }],
             _ => Vec::new(),
         },
@@ -15678,7 +15783,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         // any other value at locator 0; the normal camera (10 s) in both cases.
         1152 => {
             let v = state.take_message(2, 119);
-            vec![Action::MoveHero { locator: if v == 110 { 1 } else { 0 } }, Action::ReturnCamera { preset: -1, release: true }]
+            // SetToNormalCamera (SPEC-0037 1152).
+            vec![Action::MoveHero { locator: if v == 110 { 1 } else { 0 } }, Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }]
         }
         // SPEC-0037 783 to 789 activate-world: the value for eW 31; this interior's value moves
         // the hero to its locator; any value returns the normal camera; the value is reset.
@@ -15690,7 +15796,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::MoveHero { locator });
             }
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0037 783 to 789).
+                out.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15705,7 +15812,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 _ => {}
             }
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0027 arrival table 1017).
+                out.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15719,7 +15827,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::MoveHero { locator: (v / 10 + 2) as usize });
             }
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0045 991).
+                out.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15732,7 +15841,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::MoveHero { locator: 2 });
             }
             if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
+                // SetToNormalCamera (SPEC-0039 880 handler 8).
+                out.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
             }
             out
         }
@@ -15758,6 +15868,11 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 _ => None,
             };
             let mut actions: Vec<Action> = locator.map(|locator| Action::MoveHero { locator }).into_iter().collect();
+            // After a move the camera is set to normal: SetToNormalCamera(5.0, 0.0, true)
+            // (SPEC-0045 909 activate-world; SPEC-0027 arrival table 909).
+            if locator.is_some() {
+                actions.push(Action::NormalCamera { distance: 5.0, angle: 0.0, release: true });
+            }
             // SPEC-0021 Item 36: the stage-6 return to locator 28 grants one Rope Gun when flag 6
             // (Free Tor's Farm) is set, in its scene after the slots.
             let rope_scene = locator == Some(28) && state.flag(6);
@@ -15804,6 +15919,11 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         1023 => {
             let mut v: Vec<Action> = village_return(state).into_iter().collect();
+            // The return move is followed by SetToNormalCamera(10.0, 0.0, true) (SPEC-0045 1023
+            // activate-world; SPEC-0027 arrival table 1023).
+            if !v.is_empty() {
+                v.push(Action::NormalCamera { distance: 10.0, angle: 0.0, release: true });
+            }
             v.extend(arena_return_1023(state));
             v
         }
@@ -16165,7 +16285,8 @@ fn woods_activate(state: &mut GameState) -> Vec<Action> {
         ],
         2 => {
             state.blackboard.remove(&(2, 129));
-            vec![Action::Sleep { ticks: 1 }, Action::MoveHero { locator: 50 }, release_camera()]
+            // SetToNormalCamera (SPEC-0042 1184 A, value 2).
+            vec![Action::Sleep { ticks: 1 }, Action::MoveHero { locator: 50 }, Action::NormalCamera { distance: 6.0, angle: 0.0, release: true }]
         }
         _ => Vec::new(),
     }
@@ -16196,6 +16317,8 @@ fn kitchen_init(state: &mut GameState) -> Vec<Action> {
     } else {
         0
     };
+    // The slot thread starts with SetToNormalCamera(10.0, 0.0, true) (SPEC-0045 1163).
+    out.push(Action::NormalCamera { distance: 10.0, angle: 0.0, release: true });
     out.push(Action::LoadRegion { slot: 0, region: Some(1163 + 1 + j) });
     if !state.flag(29) {
         out.push(Action::LoadRegion { slot: 3, region: Some(1163 + 1 + 5) });
@@ -16208,8 +16331,10 @@ fn kitchen_init(state: &mut GameState) -> Vec<Action> {
 fn kitchen_activate(state: &mut GameState) -> Vec<Action> {
     let mut out = if !state.flag(30) && !state.flag(31) && !state.flag(158) && state.flag(156) { mice_start(state) } else { vec![Action::MiamouseDisable] };
     match state.take_message(2, 122) {
-        50 => out.extend([Action::MoveHero { locator: 15 }, release_camera()]),
-        100 => out.extend([Action::MoveHero { locator: 0 }, release_camera()]),
+        // SetToNormalCamera (SPEC-0045 1163).
+        50 => out.extend([Action::MoveHero { locator: 15 }, Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }]),
+        // SetToNormalCamera (SPEC-0045 1163).
+        100 => out.extend([Action::MoveHero { locator: 0 }, Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }]),
         _ => {}
     }
     out
@@ -16603,9 +16728,11 @@ fn yard_activate(state: &mut GameState) -> Vec<Action> {
     let v = state.take_message(2, 92);
     state.blackboard.insert((2, 92), 0);
     match v {
-        30 => vec![Action::MoveHero { locator: 4 }, release_camera()],
-        40 => vec![Action::MoveHero { locator: 2 }, release_camera()],
-        50 => vec![Action::MoveHero { locator: 3 }, release_camera()],
+        // SetToNormalCamera(10.0, 0.0, true) is called BEFORE the move, so the eye is placed from
+        // the hero's position at that moment (SPEC-0027 Scripted door arrivals, order quirks).
+        30 => vec![Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }, Action::MoveHero { locator: 4 }],
+        40 => vec![Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }, Action::MoveHero { locator: 2 }],
+        50 => vec![Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }, Action::MoveHero { locator: 3 }],
         _ => Vec::new(),
     }
 }
@@ -21946,7 +22073,7 @@ mod tests {
         on_update(880, &mut s, false);
         assert!(s.flag(296));
         assert_eq!(on_teleport(880, 0, &mut s)[0], Action::ReplaceExterior { slot: 81, plane: -1 });
-        assert_eq!(on_activate(880, &mut s), vec![Action::MoveHero { locator: 2 }, Action::ReturnCamera { preset: -1, release: true }]);
+        assert_eq!(on_activate(880, &mut s), vec![Action::MoveHero { locator: 2 }, Action::NormalCamera { distance: 5.0, angle: 0.0, release: true }]);
     }
 
     #[test]
@@ -21994,7 +22121,7 @@ mod tests {
         // The arrival: 60 -> locator 1, read once.
         s.blackboard.insert((2, 173), 60);
         assert_eq!(on_activate(1397, &mut s), vec![Action::MoveHero { locator: 1 }]);
-        assert_eq!(on_activate(1397, &mut s), vec![Action::ReturnCamera { preset: -1, release: true }]);
+        assert_eq!(on_activate(1397, &mut s), vec![Action::NormalCamera { distance: 15.0, angle: 0.0, release: true }]);
     }
 
     #[test]
@@ -22043,7 +22170,7 @@ mod tests {
     #[test]
     fn modules_1156_1159_1170() {
         let mut s = GameState::default();
-        assert_eq!(on_init(1156, &mut s), vec![Action::ReturnCamera { preset: -1, release: true }]);
+        assert_eq!(on_init(1156, &mut s), vec![Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }]);
         s.set(30, true);
         assert!(on_init(1156, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1157) }));
         assert!(on_init(1159, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1161) }));
@@ -22388,7 +22515,7 @@ mod tests {
         let mut s = GameState::default();
         s.set(119, true);
         let init = on_init(951, &mut s);
-        assert_eq!(init, vec![Action::LockChest { id: 0, key: 15, message: 124 }, Action::InitObjOn { obj: 0, end: false }, Action::LoadRegion { slot: 0, region: Some(953) }]);
+        assert_eq!(init, vec![Action::LockChest { id: 0, key: 15, message: 124 }, Action::InitObjOn { obj: 0, end: false }, Action::LoadRegion { slot: 0, region: Some(953) }, Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }]);
         assert!(s.flag(120) && s.has_item(15));
         assert!(!on_init(951, &mut s).is_empty() && s.items[&15] == 1, "item 15 once");
         // The leave door holds Tor in with line 126 until the parcel.
@@ -23018,7 +23145,7 @@ mod tests {
         assert_eq!(proximity_routine(1023, 76), proximity_routine(1023, 78));
         // The return from the Recruitment Centre (eW 117) puts the hero at locator 11.
         s.last_pack = Some(1148);
-        assert_eq!(on_activate(1023, &mut s), vec![Action::MoveHero { locator: 11 }]);
+        assert_eq!(on_activate(1023, &mut s), vec![Action::MoveHero { locator: 11 }, Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }]);
     }
 
     #[test]
