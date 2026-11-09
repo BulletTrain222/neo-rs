@@ -78,7 +78,7 @@ HP is per row (two values where rows of one kind differ). "Rows" are the monster
 | Werelupe Basher | 240 | 75 | Illusen's Glade, Werelupe Burrows, Werelupe Woods | Werelupe Burrows and Library Oddities (SPEC-0065) |
 | Werelupe Bone Thrower | 241 | 85 | Illusen's Glade, Werelupe Burrows | Werelupe Burrows and Library Oddities (SPEC-0065) |
 | Werelupe Elite | 242 | 110 | Werelupe Burrows Lower | SPEC-0063 round 4; field notes in Werelupe Burrows and Library Oddities (SPEC-0065) |
-| Evil Harris | 150 | 75 | Park Shrine, Fyora's Library | Werelupe Burrows and Library Oddities (SPEC-0065) |
+| Evil Harris | 150 | 75 | Park Shrine, Fyora's Library (the three of the Endless Staircase, pack 1299, not the 1327 library hall) | Werelupe Burrows and Library Oddities (SPEC-0065) |
 
 ## Shared field behaviour
 
@@ -263,7 +263,7 @@ All class-17 enemies in agro share one attack-manager list (SPEC-0038 Behavior 4
 ### Agro: idle pick, defence and counters
 
 - **Agro idle pick.** In agro the idle pick (set-up on outer sub-state 0, and the idle animation of stand-still sub-states) is id 141 when the enemy is flying or its row has Can Fly 2, and id 1 otherwise. Outside agro the idle pick is id 0 (97 while a Can Fly 1 flyer is in the air). A table with no entry for the id plays clip 0 of its main set, which for some kinds is not an idle clip; each kind's animation table says which.
-- **Defence is rolled once per swing.** The melee defence roll is latched per hero swing: it runs only when the defence hold is below 1, the enemy is not in a hit reaction and not mid-attack (except sequencer states 0, 1 and 5), and the hero is within 8.0 and in front. The first roll, int[1, 100] at or below the block chance for the swing class (quick, normal, heavy), gives a block; otherwise a second roll below the dodge chance gives a dodge. The defence timer then holds off further defence for its drawn range. Missile defence is rolled per shot meeting the capsule within the row's look-ahead.
+- **Defence is rolled once per swing.** The melee defence roll is latched per hero swing: it runs only when the defence hold is below 1, the enemy is not in a hit reaction and not mid-attack (except sequencer states 0, 1 and 5), and the hero is within 8.0 and in front. The first roll, int[1, 100] at or below the block chance for the swing class (quick, normal, heavy), gives a block; otherwise a second roll below the dodge chance gives a dodge. The defence timer then holds off further defence for its drawn range. Missile defence is not latched: on every agro tick, every live hero shot whose straight path over the row's look-ahead meets a hurt capsule gets a fresh roll (int[1, 100] below the row's missile dodge), so a shot that is predicted to hit for n ticks is dodged with probability 1 - (1 - q)^n, q = (chance - 1) / 100 (SPEC-0038 Behavior 44). The roll is off while the defence hold is above 0, in a hit reaction and in the recovery state of an attack; the per-kind "dodged on N of 100" figures below are the single-roll q, not the chance per shot. A dodge makes the enemy unhittable for its clip and abandons any swing in progress.
 - **Counters are rolled every tick of a hit reaction.** While the enemy is in a hit reaction, the counter choice rolls every tick for each slot whose trigger is "own hit reaction" (trigger 6, with that slot's chance), so a counter is near certain within the reaction's length. Other triggers: 1 and 2 (after a dodge or block), 5 (sequencer blocked while the hero holds L1).
 - **Per-tick order in agro** (SPEC-0038 Behavior 44): recovery countdown, block-state fix, missile defence, melee defence, lost-sight test, normal choice (slots tested from the highest down, first pass wins), counter choice, distance-hide gate (the two Tentacles), outer switch, agro tail (route flag and leash). The normal choice runs only while the hero is attackable, the recovery countdown is below 1 and the outer sub-state is 1, 3, 4 or 11.
 
@@ -541,7 +541,7 @@ The Grunt's hover height (1 to 3 above the hero) is not folded into the feet col
 
 #### Defence and counter rules
 
-Melee defence (once per hero swing, hold below 1, not in a hit reaction, not mid-attack except sequencer states 0, 1 and 5, hero within 8.0 and in front): the block roll never passes (chance 0); the dodge roll passes below 50 for a quick swing, 10 for a normal one and 0 for a heavy one. A dodge sets outer 5, the hold to 120 and plays 140 (gate s+37); after the exit the hold is int[120, 300], so a second dodge cannot start for 120 to 300 ticks. Missile defence: for each live hero shot whose path within 120 ticks meets the Grunt's capsule, int[1, 100] below 10 gives outer 6 (clips 138 or 139, gate s+37). Hit reactions: kind 6 (clip 152) starts on every hit, restarts on the next, and ends 37 ticks after the last. Counters: slot 2 (trigger 6) each tick of the reaction when its cooldown is below 1, 1 < d < 20 and the hero is in front: roll int[0, 100] below 5 (row 183) or 10 (rows 184 to 189) starts the slot-2 swing (replacing the reaction); slot 1 (trigger 2) in outer 5 or 6 while the hero's recover window (Tor only) is open: roll below 25 starts the slot-1 swing. Row 189 adds slot 2 as the counter after a blocked swing with L1 held, at roll below 75.
+Melee defence (once per hero swing, hold below 1, not in a hit reaction, not mid-attack except sequencer states 0, 1 and 5, hero within 8.0 and in front): the block roll never passes (chance 0); the dodge roll passes below 50 for a quick swing, 10 for a normal one and 0 for a heavy one. A dodge sets outer 5, the hold to 120 and plays 140 (gate s+37); after the exit the hold is int[120, 300], so a second dodge cannot start for 120 to 300 ticks. Missile defence: on every agro tick, for each live hero shot whose path within 120 ticks meets a hurt capsule of the Grunt, int[1, 100] below 10 (9 of 100 per tick) gives outer 6 (clips 138 or 139, gate s+37), so a quick shot fired from 12 units is dodged with probability about 0.64 and one fired from 6 units about 0.38; a landed hit locks the Grunt out of defence for 37 ticks (SPEC-0038 Behavior 44). Hit reactions: kind 6 (clip 152) starts on every hit, restarts on the next, and ends 37 ticks after the last. Counters: slot 2 (trigger 6) each tick of the reaction when its cooldown is below 1, 1 < d < 20 and the hero is in front: roll int[0, 100] below 5 (row 183) or 10 (rows 184 to 189) starts the slot-2 swing (replacing the reaction); slot 1 (trigger 2) in outer 5 or 6 while the hero's recover window (Tor only) is open: roll below 25 starts the slot-1 swing. Row 189 adds slot 2 as the counter after a blocked swing with L1 held, at roll below 75.
 
 #### Hero actions against this enemy
 
@@ -552,7 +552,7 @@ Melee defence (once per hero swing, hold below 1, not in a hit reaction, not mid
 | Quick swing (Tor 5, 6; Roberta 5, 6, 7, 10) inside 8 units, in front | Dodge 49 of 100, once per swing |
 | Normal swing | Dodge 9 of 100 |
 | Heavy swing | Never dodged |
-| Roberta's shots | 9 of 100 to dodge when the path meets the body inside 120 ticks |
+| Roberta's shots | A 9-in-100 roll on every tick a shot is on course (about 0.65 of first shots from 12 units, 0.38 from 6; then a window of 120 to 300 ticks in which everything lands); a landed hit locks it out of defence for 37 ticks |
 | A landed hit | Damage by SPEC-0036 (doubled if it was not in agro), hit reaction 152 for 37 ticks, counter chance each tick |
 | Guarding (L1) | Blocks slot 1 when the hero faces the Grunt (dot at most -0.5); does nothing against slot 2 |
 | Hero hurt, knocked down or dead | No new choice; cooldowns stop; a running swing finishes |
@@ -589,7 +589,7 @@ Row 184 Grunt, already in agro (t = 0 the tick the setter ran), hero standing st
 
 ### Minion Archer (rows 190 to 196)
 
-**Player's answer (R-0149).** Roberta's shots: it dodges a shot only 9 times in 100 and a quick swing 49 in 100 (normal 9, heavy never), so it is the easy ranged kind; it holds 15 to 60 units away and never gives up (SPEC-0038 Behavior 44).
+**Player's answer (R-0149).** Roberta's shots: it rolls a 9-in-100 dodge on every tick a shot is on course (about half of the shots from 10 units) and dodges a quick swing 49 in 100 (normal 9, heavy never), so it is the easy ranged kind, with a window of 120 to 300 ticks after each dodge; it holds 15 to 60 units away and never gives up (SPEC-0038 Behavior 44).
 
 #### Identity and tunables
 
@@ -893,7 +893,7 @@ Row 204 is the summon of the Darkest Faerie (SPEC-0054, Minion AI: Minion Warrio
 | Turn | Hold aim weight 1.0 |
 | Agro bands | Strafe band 12.0 to 20.0, desired distance 12 + 8 f (13.6 to 18.4) |
 | Recovery after an attack | int[15, 60] |
-| Defence | Missile hold 60, dodge 100 (99 of 100), block 0; melee block 60 at or below (60 of 100) for all swing classes, then dodge 59, 39 or 29 of 100 for quick, normal, heavy; defence timer after a defence 0 to 0 |
+| Defence | Missile look-ahead 60 ticks, dodge 100 (99 of 100 on every tick a shot is on course, so a shot from 15 units is dodged with probability 1 minus 0.01 to the power of 14), block 0, dodge clip 37 ticks; melee block 60 at or below (60 of 100) for all swing classes, then dodge 59, 39 or 29 of 100 for quick, normal, heavy; defence timer after a defence 0 to 0, so no open window follows a dodge. Roberta's wand cannot kill a Warrior (Act 2 encounters below) |
 | Guard | Blocking Angle 0.92388 (same rule as the Brute) |
 | Other | Damage Reduction 0, no steal, no projectiles; weapons 1 to 3 radius 3.0 height 2.0 |
 
@@ -934,7 +934,7 @@ Shared rules. The Warrior's own numbers: standing hero (F1 0.7) band edges 7.0 a
 
 #### Chooser, movement, windows, defence
 
-Identical to SPEC-0054's Minion AI for row 204, with the field start replacing the summon start: strafe archetype (hold 31, forward 28, back 32, sidesteps 29 and 30 at 12.5 per second, lock of 120 ticks after a wall contact); slot test order 2, 1, 0 (39 percent, 49 percent, 59 percent per tick; slot 1 needs d from 10 to 17 and a route); slot 0 hit at s+28 for a hero up to 6.0 ahead (s+29 to s+32 from 6.5 to 10.5; gate s+49, end path s+50, 7 damage, knockback 1.0, blocked D at s+29 to gate s+66); slot 2 hits at s+16, s+45, s+77 for 15 each (unblockable; gate s+116, end path s+117); slot 1 runs clip 32 until the hero is within 8.0 or the drawn charge distance (8 to 20) is covered, then C (requested on sC): hit at sC+24 for 7 and knockback 3.0 (sC+24 for a hero up to 7.5 ahead when C starts, sC+25 at 8.0, sC+26 at 8.5 to 9.0), gate sC+69, end path sC+70. Hit reaction kind 0 (clip 57, 49 ticks); counters: slot 2 each tick of a reaction at roll below 25 (25 of 101); slot 0 after a blocked swing with L1. Melee defence is rolled once per hero swing at the start of the swing: block at or below 60, then dodge below 59, 39 or 29; no waiting time after a defence. Hero shots meeting the body inside 60 ticks are dodged in 99 of 100.
+Identical to SPEC-0054's Minion AI for row 204, with the field start replacing the summon start: strafe archetype (hold 31, forward 28, back 32, sidesteps 29 and 30 at 12.5 per second, lock of 120 ticks after a wall contact); slot test order 2, 1, 0 (39 percent, 49 percent, 59 percent per tick; slot 1 needs d from 10 to 17 and a route); slot 0 hit at s+28 for a hero up to 6.0 ahead (s+29 to s+32 from 6.5 to 10.5; gate s+49, end path s+50, 7 damage, knockback 1.0, blocked D at s+29 to gate s+66); slot 2 hits at s+16, s+45, s+77 for 15 each (unblockable; gate s+116, end path s+117); slot 1 runs clip 32 until the hero is within 8.0 or the drawn charge distance (8 to 20) is covered, then C (requested on sC): hit at sC+24 for 7 and knockback 3.0 (sC+24 for a hero up to 7.5 ahead when C starts, sC+25 at 8.0, sC+26 at 8.5 to 9.0), gate sC+69, end path sC+70. Hit reaction kind 0 (clip 57, 49 ticks); counters: slot 2 each tick of a reaction at roll below 25 (25 of 101); slot 0 after a blocked swing with L1. Melee defence is rolled once per hero swing at the start of the swing: block at or below 60, then dodge below 59, 39 or 29; no waiting time after a defence. Hero shots meeting the body inside 60 ticks are re-rolled on every tick and dodged at 99 of 100 each time (practically always).
 
 Movement table (rows 204 to 209; ground; radius 1.25; ground turn 1.0; strafe band 12 to 20):
 
@@ -973,7 +973,7 @@ Conventions are those of "Weapon reach tables" in the shared field behaviour. Ro
 | Hits it during clip 82 | Doubled damage, agro at once |
 | Swing from the front (inside 8.0) | 60 percent block (no damage), else dodge 59, 39 or 29 percent |
 | Power attack | Not blocked or dodged |
-| Roberta's shots | 99 percent dodged when they will meet the body |
+| Roberta's shots | Dodged on every tick a shot is on course (99 percent per tick: practically every shot), with no open window; only a shot that lands before it is in agro (during clip 82 or 81), or while a landed hit keeps it in its 49-tick reaction, hurts it; a stream of dodged shots also keeps it from swinging (a dodge abandons a swing) and costs her no magic |
 | Stays at 10 to 17 units | Charge (7 damage, knockback 3.0) at 49 percent per tick, then melee flurries when it is close |
 | Retreats beyond 20 | The Warrior walks in with clip 28 (12.5 per second) to 13.6 to 18.4 units |
 
@@ -3705,7 +3705,7 @@ Row 212 Wizard (bolt), agro at t = 0, hero standing still 30 units away, in fron
 
 ### Minion Magician (rows 197 to 202)
 
-**Player's answer (R-0149).** It holds 15 to 40 units away and dodges a quick swing 89 times in 100 and a normal or heavy swing 24 times in 100; each dodge leaves 30 to 120 open ticks, so heavy swings and shots are the answer, and it never closes in or gives up (SPEC-0038 Behavior 44).
+**Player's answer (R-0149).** It holds 15 to 40 units away and dodges a quick swing 89 times in 100 and a normal or heavy swing 24 times in 100; each dodge leaves 30 to 120 open ticks, so heavy swings are the answer; shots are dodged on almost every first try (49 in 100 on every tick of their flight) but a landed hit locks it for 77 ticks, so a quick chain that lands once keeps landing; it never closes in or gives up (SPEC-0038 Behavior 44).
 
 Monster type 81, variants 0 to 5, name "Minion Magician"; the six rows share one table of animation ids and clips except the death clip (below) and, on rows 200 and 202, the slot-1 ids 38 and 39. 49 records in play (row 197 7, 198 7, 199 13, 200 4, 201 6, 202 12). A weak flyer (80 hit points) that stays at range, throws one slow 25-damage bolt, and on four of its six rows buffs or heals other characters.
 
@@ -3805,7 +3805,7 @@ The bolt is a straight shot at 3.0 per tick from the emit point to the hero's po
 
 #### Defence and counters
 
-Melee defence once per swing (hold below 1, not mid-attack except sequencer states 0, 1, 5, hero within 8.0 and in front): quick swing 89 of 100 dodges, normal and heavy swings 24 of 100 (a 57-tick dodge clip, then hold int[30, 120]). Missile defence: dodge 49 of 100 per live hero shot meeting the capsule inside 120 ticks, clip 13 (37 ticks). Hit reaction kind 6 as above; a hit cancels a running wind-up or cast. Counter on slot 0 as above (chance 10 per tick).
+Melee defence once per swing (hold below 1, not mid-attack except sequencer states 0, 1, 5, hero within 8.0 and in front): quick swing 89 of 100 dodges, normal and heavy swings 24 of 100 (a 57-tick dodge clip, then hold int[30, 120]). Missile defence: a 49-in-100 dodge roll on every tick a hero shot is on course within 120 ticks (a shot from 25 units is dodged almost surely), clip 13 (37 ticks), then a hold of int[30, 120]; while the 77-tick hit reaction runs no defence runs, so once a first shot has landed a continuous chain of shots keeps landing (the counter of slot 0 can still start one bolt wind-up, which the next landing cancels). Hit reaction kind 6 as above; a hit cancels a running wind-up or cast. Counter on slot 0 as above (chance 10 per tick).
 
 #### Hero actions against this enemy
 
@@ -3815,7 +3815,7 @@ Melee defence once per swing (hold below 1, not mid-attack except sequencer stat
 | Walks in | The Magician retreats (20.0 per second) below 15; the hero cannot reach it |
 | Quick melee swing inside 8 | Dodged on 89 of 100 swings |
 | Normal or heavy swing inside 8 | Dodged on 24 of 100 |
-| Roberta's shots | Dodged on 49 of 100 when the path meets the body inside 120 ticks |
+| Roberta's shots | A 49-in-100 roll on every tick a shot is on course (almost every first shot from the usual 20 to 35 units is dodged); a landed hit locks it out of defence for 77 ticks, which bridges the gap between two of her quick chains, so the plain wand needs 12 landed hits (80 magic) in about 6.7 s |
 | A landed hit | Damage by SPEC-0036 (doubled out of agro and out of the cast), hit reaction 77 ticks, counter bolt at about 10 percent per tick |
 | Wounded allies within 50 units | Rows 197, 198, 199, 201 buff or heal them with a 45-tick cast (clip 8's gate) |
 | Kills the Magician | Corpse gone 80 to 105 ticks later; no drop beyond the placement's ordinal |
@@ -4129,7 +4129,7 @@ Slot 0 never touches a hero closer than 3.0 ahead; slots 1 and 2 reach 10.8 and 
 
 #### Defence and counters
 
-Melee: once per hero swing (hold below 1, not in a reaction, not mid-attack except sequencer states 0, 1 and 5, hero within 8.0 and in front), a dodge on 74 of 100 swings of any class (clip 27, 37 ticks, then a hold of 120 to 300 ticks with no further defence). Missile: 74 of 100 per live shot meeting the capsule inside 60 ticks (clips 3 and 4, 49 ticks). The hold after any dodge (120 to 300 ticks) means one dodge per 2 to 5 seconds; swings in that window land. Counters: slot 1 only, trigger 5 (above). The hit reaction does not trigger a counter (no slot has trigger 6).
+Melee: once per hero swing (hold below 1, not in a reaction, not mid-attack except sequencer states 0, 1 and 5, hero within 8.0 and in front), a dodge on 74 of 100 swings of any class (clip 27, 37 ticks, then a hold of 120 to 300 ticks with no further defence). Missile: a 74-in-100 roll on every tick a live shot is on course inside 60 ticks (clips 3 and 4, 49 ticks; practically every shot). The hold after any dodge (120 to 300 ticks) means one dodge per 2 to 5 seconds; swings in that window land. Counters: slot 1 only, trigger 5 (above). The hit reaction does not trigger a counter (no slot has trigger 6).
 
 #### Hero actions against this enemy
 
@@ -4139,7 +4139,7 @@ Melee: once per hero swing (hold below 1, not in a reaction, not mid-attack exce
 | Stands at 12 units | About 49 percent per cycle; the knight circles at about 4.4 per second and attacks with slot 0 (20) or slot 1 (50 and curse) every 100 to 270 ticks |
 | Closes inside 8 | Slot 3 (10 damage, 77 ticks) at 99 percent per tick when the knight faces within 22.5 degrees; slot 2 (50) and slot 0 (20) at the ranges above |
 | Quick, normal or heavy swing inside 8 | Dodged on 74 of 100 swings, then no dodge for 120 to 300 ticks |
-| Roberta's shots | Dodged on 74 of 100 (hold 60 ticks) |
+| Roberta's shots | A 74-in-100 roll on every tick a shot is on course (practically every shot is dodged); a dodge is followed by 120 to 300 open ticks. Her wand and Tor's Wooden Sword (stat A 4) deal 0 anyway: the defence value 10 absorbs every swing and shot (an absorbed hit still wakes it and costs magic). In the Act 2 route the Dark Knights of pack 1098 are met by Tor alone |
 | Guards (L1) | Slots 0, 2 and 3 are blocked and may be answered by slot 1; slot 1 hits through the guard |
 | A landed hit | Damage (150 hit points, defence value 10; doubled out of agro), reaction 49 ticks that cancels the swing, no counter |
 | Alarm group | Group members wake within 45 ticks, slide forward about 10 units during a 59-tick wait, then enter agro |
@@ -4174,6 +4174,57 @@ Dark Knight in agro (t = 0 the tick the setter ran), hero standing still 12 unit
 - Which wait clip a Dark Knight with a nonzero +0xC4 sentry plays (it holds the placed facing): Resolved (Medium-High; proactive (open close-out)). The shared sentry state applies: it aims at the stored look point every tick and plays animation 7, the stand clip 30 (the fidget animation 8 is not used while the flag is nonzero). Two Dark Knight placements use it (one in Black Keep Grounds, one in Market Town).
 
 
+
+## Act 2 encounters (the kinds Roberta can meet, and the Dark Knights Tor meets before her)
+
+Confidence: High for the placements, row values, binding, alarm and defence rules (SPEC-0006, SPEC-0038 Behaviors 3, 6, 37 and 44); Medium-High for the shot timings; Medium for the fight totals, which are arithmetic over those rules for a player who presses at the fastest rhythm. No Act 2 goal needs a kill except the practice book of the library lesson (SPEC-0044); every other enemy can be left alone.
+
+**Who stands where.**
+
+| Pack, set | Enemies (home points and default modes are in the census of SPEC-0039, SPEC-0043 and SPEC-0044) |
+|---|---|
+| 1098, set 0 (before the act start; Tor, swap mode 0) | six Dark Knights (row 139), wander square 90, one 18 units from the arrival point; the Darkest Faerie, King Skarl and four summon-reserved Warriors stand in set 9 |
+| 1335, set 0 (after the bed, until the west stairs) | 13 minions: Grunts rows 184, 187, 185, 183, 188, 187; Magicians rows 199, 201, 199, 202; Archers rows 192, 195, 195. Two Grunts and one Magician wander or stand near the hall, one Magician sentries at (224.3, 0.4, 150.4), nine are hidden (state 8, emerge distance 10 to 30). Alarm group 3 joins the two Grunts at (-163.8, 5.3, 53.8) and (-140.6, 5.3, 79.4) |
+| 1335, set 1 (after the west stairs) | 14 minions: Grunts rows 185 and 185; Magicians rows 199, 199, 197, 197; Archers rows 192, 195, 194, 195, 190, 194, 190, 194. Alarm groups 2 (Grunt and Magician at the west), 5 (the two sentry Archers in the east), 4 and 6 (single members) |
+| 1344, set 2 (the first step of 1344's thread as the current world, after the bed) | nine wanderers: Grunts rows 185, 189, 188, Warriors rows 208 and 209, four Archers row 194; no group, no drop; the Warrior of row 208 stands at (0.0, 7.4, -100.5) beside the crossing |
+| 1299 (embedded) | three Evil Harris row 150 (wander square 100) |
+| 1327, set 2 (post-bed visit) | five Biting Spellbooks row 134 (wander square 50, drop group 2); the practice Shooting Spellbook row 135 is set 0 of the lesson, state 0 |
+
+**Rules that apply to all of them.**
+- Navigation mesh. At the start of its think loop every class-17 enemy takes the first mesh of the kind it needs (ground for Can Fly 0, flying for Can Fly 1 and 2) that contains its home point, and keeps it (SPEC-0038 Behavior 6). Every Act 2 home point lies in such a triangle except one Archer of the 1344 set at (72.3, 51.7, -186.1), which has no flying mesh under it and stays at its home point. So the 1344 wanderers do walk, each over its own mesh (R = 0 picks a random triangle centroid): the Warrior of row 208 over a 29-triangle ground mesh around the crossing, the flyers over one 187-triangle mesh.
+- Binding. Every set above is a slot loaded with keep true, so its cap is 6 bound characters (the embedded block of 1299 also 6): of the 13 or 14 hall minions at most six are alive in the world at a time, chosen nearest first within 280 units, and the next nearest binds when one dies or is released. A released character rebinds fresh at full health at the place it was released (SPEC-0006).
+- Alarm groups. One board per world with no radius; a member entering agro posts for 100 ticks; members in states 0, 3, 5, 6, 7 and 14 go to state 21 within 15 to 45 ticks (they still pass their own notice check or give up), state-8 members emerge and enter agro at once; a hidden Display-0 enemy cannot notice the hero while another Display-0 enemy of a different group (neither 255) is in agro.
+- Reload and leaving. A movie reload of a pack forgets the kills of that pack; a teleport or a driver release stores them; a character that is released or whose world is unloaded loses all state, and no enemy follows Roberta through a world change. Inside one world an enemy with a route follows without a distance limit; it gives up after 181 ticks without a route while its waypoint is 15.0 or more from her, or after the lost-sight search (120 ticks at the last-seen point).
+- Drops. A killed minion pays its record's drop ordinal: group 2 (40 percent coins 10 to 40; item 30 percent) for hall ordinals 0, 1, 3 of set 0, ordinals 0, 1 of set 1 and all five spellbooks; group 0 (50 percent coins 25 to 75; item 50 percent, of which 60 percent a Mote, the Fire Mote 160 at 15 percent of those: 4.5 percent per kill) for the other hall minions; two Archers of set 1 and the whole 1344 set, the Harris and the practice book pay nothing.
+
+**Defence against Roberta's shots, per kind** (single roll q per tick; look-ahead L; dodge clip; hold after the exit):
+
+| Kind | q | L | Dodge clip | Hold after the exit | Hit-reaction gate |
+|---|---|---|---|---|---|
+| Grunt (rows 183 to 189) | 0.09 | 120 | 37 | int[120, 300] | 37 |
+| Magician (197 to 202) | 0.49 | 120 | 37 | int[30, 120] | 77 |
+| Warrior (204 to 210) | 0.99 | 60 | 37 | 0 | 49 |
+| Biting and Shooting Spellbook (134, 135) | 0.29 | 180 | 61 | int[30, 60] | 37 |
+| Evil Harris (150) | 0.99 | 180 | 57 | int[60, 120] | 116 |
+| Dark Knight (139) | 0.74 | 60 | 49 | int[120, 300] | 49 |
+
+A shot that needs n ticks to arrive after it is first on course is dodged with probability 1 - (1 - q)^n; every landed hit restarts the reaction and, until the gate has run out after the last hit, no defence and no swing happens (SPEC-0038 Behavior 44).
+
+**Worked fights** (wand 111, quick chain pressed at the fastest rhythm: shots 25 and 33 ticks apart, damage 5, 5, 10, magic 5, 5, 10 paid at the hit, 109-tick cycle; first hit on an unaware enemy doubled; no Mote bonus because no Act 2 enemy has type 4). The Fire Mote changes the damage to 5, 5, 11 and the cost to 1 magic and 2 Mote charge per hit.
+
+| Enemy | Health | Landed hits | Magic plain | Magic with the Fire Mote | Time | Remarks |
+|---|---|---|---|---|---|---|
+| Grunt, 12 units | 50 | 7 | 45 to 50 | 7 | 4.6 s | about 9 shots fired; the Grunt's 37-tick lock is bridged inside a chain, not between chains, so it may dodge the first shot of the second chain |
+| Magician, 25 units | 80 | 12 | 80 | 12 | 6.7 s | locked for the whole fight after the first landing; a counter bolt (136-tick wind-up) is cancelled by the next landing |
+| Warrior, 15 units | 100 | 3, then none | 20 | 3 | never dies | the first chain (10 + 5 + 10) lands on a decloaking Warrior, then it dodges every shot with no window; walk away |
+| Practice book (lesson 233, state 0), 12 units | 35 | 5 | 30 | 5 | 3.5 s | first landing 10 (doubled) |
+| Biting Spellbook, unaware, 10 units | 35 | 5 | 30 | 5 | 3.7 s | already in agro: about 13 shots, 7.3 s |
+| Evil Harris, unaware, 10 units | 75 | 11 | 70 | 11 | 6.0 s | already in agro: 15 shots, 12 hits, 80 magic, 8.3 s |
+| Dark Knight | 150 | none | - | - | - | defence 10: the Wooden Sword (4, 8 and 3 on its three swing kinds), her wand and her Fire full release all deal 0 |
+
+Fire full release (hold 80 ticks): 10 damage plus 25 burn over 12 s (not on a type-1 target: Grunt row 183, Magician row 197), 20 magic and 25 Mote charge paid at launch whether or not it hits; no better than the chain in any row above.
+
+Damage taken if she stands still and never guards: Grunt 50 or 25 per swing with a 50-in-101 status roll (about 21 health per second if it is allowed to cycle), Magician 25 per bolt (one per 340 to 600 ticks), Warrior 7, 7 and 45 (10 to 15 per second), Biting Spellbook 30 or 20 and Harris 10 per swing only while she faces away, Dark Knight about 12 per second. With the rhythm above the reaction cancels every swing before contact and she takes about nothing; each missed beat costs about one Grunt swing or Magician bolt. A guarding Roberta with the library book (stat A 20) takes: melee swing damage minus 20 (Grunt slot 1 25 to 5, Warrior 7 to 0, Harris 10 to 0, bite 30 to 10, lunge 20 to 0); shots a quarter of their damage with a minimum of 1 (Magician bolt 6, Shooting Spellbook 7); the Grunt's 50-damage swing and the Warrior's flurry cannot be guarded. Roberta walks 13.5 and runs 19.3 units per second: she outruns every kind here except the Magician's 20-unit approach.
 
 ## Distances and ranged reach (every kind of this spec)
 

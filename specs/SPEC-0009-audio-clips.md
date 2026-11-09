@@ -256,6 +256,8 @@ Story span of each selector (Medium; the bits are progress flags whose setters a
 
 Test vector (synthetic): a pack with selector 5, bits 216 and 74 set and bit 263 clear plays bank offset + 67 and stream offset + 55; when the Plague Serpent is beaten (bit 263 set) the next tick plays the plain row. A pack with selector 8 and bit 216 clear plays the plain row even when bit 248 is set.
 
+Act 2 packs (High; from the pack records and table 4): the six packs with selector 7 are 1300, 1324, 1327, 1335, 1344 and 1299. They play their plain rows from the Act 2 start until the bed scene in pack 1335 sets bit 92 (rows: stream 158, 161, 161, 161, 161 and 158 with banks 26, 27, 25, 27, 27 and 55), and their flagged rows afterwards (streams 213, 216, 216, 216, 216 and 213 with banks 93, 94, 92, 94, 94 and 122). So the library (1327) and the gardens (1300) play banks 25 and 26 only until the bed scene; every later visit to them plays the flagged banks, and the story enters 1324, 1344 (for movies 22 and 24) and 1299 only after the bed. Packs 1098 and 1174 have selector 2 and flagged banks 112 and 97 from the end of the Gnarfas fight (bits 216 and 10) until bit 322. Test vector: pack 1300, bits 216 set and 92 clear: bank 26, stream 158; bit 92 set: bank 93, stream 213; after movie 20 the hand-off restarts the music, and pack 1335's own row then gives bank 94 and stream 216. The Act 2 packs have no level-script music call or override.
+
 ### Volume and ramps
 
 Confidence: High; the stinger ramp limit during a bank change Medium.

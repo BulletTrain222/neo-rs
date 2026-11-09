@@ -21,11 +21,11 @@ None of these games is timed or scored by the host. All game state is module dat
 
 ## Where it lives on the disc
 
-- Wheel pay-outs: five 32-bit words in the level-module data of each of packs 1023, 758 and 1358 (values in Layout).
-- Wheel cell bits: eight 32-bit words in the same three modules, one mask bit per cell (Layout).
-- Wheel game words (stage, round, angle, mask, lit cells): module data of the same modules, file value 0.
-- Betting race: module data of pack 722: three racer entity words (file values 0, 1 and 2), the pick word (file value -1), six reset locator words (20 to 25) and three odds words (zero-filled at load).
-- Find game: module data of pack 934: eight hiding-place locator words (3 to 10), eight navmesh words, and four colour bytes (220, 40, 40, 128) for the low-time blink.
+- Wheel pay-outs: five 32-bit words in the level-module data of each of packs 1023, 758 and 1358, at module offsets 0x11938, 0x7f40 and 0x3e90 (values in Layout).
+- Wheel cell bits: eight 32-bit words in the same three modules, one mask bit per cell (Layout), at 0x11968, 0x7f70 and 0x3ed0.
+- Wheel game words (stage, round, angle, mask, lit cells): module data of the same modules, file value 0. Module offsets (1023 / 758 / 1358): stage 0x11934 / 0x7f38 / 0x3e8c; round 0x12e80 / 0x8f00 / 0x4380; mask 0x1195c / 0x7f64 / 0x3ec4; angle (float) 0x11960 / 0x7f68 / 0x3ec8; lit cells L[0..7], eight words, 0x13708 / 0x9ac0 / 0x4388.
+- Betting race: module data of pack 722: three racer entity words at 0x5450 (file values 0, 1 and 2), the pick word at 0x545c (file value -1), six reset locator words at 0x5520 (20 to 25) and three odds words at 0x7870 (zero-filled at load).
+- Find game: module data of pack 934: eight hiding-place locator words (3 to 10) at 0x5f90, eight navmesh words at 0x5fb0 (10, 11, 12, 13, 0, 14, 0, 15 in the file; the same index picks a place's locator and navmesh), and four colour bytes (220, 40, 40, 128) at 0x6080 for the low-time blink.
 - Boot program data: the timer frame step at virtual address 0x368FA8 (1/60, SPEC-0023) and the default timer colour at virtual address 0x2DD040 (0x80808080).
 - Line, prompt, locator, object, entity and sound numbers: the world data of each pack (SPEC-0022 for lines). Lines are named by index only.
 

@@ -76,6 +76,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 1225: Transition, slot-set ladder on flags
 
 - Family: Transition.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 4 entries at 0x540, result word 0x404.
 - Init: SlotAllocate(W, 1). SlotCreate(W, 4 entries, slot table in module data); its return value is stored for the loads below. ControlThreadsAllocate(W, 1). ControlThreadStart(W, thread A, W).
 - Thread A (runs once, started by Init): tests flag 84, then 83, then 82, then 81. The first set flag selects a load: flag 84 -> SlotLoad(W, the stored slot, set 3, true, true); flag 83 -> set 2; flag 82 -> set 1; flag 81 -> set 0. Each load is followed by a diagnostic line (text not recorded). If none is set, nothing loads.
 - Triggers, proximity, teleport: none.
@@ -98,6 +99,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 1427: Transition, eight triggers that set the world load override once per tick
 
 - Family: Transition.
+- Module data tables (module offsets, SPEC-0030 section 1.6): routine table at 0x408: 8 words, word i is the callback routine of script trigger index i (Init registers index i with word i, in order). Words 1 and 2 are equal, as are 3 and 4, and 5 and 6, so there are 5 distinct values; the world pointer is at 0x400. The 8 words are routine offsets stored in the file (SPEC-0030 section 1.6). Check: 8 words, 5 distinct.
 - Init: stores the world handle. Then registers eight triggers, index 0 to 7, in a loop. Each index gets a callback from a per-index callback table in module data. The callbacks, by index:
   - index 0: callback E0, which requests world override 187.
   - index 1 and 2: callback E1, world override 188.
@@ -123,6 +125,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
   - Then: if e is 906, WalkHero(locator 1, WAIT 1, CONTROL 1); otherwise WalkHero(locator 0, WAIT 1, CONTROL 1). Then ReturnToNormalCamera(-1, true).
 - Threads: none. Update: empty. Exit: empty.
 - Edge cases: the event code 906 selects the first path, which is the transition into the mine; the second path is the transition to Drackon Ridge (Medium for the meaning of the code, from the module's own labels). The first path ends by walking the hero to locator 1, the second by walking to locator 0. The reset steps are the same in both. The callback is never run in play: no live script starts a transition scene, so neither code 906 nor any other code is ever delivered (Resolved question 5).
+- Reload behaviour (class a; High): the routine that rewinds the swap animations (objects 0, 1, 2 and 4) is a reset to the start poses. This is a transition pack that is rebuilt from its image on every entry, so no state survives and none is expected.
 - Confidence: High for the calls and order; Medium for the event meaning.
 
 ### 1299: Exterior, two teleports, a world-activate hook and a sting trigger
@@ -132,13 +135,23 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Teleport index 0 (T0): if flag 248 is set: AddBlackboardMessage(type 2, value 80, eW 154); StartExteriorReplacementLoad(eW 154, fade -1, no colour). If flag 248 is clear: LevelMsg(line 0, W, true, WAIT 1).
 - Teleport index 1 (T1): if flag 248 is set: AddBlackboardMessage(type 2, value 80, eW 155); StartExteriorReplacementLoad(eW 155, -1, no colour). If flag 248 is clear: SetGameState(flag 243, true); AddBlackboardMessage(type 2, value 80, eW 154); StartExteriorReplacementLoad(eW 154, -1, no colour).
 - Activate-world A: diagnostic line; v = GetBlackboardMessageValue(type 2, eW 150); AddBlackboardMessage(type 2, value -1, eW 150); if v is not -1: SetToNormalCamera(10.0, 0.0, true).
-- Trigger index 0 (S0): if object pointer non-null and state is 1: PlayStingStream(stream 18, 1.0).
+- Trigger index 0 (S0): if object pointer non-null and state is 1: PlayStingStream(stream 18, 1.0). The volume carrying index 0 is a sphere with the script-trigger flag 0x0008 at (-117.8, 31.4, -65.0), radius 6.6, on the lap of the stair between the pass of the pad line at y 35.45 and the pass at y 18.25 (SPEC-0028, Pack 1299 looping-door puzzle). Each entry fires it once; the sting itself plays only when no earlier sting is still playing (SPEC-0030 row 227).
 - Threads: none. Update: empty. Exit: empty.
-- Confidence: High for the calls; Medium for the teleport branches (flag meanings open).
+- Arrival (High). Pack 1335's teleport 1 sets flag 242, posts value 80 for worlds 150 and 155, queues movie 26 and sets world 150 (this pack) as the return world (SPEC-0043). The activate-world routine reads that value, clears it to -1 and sets the normal camera at a distance of 10.0 units (angle 0, hero released; the first argument of the call is a distance, not a time, SPEC-0027). The arrival is by the movie hand-off with a return world, so the pack is made current at once with no engine fade, and the music restarts from the first segment of bank 122. The hero is not moved by the module: he stands at entry 0, (-106.3, 62.3, -51.5), 3.8 units from the plane of teleport 0 (centre (-103.6, 61.9, -48.8)), which is shut until flag 248 (line 0: the hero says she cannot go back and has to escape). The only exit is teleport 1, a plane at (-111.4, 8.4, -78.6), 8.8 wide: with flag 248 clear it sets flag 243 and loads world 154 (pack 1327; the hero arrives at that pack's locator 27, SPEC-0044); with flag 248 set it loads world 155 (pack 1335). Flag 243 is read by no module (journal only; Medium).
+- Content of the pack (High). No camera call, no music call, no placed effects, no item, no save point, no deadly ground; four keyless camera tracks that nothing plays (debug views); the follow camera is (distance 10.0, elevation 0.2), since all nine height patches are kind 0. Music: table offset 45 (flag-off bank 55, flag-on bank 122) with selector 7, so bank 122 plays in Act 2 (flags 92 set, 94 clear). Enemies: the pack's embedded character region holds three Evil Harris (common enemies, monster type 70, row 150: 75 HP, radius 1.0, height 2.0, strafing approach, no flight, two melee attacks of 10 damage with reach 5.0), default wander mode, at (-114.91, 27.14, -73.32), (-125.40, 29.28, -59.65) and (-141.49, 34.43, -74.80). They stand on the lap between the y 35.45 and y 18.25 passes (floors about y 25.0, 28.3 and 32.7 at those points), so the solution's route crosses them twice (before the first touch and between the third and fourth touch). They stream in within 280 units like any embedded enemy (SPEC-0006) and stay dead after a kill until the pack reloads. The pad puzzle shifts bound characters with the hero (SPEC-0028). Resolved (High for the rule, Medium-High for how the walk looks): the module never assigns a navigation mesh (the mesh-assign host call does not appear in it), but that is not the end of the story, because a Harris is a class-17 common enemy (monster-table row 150, default class 17, Can Fly 0) and the class-17 think loop looks for a mesh itself: on its first tick, if the character has none, it takes the first ground-kind (kind 1) mesh of the pack's list that has a triangle containing its position (horizontal test; SPEC-0029 Behavior 2). All three Harris home points lie inside ground mesh 0 of this pack (92 triangles), so each one gets mesh 0 and does wander: its goal is a point of the square of side 100 about the home point (x and z offsets each a whole number 0 to 99 minus 50), kept when it lies on mesh 0, otherwise moved halfway toward the Harris and tested again up to 10 times, then the home point; the walker steers by the mesh's route table and the mesh confines it (SPEC-0056, Wander; SPEC-0038 state 5). So the Harris do not stand at their placed points: they drift over mesh 0, turn to face the hero when they notice and chase over the mesh. The pad puzzle moves them only vertically (SPEC-0028). All three are bound for as long as the hero is in the pack (SPEC-0028).
+- Look and sound of the pack (High from the pack data; not run in the original). Music row: stream offset 12 (stream 158, or 213 with the run-time flag), bank 122 with the flag on, sound block 409, stream cap 700, bank level 750; the bank is a plain loop (no combat segment). One ambient sound record (kind 8, sub-kind 0): cue 1, centre (-127.9, 44.1, -77.2), outer radius 75, inner radius 60, factor 1.0, positioned; it starts on the third tick inside the sphere. No adventure zone, no placed effect, no atmosphere zone (the all-zero default applies, so no tint and no post-pass colour), sky dome 1, and the neighbour world is never drawn while this pack is current. One character light set with three directional lights (colours (155, 72, 255), (162, 128, 196) and (195, 140, 227) at strengths 0.3, 0.1 and 0.05) and one ambient term. No level material scrolls. The only scripted sound is the sting of trigger 0.
+- Effects and sounds in Act 2 (events; High from the module, the pack data and the character tables; not run in the original).
+  - Arrival (movie 26 hand-off, which stops all sound, or the exterior load from pack 1327): the music restarts from its first segment (flagged bank 122 plain loop, stream 213 or 158, area block 409). The pack has no placed effect and no effect call.
+  - Script sound: trigger 0 (the volume at the stair head) requests stinger 18 at volume 1.0 each time the hero's body is inside it and the trigger state is 1 (no latch); it plays only if the music system runs and no earlier stinger is still sounding (SPEC-0030), and is not positioned. No other sound call; the two teleports play no cue.
+  - Ambient: one wind loop (cue 1, block 409) centred at (-127.9, 44.1, -77.2), outer radius 75, inner 60, factor 1.0, positioned, starting on the third tick inside.
+  - Footsteps and landings: every walkable patch is stone (run 41, walk 21, other 1; landing 60; no dust). Falling to a lower lap lands with the landing cue of the surface below (there is no water and no void).
+  - The three Evil Harris (creature block 380): walk loop cue 0 (keep-alive) on every walk, agro cue 3, attacks cues 5, 6, 7 and 8, dodge 4, take damage 9, laugh 11, die 10 with the death burst 1627 over the last 15 percent of the death clip; no drop. The embedded wild creature (type 108) was not read.
+- Confidence: High for the calls; Medium for the teleport branches (flag meanings open) and for the enemy behaviour on the stair (the records and rows are High; no play was observed).
 
 ### 809: Transition, slot chooser thread and debug-mode flag writes
 
 - Family: Transition.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 5 entries at 0x5f8, result word 0x484.
 - Init: tests the debug-mode query (SPEC-0030: returns false in play). Only when the query returns nonzero does Init first set flags 54, 55, 56 and 57 to true (SetGameState, in that order). These four flag writes are the only host calls in this module that the query controls. In play and in debug mode alike, Init then runs SlotAllocate(W, 1); SlotCreate(W, 5 entries, slot table in module data), storing its return value in the module's slot word; ControlThreadsAllocate(W, 1); ControlThreadStart(W, thread D, W).
 - Thread D (runs once, started by Init in play): tests flag 58, 57, 56, 55, 54 in that order. The first set flag loads: 58 -> SlotLoad(the stored slot, set 4, true, true); 57 -> set 3; 56 -> set 2; 55 -> set 1; 54 -> set 0. Each load has a diagnostic line. The slot is the stored SlotCreate result, read from the slot word that Init stores, and the activate argument is true.
 - Triggers: none. Update: empty. Exit: empty.
@@ -180,6 +193,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 1259: Exterior, a shared trigger that reloads a slot set by index
 
 - Family: Exterior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 50 entries at 0x400, result word 0x388.
 - Init: stores the world handle in a module cell, then SlotAllocate(W, 1); SlotCreate(W, 50 entries, slot table in module data), its return value stored in the slot word. Then RegisterScriptTrigger(W, S, index i) once for each entry of that slot table, in table order: 50 registrations. The table entries are 0 to 49 in order, so the registered indices are 0 to 49. The same routine S serves all of them.
 - Trigger routine S: if the object pointer is non-null and the trigger record's index (+0x14) is not -1: SlotReset(W, the stored slot); SlotLoad(W, the stored slot, set = the trigger record's index, true, true).
 - No dormant routine: the one block that looks like an unreached routine starts at the slot table that Init passes to SlotCreate, so it is that table, not code (High: it holds the entries 0 to 49 described above).
@@ -213,6 +227,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 788: Interior, proximity line, a teleport and a blackboard-driven arrival (no Exit)
 
 - Family: Interior. Exit is not exported.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): entity 0 at 0x508 and 0x50c.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
 - Proximity P (entity; High): no flag test. Lines 4, 5, 6 in turn (branch marker plus counter, restarted on each entry), shown with SetConversationTarget(entity, true); LevelMsg(line, W, true, WAIT 1); EndConversation(entity).
 - Teleport index 0 (T): diagnostic line; if the trigger index is 0: AddBlackboardMessage(type 2, value 50, eW 31) and StartLeaveInterior(eW 44, -1, -1, no colour). Then, in every case, Wait(3.0 s). The blackboard write is inside the index test (High).
@@ -239,6 +254,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 787: Interior, a money-gated line, a world-activate hook and a teleport (Exit exported)
 
 - Family: Interior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): entity 0 at 0x588.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
 - Proximity P (entity), one line per talk, each in the bracket SetConversationTarget(record entity, true); LevelMsg(line, W, true, WAIT 1); EndConversation:
   - Flag 447 set: m = GetNeopoints(). If m >= 500: SetGameState(flag 448, true), RemoveNeopoints(500), line 3. If m < 500: line 4. Flag 448 is not tested, so every talk with 500 or more Neopoints takes another 500.
@@ -252,6 +268,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 789: Interior, a proximity routine with a hero and draw test, and a teleport (no Exit)
 
 - Family: Interior. Exit is not exported.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): entity 0 at 0x588.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
 - Proximity P (entity):
   - Every line is shown with the bracket SetConversationTarget(entity); LevelMsg(line, W, true, WAIT 1); EndConversation (High). The routine keeps one counter c (0 on each entry, no branch marker).
@@ -267,6 +284,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 947: Exterior, two threads, a slot load, a death watch and a hit-point watch
 
 - Family: Exterior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 2 entries at 0x6a8, result word 0x584.
 - Init: SlotAllocate(W, 2); SlotCreate(W, 2 entries, slot table in module data), its return value stored in the slot word (one call, one stored value); ControlThreadsAllocate(W, 2); ControlThreadStart(W, thread G, W); RegisterTeleportCallback(index 0, T0, kind 0, W). Then, by flag 1:
   - If flag 1 is set: ControlThreadStart(W, thread H, W).
   - On both flag-1 paths (set and clear): RegisterScriptTrigger(W, S0, index 0); RegisterScriptTrigger(W, S1, index 1); RegisterScriptTrigger(W, S2, index 2); RegisterMovableBlockSoundIndex(W, 7). Only the thread H start depends on flag 1.
@@ -283,6 +301,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 1220: Transition, slot ladder, a camera-and-walk trigger and a blackboard arrival
 
 - Family: Transition.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 4 entries at 0x7a0, result word 0x604.
 - Init: SlotAllocate(W, 1); SlotCreate(W, 4 entries, slot table in module data), its return value stored; ControlThreadsAllocate(W, 1); ControlThreadStart(W, thread A, W); RegisterScriptTrigger(W, S0, index 0); RegisterActivateWorldCallback(A2, W).
 - Thread A (runs once): flag 84 -> SlotLoad(W, the stored slot, set 3, true, true); flag 83 -> set 2; flag 82 -> set 1; flag 81 -> set 0 (first set flag wins; the stored slot is used in each load; each load is followed by a diagnostic line).
 - Trigger index 0 (S0): if object non-null and state is 1:
@@ -309,6 +328,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 783: Interior, a line ladder on flags, a teleport and an arrival (no Exit)
 
 - Family: Interior. Exit is not exported.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): entity 0 at 0x608.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
 - Proximity P (entity):
   - The routine keeps one counter and no branch marker (shared counter, SPEC-0022 Line rotation patterns); the module restarts it on each entry. Every line is shown with the bracket SetConversationTarget; LevelMsg; EndConversation (High).
@@ -326,6 +346,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 784: Interior, conditional thread, a proximity line and a trigger with a hero walk (no Exit)
 
 - Family: Interior. Exit is not exported.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 1 entry at 0x680, result word 0x600.
 - Init, in every case: SlotAllocate(W, 1); SlotCreate(W, 1 entry, slot table in module data), its return value stored; RegisterEntityProximityCallback(W, entity 0, P, true); ControlThreadsAllocate(W, 1); ControlThreadStart(W, thread K, W).
   - Flag 543 clear: InitObjOn(object 2, false) and RegisterScriptTrigger(W, S1, index 1).
   - Flag 543 set: InitObjOn(object 3, false) is the call on this side.
@@ -343,6 +364,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 837: Transition, a flag-driven world mask, a dormant chooser and a break routine called from Update
 
 - Family: Transition.
+- Module data tables (module offsets, SPEC-0030 section 1.6): the dormant slot word is at 0x604 (file value -1, no code stores it).
 - Init, branch on flag 636:
   - If flag 636 is clear: InitObjOn(object 0, false); SetBreakableActive(breakable 3, false, W); SetWorldCollisMask(W, 1); SetWorldDisplayMask(W, 1).
   - If flag 636 is set: SetWorldCollisMask(W, 2); SetWorldDisplayMask(W, 2).
@@ -360,6 +382,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 1238: Exterior, a pickup watch, slot sets by flag and two threads
 
 - Family: Exterior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 2 entries at 0x7f8, result word 0x604; 2 entries at 0x800, result word 0x608; 1 entry at 0x808, result word 0x60c.
 - Init, in order: SlotAllocate(W, 3) when flag 50 is set, SlotAllocate(W, 2) when it is clear; SlotCreate(W, 2 entries, slot table A), its return value stored in the table A word; if flag 50 is set, SlotCreate(W, 2 entries, table B), its return value stored in the table B word; on both values of flag 50, SlotCreate(W, 1 entry, table C), its return value stored in the table C word; ControlThreadsAllocate(W, 2) when flag 50 is set, ControlThreadsAllocate(W, 1) when it is clear; ControlThreadStart(W, thread T1, W); if flag 50 is set, ControlThreadStart(W, thread T2, W); RegisterHeroPickupItemCallback(W, pickup P, false). (High: the thread count and the order follow flag 50.)
 - Pickup P (hero picked up an item; the first word of the record is the item id): diagnostic line. If the item id is 83 and flag 579 is clear: SetGameState(flag 579, true); diagnostic line. Picking up item 83 therefore sets flag 579 once.
 - Thread T1 (runs once), in order: diagnostic line.
@@ -375,6 +398,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 857: Interior, two threads and a proximity line selector
 
 - Family: Interior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): entity 0 at 0x610 and 0x614.
 - Init: ControlThreadsAllocate(W, 2); ControlThreadStart(W, thread A, argument -1); ControlThreadStart(W, thread B, W); RegisterEntityProximityCallback(W, entity 0, P, true).
 - Thread A (argument -1; runs once): if flag 59 is set: SetConversationTarget(argument); LevelMsg(line 0, W, true, WAIT 1); EndConversation. Else if flag 56 is set: LevelMsg(line 2) with the same bracket. Else LevelMsg(line 4) with the same bracket. Each case is the first line of a two-line alternation (lines 0 and 1, 2 and 3, 4 and 5; one counter, one marker); since the thread runs once, lines 1, 3 and 5 are never reached (High).
 - Thread B (runs once): SetToNormalCamera(5.0, 0.0, true).
@@ -385,6 +409,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 776: Interior, a proximity selector, a world-activate hook and a teleport (no Exit)
 
 - Family: Interior. Exit is not exported.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): entity 0 at 0x688.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
 - Proximity P (entity): one routine; every line is shown with the conversation bracket (SetConversationTarget(entity, true); LevelMsg; EndConversation). Order (High):
   1. WhichHeroIsActive() is read first. If it is 1, Random(1, 3) is drawn, and the cycle of step 2 is taken only when the draw is 1. Otherwise go to step 3.
@@ -400,6 +425,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 858: Interior, two threads and a proximity routine with item checks
 
 - Family: Interior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): proximity routine 1 at 0x690 and 0x694.
 - Init: ControlThreadsAllocate(W, 2); ControlThreadStart(W, thread A, argument 0); ControlThreadStart(W, thread B, W); RegisterEntityProximityCallback(W, entity 0, P, true).
 - Thread A (argument 0; runs once): if flag 59 is set: SetConversationTarget(argument); LevelMsg(line 0); EndConversation. Else if flag 56 is set: LevelMsg(line 2). Else LevelMsg(line 4). As in 857, each is the first line of a two-line alternation (second lines 1, 3, 5 are never reached by a thread that runs once; High).
 - Thread B (runs once): SetToNormalCamera(5.0, 0.0, true).
@@ -415,6 +441,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 906: Exterior, a per-tick navigation pass over 18 character slots, with routines registered from Init
 
 - Family: Exterior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): navigation table at 0x800: 18 words, one per entity number 0 to 17 (the unit of the per-tick pass), zero in the file; Init sets all 18 to -1, and the pass replaces a -1 by the closest navmesh id once the host returns one. World pointer at 0x700. Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 1 entry at 0x7d8, result word 0x704.
 - Init (no branch; every call runs on every load, High), in order: the world pointer W is kept in a module word; the table reset (below); RegisterActivateWorldCallback(A, W); RegisterScriptTrigger(W, button routine, index 2); RegisterScriptTrigger(W, long-fall routine L0, index 0); RegisterScriptTrigger(W, long-fall routine L1, index 1); SlotAllocate(W, 1); SlotCreate(W, 1 entry, slot table in module data), its return value stored in the slot word; RegisterHeroPickupItemCallback(W, pickup P, false); ControlThreadsAllocate(W, 1); ControlThreadStart(W, thread T, argument 0).
 - Table reset (first step of Init): sets all 18 entries of the nav-mesh table (module data) to -1 (unassigned). No host call.
 - Update (runs every tick, ungated): calls the navigation routine, then the assignment routine.
@@ -434,6 +461,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 786: Interior, a three-flag proximity line ladder, a teleport and an arrival (Exit exported)
 
 - Family: Interior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): entity 0 at 0x708 and 0x70c.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
 - Proximity P (entity):
   - The routine keeps a branch marker and a counter (SPEC-0022 Line rotation patterns); the module restarts both on each entry. Every line is shown with the bracket SetConversationTarget; LevelMsg; EndConversation (High).
@@ -452,6 +480,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 1251: Interior, an item-activation thread, an on-enter callback and an item-ask dialogue chain
 
 - Family: Interior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 1 entry at 0x780, result word 0x704. Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): entity 0 at 0x70c and 0x710.
 - Init: SlotAllocate(W, 1); SlotCreate(W, 1 entry, slot table in module data), its return value stored; ControlThreadsAllocate(W, 1); ControlThreadStart(W, thread A, W); RegisterEntityProximityCallback(W, entity 0, P, true); RegisterOnEnterCallback(callback E, W, index 0); RegisterItemAskAboutCallback(W, item 154, callback Q, true).
 - Thread A (runs once): SlotLoad(W, the stored slot, set 0, true, false). Then ItemActivate(W, the stored slot, ordinal, snap false, placed true, no position override, no facing override), with ordinal 0 when flag 460 is set and 1 when it is clear; the result (the item handle) is kept in a module word. The first integer is the SlotCreate result (the stored slot, 0 in play), not a separate item slot, and the ordinal counts the item placements of the region that the load put in that slot (High). The load has activate false, so the region spawns none of its own placements; only the chosen one appears.
   - The region of set 0 holds two Witch's Wand (item 114) shop records at the same point (-21.669, 2.918, -0.756): ordinal 0 is priced 3000 Neopoints and ordinal 1 is priced 10000. So until the hand-in of proximity branch 3 (flag 460 clear) the wand is on sale at 10000, and once flag 460 is set it is on sale at 3000 (SPEC-0021 and SPEC-0050 describe the shop records). Snap false keeps the stored height 2.918 (no ground snap); placed true makes it a static placed item that never expires; with no override vectors it sits at the placement's own point and facing (High).
@@ -472,6 +501,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 855: Interior, two threads and an item-gated proximity line
 
 - Family: Interior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): proximity routine 1 at 0x710 and 0x714.
 - Init: ControlThreadsAllocate(W, 2); ControlThreadStart(W, thread C, argument 0); ControlThreadStart(W, thread B, W); RegisterEntityProximityCallback(W, entity 0, P, true).
 - Thread C (argument 0; runs once): if flag 463 is set: LevelMsg(line 0). Else if flag 462 is set and the hero holds item 22: LevelMsg(line 2). Else if flag 462 is set and item 22 is not held: LevelMsg(line 3). Else if flag 59 is set: LevelMsg(line 5). Else if flag 56 is set: LevelMsg(line 6). Else LevelMsg(line 8). Each with the bracket (target = the argument). Lines 0, 3, 6 and 8 are the first lines of two-line alternations (second lines 1, 4, 7 and 9 are never reached by a thread that runs once); lines 2 and 5 are single lines (High).
 - Thread B (runs once): SetToNormalCamera(5.0, 0.0, true).
@@ -489,6 +519,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 1152: Exterior, a proximity ladder, two teleports, a world-activate branch and a slot choice
 
 - Family: Exterior. Exit is not exported.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 3 entries at 0x830, result word 0x78c.
 - Init: SlotAllocate(W, 1); SlotCreate(W, 3 entries, slot table in module data), its return values stored; ControlThreadsAllocate(W, 1); ControlThreadStart(W, thread S, W); RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 1, T1, kind 13, W); RegisterTeleportCallback(index 0, T0, kind 13, W); RegisterActivateWorldCallback(A, W).
 - Proximity P (entity), one line per talk with the bracket SetConversationTarget(record entity, true); LevelMsg(line, W, true, WAIT 1); EndConversation. The first test that holds picks the line:
   - Flag 29 set: rotating set 1, lines 1, 2, 3.
@@ -507,6 +538,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 ### 1429: Interior, two threads, a proximity line selector, a buy-item line and a teleport
 
 - Family: Interior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): proximity routine 1 at 0x790.
 - Init: stores the world; RegisterEntityProximityCallback(W, entity 0, P, true), made once through a small helper that reads the stored world, so it is a valid registration (High); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterHeroBuyItemCallback(W, B, false); ControlThreadsAllocate(W, 2); ControlThreadStart(W, thread K, W); ControlThreadStart(W, thread C, argument 0).
 - Thread C (argument 0; runs once): if flag 93 is set: SetConversationTarget(argument); LevelMsg(line 0); EndConversation. Else if flag 92 is set: LevelMsg(line 3). Else LevelMsg(line 6). Each with the bracket. Lines 0, 3 and 6 are the first lines of three-line rotations (0, 1, 2; 3, 4, 5; 6, 7, 8) on one counter, so the later lines are never reached by a thread that runs once (High).
 - Thread K (runs once): SetToNormalCamera(5.0, 0.0, true).
@@ -516,11 +548,17 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 - Update: empty. Exit: empty.
 - Edge cases: there is exactly one proximity registration. Two further routines are present but nothing registers or starts them (dormant): each shows one line in the conversation bracket, line 9 in the first and line 10 in the second, on the stored entity (High).
 - Resident in E: the module of 1429 is the same module as in 1430, 1431 and 1433, and 1427 streams 1429, 1430 and 1431 into the exterior buffer. A module is started by the family of the buffer it is loaded into, so none of the routines above runs for 1429, 1430 or 1431 in E: no proximity talk, no teleport callback (door 0 has no callback and takes the default door rule, which has no destination for these packs), no buy-item hook, no threads, no Update or Exit. The module runs only in 1433, which is entered from 1300 as an interior (SPEC-0006, Edge cases, Interior-kind packs in E). The hero cannot stand in 1429, 1430 or 1431 in play.
+- The pack 1433 visit, in order (Act 2 reaches it from teleport 0 of pack 1300 while flag 94 is clear; High unless marked). Arrival: the interior's only entry record, entry 0 at (0.00, 1.16, 0.00) facing +z, is the landing (interior entry -1 means entry 0); the landing height is probed from 6.0 above and the highest ground at or below that is the floor, 0.0, so the hero stands at (0, 0, 0). Init then registers the callbacks and starts the two threads (the camera thread first). The greeting thread's first act is the line, on the first tick it runs: Vorsh, entity 0, is the conversation target, and the line is the first line of the set chosen by flag 93 (line 0), else flag 92 (line 3), else line 6. In Act 2 before the bed scene sets 92 that is line 6. The greeting thread keeps its own counter and branch marker at module data 0x788 and 0x78c (both 0 in the file); the talk rotation has the separate counter at 0x790, so a greeting never advances it. The box closes on the Square press after its last page; nothing else waits on it.
+- Vorsh (High): one character in the pack's embedded block, entity 0: monster type 86, variant 1, townsfolk class, placement mode 0 (stands idle; no route), at (11.87, 0.00, -0.06) facing -x (0.07 toward +z); the landing is 11.9 from him and he faces it, so his greeting mode (SPEC-0056) starts when the hero comes within 6.0 with her in his front half and stays on until she is 12.0 away or behind him. He is the only character: no enemy, no other townsfolk, no pet. The proximity callback was registered with its flag set, so it fires on the Action press with Vorsh as the hero's candidate within 5.8 (SPEC-0056, Proximity callbacks and items); each press runs the rotation above (Act 2: flags 322 and 236 are clear, so the third set: first press line 17 (several pages, the "Oh!" / "Yes?" exchange), then 18, then 19, then 17 again; the counter is shared with the other two sets and is 0 on every entry). All 21 lines of the pack's table are spoken by Vorsh except line 20 (the hero's refusal for the Golden Shield). Lines 1, 2, 4, 5, 7 and 8 are never shown (they are the later lines of the three greeting rotations that a thread that runs once never reaches), and 9 and 10 belong to the dormant routines.
+- Exit (High): the pack's only trigger-type volume is kind 7 volume 0, the teleport: a flat rectangle in the plane z = 17.64 (zero thickness), x from -4.42 to 4.61, y 0.03 to 10.67; the hero is inside it within 1.175 of the plane, so from z = 16.47 on. The floor runs to about z = 17.0 (a wall stops a hero just short of the plane), so the door is reached by walking 16.5 straight ahead of the entry. It shows the Square prompt (context 13) and the engine's door rule waits for a Square press; unlike the pack 1300 teleports this callback tests no press of its own. On confirm it posts value 60 for slot 151 (pack 1300) and starts the leave-interior with transition slot 156 (pack 1344), plane -1 and entry -1: the hero returns to the exterior and pack 1300's activate-world step puts her at its locator 6 (SPEC-0045); pack 1344 is queued for the transition buffer. No fade colour is passed. There is no save point, no other door, no breakable, no script object, no kind-4 volume that fires anything and no music change in the pack.
+- What changes with flags (High): only the greeting set (93, 92), the talk set (322, 236) and the Golden Shield refusal (248; SPEC-0050). In Act 2 the visit always sees 322 clear; 236 is set by the bed scene together with 92, after which pack 1300 cannot be entered until the Act 3 start. The music row is the pack's own (type-1001 record: key 11070, selector 0, row 192: stream 173, bank 30, sound block kept, as in packs 1428 and 1432), and with selector 0 the run-time music flag is never set, so the music is the same at every point of the story.
+- Items in the pack (SPEC-0050 for the economy): seven flag-1 stock points on counters at height 2.2 to 2.3 (snap byte 0, so the stored height is used) and one flag-0 point, a Sun Mote (item 171) at (13.37, 9.37, 10.05) with the luck gate set and the snap byte set: it is placed at the ground under it plus 0.5, 9.843 (ground 9.343 on the spiral's step, entry 12 of the pack's ground list), which is 9.8 above the floor; whether a hero can stand near enough was not established (the spiral stair), so treat the Sun Mote as out of reach (Medium-Low). All seven stock points are within 3.6 horizontally of floor a hero can stand on (SPEC-0050 buy range 4.0).
 - Confidence: High.
 
 ### 856: Interior, an item-ask line set, a buy-item line and a proximity selector
 
 - Family: Interior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Words written by the proximity, on-enter and item-ask routines (in the common line rotation the lower word of a pair is the line counter and the next the branch marker or mode; other writes are latches; all 0 in the file): proximity routine 1 at 0x790 and 0x794.
 - Init: ControlThreadsAllocate(W, 2); ControlThreadStart(W, thread C, argument 0); ControlThreadStart(W, thread K, W); RegisterEntityProximityCallback(W, entity 0, P, true); RegisterItemAskAboutCallback(W, item 100, Q1, true); RegisterItemAskAboutCallback(W, item 107, Q2, true); RegisterItemAskAboutCallback(W, item 113, Q3, true); RegisterHeroBuyItemCallback(W, B, false).
 - Thread C (argument 0; runs once): if flag 59 is set: SetConversationTarget(argument); LevelMsg(line 0); EndConversation. Else if flag 56 is set: LevelMsg(line 2). Else LevelMsg(line 4). With the bracket. As in 857, each is the first line of a two-line alternation that a thread running once cannot advance (High).
 - Thread K (runs once): SetToNormalCamera(5.0, 0.0, true).

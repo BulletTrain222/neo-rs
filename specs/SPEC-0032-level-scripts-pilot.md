@@ -124,6 +124,7 @@ Each module section lists: family; init steps in order; each registered callback
 ### 851: Transition, dormant character-set chooser
 
 - Family: Transition.
+- Module data tables (module offsets, SPEC-0030 section 1.6): the dormant slot word is at 0x384 (file value -1, no code stores it).
 - Init, update and exit: nothing (each returns at once).
 - The module contains a chooser routine (the body of a character-set loader). No import, export, thread start or data pointer in this module refers to it. As shipped, nothing in this module runs it.
 - If it were run with world W, it would do the following in order:
@@ -286,6 +287,7 @@ Each module section lists: family; init steps in order; each registered callback
 ### 1074: Exterior, world init with slots and an item check
 
 - Family: Exterior.
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 2 entries at 0x4d0, result word 0x404.
 - Init:
   1. SlotAllocate(world, 1).
   2. SlotCreate(world, 2, slot table T1). The returned slot number is stored in a module cell and used by the loads below.
@@ -314,6 +316,7 @@ Each module section lists: family; init steps in order; each registered callback
 ### 1156: Interior, library teleport and a slot-set chooser
 
 - Family: Interior (no exit export).
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 2 entries at 0x4b0, result word 0x404.
 - Init:
   1. Stores the world handle; diagnostic line (text not given).
   2. SlotAllocate(world, 1); SlotCreate(world, 2, slot table T2). The returned slot number is stored in a module cell.
@@ -330,6 +333,7 @@ Each module section lists: family; init steps in order; each registered callback
 ### 1159: Interior, teleport, slot chooser and a looping entity animation
 
 - Family: Interior (no exit export).
+- Module data tables (module offsets, SPEC-0030 section 1.6): Slot tables (SlotCreate arrays; the values only size the buffer, SPEC-0030 row 207): 3 entries at 0x498, result word 0x404.
 - Init: stores the world handle; SlotAllocate(world, 1); SlotCreate(world, 3, slot table T3), with the returned slot number stored in a module cell; ControlThreadsAllocate(world, 1); ControlThreadStart(world, thread C, arg world); RegisterTeleportCallback(T0, index 0, kind 13, world).
 - T0 (teleport 0): diagnostic line (text not given); AddBlackboardMessage(type 2, value 60, world 106); StartLeaveInterior(eWorlds 107, -1, -1, no color).
 - Thread C (runs once):

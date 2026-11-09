@@ -380,7 +380,7 @@ Bank index (High; the three arrays are the main, sub-part and face outputs of th
 
 ### Attach-point table (in the flat type-18 skeleton table)
 
-Confidence: High for the layout; Medium-High for the roles.
+Confidence: High for the layout (the 9-entry table, 0x30-byte entries and "negative bone index means not updated" confirmed 2026-11-09 by the per-frame rebuild); Medium-High for the roles.
 
 The flat type-18 skeleton table (SPEC-0005) holds a 9-entry pose table at the payload offset stored at +0x24, with its entry count as a u16 at +0x3A (9 in every skeleton table on disc). This is the character's **attach-point table**: each entry names a bone and a fixed placement relative to it. Entry k is 0x30 bytes:
 
@@ -433,7 +433,7 @@ Each frame, after the skeleton pose is built, for each entry k below the entry c
 2. W_k = B · [R | t], where B is bone b's current world matrix (the animated bone pose times the character's world matrix). A point p in attach space goes to B(t + R p).
 3. Before W_k is replaced, its old value is copied into the previous-frame bank, so the previous bank always holds last frame's W_k (the original uses it for swept tests).
 
-Entries with a negative bone index keep their last value (identity after a reset). In the rest of this spec and in SPEC-0046, X_k, Y_k and Z_k are the first three columns of W_k (its axes) and T_k its fourth column (the attach point's origin).
+Entries with a negative bone index keep their last value (identity after a reset). Confirmed 2026-11-09 (High; the per-frame rebuild was read in full): R is built as Rz · Ry · Rx in the column convention (the code builds the transposed row-vector forms Rx, Ry, Rz and multiplies them in front of the bone matrix, the same product); an axis whose angle is at most 0.001 in magnitude is skipped; the fourth-row w of W_k is forced to 1.0, so the on-disc +0x2C value (1.0) does not matter; B is the bone matrix times the root matrix of the owner's snapshot (side, up, forward and position rows copied from the owner's motion record at +0x1880, +0x1890, +0x18A0 and +0x18B0 and written into the root matrix at +0x290); the previous bank sits at +0x1630 (one bank of nine 0x40-byte matrices, after the current bank); the sine and cosine are the game's own odd-polynomial approximation (reduced to the first period), accurate to float tolerance. The on-demand attach-frame builder used by carry placement (SPEC-0005, Attach points and carrying) differs only in testing no angle threshold. The same per-frame routine also copies the root position row to +0x13D0 and updates the weapon swing trails (SPEC-0034): when the trail-request word (+0x1964) is non-zero and the instance id is 0 or more, p0 = attach matrix 0's position + 0.25 × the owner's attach offset and p1 = p0 + the owner's attach offset × the owner's class value (+0x264, argument 1); the trail (effect 0x129, handle at +0x1AFC) is created with endpoints p0, p1 when missing or when the trail-ready flag is 0, else a sample (p0, p1) is pushed; the request word is cleared. In the rest of this spec and in SPEC-0046, X_k, Y_k and Z_k are the first three columns of W_k (its axes) and T_k its fourth column (the attach point's origin).
 
 ### Packet pointer relocation (load time, Medium-High)
 

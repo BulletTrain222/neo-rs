@@ -167,6 +167,8 @@ pub struct FollowCamera {
     pub manual: f32,
     pub manual_flag: bool,
     side_offset: f32,
+    /// The side target the offset glides toward (kept unchanged through the hold).
+    side_target: f32,
     /// The blended transition (mode 8), while it runs.
     pub blend: Option<Blend>,
     /// The hold counter, and the hero's target (the host's point; SPEC-0027 Hold and lean terms).
@@ -196,6 +198,7 @@ impl FollowCamera {
             manual: 0.0,
             manual_flag: false,
             side_offset: 0.0,
+            side_target: 0.0,
             blend: None,
             hold: 0,
             target_point: None,
@@ -260,7 +263,6 @@ impl FollowCamera {
         self.current = p;
         self.elevation_target = p[2];
         self.manual = p[2];
-        self.velocity = [0.0; 3];
     }
 
     /// Target distance: profile distance × (1 − 0.65 sin² e) + side offset; e ≤ 0 drops the
@@ -347,8 +349,11 @@ impl FollowCamera {
             let (forward, first) = self.rows();
             let (l, side) = lean_terms(hero.position, self.target_point, forward, first);
             lean = l;
-            self.side_offset += (side - self.side_offset).clamp(-0.1, 0.1);
+            self.side_target = side;
         }
+        // The glide runs on every call, also in the hold, so a hold tick leaves the offset at
+        // min(side target, 0.1) (SPEC-0027 Hold and lean terms).
+        self.side_offset += (self.side_target - self.side_offset).clamp(-0.1, 0.1);
         let mut d = base + lean;
         d *= d.abs();
         if d > 0.99 {
@@ -479,30 +484,53 @@ impl FollowCamera {
         let before = self.eye;
         let f = self.focus;
         let d = self.target_distance(self.current[2]);
-        let behind = polar([-d * hero.facing[0], 0.0, -d * hero.facing[2]]);
-        let mut p = [behind[0], behind[1], self.profile.elevation];
-        self.elevation_target = p[2];
-        if !clear(add(f, sphere(p)), f) {
-            let front = polar([d * hero.facing[0], 0.0, d * hero.facing[2]]);
-            if clear(add(f, sphere(front)), f) {
-                p = [front[0], front[1], self.profile.elevation];
-            }
-        }
-        let blocked = |p: [f32; 3]| {
-            let e = add(f, sphere(p));
-            !clear(e, f) || ground(e[0], e[2], f[1] + 5.0) > f[1] + 5.0
+        // The spring velocity is zeroed on every pass, before any test.
+        self.velocity = [0.0; 3];
+        let elevation = self.profile.elevation;
+        self.elevation_target = elevation;
+        // Either test blocks: the line from the focus, or the buried probe (ground more than 5
+        // above the focus under a ceiling 5 above it).
+        let blocked = |e: Vec3| !clear(e, f) || ground(e[0], e[2], f[1] + 5.0) > f[1] + 5.0;
+        let flat = |sign: f32| [sign * d * hero.facing[0], 0.0, sign * d * hero.facing[2]];
+        let front = {
+            let q = polar(flat(1.0));
+            [q[0], q[1], elevation]
         };
-        while p[0] > 1.0 && blocked(p) {
-            p[0] -= 0.25;
-        }
-        self.eye = add(f, sphere(p));
-        push(&mut self.eye);
-        let v = sub(self.eye, f);
-        if (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() >= 0.1 {
-            self.reset();
+        // The shrink: a pass runs only while r is above 1.0 (a loop guard, not a floor), so the
+        // last radius can be in (0.75, 1.0] and is not tested.
+        let shrink = |mut p: [f32; 3]| {
+            while p[0] > 1.0 {
+                if !blocked(add(f, sphere(p))) {
+                    break;
+                }
+                p[0] -= 0.25;
+            }
+            p
+        };
+        let behind = {
+            let q = polar(flat(-1.0));
+            [q[0], q[1], elevation]
+        };
+        let p = if !blocked(add(f, sphere(behind))) {
+            shrink(behind)
+        } else if !blocked(add(f, flat(1.0))) {
+            // The front point is tested flat at the focus height; the elevated eye is used untested.
+            front
         } else {
+            shrink(behind)
+        };
+        let commit = |c: &mut Self, p: [f32; 3]| {
+            c.eye = add(f, sphere(p));
+            push(&mut c.eye);
+            let v = sub(c.eye, f);
+            (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() >= 0.1
+        };
+        // The second pass (the committed eye closer than 0.1 to the focus) tries the front
+        // candidate only; if that fails too the remembered eye is restored. Reset always runs.
+        if !commit(self, p) && !commit(self, shrink(front)) {
             self.eye = before;
         }
+        self.reset();
     }
 
     /// The view rows: forward from the eye to the focus, and the row R = up × forward.
@@ -733,5 +761,16 @@ mod tests {
         c.recentre(&hero, &none, &|_: &mut Vec3| {}, &clear);
         let r = polar(sub(c.eye, f))[0];
         assert!(r <= 3.0 + 1e-4 && r > 2.75, "{r}");
+    }
+
+    #[test]
+    fn hold_glides_the_side_offset_to_at_most_its_step() {
+        // SPEC-0027 Hold and lean terms: the glide runs in the hold too, toward the stale target.
+        let hero = still(2.0);
+        let mut c = camera_at([0.0, 4.0, -9.0], &hero);
+        c.side_target = 3.0;
+        c.hold = 10;
+        c.update(&hero, CameraPad::default(), none, |_| {}, |_, _| true);
+        assert!((c.side_offset - 0.1).abs() < 1e-6, "{}", c.side_offset);
     }
 }

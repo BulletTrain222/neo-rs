@@ -1,6 +1,6 @@
 # SPEC-0030: Level script modules and host API
 
-- Answers: proactive (open question sweep, round 10); proactive (open question sweep, round 9); proactive (open question sweep, round 5); proactive (open question sweep, leftovers); proactive (none requested); proactive (open question sweep, world and talk); proactive (open question sweep, slot -1); proactive (open question sweep, script threads); proactive (path walkers); extends R-0006; R-0127 (rows 111, 113 and 339: the path index and the path list); R-0049 (thread end and hold exits answered; CTL sources open); R-0048 (object state writers 5 and 6 in part); R-0063 (movable block pass timing); R-0064 (activation filter of module 985); R-0081 (switch-key boundary for pack 951); R-0104 (aim-scan vectors, range, sight-line, return values and stored world-space shot aim point); R-0116 (Baggus list chunk, runtime layout, shared model selection, pack-735 source-to-record mapping, placement-height input and bounds; numeric ground heights for all five sources (16 to 20) and the source-to-transform mapping are resolved; selected template basis values resolved for pack 735); R-0121 (aim-sight sample spacing and tested segment; outbound world speed and phase gravity remain open); R-0119 (type-29 handle-array layout and pack-735 candidate resolved; exact target mesh, unbroken draw, burst selector and trigger-pair roles remain open); R-0135 (a grab or animation call on an unbound entity does nothing); R-0147 (SetAI_Agro on a waiting state-8 enemy); R-0175 (row 165 use in pack 1428's boss-room return), R-0192 (row 90 SetExternalMissileTarget); R-0200 (row 221 CharacterSetAvoidPoint: record layout, the one caller and why it has no effect); R-0223 (row 222 CharacterIndex: the counter is the record ordinal; section 3 fire gate for pack 1398 trigger 34); R-0224 (rows 165, 275 and 281: what the boss refill does and its pack 1246 use, the dead Update call, the start pose having no effect); proactive (open question sweep, flag watcher re-arm); proactive (open question sweep, script details); proactive (open question sweep, item pickup recheck); proactive (open question sweep, round 6); proactive (disassembly confirmation); proactive (open question sweep, round 12); R-0231 (answered from the code; not run in the original); R-0239 (answered from the code; not run in the original); R-0257 (the return door of pack 1098 is context 13; answered from the code, not run in the original)
+- Answers: proactive (open question sweep, round 10); proactive (open question sweep, round 9); proactive (open question sweep, round 5); proactive (open question sweep, leftovers); proactive (none requested); proactive (open question sweep, world and talk); proactive (open question sweep, slot -1); proactive (open question sweep, script threads); proactive (path walkers); extends R-0006; R-0127 (rows 111, 113 and 339: the path index and the path list); R-0049 (thread end and hold exits answered; CTL sources open); R-0048 (object state writers 5 and 6 in part); R-0063 (movable block pass timing); R-0064 (activation filter of module 985); R-0081 (switch-key boundary for pack 951); R-0104 (aim-scan vectors, range, sight-line, return values and stored world-space shot aim point); R-0116 (Baggus list chunk, runtime layout, shared model selection, pack-735 source-to-record mapping, placement-height input and bounds; numeric ground heights for all five sources (16 to 20) and the source-to-transform mapping are resolved; selected template basis values resolved for pack 735); R-0121 (aim-sight sample spacing and tested segment; outbound world speed and phase gravity remain open); R-0119 (type-29 handle-array layout and pack-735 candidate resolved; exact target mesh, unbroken draw, burst selector and trigger-pair roles remain open); R-0135 (a grab or animation call on an unbound entity does nothing); R-0147 (SetAI_Agro on a waiting state-8 enemy); R-0175 (row 165 use in pack 1428's boss-room return), R-0192 (row 90 SetExternalMissileTarget); R-0200 (row 221 CharacterSetAvoidPoint: record layout, the one caller and why it has no effect); R-0223 (row 222 CharacterIndex: the counter is the record ordinal; section 3 fire gate for pack 1398 trigger 34); R-0224 (rows 165, 275 and 281: what the boss refill does and its pack 1246 use, the dead Update call, the start pose having no effect); proactive (open question sweep, flag watcher re-arm); proactive (open question sweep, script details); proactive (open question sweep, item pickup recheck); proactive (open question sweep, round 6); proactive (disassembly confirmation); proactive (open question sweep, round 12); R-0231 (answered from the code; not run in the original); R-0239 (answered from the code; not run in the original); R-0257 (the return door of pack 1098 is context 13; answered from the code, not run in the original); R-0270 (row 124 follow rule, host and call sites; answered from the code, not run in the original)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001). Module counts below are counted from the disc: 173 modules, 163 distinct payloads, 192 world packs in archive resources 532 to 1433.
 - Confidence: per section (High, Medium, Medium-Low or Low). Interface names are listed as written in the game's own calls.
@@ -16,6 +16,7 @@ The clean side will not run the module's machine code. Instead, each level's beh
 - World packs are archive resources (SPEC-0001). Of the 192 resources in the range 532 to 1433 whose first chunk is the world header (type 31), 173 carry a level module. The other 19 carry none.
 - The module is the payload of the top-level chunk of type 37 in that pack. Chunk framing follows SPEC-0002. The payload starts at the chunk's offset + 16 + the chunk's "extra" field, and the module length is the chunk size - 16 - extra. The length check holds for all 173 modules.
 - Repeated modules: 10 packs repeat another payload exactly. The repeat groups are 678 = 686 = 691; 798 = 861 = 1004 = 1082; 956 = 970; 1077 = 1129; 1429 = 1430 = 1431 = 1433. So 163 distinct payloads exist.
+- Reading module data tables (rule used by the per-level specs, e.g. SPEC-0044 pack 1091; High). Level-script specs give a data table as a module offset, an element type, a count and a role, and do not copy the values. Every such offset is counted from the first byte of the module payload (the "SNR2" bytes), which is also the link base of the code, so a table at offset X is at payload start + X in the pack's resource. Data words that hold plain numbers (counts, ids, 16-bit times, flags) are the same in the file and in memory; only the words named by the fixup table (addresses and call targets, section 1.3) change at link time. A reader should check a table against the test vector given in its spec (distinct-value counts, sums, first and last element) before using it.
 - No tunable values are read from the boot program's data for this spec. Every number below is a container field, an interface constant, or a rule written in words.
 - Host name table (boot program data, High, confirmed on disc). The boot program holds one table of 406 records of 12 bytes, starting at ELF data address 0x3030A0. Record 0 is an empty placeholder. Records 1 to 396 are host functions, and records 397 to 405 are the nine family entry names (Init, Update and Exit of the three families; Open question 48). Each record holds, in order: the address of its name string, the code address of its bound function (zero for the nine family names), and a key. The key's low 16 bits are the link number, and bits 16 to 23 are the kind (2 for host functions, 1 for family names). Every import and export of the 173 modules matches a table record by name, and its link number equals the key's low 16 bits (all 5,171 imports and 509 exports; Open question 47 is answered). Record 1 is the library memset routine. Every host record has at least one catalogue row. Overloads were matched to rows in table order; Every overload now agrees with its host name (Open questions 22 and 23).
 
@@ -33,13 +34,13 @@ All offsets are from the start of the module (the "SNR2" bytes). All fields are 
 | +0x0C | 4 | Symbol table offset | Table of 12-byte symbol records (section 1.1). |
 | +0x10 | 4 | Symbol record count | Record 0 is an empty placeholder. Symbol records total 5,171 import and 509 export entries across the 173 modules. |
 | +0x14 | 4 | Module name offset | Points at the null-terminated string "levelDLL.elf" in all 173 modules. |
-| +0x18 | 4 | Load hook reference | Medium: a table of routines the loader calls after linking. The load hook runs the module's load-time constructors (Which level routines run in play); their effects are part of the per-level behavior, and families are still taken from the export names. |
-| +0x1C | 4 | Unload hook reference | Medium: same, called before unlinking. Not needed by the clean side. |
-| +0x20 | 4 | End pointer | Equal to the value at +0x38 in all 173 modules. |
-| +0x24 | 4 | Extra word count | Zero in all samples (Medium). |
+| +0x18 | 4 | Load hook reference | High (corrected 2026-11-09, script-runtime pass): one routine, not a table. The loader adds the load base to it and calls it once with no arguments, after the module has been registered, when it is nonzero. The load hook runs the module's load-time constructors (Which level routines run in play); their effects are part of the per-level behavior, and families are still taken from the export names. |
+| +0x1C | 4 | Unload hook reference | High (2026-11-09): one routine, relocated like the load hook and called once before the module is unlinked, when nonzero. Not needed by the clean side. |
+| +0x20 | 4 | End pointer | Equal to the value at +0x38 in all 173 modules. Refined 2026-11-09: the loader treats it as the base of an "extra word" table whose count is the word at +0x24; every nonzero word of that table gets the load base added, and the loader hands this pointer back to its caller only when the count is nonzero. With the count zero in every disc sample the table is never walked. |
+| +0x24 | 4 | Extra word count | Zero in all samples (High, 2026-11-09: confirmed as the count of the table at +0x20, so the table is never walked on disc). |
 | +0x28 | 4 | Alignment | 0x80 in all 173 modules. |
 | +0x2C | 4 | Module size | Equal to the payload length, or up to 3 bytes less (padding). Confirmed for all 173. |
-| +0x30 | 4 | Reserved | Zero in all 173 modules. |
+| +0x30 | 4 | Reserved | Zero in all 173 modules. Corrected 2026-11-09: not a data field. The loader writes zero here itself and later uses it as the run-time link to the next loaded module; each load appends the module at the end of the chain of loaded modules. A reader of the file can ignore it. |
 | +0x34 | 4 | Compressed fixup stream offset | Section 1.4. |
 | +0x38 | 4 | End pointer copy | Equal to +0x20 in all 173 modules. |
 
@@ -51,7 +52,7 @@ Machine code starts at +0x100 (the first non-zero word after the zero pad, align
 | --- | --- | --- |
 | +0 | 4 | Offset of the symbol's name (a null-terminated string, module-relative). |
 | +4 | 4 | Value. For an export, the module-relative location of the entry. For an import, 0. |
-| +8 | 4 | Low 16 bits: link number used to bind the import to a host function. Bits 16 to 23: kind. Exports carry kind 2. The binding uses the link number only. |
+| +8 | 4 | Low 16 bits: link number used to bind the import to a host function. Bits 16 to 23: kind. Exports carry kind 2. The binding uses the link number only. Refined 2026-11-09 (High): bits 24 to 31 (byte +11) are a run-time "bound" byte that the loader clears at load and sets to 1 for kinds 2 to 4. Kinds 0 to 4 exist: 0 is a plain local (value gets the load base), 1 an import (value is the looked-up host address, no base added), 2 an export (base added; its registration must succeed), 3 a second export kind (base added, no failure path) and 4 a bound value with no base added (registration must succeed). The disc modules use only 1 and 2. A kind above 4 aborts the load. |
 
 Import names are interface names of the host API (section 2). Export names are the three entry names of section 1.2. High for the link-number rule (confirmed on every import and export on the disc).
 
@@ -71,17 +72,30 @@ On disc, Init and Update are exported in every module of a family. Exit is missi
 | --- | --- | --- |
 | +0 | 4 | Site: module-relative location of the word to patch. |
 | +4 | 4 | Low byte: patch kind. Upper bits: symbol index of the import the site refers to. |
-| +8 | 4 | Addend, zero in all records. |
+| +8 | 4 | Addend, zero in all records. The patched value is the symbol's value plus the addend (confirmed 2026-11-09); a failed patch aborts the load. |
 
 All 24,368 records use one patch kind (a 26-bit jump field), and each names an import. This describes the module's calls into the host API. The clean side does not patch or run the code, so it does not need these records.
 
 #### 1.4 Compressed fixup stream (at +0x34)
 
-A byte-coded stream of further patch operations (low half, high half, jump field and full word) that ends with a zero cursor. Counts seen: 24,451 low-half, 12,997 high-half, 6,240 jump-field and 1,236 full-word operations (Medium). Not needed by the clean side. Listed only so that the container is fully described.
+A byte-coded stream of further patch operations (low half, high half, jump field and full word) that ends with a zero cursor. Confirmed and detailed 2026-11-09 (High): the low 2 bits of each byte are the kind (0 low half, 1 high half, 2 26-bit jump field, 3 full word) and the upper 6 bits the distance to add to the running site address; a zero distance means a 32-bit absolute site follows (a zero site ends the stream). A high-half entry looks ahead to the next low-half entry and uses that low half, sign-extended, for the carry; a missing low half before the end aborts the load. The loader also adds the load base to header words +0x04, +0x0C, +0x14, +0x18, +0x1C, +0x20, +0x34 and +0x38 when each is nonzero, applies the symbol-record rules of section 1.1, then the fixup table, then the stream, and finally appends the module to the chain; its order is header check, relocation, registration, load hook, and the family's Init runs afterwards. Counts seen: 24,451 low-half, 12,997 high-half, 6,240 jump-field and 1,236 full-word operations (Medium). Not needed by the clean side. Listed only so that the container is fully described.
 
 #### 1.5 Host-call binding (Confidence: High for the direct binding and the unchanged arguments; Medium-High for the link-time order)
 
 A call from a level module into the host API is a direct call. Its target is not known when the module is built; the loader resolves it when the module is linked, before the family's Init runs. The loader takes the import's link number, finds the host record with the same name and link number in the boot program's host table, and writes that record's bound function into the call. The bound value is used as it is, with no module base added. No adapter, thunk or jump table sits between the module and the host function, and none changes the argument values: the host function receives exactly the values the module placed in its arguments. The clean side does not patch or run the module, so this fact matters only for reading argument values as they are passed. Any rule that depends on an argument value (for example the slot rule in row 205) applies to the value as the module built it.
+
+#### 1.6 Locating a level module's data tables (Confidence: High for the addressing rule and the data area; Medium for where the code ends)
+
+Every per-level spec that says a value is "held in module data" gives it as a module offset. This is how the rewrite finds such a table, list, text, colour or state word from the pack.
+
+- **One flat image, linked in place.** The module is the payload of the pack's type-37 chunk (Where it lives on the disc). The loader reads the pack into the level buffer, checks the signature, adds the buffer address to every address the module stores about itself (the header fields at +0x04, +0x0C, +0x14, +0x18, +0x1C, +0x20, +0x34 and +0x38) and to every site named by the fixup table and the compressed stream, registers the module and runs the load hook. Nothing is copied, split or reordered: code, tables, text and state words stay at their payload positions.
+- **Module offset.** The module is built as if it were loaded at address 0, so every address in its code and tables is a position in the payload. "Module offset X" in a level spec means the byte at position X of the chunk payload (position 0 is the first byte of the ASCII "SNR2"). The rewrite reads the table at X in the payload and never needs the buffer address. A pack that repeats another pack's payload (Where it lives on the disc) has the same offsets. The data area has no section table in the header: the code starts at +0x100, the data follows the last routine and runs to the size field at +0x2C (constants, text, routine tables, read-only tables and then the zero-initialised state words), and a table is identified by its offset alone. Every table and word named in the level specs lies below the size field.
+- **Cell types.** All cells are little-endian. Ids, flags, counts, slot numbers and indices are 32-bit signed integers (-1 is the usual "none" or "empty"). Angles, times and speeds are 32-bit IEEE floats. A colour is three bytes (red, green, blue, 0 to 255) at the offset given. A record table gives its stride in bytes and its field offsets inside a record; a list gives its length, and a list that ends at a marker says so (for example "ends at -1").
+- **Pointer cells.** A cell that holds the address of a routine, table or text (routine tables, constructor and destructor lists, list pointers inside a record) stores a module offset in the payload, and the loader adds the buffer address at link time. The rewrite uses the stored value as a module offset and does not add anything. A level spec does not list routine offsets; it names the routine by its role.
+- **Two kinds of table.** (1) Disc tables: the values are in the payload and the rewrite reads them from there; the level spec gives offset, stride, count, field roles and a check value, and does not copy the values. (2) Code-filled tables: the payload holds zeros (or -1) and the module's Init, constructor or set-up routine writes constants into the table at load. These values are not on the disc as data; they are code constants, so the level spec prints them in full and gives the offset only so that the table, its stride and its fields can be recognised. A level spec says which kind each table is.
+- **State words.** A counter, latch, done word, slot word or stored world pointer starts at its payload value (usually 0, sometimes -1) and is live state afterwards (Module data words are live state, section 7). Where a spec says "file value", it means the payload value.
+- **Slot tables.** The array passed to SlotCreate is a list of n region indices at a module offset. Its values only size the slot buffer (row 207) and are never loaded, so a level spec lists its offset, count and the word that receives the result, and the rewrite needs only the count.
+- **Check.** Each "Module data tables" entry in a level spec ends with a small check value (a count, first and last value, or a sum) that the rewrite can verify after reading the table.
 
 ### 2. Name encoding of host calls (Confidence: High)
 
@@ -199,7 +213,11 @@ Slot record i (base = slot table + 2960 i):
 | +0xAE4 to +0xAE8 | 1 each | Counts of the character records, checkpoints, item placements, animation tables and effect records, in that order; cleared by the release | High |
 | +0xAE9 | 1 | Active character count (cap 15): the number of successful character setups at read completion; SlotCharacterCount returns it | High |
 | +0xAF1 | 1 | Character cap: 6 after slot construction (the construction sets 15 and then runs the reset, which sets 6), after SlotReset and after every release; 15 after a load with keep false; a load with keep true leaves the 6 set by its release; never above 15 | High |
-| +0xAF2 | 1 | Count of characters attached so far (counted up by activation routines) | Medium |
+| +0xAF2 | 1 | Count of characters attached so far (counted up by activation routines; confirmed 2026-11-09: the force-bind routine refuses to bind when it has reached the cap at +0xAF1 and adds 1 after each successful bind) | High |
+| +0xAF3 + i | 1 each | Id byte of record i, stored when a forced bind succeeds (added 2026-11-09) | High |
+| +0xB04 + 4 i | 4 each | Bound flag of record i (0 = free; a forced bind with index -1 takes the first record whose flag is 0; added 2026-11-09) | High |
+| +0xB44 + 4 n | 4 each | Attached object list: the force-bind appends the new object at entry n = the attached count (added 2026-11-09) | High |
+| +0xB80, +0xB88 | 4 each | Reset to 0 and to -1 by a forced bind (meaning not established; added 2026-11-09) | Medium |
 | +0xB40 | 4 | Keep (streaming) flag: 1 = the per-tick update runs the full streaming pass (releases dead and far characters and binds the nearest eligible records, SPEC-0006); 0 = the per-tick update only releases dead characters whose death countdown ended and binds nothing (section 5). 1 after construction and SlotReset | High |
 
 Limits: there is no upper bound on the capacity n in the code. At most n buffers exist per world, because the created count stops at n. A slot holds at most 15 active characters. A region read counts up to 40 character records, 8 checkpoints, 120 item placements, 40 animation tables and 40 effect records. There is no free call: SlotReset and every SlotLoad release the slot's content, and the buffers are kept until a world-level reset empties every created slot and sets the created count to 0. The slot table and its buffers are carved out of the world's linear memory arena (a bump allocator that hands out the next aligned block and has no per-block release; it can only be rewound as a whole), so nothing is ever freed one slot at a time and the memory lives as long as the world's arena does (High). A rewrite may therefore allocate the table once at the first SlotAllocate and drop it with the world.
@@ -214,13 +232,13 @@ Limits: there is no upper bound on the capacity n in the code. At most n buffers
 - **Exit()**: called when the world's script manager is torn down, just before the module is unloaded. It is empty in 160 of 173 modules, missing in 10 (section 1.2) and not empty in three. Pack 800's Exit gives the hero item 9 (quantity 1, no popup) when the hero does not hold it; pack 934's Exit stops the on-screen timer, sets it to zero and deactivates it; pack 1248's Exit sets game-state flag 79 when its objects 0 and 2 are inactive and its object 1 is active. These effects must happen at every release of the world, including a release by a load into that buffer and the teardown on quit to the title (High). Unless a per-level spec says otherwise, the clean side may treat a missing Exit and an empty Exit the same (Medium).
 
 **Per-tick script step (Confidence: High, except where marked).** Each game tick the script step of the current world runs after the camera, the world tick, the region passes, the projectiles, the world items, the selected hero and the petpet, and before the front end (SPEC-0026, main loop step 8.1.12). The script step of the loaded second world follows it and runs step 1 only. The script step is part of the world branch, so it does not run at all, step 1 included, while the game-state code is 9 (pause and every other freezing screen; SPEC-0026, Pause and freezing screens) or the world is disabled. Its steps, in order:
-1. Special threads: the pending teleport prompt is started if one is pending; then eleven special threads are each stepped once: the teleport-prompt thread (0), the enter-interior sequence (1), the leave-interior sequence (2), the Update thread (3) and seven further sequence threads (4 to 10). Stepping a thread means running it until it yields or ends; an ended thread is freed. For a world that is not current, only special threads 0, 1, 2, 6 and 7 are stepped, as chosen by an 11-byte table at data address 0x2EB3D8 (one byte per thread, 1 = stepped); its Update thread is not stepped (High).
+1. Special threads: the pending teleport prompt is started if one is pending (the job it starts is the transition-scene job, started from a pending world-swap value that is then cleared to -1; corrected 2026-11-09); then eleven special threads are each stepped once, in this slot order: the teleport-prompt thread (0), the enter-interior sequence (1), the leave-interior sequence (2), a further sequence thread (3), the Update thread (4) and six further sequence threads (5 to 10). Corrected 2026-11-09 (High): the Update thread is slot 4 and the sequence thread before it is slot 3; the earlier text had them the other way round. The step is always run first, whether or not the world is current. In the manager's layout the slots hold, in order, the swap/prompt thread, the world callback, two further hook threads, the Update thread, the hero-death callback, the activate-world callback, the on-enter callback, the use-item, pickup and buy callbacks. Stepping a thread means running it until it yields or ends; an ended thread is freed. For a world that is not current, only special threads 0, 1, 2, 6 and 7 are stepped, as chosen by an 11-byte table at data address 0x2EB3D8 (one byte per thread, 1 = stepped); its Update thread is not stepped (High).
 2. Every trigger callback thread is stepped, and every trigger record's state decays (2 or 1 to 3 two frames after the last fire, 3 to 0 one frame later; Layout section 3).
-3. The other callback threads are stepped: breakable, teleport, activate-world, proximity, item, flag and script-group callbacks (script-group records also decay).
+3. The other callback threads are stepped, in this order (refined 2026-11-09, High): the load-override bookkeeping (below), breakable, teleport, the single item-proximity slot, the proximity entries, the item ask-about records, the game-flag callbacks, the level-flag callbacks, then the per-placed-object sub-lists (these are stepped and decay like trigger records). The activate-world callback is not stepped here; it is one of the special threads of step 1. The state decay runs only for trigger records and the per-placed-object sub-list records, not for the other callback kinds. A callback entry is released and its slot cleared in the same pass when its task step reports "not running" or the thread's first word is nonzero. Load-override bookkeeping (2026-11-09): before the trigger pass the manager remembers the world's load-override word (world +0x57C4); after the trigger pass it stores -1 when the word is unchanged and the new value when it changed.
 4. Control threads are stepped in slot order. An entry whose thread has ended is freed in this same pass (section 4, Control threads).
-5. If the world has an Update entry and no Update thread is alive, a new Update thread is created; it first runs in step 1 of the next tick.
+5. If the world has an Update entry (the world pointer must also be non-null) and no Update thread is alive, a new Update thread is created; it first runs in step 1 of the next tick (confirmed 2026-11-09, High).
 
-Steps 2 to 5 (and so new Update runs) are skipped while the hero-swap in-progress flag (game-global word 0x35C980 + 0x44, game-state code 5; SPEC-0053) is set, and for a world that is not current (High). This is the same flag that makes IsButtonPressed return false. It is not pause: under pause the whole script step is skipped (above). During a swap, the special threads of step 1 keep being stepped. Consequences: a new Update thread runs before that tick's trigger and control threads; a callback fired by the hero's trigger pass in a tick starts running in that same tick's step 2; a script waiting with Sleep(1) resumes in the next tick at the same position in this order.
+Steps 2 to 5 (and so new Update runs) are skipped while the hero-swap in-progress flag (game-global word 0x35C980 + 0x44, game-state code 5; SPEC-0053) is set, and for a world that is not current (High). This is the same flag that makes IsButtonPressed return false. It is not pause: under pause the whole script step is skipped (above). During a swap, the special threads of step 1 keep being stepped. Added 2026-11-09 (High): while the swap word is set on the current world, the only other work of the tick is that the world's load-override word is restored from the value saved by the last normal tick, when that saved value is not negative. Consequences: a new Update thread runs before that tick's trigger and control threads; a callback fired by the hero's trigger pass in a tick starts running in that same tick's step 2; a script waiting with Sleep(1) resumes in the next tick at the same position in this order.
 
 **Threads of a world that is not current (from the code; not run in the original; High for the rule, Medium-Low for how visible it is).** A world's callback threads (trigger, teleport, activate-world, proximity, item, flag, script-group, breakable), its control threads and its Update thread are stepped only while that world is current and no hero swap is in progress. A thread waiting when its world stops being current keeps its place and its record. It resumes where it stopped when the world is current again, and its record cannot start a second thread meanwhile. Example: an exterior door's enter-interior callback waits 3.0 s after starting the entry, and the part of that wait left over is spent after the hero returns, during which that door cannot fire again (38 door callbacks, packs 842, 956, 1023, 1300, 1350, 1353, 1358, 1363; the size of the lockout depends on the load time, which is unmeasured). 28 exterior and 3 transition trigger callbacks mix waits with no hold on the hero (for example in packs 1090, 1091, 1171, 758 and 1344): if the hero leaves, their remaining animations and flag writes wait until the world is current again. 35 of 150 control-thread roots mix waits with hero-affecting calls; a build that runs them whichever world is current would run camera, dialogue and hero moves while the hero is in the interior. Special threads 0, 1, 2, 6 and 7 are stepped for a non-current world. Releasing a world ends its threads.
 
@@ -254,15 +272,15 @@ Numbers run 1 to 388 in category order. Rows 286 to 294 are in Category 15. Rows
 | No. | Name | Arguments | Effect in plain words | Conf. |
 | --- | --- | --- | --- | --- |
 | 1 | InitObjOn | W, int, bool | Prepares a numbered animation object for this world. The object is marked active and set to the stopped state at time zero. If the bool is false, the object stays at time zero (its start pose). If the bool is true, it is moved to the end of its animation and enters the finished state, so IsObjAnimFinished is true. It also sets the object's drawn and draw-gate bytes, and sets its last-update change (+0x150) to (0, 0, 0, 1). | M-H |
-| 2 | PlayAnim | int object, WAIT, float speed | Plays the object's animation once, in play-once state, at the given speed factor (1.0 normal, 0.5 half, 2.0 double). A negative speed first moves the object to the end of its animation and then plays it backwards (27 sites pass -1.0). The call also clears the object's additional offset and rotation (rows 16, 19, 23 and 27) and its motion accumulator. With WAIT nonzero the caller yields each tick while the object stays in play-once state. An object index outside the world's animated-object list does nothing. | H |
+| 2 | PlayAnim | int object, WAIT, float speed | Plays the object's animation once, in play-once state, at the given speed factor (1.0 normal, 0.5 half, 2.0 double). A negative speed first moves the object to the end of its animation and then plays it backwards (27 sites pass -1.0). The call also clears the object's additional offset and rotation (rows 16, 19, 23 and 27) and its motion accumulator (the root-offset reset, which also receives the speed value; confirmed 2026-11-09). With WAIT nonzero the caller yields each tick while the object stays in play-once state; the state is tested before the first yield, and there is no unconditional first yield (confirmed 2026-11-09). An object index outside the world's animated-object list does nothing. | H |
 | 3 | ActivateObj | int object, bool end | Same as InitObjOn (row 1) on the current world: marks the object active; false puts it at time zero (stopped), true at the end of its animation (finished). Pack 1096 calls ActivateObj(14, false) at the fight start; it leaves the object at time zero and does not hide it. | H |
-| 4 | DeactivateObj | int object | For a valid object of the current world: animation state 4 (finished), drawn byte 0, draw-gate byte 1, mode byte 0 (additional offset and rotation off), colour word reset to 0x808080FF (the data word at 0x2EB1B8), and the cull value of every part and frame record set to -200.0 (SPEC-0028). An index outside the list does nothing. | H |
+| 4 | DeactivateObj | int object | For a valid object of the current world: animation state 4 (finished), drawn byte 0, draw-gate byte 1, mode byte 0 (additional offset and rotation off), colour bytes reset to 128, 128, 128, 255 (the data word at 0x2EB1B8; the disc value is 255 in all four, so a shown-again object is drawn with colour scale 1 instead of about 2, roughly half as bright: SPEC-0028, Run-time object changes, Looks), and the cull value of every part and frame record set to -200.0 (SPEC-0028). An index outside the list does nothing. | H |
 | 5 | StopEffect | int, W | Stops effect slot: clears its active flag. | H |
-| 6 | StartEffect | int, W, bool b | Uses W, or the current world when W is 0. For a valid effect slot, starts it. With b set, a copy of the camera object's 4x4 block is passed as the start frame; with b clear, no start frame is passed. | M-H |
+| 6 | StartEffect | int, W, bool b | Uses W, or the current world when W is 0. For a valid effect slot, starts it. With b set, a copy of the camera object's 4x4 block is passed as the start frame; with b clear, no start frame is passed. Refined 2026-11-09 (High): the copied block is the camera object's first four 16-byte rows (+0x00 to +0x30); the placed-effect records are 0x90 bytes each, starting at block offset +0x10; a valid effect index is 0 up to the block's count. | H |
 | 7 | IsObjAnimating | int | True when the object is in loop, play-once, or a related animating state (codes in Edge cases). | H |
 | 8 | IsObjActive | int object | True when the animated object exists and its drawn byte (+0x1B6) is set. InitObjOn and ActivateObj set the byte; DeactivateObj clears it. | H |
 | 9 | LoopAnim | int object, float speed, W | Loops the object's animation at the given speed factor (loop state), clearing its additional offset and rotation. Speeds on disc: 1.0 (36 sites), 0.2, 0.1, 0.5, 0.4, 0.0 and -1.0. | H |
-| 10 | SetObjToTime | int, float | Moves the object's time to the given seconds, clamped to 0 .. duration. At or past the end it ends in mode 8 (finished, time = duration). Below the end it always ends in mode 10 (stopped at that time; the next tick does not advance), whatever the earlier mode (SPEC-0005, Clip time and mode). | H |
+| 10 | SetObjToTime | int, float | Moves the object's time to the given seconds, clamped to 0 .. duration. At or past the end it ends in mode 8 (finished, time = duration). Below the end it always ends in mode 10 (stopped at that time; the next tick does not advance), whatever the earlier mode (SPEC-0005, Clip time and mode). Added 2026-11-09 (High): the call also resets the object's translation change (+0x150) to (0, 0, 0, 1), as the switch-on helper does, and, when the current world has a script manager, runs the sound-bank window cues over the span from the old time to the new time. | H |
 | 11 | StopAnim | int | For a valid object of the current world (index 0 to the animated-object count - 1; otherwise nothing): the state becomes 10 (stopped at its time) unless it is 8 (finished), which is kept. The last-update translation change (+0x150, SPEC-0028) is set to (0, 0, 0, 1), so no root motion is carried into the next tick. The time and the play speed are kept. | H |
 | 12 | MoveEffectToAnimatedLocator | int object h, int effect e, int locator k, bool face | For h in the animated-object list: face false moves effect e to the current position of h's locator k (formula A, Note on animated locators), in point form; face true also passes the locator direction rotated by h's current rotation (formula B), in direction form (Note on MoveEffect). There is no check of k: an invalid k or a missing locator list gives the zero point. Disc: 15 sites. | H |
 | 13 | IsObjAnimFinished | int | True when the state is finished (codes in Edge cases). | H |
@@ -290,7 +308,7 @@ Numbers run 1 to 388 in category order. Rows 286 to 294 are in Category 15. Rows
 
 **Note on animated locators (rows 12, 124, 128, 131 and 174; Confidence: High).** An animated object h can carry an inline locator list (its type-11 header, SPEC-0028). The current world position of h's locator record k is computed from: L = the record's +0x30 point; T = h's rest translation (+0xF0); R = the 3x3 matrix whose columns are h's vectors at +0x00, +0x10 and +0x20; r = h's root offset (+0x80).
 - Formula A (position): d = L - T with d.w = 0; P = T + r + R d.
-- Formula B: the position as in A without forcing d.w to 0 (on disc the locator's w equals T's w, so the result is the same), plus a direction: h's current rotation quaternion (+0x160) applied to the record's +0x40 vector.
+- Formula B: the position as in A without forcing d.w to 0 (on disc the locator's w is its radius, 0.625 in the sampled packs, and T's w is 1, so d.w is -0.375; the result is still the same because the fourth row of the host's pose matrix is always (0, 0, 0, 1), so d.w has no effect on x, y, z; R-0270). The follow link of row 124 uses this form with the locator point added to the root offset: base = L + r + (R d - d) with R the same 3x3 matrix, plus a direction: h's current rotation quaternion (+0x160) applied to the record's +0x40 vector.
 - A locator link (rows 124 and 130 with follow or link set) makes the object update recompute the base from the linked record every tick (SPEC-0028 section 7.1, step 5); the other form writes the rest translation once.
 - Synthetic check: T = (0, 0, 0), r = (0, 1, 0), R = identity, L = (2, 0, 0) gives P = (2, 1, 0); with R a 90-degree turn about y that maps (1, 0, 0) to (0, 0, -1), P = (0, 1, -2).
 
@@ -308,8 +326,8 @@ Numbers run 1 to 388 in category order. Rows 286 to 294 are in Category 15. Rows
 | 40 | IsAnimatedCameraActiveAndFinished | int track | True when both hold: IsAnimatedCameraActive (row 294) is true for the track (a play is in progress or held, the index is inside the current world's camera track table, and that entry is the track being played), and the play has ended (run state 2, Note on camera calls). End modes 0 and 2 make a play idle in the same update that ends it, so the call is true only for a play started with end mode 1, from the update its track ends until ReturnToNormalCamera, SetToNormalCamera or another play. Disc: 3 live sites (modules 757, 864 and 985). | H |
 | 41 | StartCameraShake | float T, float A, float S, float p4, float R, float phi, float Z | Starts a camera shake from seven floats in this order: duration T, amplitude A, wave rate S, attack time p4, fade-out time R, angle phi and aim factor Z. All seven go unchanged into the one shake record (SPEC-0027, Camera shake): T is the end time, A the start amplitude, S the wave rate of every key, the key times are 0, p4, T - R and T, phi feeds the two cosine terms, and Z is the aim factor. The start replaces any running shake. Disc: 3 live sites in modules 864, 1091 and 1391. | H |
 | 42 | PlayTrackAICamera | int track, int entity, WAIT, CAMW end mode, float speed | As row 34, with AI entity `entity` (looked up by id) as the target; no target when the entity is missing. | H |
-| 43 | SetToNormalCamera | float distance, float angle, bool release | Stops any play and returns the camera to the normal mode, then places the eye on the orbit of SPEC-0027 (Return to normal with an angle), with the first float as the orbit distance and the second as the angle in radians. Release as in row 35. Disc: 132 sites in 99 modules; distance 5.0 (55), 10.0 (36), 15.0 (22), 3.0 (10), 0.3 and 6.0 (2 each), others once; angle 0.0 (105), 3.14 (16), 3.14159 (6); one site in module 1077 passes 180.0, which the host reads as radians (an authoring slip; reproduce it as radians); release true at 129 sites. | H |
-| 44 | SetHeroSceneCamera | float, float | Sets a scene camera parameter for the hero (two floats). | L |
+| 43 | SetToNormalCamera | float distance, float angle, bool release | Stops any play and returns the camera to the normal mode, then places the eye on the orbit of SPEC-0027 (Return to normal with an angle), with the first float as the orbit distance and the second as the angle in radians. Release as in row 35. Disc: 132 sites in 99 modules; distance 5.0 (55), 10.0 (36), 15.0 (22), 3.0 (10), 0.3 and 6.0 (2 each), others once; angle 0.0 (105), 3.14 (16), 3.14159 (6); one site in module 1077 passes 180.0, which the host reads as radians (an authoring slip; reproduce it as radians); release true at 129 sites. Added 2026-11-09 (High): the eye is hero position + unit(forward x cos(angle) + right x sin(angle)) x distance, with forward the hero's body-forward and right the hero's right vector; the unit vector's fourth lane holds its length, so the eye's w is the hero's w plus that length x distance (whether the pose setter uses that lane is unknown). | H |
+| 44 | SetHeroSceneCamera | float a, float b | Sets a scene camera parameter for the hero (two floats). Refined 2026-11-09 (High for the argument plumbing): the two floats reach the camera's orbit setter swapped (b first, then a), with height 1.5, three fractions of 0.01 and a pivot step of 0, so a is the yaw offset and b the radius if the setter's first parameter is the radius (SPEC-0027). | M-H |
 
 **Note on camera calls (rows 33 to 43 and 318; Confidence: High).** The shake record fields and the six shake presets are described in SPEC-0027 (Camera shake); this list gives the call shapes and the play rules below.
 
@@ -324,13 +342,13 @@ Numbers run 1 to 388 in category order. Rows 286 to 294 are in Category 15. Rows
 
 | No. | Name | Arguments | Effect in plain words | Conf. |
 | --- | --- | --- | --- | --- |
-| 45 | IsAI_Dead | int id | Passes the id to a world routine and returns its answer unchanged (nonzero = dead); 0 when the id is not a character descriptor of the world. The world routine answers as follows: for a summon-reserved record (SPEC-0029 Behavior 31), by the live state of the character bound to it; for any other record, by the dead test of its bound character when it is bound, and by its kill bit (SPEC-0006) when it is not. All 56 module sites test the result. | H (return); Medium-High (world routine) |
+| 45 | IsAI_Dead | int id | Passes the id to a world routine and returns its answer unchanged (nonzero = dead); 0 when the id is not a character descriptor of the world. The world routine answers as follows: for a summon-reserved record (SPEC-0029 Behavior 31), by the live state of the character bound to it; for any other record, true when its bound character is in state 16 with a countdown above 0, and otherwise by its kill bit (SPEC-0006); a bound living character does not suppress the kill bit (corrected 2026-11-08, enemy code pass). All 56 module sites test the result. | H (return); High (world routine for summon-reserved records; Medium-High for the rest) |
 | 46 | Break | int | Breaks a breakable object of the current world. The index must be 0 to the count - 1 of the world's breakable list; otherwise nothing breaks. The three break source words are copied first on every call, even with a bad index (Behavior section 2.2). It acts only when the object is intact and breakable (state 1): it becomes broken, spawns its drops and break pieces, and plays its break effect and sound. In any other state it does nothing. | H |
 | 47 | SetBreakableActive | int, bool, W | Enables or disables a breakable object (Behavior section 2.2). True sets it to intact and breakable (state 1) and sets its sub-record; false sets it to disabled (state 0). | H |
 | 48 | IsBreakableIntact | int | Query: true when the breakable is in state 1 or 3 (intact). | H |
 | 49 | SetAI_HitPointsPercentage | int, float | Sets the entity's hit points to the given fraction of its maximum (fraction times maximum, truncated to a whole number). Does nothing when the entity is missing. | H |
 | 50 | GetAI_HitPoints | int | Entity lookup in the current world (Note on entity ids). Returns the entity's current hit points, an integer (the numerator of row 87). Returns -1 when the entity is missing. | H |
-| 51 | TriggerActStart | int | Act-start setup by stage number (SPEC-0053, section 3.7). Stage 1 sets the swap mode to 0 (locked to Tor) and switches to Tor by a normal switch request. Stage 2 sets mode 1 (locked to Roberta), selects Roberta directly, stores progress value 220 and heals Roberta only. Stage 3 sets mode 2, selects Tor directly, stores 248 and heals both heroes. Stage 4 sets mode 2, stores 332 and heals both. Other values set mode 2 and heal both heroes. No act-state word is written here. Stages 2 and 3 also re-spawn both heroes at the current world's spawn vector (normally entry record 0; SPEC-0040, Behavior 1B); stages 1 and 4 place nobody (Medium). | H (flow), M (names) |
+| 51 | TriggerActStart | int | Act-start setup by stage number (SPEC-0053, section 3.7). Stage 1 sets the swap mode to 0 (locked to Tor) and switches to Tor by a normal switch request. Stage 2 sets mode 1 (locked to Roberta), selects Roberta directly, stores progress value 220 and heals Roberta only. Stage 3 sets mode 2, selects Tor directly, stores 248 and heals both heroes. Stage 4 sets mode 2, stores 332 and heals both. Other values set mode 2 and heal both heroes, and tear nothing down. No act-state word is written here. Added 2026-11-09 (High): stage 2's fresh party kit is 3 of item 0x96, 3 of item 0x95, 1 of item 0x7F and 1150 of item 0x87 (Neopoints) in the party inventory; stage 3 merges the stash into the party inventory, reloads hero slot 0 and selects Tor. Stages 3 and 4 tear down combat, effects and the petpet before the heal; stages 1 and 2 do so after it. Stages 2 and 3 also re-spawn both heroes at the current world's spawn vector (normally entry record 0; SPEC-0040, Behavior 1B); stages 1 and 4 place nobody (Medium). | H (flow), M (names) |
 | 52 | GetHitPointsPercentage | hero selector | Query: returns the hero's current hit points divided by its maximum, as a fraction (0 to 1 in normal play; not multiplied by 100). Hero 0 is Tor and hero 1 is Roberta (SPEC-0036). A maximum of 0 is not handled. | H |
 | 53 | SetHitPointsPercentage | hero selector, float | Sets the hero's hit points to the maximum multiplied by the given fraction, truncated to a whole number, then applies the set rule of SPEC-0036 (Hit points). A fraction above 1 gives the maximum. A negative fraction is not confirmed (Open questions). | H |
 | 54 | GetHitPoints | hero selector | Query: returns the hero's current hit points as an integer. The value can be negative after a negative add (SPEC-0036). | H |
@@ -355,7 +373,7 @@ Numbers run 1 to 388 in category order. Rows 286 to 294 are in Category 15. Rows
 | 73 | IsDoingMeleeAttack | int | True when n is 1 to 13, the selected hero is Tor (hero index 0), a hero class query (method table slot +0xE4) returns nonzero, and Tor's melee state word equals n. Always false while Roberta is selected. | M-H (the role of the class query Medium) |
 | 74 | IsDoingAnyMeleeAttack | none | True when the selected hero is Tor and its melee state word is 2, 3, 5, 6, 10, 11 or 12, or when row 67, 69 or 71 is true. So it is always false while Roberta is selected. | H |
 | 75 | IsOnLastMeleeJab | none | True when the selected hero is Tor (hero index 0), the hero class query (method table slot +0xE4) returns nonzero, Tor's melee state word is 6 (the jab chain) and the jab counter beside it (+0xF94) is above 1. False while Roberta is selected or when there is no hero. There is no lock test. | M-H (the role of the class query Medium) |
-| 76 | LaunchFireMote | int, int, float, bool | Launches a fire-mote projectile from a start locator. The float sets the flight speed. The fourth argument selects the target: true aims at the active hero, false uses the end locator. If the end locator is missing, hero aim is forced. When the start locator is missing it does nothing and reports an error. | H for target selection and start-locator gate; M for remaining projectile details |
+| 76 | LaunchFireMote | int, int, float, bool | Launches a fire-mote projectile from a start locator. The float sets the flight speed. The fourth argument selects the target: true aims at the active hero, false uses the end locator. If the end locator is missing, hero aim is forced. When the start locator is missing it does nothing and reports an error. Corrected 2026-11-09 (High): the two ints are locator ids, matched against the 16-bit id at record offset +0x1E (the first record with that id), not list positions. The aim point is the end locator's position, or the hero's position with y raised by 1.5. The direction is the unit vector from start to aim; the float is the distance moved per tick (velocity = direction x speed); the lifetime is trunc(distance / speed) + 20 ticks. The projectile uses setup kind 0x17, effect ids 0x210 and 0x3DF and the floats 3.0 and 2.0, and is submitted into a free projectile slot; with none free nothing launches. | H |
 | 77 | IsBreakableInvulnerable | int | Query: true when the breakable is not in state 1, so it cannot be damaged (Behavior section 2.2). | H |
 | 78 | Draik_SetBreakableIndices | int x9 | Stores nine breakable ids in the order: left leg, right leg, tail, chest, left arm, right arm, left wing, right wing, head. The Draik index queries read them back. | H |
 | 79 | MiamiceCatchDisable | none | Turns Miamouse catching off; the cage count is kept. | H |
@@ -381,10 +399,10 @@ Numbers run 1 to 388 in category order. Rows 286 to 294 are in Category 15. Rows
 | 94 | EndConversation | int id | The hero, if still in the talking state (25), returns to its saved state, and its partner is cleared. The entity is treated the same way. The dialogue box owner is cleared. A hero that already left state 25 (for example when the box closed between two lines and the hero returned to state 1) keeps its current state. | H |
 | 95 | IsButtonPressed | BUTTON, bool, T(bool) | Query: whether a controller button is held or was newly pressed. The first argument is a button code, mapped to a pad mask (Confidence High): 0 Square (0x0080), 1 Triangle (0x0010), 2 Circle (0x0020), 3 Cross (0x0040), 4 Start (0x0800), 5 Select (0x0100), 6 L3 (0x0200), 7 debug query (always false in this build, section 8), 8 L1 (0x0004), 9 R3 (0x0400), 10 R2 (0x0002), 11 R1 (0x0008), 12 any button (0xFFFF), 13 D-pad (0xF000), 14 the four face buttons (0x00F0), 15 L1, R1, L2 or R2 (0x000F). The call is bound directly to its body (no wrapper). The second argument selects which of two state words of controller pad slot 0's own record is read (not the combined menu snapshot; SPEC-0033): false reads the held word, true reads the newly-pressed word (the button went down this pass). The button bits are fixed: 0x0004 is L1 and 0x0008 is R1. The third argument: if true, the result is always false, so a call of the form IsButtonPressed(x, false, true) is constant false. Code 7 always gives false. The result is also false while the game-global word at data address 0x35C9C4 (base 0x35C980 + 0x44) is nonzero, and while the word at 0x35C9A0 (base + 0x20) is nonzero, which clears the mask. Script threads run after the pad read and after the hero's update in the same pass (SPEC-0026, main loop step 8.1.12). | H |
 | 96 | DisplaySquareButtonContext | context message | Shows label n of design table 13 (SPEC-0024) as the Square caption of the HUD (SPEC-0023, section 33), formatted with the call's extra arguments, and sets the hero's script-prompt flag for the tick (that flag blocks the hero's no-target Square stance entry and is cleared at the end of every hero input step; SPEC-0033). n = 0 hides the caption. The whole call is ignored while the game-global word at data address 0x35C9A0 (base 0x35C980 + 0x20) is nonzero. A caption is shown only on the pass in which it is set, so a script that wants a lasting prompt calls this every tick. Contexts used on the disc: 1 to 6, 13, 26 and 32. | H |
-| 97 | DisplayScreenMessage | string pointer, float, float, float | Shows on-screen text at a 3-D position. The third value is raised to at least 1.3 before the point is projected to the screen. | M |
+| 97 | DisplayScreenMessage | string pointer, float, float, float | Shows on-screen text at a 3-D position. The third value is raised to at least 1.3 before the point is projected to the screen. Added 2026-11-09 (High): the draw side queues a 0x20-byte record; at draw the point is multiplied by the camera's 4x4 at camera +0x460 (x, y, z times rows 0 to 2 plus row 3), x, y and z are divided by w and (1792, 1824) is subtracted; the text is drawn in text mode 3 only when w > 1.0 and -10 < x < 522 and -10 < y < 458 (strict). The draw returns the number of characters drawn, and the flush call draws every queued record in order and empties the queue. | M-H |
 | 98 | FloatToChar | float, int, string pointer | Formats a number as text into a buffer. No game-state effect. The routine that does the formatting is not named (Open question 49). | M |
 | 99 | IsEntityTalking | int | Entity lookup in the current world. True when the entity's base state (+0x144) is 25 (0x19), the talking state. False when the entity is missing. | H |
-| 100 | LevelPrompt | int i, W, int labels | Shows line i of W's level text table in the shared box, as LevelMsg does but without its wait (SPEC-0022, Showing a level line). It then sets choice mode with two labels and a cleared answer (-1), yields one tick at a time while the box is open, and returns true when the answer is 1 (Circle). labels below 0 gives the built-in labels Yes (Circle) and No (Triangle); labels of 0 or more takes the two labels from record labels of the same table (SPEC-0022, Choices). When line i is out of range (-1 included), nothing is shown and the call returns false at once. Every live call on the disc passes -1 for labels, so in play the labels are always Yes and No; no call passes a labels value at or beyond the table's count, which would leave no record to read. | H |
+| 100 | LevelPrompt | int i, W, int labels | Shows line i of W's level text table in the shared box, as LevelMsg does but without its wait (SPEC-0022, Showing a level line). It then sets choice mode with two labels and a cleared answer (-1), yields one tick at a time while the box is open, and returns true when the answer is 1 (Circle). labels below 0 gives the built-in labels Yes (Circle) and No (Triangle); labels of 0 or more takes the two labels from record labels of the same table (SPEC-0022, Choices). When line i is out of range (-1 included), nothing is shown and the call returns false at once (confirmed 2026-11-09, High: the choice setup still runs on the closed box before the false return). Every live call on the disc passes -1 for labels, so in play the labels are always Yes and No; no call passes a labels value at or beyond the table's count, which would leave no record to read. | H |
 | 101 | IsDialogActive | none | Query: true while the dialogue box has text or a pending stop. | H |
 | 102 | IsHeroTalking | none | Query: true when the hero is in the talking state (25). | H |
 | 103 | SetConversationTargetWithOrient | int id, bool b, T(bool) t | As row 93, except that the hero's partner is set to the entity only when t is 1. With t = 0 the hero has no partner, so it does not turn, and a line shown by LevelMsg uses the line record's own speaker name. | H |
@@ -401,11 +419,11 @@ Numbers run 1 to 388 in category order. Rows 286 to 294 are in Category 15. Rows
 | 109 | GrabEntityControl | int entity | Sets the entity's base state to 33 (script hold). From the next NPC update the requests of its AI are stored but not applied, the entity cannot be hit, and each tick in which its current clip's progress is at least 0.99 it requests its default idle animation (row 120) (section 4, Script control and the entity's AI). A walk class applied before the grab freezes, but the clip already playing keeps carrying the entity until its progress reaches 0.99, and the walk resumes on release (section 4, Script hold during a walk). A missing entity: nothing. An entity whose record is not currently bound to a live character is missing too: the call returns at once, stores nothing and is not retried later, so a script that grabs an entity before the streaming pass has bound it (pack 985's King on the first tick) holds nothing; the animation calls of rows 104 and 105 behave the same. It is released by row 107 or by any call that sets state 1 (MoveEntity with CTL 1, WalkEntity, PlayEntityAnim or LoopEntityAnim ending with CTL 1). | H (Medium-High for the drift of an applied walk) |
 | 110 | ReturnEntityAnimToIdle | int | Asks the entity to return to its idle animation and sets its base state to 1, so its AI runs again. | H |
 | 111 | WalkEntityAlongPath | int entity, int path, WAIT, CTL | Entity lookup only, with no locator check. The control-flag word is set as in row 106 and the base state to 1. The path index is stored in the +0xB8 word of the entity's placement record (a path number of the area's path list, SPEC-0006 Tagged tables, tag 0x0A) only when it is 0 or more; a negative index leaves the placement's own value, so a call with -1 walks the entity along the path its placement names (the pack 1023 cycle zones do this for every villager, SPEC-0045). Class 35 (path walk) is requested with priority 2, which parks the entity's AI as in row 106. Class 35 starts at point 0, reaches each path point when the horizontal distance to it is below 0.5, then moves on to the next point, and ends one tick after the last point is reached (SPEC-0056, Path walk). With WAIT set, the caller yields one tick per loop while the current requested class is 35. See SPEC-0056 (NPC AI modes and walk routines). Disc: 34 sites; WAIT is set at 3. Of these, 26 are an unused path branch of the shared entity-control routine (never selected), 3 are the cycle zone threads (modules 758, 991 and 1023; the 991 one is unreachable) and 5 are scripted walks in module 1300 (entities 8, 14, 15, 16 and 17 with path arguments 1, 6, 7, 9 and 10). The class does not set the movement class; it uses the one the townsfolk routine last set (the move type). The walker needs a navigation mesh (kind 1, containing its position when its townsfolk routine first ran) or it does not move. Speed: SPEC-0056, Walk speed and movement type (5.00 units/s, 1.71 for animation table variant B). | H |
-| 112 | MoveEntity | int entity, int locator, bool probe, CTL, bool face | The entity form of MoveHero (row 156): places the entity at the locator's position; probe on: the entity's final height is the probed ground height at the locator's x and z, which replaces the locator's height (the same probe as row 156: ceiling = the record height + 4.0; the highest accepted ground patch at or below the ceiling, else the last rejected sample, which may lie above the ceiling, else -1.0e9 when nothing was sampled, and 0.0 when the point has no ground cell; SPEC-0018, Ground probe); the result is stored without any check, so a miss places the entity at -1.0e9 and an empty cell places it at height 0; probe off: the locator's own height is used; face = also take the locator record's facing, written to the body axes only (not to the stored steering facing): with CTL 1 (state 1) the body returns to the stored heading on the next tick, so the locator heading shows for one tick; with any other CTL (state 0x21) the body keeps the locator heading until the entity is released (Medium; SPEC-0038 section 52); CTL 1 sets state 1, any other value 0x21. A locator outside the table or a missing entity does nothing. Disc: 136 sites. A second host record with a player-record first argument does the same on that record; no module calls it. | H |
+| 112 | MoveEntity | int entity, int locator, bool probe, CTL, bool face | The entity form of MoveHero (row 156): places the entity at the locator's position; probe on: the entity's final height is the probed ground height at the locator's x and z, which replaces the locator's height (the same probe as row 156: ceiling = the record height + 4.0; the highest accepted ground patch at or below the ceiling, else the last rejected sample, which may lie above the ceiling, else -1.0e9 when nothing was sampled, and 0.0 when the point has no ground cell; SPEC-0018, Ground probe); the result is stored without any check, so a miss places the entity at -1.0e9 and an empty cell places it at height 0; probe off: the locator's own height is used; face = also take the locator record's facing, written to the body axes only (not to the stored steering facing): with CTL 1 (state 1) the body returns to the stored heading on the next tick, so the locator heading shows for one tick; with any other CTL (state 0x21) the body keeps the locator heading until the entity is released (Medium; SPEC-0038 section 52); CTL 1 sets state 1, any other value 0x21. A locator outside the table or a missing entity does nothing. Disc: 136 sites. A second host record with a player-record first argument does the same on that record (it does nothing when that record is null); no module calls it. Added 2026-11-09 (High): unlike MoveHero, the entity form updates the NPC move target to the position first, then resets the placement (or transform, when face is clear), and sets the state (1 when CTL is 1, else 0x21) last; MoveHero sets the state before the placement. | H |
 | 113 | IsEntityWalkToPointActive | int entity | True when the entity's current requested class is 23, 24, 25, 26 or 35 (the walk classes of rows 106, 108 and 111, including the path walk). The current requested class is the pending request when its priority allows it, else the applied class, so the call is true at once after a walk call, before the next NPC update. It stays true while the walk is frozen under script hold (section 4). A path walk stops counting one tick after its last point is reached (the class reads 0 again). False for a missing entity. The answer is true in the same script tick as the walk call, before the walker's next AI step; the cycle zone threads rely on this, because they ask right after issuing the walks and deactivate a villager whose answer is false. | H |
 | 114 | DeactivateEntity | int | Kills the entity permanently: runs its death hook and releases it with the kill bit of its spawn record set (SPEC-0006), so streaming never binds that record again until a forced bind (row 116) clears the bit. | H |
 | 115 | SetAI_Agro | int | Turns the entity's aggression on. For a living entity (a dead one is left alone) it sets base state 1 and class-17 state 2, the alerted search (SPEC-0038). The state is 21 instead when the entity's monster row (SPEC-0029) has its Display in Default word (+0x82) equal to 0 and invisibility has not been disabled for the entity (row 121). It sets the search countdown from monster-row words +0x60 and +0x5C, sets the last-seen point to the hero's position, and requests animation 18 (149 for flyers). It does not enter agro (state 19) directly. It does not test the entity's current state: on an enemy waiting hidden in state 8 it replaces the wait with state 2 (21 for a Display-0 row) and animation 18 without the emerge animation, the enemy must then pass its own notice check to reach agro, and otherwise returns to its default state (R-0147; SPEC-0038 Behavior 40). Any mode-change timer drawn with the new mode (60 to 180 ticks) has no known reader, so it looks unused (Medium). | H |
-| 116 | ActivateEntity | int | Force-binds the spawn record now (looked up by id), whether or not it is within streaming range, and clears its kill bit (SPEC-0006). The int is the entity id, the position in the entity-id table (Open question 63). When no entity matches, nothing is activated (Edge cases). | H for the bind and the bit; M for the lookup |
+| 116 | ActivateEntity | int | Force-binds the spawn record now (looked up by id), whether or not it is within streaming range, and clears its kill bit (SPEC-0006). The int is the entity id, the position in the entity-id table (Open question 63). When no entity matches, nothing is activated (Edge cases). Added 2026-11-09 (High): the entry resolves to an entry id and a slot. A slot below zero means the world's always-loaded character block: the bind there picks the record with that id (index -1 means the first record whose bound flag is clear); it does nothing unless the block's attached count is below its character cap, returns "bound" at once for an already bound record, and otherwise spawns the character and, when the spawn worked, enters state 1 on it, sets the bound flag, stores the id byte, appends the object to the attached list, bumps the attached count and registers the character's sound references; it reports success even when the spawn failed. Any other slot binds the region slot. The kill bit of the id is cleared by the bind, and the debug message prints only when nothing was bound. | H |
 | 117 | SetAI_MovementType | int entity, movement type | Stores the movement type in the entity's navigation block (SPEC-0056: 0 walk, 1 run, 2 fast run). The townsfolk routine and the walk classes 23 to 26 copy it to the movement class every tick, so it also changes the gait of a patrolling villager (id 8 is used only at type 0). Disc: 12 sites in 7 modules: module 1023 (entity 1, type 2), 678 (entities 1, 2 and 7, type 2), 842 (entities 3, 5 and 7, type 2: the Cogham villagers followed by Ixi Spearmen), 909 (entity 31, type 1), 956 (entity 28, type 7), 1163 (entity 9, type 0) and 1335 (entity 36, type 1). | H |
 | 118 | DisableVillagerSocialize | int entity | Sets the villager's social gate word to 1, so it is not eligible for villager pairing (SPEC-0040, Behavior 3B). Row 342 clears it; it is 0 at creation. | H |
 | 119 | SetAI_Behavior | int, behaviour code, data pointer | Sets an AI entity's behaviour code and data. The AI data block is the entity's placement record itself (SPEC-0006): when the data pointer is not null, bytes 0 to 27 of the given block are copied over record data +0xBC to +0xD7. The behaviour code is the s16 at record data +0x84; on disc every placement sets it. If the new code differs from the stored one, the code is stored and the mode word is set to 0 directly (no mode setter and no timer); with the same code only the block copy happens. On the entity's next behaviour-class-6 (townsfolk) tick, the class's pre-step sees mode 0 and sets the mode to the code before the mode body runs. The new block values act at their next use (for example the next wander point). See SPEC-0056 (NPC AI modes and walk routines). | H |
@@ -413,7 +431,7 @@ Numbers run 1 to 388 in category order. Rows 286 to 294 are in Category 15. Rows
 | 121 | DisableInvisibility | int entity | Sets the entity's invisibility-off word (+0xE60, 0 at creation). For an enemy whose monster row has Display in Default 0 (an invisible kind; SPEC-0038) this has two effects: (a) the hit exclusion of invisible kinds no longer applies (without the word, the enemy is excluded from hits while in its default state, or in state 21 while not playing animation 82, unless the hero's outfit slot holds the Tattered Cloak, item 126); (b) SetAI_Agro (row 115) and the alerted search enter state 2, not 21. Disc: 25 sites. | H |
 | 122 | GetClosestNavMeshId | W, int entity | Looks up the entity in W (Note on entity ids). Returns -1 when the entity is missing or W has no nav-mesh list. Otherwise it takes the entity's position (x, y, z) and a mesh kind: kind 2 when the entity's monster row has a nonzero Can Fly value, kind 1 otherwise (SPEC-0018 mesh kinds; SPEC-0029 Can Fly). For each mesh of that kind, in list order, it finds the first triangle in array order that contains (x, z): a point is inside when, for each edge from vertex a to vertex b in vertex order (0 to 1, 1 to 2, 2 to 0), (x - a.x)(b.z - a.z) - (b.x - a.x)(z - a.z) is 0 or less, so edges count as inside. The mesh height h is that triangle's vertex 0 y. The result is the index of the mesh with the smallest abs(h - y); a later mesh replaces an earlier one only when strictly closer. When no mesh of the kind contains the point the result is -1. The mesh count is read from W's list and the meshes from the current world's list (the same list whenever W is the current world). Disc: 5 live sites, each in a module's per-tick update (modules 822, 906, 956, 986 and 1098). | H |
 | 123 | SetAI_ConversationTarget | int entity, int t | Sets the entity's talk target: t = -1 the selected hero, t >= 0 entity t, t < -1 none. In base state 25 (talk) the NPC turns toward its talk target each tick with rate 0.3. | H |
-| 124 | MoveObjToAnimatedLocator | int object o, int host h, int locator k, bool follow, W | Uses W, or the current world when W is 0. Needs o and h in the world's animated-object list, an inline locator list on h (h's type-11 header, SPEC-0028) and 0 <= k < that list's count; otherwise nothing happens. follow true: o's locator link becomes (h's locator record k, host h), so each object update places o at that locator's current position (SPEC-0028 section 7.1, step 5) and o follows h. follow false: o's rest translation (+0xF0) is set once to the locator's current world position (formula A, Note on animated locators), and o's last-update change (+0x150) is set to (0, 0, 0, 1). Disc: 10 sites, in modules 990, 1077, 1089 and 1091. | H |
+| 124 | MoveObjToAnimatedLocator | int object o, int host h, int locator k, bool follow, W | Uses W, or the current world when W is 0. Needs o and h in the world's animated-object list, an inline locator list on h (h's type-11 header, SPEC-0028) and 0 <= k < that list's count; otherwise nothing happens. follow true: o's locator link becomes (h's locator record k, host h) and nothing else happens at the call: o is not moved by the call itself. From then on every pose evaluation of o (the per-tick update of states 0, 2, 5 and 6, and the absolute evaluations of InitObjOn, ActivateObj and SetObjToTime) replaces o's base position by the locator's current point, base = L + r + (D d - d), where L is the record's +0x30 point, r the host's root offset (+0x80), d = L - the host's rest translation (x, y, z), and D the host's rotation from its rest orientation to its current one (identity for a host that does not turn, which is every host on the disc; then base = L + r). o's position is its own root offset plus this base (plus its +0x90 offset when its mode byte is 1 or 3). Only position is taken: o keeps its own rotation, scale and own clip, the locator's facing is not used, and o's rest translation is ignored while the link is set. There is no per-frame copy: an o in state 8 or 10 that nobody re-poses stays where it was last posed even while h moves, so scripts re-pose followers themselves (SetObjToTime in a thread, or PlayAnim on o). The link reads h's pose as stored at that moment; a host that stops, is deactivated or changes clip simply leaves its last root offset in effect, and a looping host's root resets to zero at each wrap (R-0270; SPEC-0042, module 990, has the worked case). follow false: o's rest translation (+0xF0) is set once to the locator's current world position (formula A, Note on animated locators), and o's last-update change (+0x150) is set to (0, 0, 0, 1). Disc: 10 sites, in modules 990, 1077, 1089 and 1091, all with follow true (no site uses false). They run 44 effective calls: 990 object 0 hosts objects 39 to 50 at locators 0 to 11 (the lever lift, SPEC-0042); 1077 and its copy 1129: host 24 carries objects 32 and 33 at locators 1 and 2; 1089: host 0 carries objects 12 to 17, 18 to 23, 24 to 29 and 30 to 35 at locators 1 to 6, 9 to 14, 17 to 22 and 25 to 30; 1091: hosts 75, 100, 111, 116, 130 and 134 carry objects 135, 51, 52, 53, 136 and 54, locator 0 each (four more table rows pass host -1 and do nothing). Every host animates (lift or descent clips with no rotation), so on the disc base = locator point + host root offset. Test vector (module 990): object 39 follows locator 0 of object 0, point (-1.082, 0.560, 68.602), host y root 0 to 6.997 over 1.933 s; with object 39's own offset 0 it is posed at y 0.560 at load and y 7.557 when the lever animation has ended (R-0270). | H |
 | 125 | SetEntityUndamageable | int entity, bool b, W | Looks the entity up in W; nothing when W is 0 or the entity is missing. Sets the undamageable flag (+0x7F4) to 1 or 0. While it is set the entity still takes hits: the hit reaction, the switch to agro (class-17 state 19) and the hit count all run; only the hit-point loss is skipped. Disc: 22 sites in 4 modules (784, 1056, 1327 and 1398). At these sites W is not 0: the module loads it from its own data word that holds the module's stored world, so the call takes effect (High for module 1056; Medium-High for the other three). Module 1056 sets it on entities 4, 7, 8, 9, 14, 20 and 21; which characters these are is not mapped. Module 1398 sets it every tick on entities 0 to 4 (the two Drackonacks and three Giant Drackonacks of region 1399) and 16 to 21 (the six Evil Harrises of region 1403) and never clears it, so they cannot be killed there (SPEC-0043, 1398; R-0146). | H |
 | 126 | SetTargetActive | int target, bool b | For a valid target of the current world’s aim-target list (0x60-byte records at world +0x5824, count at world +0x5820), writes its active word at +0x58. Each target record is built at world load from one n2 entry of the type-11 chunk (SPEC-0028 section 6; count at header +0x20, 0x0C-byte entries). Its marker source at +0x50 is the registry model selected by entry +0x00 when inline mesh +0x04 is zero; otherwise it is the inline mesh. The initial target point at +0x40 is the xyz position in the locator-like record at entry +0x08 (its fourth lane is zero). The active word starts at 1. While item 36 is held, the hero’s scan considers active targets at a three-dimensional distance below 110.0 units. It scores the normalized vector from the camera eye to each target against camera forward; only a best score above 0.998 can be selected. The line-of-sight sweep runs from 1.5 units below the camera eye to the target and samples cells at 0, 5, 10, 15 and every further 5 units along the normalized camera-to-target segment, stopping when the sampled offset reaches the segment length. For each sampled cell, its eligible frame records and class-3 volume records are tested against the full segment from the lowered camera point to the target, not just the interval since the previous sample. The segment is not shortened before the target. A blocked target cannot become the best candidate. Obstructions in cells between sample positions can be missed; the collision geometry in each sampled cell is tested against the whole segment. Each scan clears the aimed word at +0x54 for every target, then sets it for the chosen target. The scan returns 0 for no selection, 1 for a character aim candidate, or 2 for a Rope Gun anchor; a successful anchor pass takes precedence. It writes the hero's world-space shot aim point separately: the selected character's aim point plus half its motion height when a character candidate passes, or camera position plus 150 times camera-forward otherwise. Anchor coordinates remain in the Rope Gun manager. | High for compared vectors, range, sightline, return values and stored point; Medium-High for remaining scan rules |
 | 127 | GetDistanceToGoalPos | int entity | Returns the 3-D distance from the entity's position to its stored move goal (set by the walk and move calls). Returns 0.0 when the entity is missing or its goal-reached flag is set (the navigation step sets it within 0.25 units of the goal). | H |
@@ -449,11 +467,11 @@ No host call in any category opens the save screen, saves the game, or sets a sa
 | No. | Name | Arguments | Effect in plain words | Conf. |
 | --- | --- | --- | --- | --- |
 | 147 | QueryGameState | int | Returns the game flag with that id. There are 743 game flags (ids 0 to 742) in a bit set; ids above 742 read 0. | H |
-| 148 | SetGameState | int, bool | Sets (true) or clears (false) the game flag with that id (0 to 742; larger ids are not stored). Setting or clearing notifies the flag's callback (row 383) when the current world has a script manager. When the flag rises from 0 to 1, the stinger mapped to that flag (if any) is played, and a per-flag hook runs when that flag's hook entry is set. | H (bit set); M (side effects) |
+| 148 | SetGameState | int, bool | Sets (true) or clears (false) the game flag with that id (0 to 742; larger ids are not stored). Setting or clearing notifies the flag's callback (row 383) when the current world has a script manager. When the flag rises from 0 to 1, the stinger mapped to that flag (if any) is played, and a per-flag hook runs when that flag's hook entry is set. Confirmed 2026-11-09 (High): the notice carries the bit's value before the change and the new value 1 and is sent only when the world has a script manager; the stinger (played at volume 1.0) and, when the flag's journal row is nonzero, the journal-pending icon happen only when the bit was off; the bit is set in every case, even with no world loaded. ClearGameState (false) has no null test of the world or manager (a missing world crashes), sends the notice with the old value and new value 0, and plays no stinger and raises no journal icon. A second argument some callers pass is ignored. | H |
 | 149 | AddBlackboardMessage | message type t, int v, eW slot s | The blackboard has 193 rows, one per world identifier (slot), and each row holds 8 entries of (type, value); type 0 marks a free entry. The call takes row s, uses the entry whose type is t, else the first free entry, and writes (t, v). When the row already holds 8 other types, nothing is stored. A read with no matching entry returns -1 (row 150), so scripts write -1 to mean "nothing" (54 sites); the entry stays in use. Types on disc: 1 (7 sites, modules 1023, 1176, 1350 and 1371), 2 (191 sites, arrival tags) and 3 (9 sites, modules 1184, 1217 and 1220). The board is not saved. It is cleared (every type and value 0) at start-up, when the title screen's Start press is accepted, when a new game is confirmed, when the world is torn down on a quit to the title or a game-over exit, and when a saved game is applied, so it survives every area change, door, movie return and swap. | H |
 | 150 | GetBlackboardMessageValue | message type t, eW slot s | Returns the value of the entry of type t in row s, or -1 when no entry matches. The read does not clear the entry. Typical use: an activate-world callback reads type 2 of its own slot to choose its arrival locator (60 sites). | H |
 | 151 | IsDebugMode | none | Returns 0 (false) on every path in this build, so debug-gated branches never run (section 8 of Behavior). | H |
-| 152 | SetLevelState | int (0 to 63), bool, W | Writes one of the 64 level-state flags of the world: true sets it, false clears it. World 0 means the current world. An out-of-range index or a missing world does nothing. | H |
+| 152 | SetLevelState | int (0 to 63), bool, W | Writes one of the 64 level-state flags of the world: true sets it, false clears it. World 0 means the current world. An out-of-range index or a missing world does nothing. The flags are cleared when the world's buffer is released before each load (and at start-up), so they last for the whole residency of the world: they survive world swaps and interior visits, they are not saved, and a flag set in Init stays set (SPEC-0028, Persistence). | H |
 | 153 | QueryLevelState | int (0 to 63), W | Returns the level-state flag at the index. World 0 means the current world. Returns 0 when the index is out of range or no world is loaded. | H |
 | 154 | SetGameOver | int | Sets flag E of the game-globals record (data address 0x35C98C) to 1. The argument is not used. On the next pass the game-state code is 2, unless a higher-priority code applies, and the in-play state hands over to the game-over page (SPEC-0026, Game-state code). | H |
 | 155 | SetDebugScriptLogState | debug log mode | Does nothing in this build: the debug check is a constant zero, so the log mode is never written. Never runs in play (section 8). | H |
@@ -477,7 +495,7 @@ No host call in any category opens the save screen, saves the game, or sets a sa
 | 168 | LoopHeroAnim | int, float, CTL | Loops a hero animation for the given seconds, converted to ticks as in row 104: trunc(s x 60) in single precision at the tick rate (60 per second, written at start-up; SPEC-0007, Rate selection), and one tick for a negative time. Unlike row 104, a count of 0 stays 0; it is not turned into the forever value. The call stores whether CTL is 1 in the hero's control-flag word, requests the animation on the selected hero, sets the hero's request code to 0x37 (loop) and stores the tick count in the hero's loop counter. It does not wait. While the hero is in the loop state (0x37), the counter drops by one each tick while it is above zero; at zero the loop ends: the hero goes to state 1 when the stored CTL is 1, and otherwise to state 0x21 (High). | H |
 | 169 | DamageHero | int | Applies the given amount of damage to the current hero through the hero's full hit routine, with attacker id -1. The hit routine's rules apply: a hero in the death state takes no damage, and a hit that takes health to zero runs the death handler with the gate allowed. See SPEC-0055 (hero death and respawn). | High |
 | 170 | IsHeroOccupied | none | True when the selected hero is in state 7 to 19, 21, 23 to 30, 33, 35, 37, 38, 41 or 43 to 60; or has an active stun (status 0 with its timer at 1 or more); or the screen effect is moving (fade alpha differs from its target, bar alpha differs from its target, or bar progress differs from its target; SPEC-0052). Otherwise false. It is the hero's own busy test of SPEC-0040 15.2, the same routine and not a wider copy: the 41 state tests, the script-held states 33, 48, 50, 51, 52, 53 and 55, the stun test and the screen-effect test are its four parts. The same test makes the world interaction chooser use its special-state branch (SPEC-0022). | H |
-| 171 | IsHeroDead | hero selector | Query: true when the hero is in the death state (state 16). Always false for an index other than 0 or 1. | H |
+| 171 | IsHeroDead | hero selector | Query: true when the hero is in the death state (state 16). Always false for an index other than 0 or 1. Refined 2026-11-09 (High for the index rule): index 0 and 1 select the first and second hero objects themselves, whichever hero is selected, and the answer is the object's own "is dead" method returned unchanged; that the method is the state-16 test is not separately verified (Medium). | H |
 | 172 | KillCurrentHero | none | Puts the active hero through the default death directly. The death callback gate is bypassed, so no callback runs, and the hero's health is left unchanged. See SPEC-0055 (hero death and respawn). | High |
 | 173 | SwitchHero | hero selector, bool, T(bool) | Requests a switch to the given hero. Makes no request when that hero is already selected. The request is refused by the swap mode (row 167) or when the target hero is dead. The two booleans select the fade and flash sequence (first) and the finish cue (second); with both false the swap is silent. A request made while a swap is running overwrites the shared request record. On every call, whether or not a request was made (also for -1 or the already selected hero), the weapon-ready word of row 161 is then set to 0, with the cue-1 sound when it was set (High). See SPEC-0053, sections 3.2 to 3.5. | Medium-High |
 | 174 | GetDistFromHeroToAnimatedLocator | int object h, int locator k | Returns the 3-D distance from the selected hero's position to the current position of h's locator k (formula A, Note on animated locators). Returns 0.0 when there is no current world, no object list, or h is out of range. An invalid k gives the distance to the world origin. | H |
@@ -485,7 +503,7 @@ No host call in any category opens the save screen, saves the game, or sets a sa
 | 176 | GetHeroAttackAlignment | none | Returns the active hero's equipped weapon Mote id from equipment word 2; returns -1 when that slot is empty (SPEC-0021, Equipment slots). | H |
 | 177 | GetHeroHeightPatchType | none | Query: the type of ground patch under the hero. | L |
 | 178 | NeedHeroAlive | hero selector | Revive check, not a requires-alive test. Only the selectors 0 (Tor) and 1 (Roberta) are accepted; -1 and any other value do nothing. When the named hero is in the death state, the revive helper runs. Its revive gate is the swap mode word: the helper acts only when the swap mode equals 2 (free both ways). It then revives the partner of the active hero, if that partner is dead, by setting the partner to idle at full health. Returns 1 when a revive happens, otherwise 0. The revive of a dead partner with a switch is a separate route in the hero action routine (SPEC-0053, section 3.8, route b). Modules 1244 (its entry scene) and 1394 (at area entry) call it for each dead hero. See SPEC-0036 (Revive by script) and SPEC-0055 (hero death and respawn). | High (gate); Medium-High (return value) |
-| 179 | AlignAxisToVectorToHero | int, axis selector, float | Turns one column of the object's current block toward the hero. The columns are X, Y and Z (+0x100, +0x110, +0x120; SPEC-0028); selector 0 picks X, 1 picks Y and any other value Z (the disc passes only 2). Let u be the picked column normalised, d the unit vector from the object's translation (+0x130) to the hero's position (full 3-D, height included), and t the float clamped to 0 to 1. The call returns u . d, taken before the turn. When u . d < 1 - 0.001 t^2, the new column is normalise(t d + (1 - t) c), with c the stored column as it is; otherwise the new column is d itself. The other two columns are then rebuilt by cross products so the three stay orthonormal, keeping the old Y column's plane when X or Z is picked and the old Z column's plane when Y is picked. Returns 0 and changes nothing when the object is missing. | H |
+| 179 | AlignAxisToVectorToHero | int, axis selector, float | Turns one column of the object's current block toward the hero. The columns are X, Y and Z (+0x100, +0x110, +0x120; SPEC-0028); selector 0 picks X, 1 picks Y and any other value Z (the disc passes only 2). Let u be the picked column normalised, d the unit vector from the object's translation (+0x130) to the hero's position (full 3-D, height included), and t the float clamped to 0 to 1. The call returns u . d, taken before the turn. When u . d < 1 - 0.001 t^2, the new column is normalise(t d + (1 - t) c), with c the stored column as it is; otherwise the new column is d itself. The other two columns are then rebuilt by cross products so the three stay orthonormal, keeping the old Y column's plane when X or Z is picked and the old Z column's plane when Y is picked. Returns 0 and changes nothing when the object is missing. Added 2026-11-09 (High): after the rebuild the three rows are scaled by the chosen column's original length and their w is set to 0; the blend uses the raw (not normalised) chosen column. | H |
 | 180 | IsHeroSwapInProgress | none | Returns 1 from acceptance of a switch request until the swap task ends, else 0. It is not a raw swap value. See SPEC-0053, sections 2.3 and 3.2. | High |
 | 181 | GetHeroShieldAlignment | none | Returns the active hero's equipped shield Mote id from equipment word 1; returns -1 when that slot is empty (SPEC-0021, Equipment slots). | H |
 | 182 | FillBothHerosMagicPoints | none | Sets the magic points of both heroes to their maximum and refreshes the magic display. | H |
@@ -530,7 +548,7 @@ No host call in any category opens the save screen, saves the game, or sets a sa
 | 209 | SetWorldCollisMask | W, unsigned integer | Sets the world's collision layer mask: a plain store of the mask into the world record. | H |
 | 210 | CharacterNavmeshAssign | int entity, int mesh | Entity lookup in the current world (Note on entity ids). The mesh set: when mesh equals the stored mesh id, nothing. Otherwise the id is stored; when it is 0 or more, the character's current triangle on that mesh is located again and its move goal is set to its current position. If no triangle is found, only a debug message follows (the character then counts as off-mesh). A negative id is stored and gives off-mesh steering (SPEC-0056). Nothing happens when the entity is missing. Disc: 59 sites. | H |
 | 211 | CharacterActivate | W, int slot, int n | Activates character n (0 to 14) of the slot. The slot number must be 0 to W's slot capacity - 1; a negative number (so -1 as well) or a number at or above the capacity returns 0 at once, with no activation and no state change, as CharacterDeactivate does (row 213). Test vector: a slot word holding -1: CharacterActivate(slot, 0) returns 0 and no character becomes active. (High) Activating a character starts its default-class coroutine at once (SPEC-0029, Behavior 1); a boss controller therefore runs from the activation, not from a later release. | H |
-| 212 | SetWorldDisplayMask | W, unsigned m | Stores 2 x m in W's object display-mask word (0 at world setup). When that word is nonzero, the world's animated-object draw uses it as the node-mask filter: a mesh node with a nonzero mask word is drawn only when it shares a bit with the filter. Disc values 1 and 2 give filters 2 and 4. | M-H |
+| 212 | SetWorldDisplayMask | W, unsigned m | Stores 2 x m in W's display-mask word (0 at world setup). The word is the node-mask filter of the level display tree (together with the live story-layer bits, SPEC-0046 World layer mask) and, always (also when it is 0), of the world's placed-object mesh draw, without the story-layer bits: a node with nonzero layer flags is drawn only when it shares a bit with the filter, so with word 0 only nodes with flags 0 are drawn (SPEC-0028, Run-time object changes, Looks). The pack 1299 private tree ignores it. Disc values 1 and 2 give filters 2 and 4. | H |
 | 213 | CharacterDeactivate | W, int slot, int n | The slot number must be 0 to W's slot capacity - 1; otherwise the call returns 0. It finds the slot's active character bound to record n and releases it by the release rule of SPEC-0006 (Release and rebind): active count lowered, position and facing written back unless its AI mode is 7, base state 42 unless dead, object freed. The record's kill bit is not set, so the slot's streaming may bind the record again. Returns 1 when a character was released and 0 when none is bound to n. | H |
 | 214 | IsWorldOrCharacterLoadActive | none | Query: a world or character load is in progress, read from the loader state of the global loader record. | H |
 | 215 | GetAssetGroupCharacterRange | int group, int output first, int output last | Writes the first and last index of the run of entries in the world's entity-id table (tag 0x12, SPEC-0006) whose slot byte equals group, compared as a signed byte (so -1 selects slot 0xFF). Its body is the run search, variant A (SPEC-0022, Record search by run). With no matching entry only last is written (count - 1), and first keeps the caller's value. Reached in 8 level modules, with keys 0, 1, 4, 6, 17, 21, -1 and computed values. The second run-search variant (on the placement-id table, tag 0x13) has no caller. Outputs only. | High |
@@ -666,7 +684,7 @@ No host call in any category opens the save screen, saves the game, or sets a sa
 
 | No. | Name | Arguments | Effect in plain words | Conf. |
 | --- | --- | --- | --- | --- |
-| 313 | SetAiHotspotDistCamera | int entity, int slot, float distance, float angle (radians), float (ignored) | Sets the camera for an entity from a hotspot. When the second int is below nine it selects one of nine stored per-entity offsets; otherwise a default offset is used. The float argument gives a direction from an angle in radians. The entity id is the first integer argument and the slot selector is the second integer; the float arguments arrive in their written order: the first float is the distance by which the direction is scaled, the second float is the angle in radians (a plain radian value, no degree conversion) whose sine and cosine build the horizontal direction, and the third float is never used (Medium-High; no module calls this row, so play never reaches it; Open question 59). The exact vector arithmetic of the final camera pose is not fully established. | M-H (argument roles); L (pose) |
+| 313 | SetAiHotspotDistCamera | int entity, int slot, float distance, float angle (radians), float (ignored) | Sets the camera for an entity from a hotspot. When the second int is below nine it selects one of nine stored per-entity offsets; otherwise a default offset is used. The float argument gives a direction from an angle in radians. The entity id is the first integer argument and the slot selector is the second integer; the float arguments arrive in their written order: the first float is the distance by which the direction is scaled, the second float is the angle in radians (a plain radian value, no degree conversion) whose sine and cosine build the horizontal direction, and the third float is never used (Medium-High; no module calls this row, so play never reaches it; Open question 59). Established 2026-11-09 (High): the character is looked up (nothing if none). The position and forward are, for a slot below 9, taken from rows 2 and 3 of that slot's attach matrix in the character's model object, and otherwise the character's position plus up x 3.0 with the body forward. The forward is flattened (y = 0) and normalised, side = unit(up x forward), and the direction = -(forward x cos(angle) + side x sin(angle)). The scripted pose rows are (up x forward unnormalised, w 0), up, direction (w 0), and the eye = position - direction x distance (w 1); the pose starts with a field of view of 1.5707964. | H |
 | 314 | SetCameraToTrackHeroMode | int | Puts the camera into hero-track mode, using a camera track record chosen by the int. The camera is placed at the record's point (the first key of the track when it has keys), aimed at the selected hero, and set to camera mode 12 (SPEC-0027). Does nothing when the index is negative, out of range or the record is absent. No module calls it. | H |
 | 315 | SetAI_DistCamera | int entity id, float, float, float | Enters the fallback camera pose on the entity: the first float is the horizontal reach R, the second the yaw offset o and the third the height h; the distance is sqrt(R^2 + h^2) and the elevation asin(h / R) (SPEC-0027, Fallback pose). Does nothing when the entity is missing or its region is not loaded. No module calls it (Open question 51). | M-H |
 | 316 | OverRideCameraAttributes | float distance, float elevation, float minimum height | Turns on the camera attribute override and stores the three floats as the follow distance, the default elevation (radians) and the minimum eye height above the ground of the script profile (profile 4 of SPEC-0027, Camera profile record). While the override is on, the follow camera uses that profile instead of the ground-kind profile; the profile fields are reloaded only when the selected profile index changes (Open question 51). No module calls it. | H |
@@ -679,7 +697,7 @@ No host call in any category opens the save screen, saves the game, or sets a sa
 
 | No. | Name | Arguments | Effect in plain words | Conf. |
 | --- | --- | --- | --- | --- |
-| 321 | MoveEffectToCharPosition | int, int, float, float, float | Moves an effect to a character's position plus an offset given by the three floats. The ints choose the effect and the attach point. Partly established. | L |
+| 321 | MoveEffectToCharPosition | int, int, float, float, float | Moves an effect to a character's position plus an offset given by the three floats. Upgraded 2026-11-09 (High): the first int is an entity slot (missing entity: nothing) and the second the script effect index; the floats are height, forward distance and side distance. The new position = the character's position + body-forward x forward distance + (0, height, 0) + unit(forward x world up) x side distance; the effect is moved there with the forward vector as its direction (as MoveEffect, row 324). | H |
 | 322 | PlayHeroShieldSound | hero selector, cue id, VEC, do-not-restart bool | When the selector is -1 or matches the active hero, plays the cue id on the active hero's shield sound slot. A null VEC uses the active hero's position. The bool is the cue call's do-not-restart flag (SPEC-0031, Cue playback). | H |
 | 323 | PlayHeroWeaponSound | hero selector, cue id, VEC, do-not-restart bool | Same as row 322, using the active hero's weapon sound slot. | H |
 | 324 | MoveEffect | int, float x6 | Moves the effect given by the int to a new position. The six floats form two three-vectors that the body builds into the effect's start and end points. The pairing is partly established. | L |
@@ -841,10 +859,10 @@ Break source values: before a break, three world words are copied to three globa
 ### 3. Triggers, callbacks and proximity (Confidence: Medium, except where marked)
 
 - **Registration.** A trigger is registered once, usually from Init, under an integer index. Registering writes the callback into the world's trigger table at that index. An index outside the table is ignored. A null world is refused and nothing is registered (High). Registering the same index twice keeps the later routine (pack 758, index 5; Medium-High).
-- **Locator table (High).** Every locator argument of every host call (MoveHero, MoveEntity, WalkHero, WalkHeroAndOrient, RunHero, WalkEntity, WalkEntityAndOrient, SetHeroStartPos, the ReturnToNormalCamera preset, the LoopSound, KillSound and VisitLoopSound emitter, MoveEffect, AddItemToWorld, MoveMovableBlockToLocator, MoveObjToLocator, SetAnimObjAdditionRotLocatorForward and GetDistFromHeroToLocator) indexes one table: the 80-byte records of the world pack's type-11 chunk. The locator count is the u32 at payload +0x24, and the records start at the payload offset stored at +0x4C. A record holds its position at +0x30 and its facing (direction) at +0x40. Counts on disc run from 0 to 503 (pack 678: 50). Every resolved locator argument of every module lies inside its pack's count (for example MoveHero 272 of 272 sites, ReturnToNormalCamera 281 of 281 plus the -1 sites, WalkEntity 75 of 75, MoveEntity 125 of 125, AddItemToWorld 33 of 33).
+- **Locator table (High).** Every locator argument of every host call (MoveHero, MoveEntity, WalkHero, WalkHeroAndOrient, RunHero, WalkEntity, WalkEntityAndOrient, SetHeroStartPos, the ReturnToNormalCamera preset, the LoopSound, KillSound and VisitLoopSound emitter, MoveEffect, AddItemToWorld, MoveMovableBlockToLocator, MoveObjToLocator, SetAnimObjAdditionRotLocatorForward and GetDistFromHeroToLocator) indexes one table: the 80-byte records of the world pack's type-11 chunk. The locator count is the u32 at payload +0x24, and the records start at the payload offset stored at +0x4C. A record holds its position at +0x30 and its facing (direction) at +0x40. Counts on disc run from 0 to 503 (pack 678: 50). Every resolved locator argument of every module lies inside its pack's count (for example MoveHero 272 of 272 sites, ReturnToNormalCamera 281 of 281 plus the -1 sites, WalkEntity 75 of 75, MoveEntity 125 of 125, AddItemToWorld 33 of 33). Added 2026-11-09 (High): a second lookup flavour exists for locators, by the 16-bit id at record +0x1E (the first record with that id); LaunchFireMote uses it, so its two ints are locator ids, not record indices. Its debug lines print only when debug mode is on and the debug level word (game-global +0x70) is at least 2.
 - **Trigger capacity (High).** The world's trigger table has n entries, where n is the first u32 of the type-11 chunk payload; n is 0 when the pack has no type-11 chunk. Of the 192 packs, 189 carry a type-11 chunk; n runs from 0 to 228, and 69 packs have n = 0 (pack 678: 8). Indices 0 to n - 1 register; others are ignored. Every resolved RegisterScriptTrigger index on the disc is in range: 99 packs register triggers, with no index outside the capacity, and 26 of them register exactly index n - 1.
 - **Other per-world table sizes (High).** Fixed when the world is set up: teleport callbacks, one per teleport plane; breakable triggers, one per breakable object; proximity callbacks, one per character descriptor of the world (indexed by descriptor id); item ask-about callbacks, 10; game-flag callbacks, 743; level-flag callbacks, 64; control threads, the n given to ControlThreadsAllocate.
-- **The world's object pools are these callback tables (Medium-High).** The seven pools A to G and the scene list that SPEC-0028 section 15 lists are the script manager's callback tables: A the script triggers (count = the first u32 of the type-11 payload, the trigger capacity above); B the breakable triggers; C the teleport callbacks (one per teleport plane); D the entity proximity callbacks (one per tag-0x12 entity entry); E the 743 game-flag callbacks; F the 64 level-flag callbacks; G the 10 item ask-about callbacks. The scene list holds the per-placed-object instance triggers, one sub-list per placed object, sized by the first word of that object's inline type-11 header. The owner of the 0x400-entry table with count 50 built beside them is open. A release rule frees finished callback threads.
+- **The world's object pools are these callback tables (Medium-High).** The seven pools A to G and the scene list that SPEC-0028 section 15 lists are the script manager's callback tables: A the script triggers (count = the first u32 of the type-11 payload, the trigger capacity above); B the breakable triggers; C the teleport callbacks (one per teleport plane); D the entity proximity callbacks (one per tag-0x12 entity entry); E the 743 game-flag callbacks; F the 64 level-flag callbacks; G the 10 item ask-about callbacks. The scene list holds the per-placed-object instance triggers, one sub-list per placed object, sized by the first word of that object's inline type-11 header. Resolved 2026-11-09 (High): the table of 50 entries with 0x400-byte stacks built beside them is the script manager's own thread pool (50 threads, 1 KB stacks), set up in the same constructor from the same memory arena. Pool order in the manager: triggers, breakables, teleports, proximity entries, game-flag callbacks, level-flag callbacks, ask-about records. All record blocks start idle (zeros, with -1 in index fields): trigger and breakable records 0x48 bytes, teleport records 0x44, proximity and callback records 0x18. A release rule frees finished callback threads.
 - **Enter test (High).** The trigger pass (SPEC-0028, Behavior, Trigger pass) tests each volume once per tick for each actor that runs it, with no enter or leave edge. A hit runs the trigger's fire step only when the volume's flags pass the fire gate of its kind and path (see Fire paths below), and the fire step writes the callback state word under the update rule (Layout, section 3): 0 idle, 1 first fire, 2 repeated fire, 3 decaying toward 0. For the selected hero's body contact, state 1 means the hero has just entered, 2 that it stays inside, and 3 then 0 that it has left (3 two frames after the last contact frame, 0 one frame later). Order in a tick: world step (movable blocks, region characters), selected hero (shots, then body contact), petpet, then the script step (threads resumed, then decay).
 - **Per-tick firing (example, Low).** A script-group trigger of the simple kind fires only when all of these hold: the group has at least one member; the member's animation has finished; the hero is on the ground (height above the ground below 0.1 units); and the hero is not occupied by another action. When it fires it plays the group's animation and camera and may activate an object.
 - **Proximity callbacks.** Entity proximity callbacks receive the proximity record for an entity id. The bool of RegisterEntityProximityCallback is the range flag of the talk entry (row 251; set in every call on the disc; High). The on-enter registration takes no bool; its callback receives the record (v, 0, 0) holding the int given at registration (row 255; High). The talk frame that every entity proximity callback follows (at most one line, bracketed by SetConversationTarget and EndConversation, nothing at all when no line is chosen) and the line rotation kept in module data words are specified in SPEC-0022 (Proximity talk frame and line rotation) (High).
@@ -879,16 +897,16 @@ Break source values: before a break, three world words are copied to three globa
 ### 4. Threads and waits (Confidence: High for Sleep, Wait, control threads and script control, Medium otherwise)
 
 - **Script threads** are cooperative. Each is a routine that runs until it yields. A yield returns control to the frame scheduler, and the thread resumes on a later tick. One yield equals one game tick (1/60 s, SPEC-0007). The order in which threads are stepped each tick is in section 1 (Per-tick script step).
-- **Thread limit (High).** At most 50 script threads can be alive in one world at once, each with a 1 KB stack. Every callback run, control thread, Update run and sequence is one thread. The original has no safe failure when a 51st is needed (Edge cases).
+- **Thread limit (High).** At most 50 script threads can be alive in one world at once, each with a 1 KB stack. Every callback run, control thread, Update run and sequence is one thread. The original has no safe failure when a 51st is needed (Edge cases). Confirmed 2026-11-09 (High): the pool is built for 50 threads of 0x400 bytes, and the allocator, when the in-use count is not below the maximum, prints a debug message that it ran out of threads and returns null; a thread header of 0x24 bytes sits before each stack.
 - **No automatic stepping (High).** Threads started by script calls are stepped only by the per-tick script step (section 1). They never auto-step: the thread-pool sweeps of the main loop step only threads created with the auto-step word, and none of the script's threads has it.
 - **Control threads (High).**
   - ControlThreadsAllocate(W, n) gives W a table of n entries. Each entry holds a callback, its argument and a thread handle, and starts free.
-  - ControlThreadStart(W, f, p) takes the first free entry and creates a thread that runs f(p) and then ends. It returns nothing. With no free entry it does nothing.
+  - ControlThreadStart(W, f, p) takes the first free entry and creates a thread that runs f(p) and then ends. It returns nothing to the script (the host routine returns the entry index, or -1 when the table is missing, has a count below 1 or is full; the script call discards it; confirmed 2026-11-09). With no free entry it does nothing.
   - Step 4 of the per-tick script step steps each entry's thread in table order. An entry whose thread has ended is freed in that same pass, so it can be reused from that point on, including by a later step-4 thread in the same tick.
   - A control thread counts toward the 50-thread limit.
 - **Sleep(n)** yields n ticks. n of zero or less does nothing.
 - **Scheduling rule of script threads (High).** Script threads are cooperative and have no counter, flag or ready list of their own. Each tick the per-tick script step (above) runs every live thread once, in the fixed order of its five steps (special threads, trigger callbacks, other callbacks, control threads in slot order, Update creation), and a thread runs until it yields or ends. A thread yields only at Sleep, Wait or a wait loop of a waiting wrapper; it resumes in the next tick at the same place in that order. A thread that never yields would stall the whole tick (no rule frees it); a wait loop that never ends stalls only its own thread and keeps its slot (and its place in the 50-thread limit). No thread can keep another from finishing.
-- **Caught-exception record (High).** A 0x30-byte record with a callback, a flag, a link and a 64-bit counter exists in the boot program, but it is not a script thread: it is the compiler runtime's record of a thrown C++ exception. Its two 16-bit fields at offsets 0x04 and 0x06 hold 4 and 1 (the language tag and version), the word at 0x08 is the thrown object, 0x0C its type, 0x10 the cleanup routine, 0x14 the caught flag (zero while the exception is still being thrown, set when a handler takes it), 0x18 the link to the next older record (the newest record is the head of the chain), 0x20 the handler count and 0x28 the original object. The end-of-handler step subtracts one from the count; a nonzero count ends the step. At zero, a record that is the newest in the chain and has the caught flag clear is kept (the exception is still in flight; its count is then -1 and later subtractions never bring it back to zero, so it is never finished). Any other record is unlinked, its cleanup routine is called with the thrown object and the value 2 (destroy the thrown object), and its storage is released. Nothing in the game proper throws: the throw and record-creation routines are called only from the runtime's own unwinder code, and none of the 276 distinct import names of the 173 level modules is a throw, catch or exception name. So no such record is ever created in play and a rewrite implements nothing for it.
+- **Caught-exception record (High).** A 0x30-byte record with a callback, a flag, a link and a 64-bit counter exists in the boot program, but it is not a script thread: it is the compiler runtime's record of a thrown C++ exception. Its two 16-bit fields at offsets 0x04 and 0x06 hold 4 and 1 (the language tag and version), the word at 0x08 is the thrown object, 0x0C its type, 0x10 the cleanup routine, 0x14 the caught flag (zero while the exception is still being thrown, set when a handler takes it), 0x18 the link to the next older record (the newest record is the head of the chain), 0x20 the handler count and 0x28 the original object. The end-of-handler step subtracts one from the count; a nonzero count ends the step. At zero, a record that is the newest in the chain and has the caught flag clear is kept (the exception is still in flight; its count is then -1 and later subtractions never bring it back to zero, so it is never finished). Confirmed 2026-11-09 (High): the creation routine builds this record and makes it the new head of the chain, and the end-of-handler routine behaves as described here; the endless routine that creates one such record and yields in a loop is the runtime's own throw loop and never returns. Any other record is unlinked, its cleanup routine is called with the thrown object and the value 2 (destroy the thrown object), and its storage is released. Nothing in the game proper throws: the throw and record-creation routines are called only from the runtime's own unwinder code, and none of the 276 distinct import names of the 173 level modules is a throw, catch or exception name. So no such record is ever created in play and a rewrite implements nothing for it.
 - **Wait(f)** yields the whole part of f x 60 ticks, by the seconds-to-ticks rule below; a count of 0 or less returns at once without yielding. The multiplier is the game tick rate, 60, written once at start-up from the boot rate table (SPEC-0007, Rate selection); it is not in the file.
 - **Waiting wrappers.** When a call's wait mode is nonzero (exactly 1 for PlayEntityAnim; Layout section 2.1), the caller yields each tick until the operation finishes. Examples: PlayAnim waits while the object is in the play-once state (state code 2); PlayHeroAnim always yields one tick and then, with the wait set, waits while the hero stays in the one-shot state; WalkHero waits while the hero is walking. There is no timeout in these loops (Low; a wait that never ends stalls its thread).
 - **Ticks for seconds.** Animation time is in seconds. Sampling uses frame = floor(time x 15) and fraction = time x 15 - frame (Medium; 15 frames per second is a code constant).
@@ -937,7 +955,7 @@ Sequence when a world is entered:
 **Init order (High).** A world's pack is read by its buffer's loader. When the read completes, the loader's completion step runs in this order: clear the buffer's busy word; check the IDM header; walk the chunks (SPEC-0006), which also binds the type-37 module; resolve the family's Init export and call Init(world). All of this happens before the arrival placement of that load and before the world is made current.
 - For a request-driven load (exterior replacement, return after a movie, pending slot), the driver pumps the loader until no load is active, then places the hero (placement after an exterior load, below), then makes the world current when the request's make-current word is set.
 - For the enter-interior job, the job waits for the interior buffer, makes the interior current, then lands the hero.
-- During Init, the current-world pointer is the world being reloaded when the exterior buffer is reloaded in place. Otherwise it is the world that was current before, for example the exterior while an interior or a streamed neighbour loads. Host calls in Init that act on the current world (MoveHero, SetHeroStartPos, ActivateObj, entity lookups) act on that world; the calls that take W act on the loaded world.
+- During Init, the current-world pointer is the world that was current before the load; nothing in the load makes the loaded world current before Init has run. It equals the loaded exterior only when E is released and read again in place while it is current: a script exterior replacement load, a save load or Continue made while E is current, a movie hand-off with a return world while E is current. It is T when an exterior is streamed in from a transition (the load starts only while T is current, and the swap needs E's ground, which exists only after the load) and when a game starts or a save is loaded from the title (T is read and made current, then E is read). It is T or I when the movie hand-off reloads E with T or I current. It is E while an interior or a transition loads (enter interior, leave interior, streaming of a transition). An interior visit does not reload E, so E's Init does not run on return (SPEC-0028, Run-time object changes). Host calls in Init that act on the current world (MoveHero, SetHeroStartPos, ActivateObj, entity lookups) act on that world; the calls that take W act on the loaded world.
 - A start pose stored by Init (module 777's SetHeroStartPos(8)) is overwritten by the placement that follows. Arrival logic belongs in the activate-world and on-enter callbacks (rows 252 and 255), which start when the world becomes current, so after the placement.
 - Because Init is a plain call inside the loader's completion step, a yield inside Init would yield the loader (Open question 80).
 
@@ -1024,6 +1042,1988 @@ The known path accepts an aligned module-image buffer from world-data parsing or
 
 The loader's init field is the module container's load hook at +0x18 (section 1), not a separate field, and no path reuses a loaded record: a holder that still has a linked module is unlinked first, which runs the unload hook and frees its manager slot (Open question 37, resolved). A second form checks byte +3 of the SNR image header for ASCII '1'; this is a format-version check, not a module-name test. It asks the manager to unload the exact image pointer first, and proceeds only when that pointer is linked. This form copies and relocates the image, calls the image load hook if set, then registers its id. No direct callsite for this form appears in the known boot, level-module, or DLL records, so no on-disc module name is shown reaching it (Open question 39).
 
+### 13. Object changes by pack (Confidence: High for the sites, the object numbers that are listed and the flag conditions; Medium for the "Persists" column and for the words "other script tests"; Medium-Low for rows marked table-driven or table/argument)
+
+This section lists the places where a level module's script calls change a placed object, a breakable, a placed effect, a character set or a world layer word: InitObjOn, ActivateObj, DeactivateObj, PlayAnim, LoopAnim, StopAnim, SetObjToTime, SetObjToMayaFrame, the locator-follow calls, the offset, rotation, colour and speed setters, SetWorldCollisMask, SetWorldDisplayMask, SetBreakableActive, MakeBreakable, Break, StartEffect, StopEffect, SlotLoad, SlotReset, the movable-block calls, SetTargetActive, ItemActivate, AddItemToWorld, DeactivateEntity, ActivateEntity, CharacterActivate and CharacterDeactivate. It covers 3,612 sites in 125 of the 163 distinct module images. The 38 packs with no such site are 685, 748, 749, 752, 776, 783, 786, 787, 788, 789, 797, 798, 809, 851, 855, 856, 857, 858, 906, 950, 955, 984, 1003, 1074, 1080, 1170, 1172, 1220, 1225, 1245, 1253, 1254, 1255, 1256, 1259, 1299, 1427 and 1429. Slot creation, entity walks and the flag writes are not object changes and are not listed.
+
+How to read the tables. Each row is a group of sites of one pack that make the same change under the same condition.
+- **Object / part**: the object, breakable, effect, entity or character-set numbers (ranges are collapsed; "table/argument" means the number is computed from module data or passed in by a caller, so it is not a fixed list). For the two layer-word calls the row has no object.
+- **When**: what runs the site. "at load" is the module's load routine or a helper it calls (once per load of the pack). "every tick" is its update. "world-activate callback" and "on-enter callback" run every time the world becomes current, so also after a return from an interior (the exterior is not reloaded then). "script trigger N", "entity proximity N", "teleport callback", "animated trigger N", "breakable hook N", "script-group callback" and "thread" are event handlers; they run only while the pack's world is current.
+- **Condition**: the tests that must hold, in words. Flags are game-state flags. "other script tests" stands for module state words, button presses, timers, distances and counters. Debug-only sites (17 in packs 985, 1096 and 1174) never run in play and are left out.
+- **Change**: the effect (Behavior section 2, Category 1 rows; objects are hidden at disc state until a call shows them; DeactivateObj also removes the object's walls and ground at once; PlayAnim and LoopAnim set the object's playing state unconditionally, so they bring back an object that was hidden or deactivated, with its walls and ground from the next object step (SPEC-0028, Run-time object changes)).
+- **Persists** (what makes the change survive a reload of the pack; the game saves flags, broken bits, kill bits and the collected table, and nothing about placed objects, effects, level state or module words):
+  - "rebuilt at each load" / "rebuilt each tick" / "re-run when the world becomes current": the site itself tests its condition there, so the result follows the flags.
+  - "rebuilt at each load (thread started at load)": a control thread that the load routine starts tests the flag when it runs, so the result follows the flags at each load unless the thread first waits for an event.
+  - "flag N read at load": the event handler writes flag N (itself or through a routine it calls) and the pack's load or update routine tests N.
+  - "kill bit, saved": DeactivateEntity or CharacterDeactivate by pointer; the character stays gone after a reload.
+  - "broken bit, saved": Break sets the bit for script indexes below 128; on disc data this does not keep the breakable broken (a breakable with its bit set loads intact), so the packs that need it gone also disable it from a flag at load.
+  - "no, reverts at reload": the handler writes no flag the pack tests; the object returns to its load state at the next reload of the pack. For cutscene props this is intended. An exterior is not reloaded by an interior visit, so inside a visit the change stays.
+  - "flag written, not read at load by this pack": the handler writes flags but this pack never tests them at load; another pack or the main program may. Check before relying on it.
+  - "level state only, not saved": the handler writes only level-state flags, which are cleared each time the world's buffer is released for a load (they survive swaps and interior visits of a resident exterior).
+  - "unclear": the site is reached through a table or an unlisted routine.
+
+Rules for a rewrite (High):
+1. Placed objects start hidden (state 3 almost without exception on disc). A flag-chosen setup shows the objects that belong to the flag value by calling InitObjOn or ActivateObj; an object with no call in that case is simply absent, with no walls and no ground.
+2. A flag is tested where the site runs. A scene that sets a flag does not move an object unless the same scene (or a tick routine that tests the flag) calls the object's setter; the load routine picks the flag up at the next load.
+3. Some changes are chained to the state of another object through a timer or a state word, not through the object's visibility (pack 1174: the west balcony rails follow the state word of pillar tile 42 and tile 43, SPEC-0044; pack 837: the wall layer words follow breakable 2). A rewrite has to keep the state words.
+4. The exterior world keeps its object states through interior visits. A rewrite that rebuilds the exterior on return loses every event-only change and re-runs the load routine instead; the "world-activate callback" rows are the ones the original repeats on return.
+5. Init-time calls with no world argument (or world 0) act on the current world; Init runs before the world is made current. In 13 exterior packs (735, 758, 772, 777, 822, 842, 956, 986, 1091, 1249, 1324, 1327, 1382) there are 52 such Init-reached sites (interior and transition modules pass their own world at all 95 of theirs). They act on the owning exterior only when it is the current world at load (a script replacement load, a save load or Continue while E is current, a return-world movie hand-off while E is current); when the exterior is streamed in, or a game starts or loads from the title, or a movie hand-off reloads E with T or I current, they act on T or I at the same object number and E's object stays in its disc state. Resolved (Medium-High): a rewrite must reproduce this by resolving the sites against the current world at the time Init runs (SPEC-0028, Run-time object changes, Which world is current while an exterior's Init runs).
+
+Reload behaviour summary (event-only changes; Confidence: High for the routine list, Medium for the classes marked Medium in the pack sections).
+
+A change that no flag read at load, at each tick or at world activation records is undone at the next rebuild of its pack. An interior or transition pack is rebuilt on every entry. An exterior pack is rebuilt only by a load of the exterior: a game load, a continue after a defeat, a new game, an exterior replacement load, or leaving for another exterior and coming back. A visit to an interior does not rebuild the exterior, which keeps every changed object. 120 routines that show, hide, enable or move something visible belong to this group. They fall into three classes (counts: a 83, b 21, c 16):
+- Class a, intended and harmless (83 routines): cutscene props that are hidden again, plates and pressure pads that undo themselves, minigame resets, fight toggles whose state is held by fight flags, and transition packs that are rebuilt on every entry. A rewrite loses nothing by rebuilding them.
+- Class b, gameplay-visible (21 routines in packs 790, 990, 1098, 1171, 1244, 1382 and 1392): a gate, lever, platform, panel or pedestal returns to its start state after a reload. In every case but pack 1244 the player can repeat the action, so nobody is locked out and no content is lost; pack 1392 skips its three lever pulls after the start; pack 1244 may seal a route (see its section). Keep each of these as the original does, including the odd ones.
+- Class c, persistent through a mechanism that is easy to miss (16 routines in packs 985, 1078, 1248, 1300, 1353, 1371, 1381, 1398 and 1411): a flag read by a table-driven helper, a thread that Init starts, the activate-world callback, or the exit routine rebuilds the change. A rewrite must keep the flag and the place where it is read.
+
+The change is also visible if a rewrite errs the other way. Making a class a or b change persistent shows the post-event state after a reload where the original shows the start state (levers pulled, gates open, rails gone, pedestals lit). Dropping a class c rebuild shows the start state where the original shows the finished state. Each pack section has a "Reload behaviour" bullet with the exact scenario.
+
+| Pack | Family | Routines (a / b / c) | What happens at a reload |
+| --- | --- | --- | --- |
+| 0735 | Exterior | 3 (3 / 0 / 0) | effect-scene props hidden again; bobbing thread restarts |
+| 0758 | Exterior | 2 (2 / 0 / 0) | minigame reset; mask words restart |
+| 0790 | Exterior | 2 (0 / 2 / 0) | two levers and their objects 1 and 2 return to start; lever reusable |
+| 0822 | Exterior | 1 (1 / 0 / 0) | prop shown before a replacement load |
+| 0908 | Transition | 1 (1 / 0 / 0) | swap animations rewound; transition rebuilt each entry |
+| 0956 | Exterior | 1 (1 / 0 / 0) | hides objects that no call shows; flags gate the trigger |
+| 0985 | Exterior | 1 (0 / 0 / 1) | arena walls re-armed by the activate-world callback; flag 214 keeps the Gnarfas arena open |
+| 0990 | Exterior | 2 (1 / 1 / 0) | switch pairs and lever-lifted walkway return to start; reusable |
+| 1023 | Exterior | 2 (2 / 0 / 0) | package prop hidden again; item removal and flags kept; mask cycle restarts |
+| 1077 | Exterior | 2 (2 / 0 / 0) | threads restart; lever results rebuilt from flags 38, 36, 306 |
+| 1078 | Exterior | 2 (1 / 0 / 1) | plate doors close when released; lever doors kept by table flags 669 to 674 |
+| 1079 | Transition | 1 (1 / 0 / 0) | plate swaps restored; transition |
+| 1089 | Transition | 1 (1 / 0 / 0) | timed crusher run; transition |
+| 1091 | Exterior | 5 (5 / 0 / 0) | stepping stones and rope targets restart |
+| 1096 | Exterior | 2 (2 / 0 / 0) | tower stages restart while flag 45 is clear |
+| 1098 | Exterior | 1 (0 / 1 / 0) | lever pairs and panel object 3 return to start; stage gates make them reusable |
+| 1122 | Exterior | 1 (1 / 0 / 0) | intro prop only |
+| 1130 | Transition | 3 (3 / 0 / 0) | button pairs swap back; transition |
+| 1171 | Exterior | 5 (3 / 2 / 0) | three gate levers: gates 0 to 2 close again after a reload; reusable |
+| 1174 | Exterior | 3 (3 / 0 / 0) | rails and pillars rebuilt at every arrival (run restarts) |
+| 1217 | Exterior | 15 (15 / 0 / 0) | fight toggles; fight state in flags 82, 83, 145, 278 |
+| 1244 | Exterior | 1 (0 / 1 / 0) | rock-fall scene undone by a reload while flag 272 is set and 273 clear; scene cannot repeat |
+| 1247 | Exterior | 5 (5 / 0 / 0) | plate gates close when released; arrival gate closes again at a reload |
+| 1248 | Exterior | 4 (1 / 0 / 3) | switch objects kept only for one combination (flag 79 at unload) |
+| 1249 | Exterior | 5 (5 / 0 / 0) | plate gates close when released; levers kept as all-up (flag 80) |
+| 1300 | Exterior | 1 (0 / 0 / 1) | ritual objects kept by flag 594 |
+| 1353 | Exterior | 1 (0 / 0 / 1) | statue puzzle rebuilt from flag 694 (turn angles are not kept) |
+| 1358 | Exterior | 1 (1 / 0 / 0) | mask minigame restarts |
+| 1363 | Exterior | 1 (1 / 0 / 0) | pressure plate swaps back |
+| 1371 | Exterior | 1 (0 / 0 / 1) | wave gates kept by flags 342 to 344; mid-wave reload resets the cage |
+| 1381 | Exterior | 7 (2 / 0 / 5) | stations and blocks rebuilt from flags 708 to 719 at every activation |
+| 1382 | Exterior | 5 (0 / 5 / 0) | pedestals, switches and gate scene reset; kill bits and flags 98, 337 kept |
+| 1392 | Exterior | 9 (0 / 9 / 0) | reload with flag 696 set shows all three levers pulled and objects 11, 13, 15 drawn |
+| 1393 | Exterior | 14 (14 / 0 / 0) | whole-module reset; no flag read |
+| 1394 | Exterior | 6 (6 / 0 / 0) | timed puzzle restarts |
+| 1398 | Exterior | 2 (0 / 0 / 2) | finished stages kept by flags 720 to 724; unfinished stage re-armed |
+| 1411 | Exterior | 1 (0 / 0 / 1) | shrine light sequences not replayed (flags 688 to 691) |
+
+Quirks worth keeping (High unless marked):
+1. Pack 1392 treats all three gate levers as pulled whenever flag 696 is set at load, whether or not they were pulled.
+2. Pack 1244 tests flag 273 at load but its scene ends by setting flag 272, so a reload between the two shows the sealed layout and the scene cannot run again (Medium).
+3. Pack 1248 keeps its switch results only if, when the pack is unloaded, objects 0 and 2 are inactive and object 1 is active; every other combination is forgotten.
+4. A broken bit never keeps a breakable broken (the start-mode pass revives it), so packs that need a breakable gone also disable it from a flag at load; the break scenes of packs 1171 and 1244 are undone by a reload except for those flag disables.
+5. Pack 985 re-arms its arena walls at every world activation in the Gelert branch, and only while flag 214 is clear in the Gnarfas branch (Medium).
+
+Test vectors:
+- Pack 706, flag 205 clear at load: collision word 1 and display argument 1 (display word 2); flag 205 set: collision word 2 and display argument 2 (display word 4).
+- Pack 1184, flag 277 clear: every tick collision word 1 and display argument 1; flag 277 set: collision word 2 and display argument 2.
+- Pack 1066: object 0, every tick: with flag 2 set and object 0 shown, object 0 is hidden (DeactivateObj) in the same tick.
+- Pack 934, flags 470 and 474 set and object 0 hidden: object 0 is shown at its start pose on the next tick; both flags clear and object 0 shown: it is hidden on the next tick.
+- Pack 1392 (reload with the three gate levers): flag 696 clear at load: levers 20, 22 and 24 at their start pose, effects 13 to 18 stopped, objects 11, 13 and 15 not shown, and the first Update runs the fall-in. Flag 696 set at load: levers 20, 22 and 24 at their end pose, objects 11, 13 and 15 shown at their start pose, effects 13 to 18 left running, all three lever words 1, so triggers 25 to 27 do nothing.
+- Pack 1244 (reload after the rock-fall scene, Werelupe King alive): flags 272 set and 273 clear at load: objects 5, 0, 1 and 4 shown at their start pose, object 6 not shown, breakables 17 to 24 intact, triggers 0, 3 and 4 do not fire. Flag 273 set: none of those objects is initialised.
+- Pack 1171 (reload after pulling lever L5): before the pull, lever object 11 is drawn and gate object 2 is at its start pose; after the pull, 12 is drawn and gate 2 is at its end pose; after a reload (not after an interior visit) lever 11 is drawn again, gate 2 is at its start pose, and the lever can be pulled again.
+
+**Pack 0678** (same code as 0686, 0691): Transition, the road-fight scene chain, flag-gated slot setup and a button prompt
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0,9,10 | every tick, thread | none | entity removed permanently (kill bit) | kill bit, saved |
+| - | every tick, thread | none | character slot emptied (characters released) | flag 126,146 read at load |
+| 3 | every tick, thread | none | character set loaded into a slot | flag 126,146 read at load |
+| 10 | every tick, thread | none | entity force-spawned (kill bit cleared) | flag 126,146 read at load |
+| 5,6 | every tick, thread | none | character released (streaming may rebind) | kill bit, saved |
+| 2 | table-driven | flag 148 set and flag 149 clear and other script test and other script test | character set loaded into a slot | unclear |
+| - | thread | none | character slot emptied (characters released) | flag 149 read at load |
+| 0,3 | load thread | none | character set loaded into a slot | no, reverts at reload |
+| 1 | table-driven | none | character set loaded into a slot | unclear |
+| 0,1 | thread | flag 124 set | shown at start pose (draw, collision, pose at time 0) | flag 126 read at load |
+| 0,1 | thread | flag 124 set | hidden, collision and walls off | flag 126 read at load |
+| 0,1 | thread | none | shown at start pose (draw, collision, pose at time 0) | flag 146 read at load |
+| 0,1 | thread | none | hidden, collision and walls off | flag 146 read at load |
+| 0,1 | thread | none | shown at start pose (draw, collision, pose at time 0) | flag 149 read at load |
+| 0,1 | thread | none | hidden, collision and walls off | flag 149 read at load |
+
+**Pack 0696**: Transition, map triggers, button prompt and intro movie
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | at load | flag 137 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0-16 | at load | flag 284 set | effect stops | rebuilt at each load |
+| - | every tick | flag 220 set and flag 284 clear | ground-block collision layer word := 4 | rebuilt each tick |
+| - | every tick | flag 220 set and flag 284 clear | placed-object display layer word := 2 x 15 | rebuilt each tick |
+
+**Pack 0699**: Exterior, world masks and two triggers
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | at load | flag 265 clear | placed-object display layer word := 2 x 1 | rebuilt at each load |
+| - | at load | flag 265 set | placed-object display layer word := 2 x 2 | rebuilt at each load |
+| - | at load | none | ground-block collision layer word := a computed word | rebuilt at each load |
+
+**Pack 0702**: Transition, button prompt and a message on entry
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | at load | flag 252 clear | ground-block collision layer word := 1 | rebuilt at each load |
+
+**Pack 0706**: Transition, flag-gated setup, character sets and a teleport
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0,1 | load thread | flag 67 clear and flag 66 clear and flag 65 clear and flag 64 clear and flag 63 clear | character set loaded into a slot | rebuilt at each load |
+| 2 | load thread | flag 67 clear and flag 66 clear and flag 65 clear and flag 64 clear | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 67 clear and flag 66 clear and flag 65 clear | character set loaded into a slot | rebuilt at each load |
+| 4 | load thread | flag 67 clear and flag 66 clear | character set loaded into a slot | rebuilt at each load |
+| 5 | load thread | flag 67 set | character set loaded into a slot | rebuilt at each load |
+| 0 | at load | flag 248 set and item 14 not held | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| - | at load | flag 205 clear | ground-block collision layer word := 1 | rebuilt at each load |
+| - | at load | flag 205 clear | placed-object display layer word := 2 x 1 | rebuilt at each load |
+| - | at load | flag 205 set | ground-block collision layer word := 2 | rebuilt at each load |
+| - | at load | flag 205 set | placed-object display layer word := 2 x 2 | rebuilt at each load |
+
+**Pack 0714**: Transition, intro movie trigger and button prompt
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | load thread | none | character set loaded into a slot | no, reverts at reload |
+| 9-15 | at load | flag 284 set | effect stops | rebuilt at each load |
+| - | every tick | flag 220 set and flag 284 clear | ground-block collision layer word := 4 | rebuilt each tick |
+| - | every tick | flag 220 set and flag 284 clear | placed-object display layer word := 2 x 15 | rebuilt each tick |
+
+**Pack 0722**: Exterior, sixteen entity proximity registrations in eight routines, a betting race, signs, five interior doors and a slot-load thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 1,2,7 | load thread | flag 76 clear and flag 75 clear | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 76 set | character set loaded into a slot | rebuilt at each load |
+| 0,4 | load thread | flag 76 set and flag 562 set | character set loaded into a slot | rebuilt at each load |
+| 5 | load thread | flag 76 set and flag 569 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 0732**: Transition, two entity lines, a blackboard value per teleport index
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 1 | load thread | flag 561 clear or flag 562 set | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | not (flag 561 clear or flag 562 set) | character set loaded into a slot | rebuilt at each load |
+
+**Pack 0735**: Exterior, hero-death and activate-world callbacks, a set of triggers and a cutscene chain
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | script trigger 21 | none | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 5 | script trigger 21 | none | character set loaded into a slot | flag written, not read at load by this pack |
+| 0 | script trigger 21 | none | character activated | flag written, not read at load by this pack |
+| 0 | script trigger 21 | none | character released (streaming may rebind) | kill bit, saved |
+| 1,3,4 | script trigger 4/5 | flag 263 clear | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 1-4 | script trigger 4/5 | flag 263 clear | animation plays once | no, reverts at reload |
+| 1,2 | script trigger 4/5 | flag 263 clear | effect starts | no, reverts at reload |
+| 1,2 | script trigger 4/5 | flag 263 clear | effect stops | no, reverts at reload |
+| 1,3,4 | script trigger 4/5 | flag 263 clear | hidden, collision and walls off | no, reverts at reload |
+| - | load thread | none | character slot emptied (characters released) | flag 263 read at load |
+| 4 | load thread | none | character set loaded into a slot | flag 263 read at load |
+| 0 | load thread | none | character activated | flag 263 read at load |
+| 12,54 | load thread | none | hidden, collision and walls off | flag 263 read at load |
+| 0 | load thread | none | breakable enabled (intact) | flag 263 read at load |
+| 0 | load thread | none | breakable broken by script | broken bit, saved |
+| 0,13 | load thread | none | shown at start pose (draw, collision, pose at time 0) | flag 263 read at load |
+| 0 | load thread | none | animation plays once | flag 263 read at load |
+| table/argument | table-driven | other script test | breakable made breakable | unclear |
+| table/argument | table-driven | other script test | breakable broken by script | broken bit, saved |
+| table/argument | table-driven | none | animation plays once | unclear |
+| table/argument | table-driven | none | hidden, collision and walls off | unclear |
+| table/argument | table-driven | none | effect starts | unclear |
+| table/argument | table-driven | none | shown at start pose (draw, collision, pose at time 0) | unclear |
+| table/argument | table-driven | none | effect stops | unclear |
+| table/argument | load thread | other script test | pose set to a computed time and frozen | no, reverts at reload |
+| table/argument | at load | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 14-16 | at load | none | animation loops | rebuilt at each load |
+| 12,table/argument | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | none | breakable disabled | rebuilt at each load |
+| 12 | world-activate callback | flag 263 clear | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 12,54 | world-activate callback | flag 263 set | hidden, collision and walls off | re-run when the world becomes current |
+| 0,13 | world-activate callback | flag 263 set | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 2 | load thread | flag 76 clear and flag 75 clear and flag 261 set and (flag 530 clear or flag 531 set) | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 76 clear and flag 75 clear and flag 261 set and flag 531 set | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 76 clear and flag 75 clear and flag 530 set and flag 531 clear | character set loaded into a slot | rebuilt at each load |
+| 2 | load thread | flag 76 clear and flag 75 clear | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | flag 76 set and flag 530 set and flag 531 clear | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | none | character set loaded into a slot | no, reverts at reload |
+| 1 | at load | none | effect stops | rebuilt at each load |
+
+**Pack 0742**: Transition, proximity conversation and two watcher threads
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 76 clear and flag 75 clear | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | flag 76 clear | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | flag 76 set | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 76 set and flag 561 set and flag 562 clear | character set loaded into a slot | rebuilt at each load |
+
+**Pack 0745**: Interior, four entity proximity routines, an on-enter callback and a flag-gated item exchange
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0,1 | load thread | flag 76 clear and flag 75 clear | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | flag 76 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | none | character set loaded into a slot | no, reverts at reload |
+
+**Pack 0750**: Interior, on-enter line, four proximity lines and a flag-gated line set
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 76 clear and flag 75 clear | character set loaded into a slot | rebuilt at each load |
+
+**Pack 0753**: Exterior, entity proximity, teleport and an effect group
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 15-48 | at load, load thread, script trigger 1 | other script test | effect stops | flag 258 read at load |
+| 15-48 | at load, load thread, script trigger 1 | not other script test | effect starts | flag 258 read at load |
+| 0 | load thread | none | character released (streaming may rebind) | kill bit, saved |
+| 0 | script trigger 1 | other script test and movie 36 not played | character activated | level state only, not saved |
+| - | at load | flag 252 clear | ground-block collision layer word := 1 | rebuilt at each load |
+
+**Pack 0757**: Exterior, boss-arena style encounter with a camera and AI state
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 2-5 | at load | none | shown at end pose (finished) | rebuilt at each load |
+
+**Pack 0758**: Exterior, many entity proximity lines, a script-trigger set with a button prompt and breakable checks, and a world-swap callback
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | load thread, thread | none | character slot emptied (characters released) | no, reverts at reload |
+| 0,12 | load thread | none | character set loaded into a slot | no, reverts at reload |
+| table/argument | load thread | none | character activated | no, reverts at reload |
+| - | thread | other script test | character slot emptied (characters released) | no, reverts at reload |
+| table/argument,? | thread | other script test | character set loaded into a slot | no, reverts at reload |
+| table/argument | thread | other script test | character activated | no, reverts at reload |
+| table/argument | thread | other script test | character released (streaming may rebind) | kill bit, saved |
+| - | table-driven | none | character slot emptied (characters released) | unclear |
+| ? | table-driven | none | character set loaded into a slot | unclear |
+| 3,6 | at load, entity proximity 26, entity proximity 28, script trigger 14 | other script test | animation plays once backward from the end | flag written, not read at load by this pack |
+| 17 | at load, entity proximity 26, entity proximity 28, script trigger 14 | breakable 17 broken or off | breakable enabled (intact) | flag written, not read at load by this pack |
+| 18 | at load, entity proximity 26, entity proximity 28, script trigger 14 | breakable 18 broken or off | breakable enabled (intact) | flag written, not read at load by this pack |
+| 19 | at load, entity proximity 26, entity proximity 28, script trigger 14 | breakable 19 broken or off | breakable enabled (intact) | flag written, not read at load by this pack |
+| 20 | at load, entity proximity 26, entity proximity 28, script trigger 14 | breakable 20 broken or off | breakable enabled (intact) | flag written, not read at load by this pack |
+| 2,3,6 | script trigger 15 | other script test | animation plays once | no, reverts at reload |
+| 2 | script trigger 15 | other script test | animation plays once backward from the end | no, reverts at reload |
+| table/argument | script trigger 16/17/18/19 | breakable (table) intact | breakable broken by script | broken bit, saved |
+| 0,2,3,6 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| - | at load, script trigger 3 | none | ground-block collision layer word := a computed word | flag written, not read at load by this pack |
+| - | at load, script trigger 3 | none | placed-object display layer word := 2 x a computed word | flag written, not read at load by this pack |
+| - | table-driven | none | transition scene | unclear |
+
+**Pack 0772**: Exterior, entity conversation chain, a walk-off scene and item prompts
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | entity proximity 14 | none | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 1 | entity proximity 14 | none | character set loaded into a slot | flag written, not read at load by this pack |
+| 2 | world-activate callback | flag 591 set and flag 592 clear | character set loaded into a slot | re-run when the world becomes current |
+| 1 | at load | flag 543 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | flag 543 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | flag 543 set | animation loops | rebuilt at each load |
+| 0 | every tick | other script test and flag 543 set | shown at start pose (draw, collision, pose at time 0) | rebuilt each tick |
+| 0 | every tick | other script test and flag 543 set | animation loops | rebuilt each tick |
+
+**Pack 0777**: Exterior, entity proximity dialogue set, script triggers and an AI-death sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | script trigger 4/5/6/7... | other script test and flag 256 clear and other script test | animation plays once | unclear |
+| table/argument | script trigger 4/5/6/7... | other script test and flag 256 clear and other script test | effect stops | unclear |
+| 15 | script trigger 4/5/6/7... | other script test and flag 256 clear and other script test | shown at start pose (draw, collision, pose at time 0) | unclear |
+| 14 | script trigger 4/5/6/7... | other script test and flag 256 clear and other script test | hidden, collision and walls off | unclear |
+| 12,13 | at load | flag 253 set | effect stops | rebuilt at each load |
+| 14 | at load | flag 254 set | effect stops | rebuilt at each load |
+| 15 | at load | flag 255 set | effect stops | rebuilt at each load |
+| 16 | at load | flag 256 set | effect stops | rebuilt at each load |
+| table/argument | at load | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| table/argument | at load | other script test | shown at end pose (finished) | rebuilt at each load |
+| table/argument | at load | other script test and other script test and (other script test or flag (table) clear) | shown at end pose (finished) | rebuilt at each load |
+| 1,4 | load thread | flag 592 clear or flag 593 set | character set loaded into a slot | rebuilt at each load |
+| 0,2 | load thread | not (flag 592 clear or flag 593 set) | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 591 clear or other script test | character set loaded into a slot | rebuilt at each load |
+| 1-6 | at load, thread | other script test | shown at end pose (finished) | flag 593 read at load |
+| 1-6 | at load, thread | not other script test and other script test | shown at start pose (draw, collision, pose at time 0) | flag 593 read at load |
+| 1,2 | table-driven | none | animation plays once | unclear |
+| 3-6 | script trigger 0 | none | animation plays once | flag 252 read at load |
+| 0 | thread | none | hidden, collision and walls off | flag 593 read at load |
+| - | thread | none | character slot emptied (characters released) | flag 593 read at load |
+| 4 | thread | none | character set loaded into a slot | flag 593 read at load |
+| 0 | at load | flag 252 set and flag 593 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 0784**: Interior, conditional thread, a proximity line and a trigger with a hero walk (no Exit)
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 590 set and flag 591 clear | character set loaded into a slot | rebuilt at each load |
+| 2 | script trigger 1 | other script test and flag 543 clear and flag 543 clear and other script test and flag 542 clear | animation plays once | flag 543 read at load |
+| 2 | at load | flag 543 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 3 | at load | flag 543 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 0790**: Exterior, four triggers, a hero-button prompt and a camera-and-slot thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 1,2,18,20 | script trigger 14/15 | other script test | animation plays once | no, reverts at reload |
+| 18,20 | script trigger 14/15 | other script test | hidden, collision and walls off | no, reverts at reload |
+| 19,21 | script trigger 14/15 | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| - | thread | other script test | character slot emptied (characters released) | no, reverts at reload |
+| 1 | thread | other script test | character set loaded into a slot | no, reverts at reload |
+| - | thread | not other script test and other script test | character slot emptied (characters released) | no, reverts at reload |
+| 0 | thread | not other script test and other script test | character set loaded into a slot | no, reverts at reload |
+| 0-3,18,20 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 0793**: Transition, one entity line and a thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 1 | load thread | flag 417 clear | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | flag 417 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 0796**: Exterior, a button-gated sequence and a fade-and-load trigger
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0,1,17 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 0799**: Transition, a button-driven lever sequence and a query-only trigger
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0-2 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 0800**: Exterior, debug cutscene test chooser and boss-stage threads
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | every tick, thread, script trigger 1 | none | character slot emptied (characters released) | flag 55 read at load |
+| 7 | every tick, thread | none | character set loaded into a slot | flag 55 read at load |
+| - | every tick, thread | none | world item spawned | flag 55 read at load |
+| 0 | every tick, thread | none | shown at start pose (draw, collision, pose at time 0) | flag 55 read at load |
+| 0,1,5,6 | load thread | flag 58 clear and flag 57 clear and flag 56 clear and flag 55 clear | character set loaded into a slot | rebuilt at each load |
+| 2 | load thread | flag 58 clear and flag 57 clear and flag 56 clear | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 58 clear and flag 57 clear | character set loaded into a slot | rebuilt at each load |
+| 4 | load thread | flag 58 set | character set loaded into a slot | rebuilt at each load |
+| 0 | at load | flag 55 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 0816**: Transition, breakable switch and pickup flag
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 11 | at load | flag 516 set and flag 517 clear | breakable disabled | rebuilt at each load |
+| 12 | at load | none | breakable disabled | rebuilt at each load |
+
+**Pack 0822**: Exterior, villager and trigger room with a flag-gated conversation
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0,1,4,5,8,9 | load thread | flag 58 clear and flag 57 clear and flag 56 clear and flag 55 clear and other script test | character set loaded into a slot | rebuilt at each load |
+| 2,6,10 | load thread | flag 58 clear and flag 57 clear and flag 56 clear and other script test | character set loaded into a slot | rebuilt at each load |
+| 3,7,11 | load thread | flag 58 clear and flag 57 clear and other script test | character set loaded into a slot | rebuilt at each load |
+| 12 | load thread | flag 58 set and (flag 531 clear or flag 532 set) | character set loaded into a slot | rebuilt at each load |
+| 13 | load thread | flag 58 set and flag 532 set | character set loaded into a slot | rebuilt at each load |
+| 7 | script trigger 2 | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 7 | script trigger 2 | other script test | animation plays once | no, reverts at reload |
+| 18-21 | at load, script trigger 8 | none | animation loops | flag 621 read at load |
+| 4,5 | at load, script trigger 8 | none | shown at start pose (draw, collision, pose at time 0) | flag 621 read at load |
+| 4,5 | at load, script trigger 8 | none | animation plays once | flag 621 read at load |
+| 55-60 | at load, script trigger 8 | other script test | effect starts | flag 621 read at load |
+| 10-13,15-21 | at load | none | animation loops | rebuilt at each load |
+| 55-60 | at load | none | effect stops | rebuilt at each load |
+| 14 | script trigger 8 | flag 55 clear and other script test | animation plays once | flag 621 read at load |
+| - | script trigger 5/6/7 | other script test | character slot emptied (characters released) | no, reverts at reload |
+| 7 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 14,18-21 | at load | flag 55 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 1-3,14,18 | at load | flag 55 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 6 | at load | flag 57 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 0837**: Transition, a flag-driven world mask, a dormant chooser and a break routine called from Update
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | at load, every tick | none | ground-block collision layer word := 2 | rebuilt at each load |
+| - | at load, every tick | none | placed-object display layer word := 2 x 2 | rebuilt at each load |
+| 3 | at load | none | breakable disabled | rebuilt at each load |
+| - | at load | none | ground-block collision layer word := 1 | rebuilt at each load |
+| - | at load | none | placed-object display layer word := 2 x 1 | rebuilt at each load |
+| 0 | at load | flag 636 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | every tick | none | animation plays once | rebuilt each tick |
+| 3 | every tick | none | breakable enabled (intact) | rebuilt each tick |
+| 3 | every tick | none | breakable broken by script | broken bit, saved |
+
+**Pack 0842**: Exterior, four teleports to interior worlds with a prompt, a story-stage slot thread and quest cutscenes
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | every tick, load thread | none | character slot emptied (characters released) | flag 54,56,198 read at load |
+| 1 | every tick, load thread | none | character set loaded into a slot | flag 54,56,198 read at load |
+| - | every tick, script trigger 2 | none | character slot emptied (characters released) | flag 54,56,59,198 read at load |
+| 2,3,6,7 | every tick, script trigger 2 | none | character set loaded into a slot | flag 54,56,59,198 read at load |
+| table/argument | at load, load thread, script trigger 1 | other script test | effect stops | flag 53,54,197,198 read at load |
+| table/argument | at load, load thread, script trigger 1 | other script test | effect starts | flag 53,54,197,198 read at load |
+| 0,1 | load thread | flag 59 clear and flag 58 clear and flag 57 clear and flag 56 clear and flag 55 clear and flag 54 clear | character set loaded into a slot | rebuilt at each load |
+| 7 | load thread | flag 59 clear and flag 58 clear and flag 57 clear and flag 56 clear and flag 55 clear | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 59 clear and flag 58 clear and flag 57 clear and flag 56 clear | character set loaded into a slot | rebuilt at each load |
+| 4 | load thread | flag 59 clear and flag 58 clear and flag 57 clear | character set loaded into a slot | rebuilt at each load |
+| 7 | load thread | flag 59 clear and flag 58 clear | character set loaded into a slot | rebuilt at each load |
+| 6 | load thread | flag 59 set | character set loaded into a slot | rebuilt at each load |
+| 0 | at load, load thread, script trigger 1 | not other script test | hidden, collision and walls off | flag 53,54,197,198 read at load |
+| 0 | at load, load thread, script trigger 1 | not other script test | shown at start pose (draw, collision, pose at time 0) | flag 53,54,197,198 read at load |
+| 0 | at load, load thread, script trigger 1 | none | shown at start pose (draw, collision, pose at time 0) | flag 53,54,197,198 read at load |
+| 1 | at load | flag 198 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 1 | every tick | flag 198 set and object 1 shown | hidden, collision and walls off | rebuilt each tick |
+
+**Pack 0859**: Interior, proximity dialogue tree with an item-count check and a buy-item line
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | entity proximity 0 | flag 506 set and flag 507 clear and other script test | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 0 | entity proximity 0 | flag 506 set and flag 507 clear and other script test | character set loaded into a slot | flag written, not read at load by this pack |
+| 0 | load thread | flag 507 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 0864**: Exterior, four entity proximity routines, a boss stage thread, an exit cutscene and a per-tick animated-object sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | entity proximity 45, entity proximity 47, entity proximity 48 | none | character slot emptied (characters released) | flag written, not read at load by this pack |
+| - | entity proximity 43 | none | character slot emptied (characters released) | no, reverts at reload |
+| - | thread | other script test | character slot emptied (characters released) | no, reverts at reload |
+| table/argument | thread | other script test | character set loaded into a slot | no, reverts at reload |
+| 1 | table-driven | flag 58 clear | character set loaded into a slot | unclear |
+| 0 | table-driven | flag 58 set | character set loaded into a slot | unclear |
+| table/argument | table-driven | other script test | pose set to a computed time and frozen | unclear |
+| table/argument | table-driven | other script test | animation loops | unclear |
+| table/argument | table-driven | none | animation loops | unclear |
+| table/argument | table-driven | none | pose set to a computed time and frozen | unclear |
+| table/argument | table-driven | other script test | animation plays once | unclear |
+| 15,16,table/argument | table-driven | none | animation plays once | unclear |
+| 16,table/argument | table-driven | object (table) not animating | effect stops | unclear |
+| table/argument | every tick | none | animation plays once | rebuilt each tick |
+| 44 | table-driven | none | entity removed permanently (kill bit) | kill bit, saved |
+| 35,table/argument | table-driven | none | effect starts | unclear |
+| 35 | table-driven | other script test and flag 293 set and other script test | effect stops | unclear |
+| 93,94 | table-driven | other script test and flag 293 set and other script test | animation plays once | unclear |
+| - | table-driven | other script test and flag 293 set and other script test | character slot emptied (characters released) | unclear |
+| table/argument | every tick | object (table) finished | pose set to a fixed time and frozen | rebuilt each tick |
+| table/argument | every tick | object (table) finished | effect starts | rebuilt each tick |
+| table/argument | every tick | object (table) finished | animation plays once | rebuilt each tick |
+| table/argument | every tick | object (table) finished | effect stops | rebuilt each tick |
+| table/argument | every tick | other script test | effect stops | rebuilt each tick |
+
+**Pack 0874**: Transition, two entity talks, a camera and a slot thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | entity proximity 6 | none | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 0 | load thread | flag 58 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 58 set | character set loaded into a slot | rebuilt at each load |
+| 2 | load thread | flag 291 clear | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 290 clear | character set loaded into a slot | rebuilt at each load |
+
+**Pack 0880**: Exterior, boss-entry triggers, a treasure-map exchange and a slot thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 52 clear and flag 51 clear and flag 50 clear and flag 49 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 52 clear and flag 51 clear and flag 50 clear | character set loaded into a slot | rebuilt at each load |
+| 2 | load thread | flag 52 clear and flag 51 clear | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 52 set | character set loaded into a slot | rebuilt at each load |
+| - | script-instance trigger | flag 296 clear | character slot emptied (characters released) | no, reverts at reload |
+| 4 | script-instance trigger | flag 296 clear | character set loaded into a slot | no, reverts at reload |
+| - | script-instance trigger | none | character slot emptied (characters released) | no, reverts at reload |
+| 0,1 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| - | at load | flag 252 clear | ground-block collision layer word := 1 | rebuilt at each load |
+
+**Pack 0886**: Exterior, a dialogue-prompt trigger, a camera-and-slot thread and an AI sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | table-driven | other script test and flag 251 clear | character slot emptied (characters released) | unclear |
+| 4 | table-driven | other script test and flag 251 clear | character set loaded into a slot | unclear |
+| 3 | every tick | flag 250 clear and entity 16 dead and entity 17 dead and entity 18 dead | hidden, collision and walls off | rebuilt each tick |
+| 3 | at load | flag 250 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| - | at load | flag 252 clear | ground-block collision layer word := 1 | rebuilt at each load |
+
+**Pack 0893**: Exterior, slot setup, a slot-load thread, an item-counting exchange, a boss check and button and dialogue triggers
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | entity proximity 41 | flag 526 clear | character slot emptied (characters released) | flag 526 read at load |
+| 6 | heropickupitemcallback | other script test | character set loaded into a slot | flag 525 read at load |
+| - | load thread | none | character slot emptied (characters released) | no, reverts at reload |
+| 3 | load thread | not (flag 394 clear and flag 395 clear) and (flag 394 clear or flag 395 set) | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | none | character set loaded into a slot | no, reverts at reload |
+| 36-38 | thread | other script test | entity removed permanently (kill bit) | kill bit, saved |
+| - | thread | other script test | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 8 | load thread | flag 193 clear | character set loaded into a slot | rebuilt at each load |
+| 11 | load thread | flag 524 set and flag 525 clear and item 77 not held | character set loaded into a slot | rebuilt at each load |
+| 6 | load thread | flag 524 set and flag 526 clear and flag 525 set | character set loaded into a slot | rebuilt at each load |
+| 10 | load thread | flag 47 clear and (flag 490 clear or flag 491 set or flag 64 set) | character set loaded into a slot | rebuilt at each load |
+| 9 | load thread | flag 47 clear and flag 64 set | character set loaded into a slot | rebuilt at each load |
+| 4 | load thread | flag 47 clear and flag 494 set and flag 495 clear | character set loaded into a slot | rebuilt at each load |
+| 7 | load thread | flag 47 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 0908**: Transition, world-swap with a camera and a hero walk
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0-2,4 | scriptworldswap | none | pose set to a fixed time and frozen | no, reverts at reload |
+| 0-2,4 | scriptworldswap | none | animation plays once | no, reverts at reload |
+| 0-2,4 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 0909**: Exterior, object and slot setup, teleports to two interiors, a whinny-pen trigger set and a flag-gated item exchange
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 8 | thread | none | hidden, collision and walls off | flag 706 read at load |
+| 8 | thread | none | shown at start pose (draw, collision, pose at time 0) | flag 706 read at load |
+| - | every tick | none | character slot emptied (characters released) | rebuilt each tick |
+| 16,17 | every tick | none | character set loaded into a slot | rebuilt each tick |
+| 6,19 | every tick | none | animation plays once | rebuilt each tick |
+| 19 | every tick | none | play speed set (-1.0) | rebuilt each tick |
+| 3,4 | every tick | none | effect stops | rebuilt each tick |
+| 7,8 | every tick | none | hidden, collision and walls off | rebuilt each tick |
+| 6,8 | every tick | none | shown at start pose (draw, collision, pose at time 0) | rebuilt each tick |
+| - | thread | none | character slot emptied (characters released) | flag 706 read at load |
+| 4,10,16,table/argument | thread | none | character set loaded into a slot | flag 706 read at load |
+| - | thread | other script test | character slot emptied (characters released) | flag 706 read at load |
+| 2,4,10,14-16,22,23 | thread | other script test | character set loaded into a slot | flag 706 read at load |
+| - | thread | other script test and other script test and flag 119 set and flag 121 clear | character slot emptied (characters released) | flag 706 read at load |
+| 4,table/argument | thread | other script test and flag 126 clear | character set loaded into a slot | flag 706 read at load |
+| 10,table/argument | thread | other script test and flag 122 clear | character set loaded into a slot | flag 706 read at load |
+| 4,13,16 | thread | other script test and flag 147 clear | character set loaded into a slot | flag 706 read at load |
+| 0,1 | thread | flag 6 clear and flag 5 clear and flag 4 clear and flag 3 clear and flag 2 clear and flag 110 clear | character set loaded into a slot | flag 706 read at load |
+| 2 | thread | flag 6 clear and flag 5 clear and flag 4 clear and flag 3 clear | character set loaded into a slot | flag 706 read at load |
+| 3 | thread | flag 6 clear and flag 5 clear and flag 4 clear | character set loaded into a slot | flag 706 read at load |
+| 9 | script trigger 5 | not other script test | shown at start pose (draw, collision, pose at time 0) | flag 112 read at load |
+| 17-20 | script trigger 5 | not other script test | animation plays once | flag 112 read at load |
+| 20 | script trigger 5 | not other script test | animation frozen at its current time | flag 112 read at load |
+| 9,20 | script trigger 5 | not other script test | hidden, collision and walls off | flag 112 read at load |
+| 3,4 | script trigger 5 | not other script test | effect starts | flag 112 read at load |
+| 7,8,17-20 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 3,4 | at load | none | effect stops | rebuilt at each load |
+| 4,15,16 | at load | flag 122 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 15,16 | at load | flag 122 set | shown at end pose (finished) | rebuilt at each load |
+| 5 | at load | flag 122 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 3,10,11 | at load | flag 110 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 10,11 | at load | flag 110 set | shown at end pose (finished) | rebuilt at each load |
+| 2 | at load | flag 110 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 10,11 | every tick | flag 110 set and other script test | animation plays once | rebuilt each tick |
+| 3 | every tick | flag 110 set and other script test | hidden, collision and walls off | rebuilt each tick |
+| 2 | every tick | flag 110 set and other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt each tick |
+| 15,16 | every tick | other script test and flag 122 set | animation plays once | rebuilt each tick |
+| 4 | every tick | other script test and flag 122 set | hidden, collision and walls off | rebuilt each tick |
+| 5 | every tick | other script test and flag 122 set | shown at start pose (draw, collision, pose at time 0) | rebuilt each tick |
+| - | every tick | flag 117 set and flag 118 clear | character slot emptied (characters released) | rebuilt each tick |
+| 18 | every tick | flag 117 set and flag 118 clear | character set loaded into a slot | rebuilt each tick |
+
+**Pack 0934**: Exterior, a timed find-the-petpet game with a yes-or-no prompt, trigger lines, slot threads and an AI-kill gate
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | teleport callback | (flag 470 set or flag 474 set) and object 0 shown | hidden, collision and walls off | flag 470,474 read at load |
+| 10,11 | teleport callback | flag 374 set and other script test | animation plays once | flag 470,474 read at load |
+| 0,9 | load thread | other script test | character set loaded into a slot | rebuilt at each load |
+| - | load thread | other script test | character slot emptied (characters released) | no, reverts at reload |
+| 6 | load thread | none | character set loaded into a slot | flag 372 read at load |
+| - | load thread | not other script test | character slot emptied (characters released) | flag 372 read at load |
+| 4 | load thread | none | character set loaded into a slot | flag 378 read at load |
+| - | load thread | none | character slot emptied (characters released) | flag 378 read at load |
+| 10,11 | world-activate callback | none | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 0 | script trigger 3/4/5 | other script test | hidden, collision and walls off | flag 470,474 read at load |
+| 10,11 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | every tick | (flag 470 set or flag 474 set) and object 0 hidden | shown at start pose (draw, collision, pose at time 0) | rebuilt each tick |
+| 0 | every tick | flag 470 clear and flag 474 clear and object 0 shown | hidden, collision and walls off | rebuilt each tick |
+
+**Pack 0947**: Exterior, two threads, a slot load, a death watch and a hit-point watch
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 375 clear | character set loaded into a slot | rebuilt at each load |
+
+**Pack 0951**: Interior, proximity conversations, a story thread and a per-tick entity wander
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 1 | load thread | flag 220 clear and (flag 2 clear or flag 147 set) and flag 147 clear and (flag 121 clear or flag 123 set) and flag 123 set | character set loaded into a slot | rebuilt at each load |
+| 2 | load thread | flag 220 clear and (flag 2 clear or flag 147 set) and flag 147 clear and (flag 121 clear or flag 123 set) and flag 123 set | character activated | rebuilt at each load |
+| 1 | load thread | flag 220 clear and (flag 2 clear or flag 147 set) and flag 147 clear and flag 123 set | character set loaded into a slot | rebuilt at each load |
+| 0 | at load | flag 121 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | flag 121 set | shown at end pose (finished) | rebuilt at each load |
+| 0,1 | every tick | flag 119 set and flag 123 clear and item 98 held and other script test | character activated | rebuilt each tick |
+
+**Pack 0956** (same code as 0970): Exterior, long intro sequence and trigger ladder
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | load thread | flag 248 clear and flag 64 clear | character slot emptied (characters released) | rebuilt at each load |
+| 7,8 | load thread | flag 248 clear and flag 64 clear | character set loaded into a slot | rebuilt at each load |
+| - | load thread | flag 248 set and flag 67 clear | character slot emptied (characters released) | rebuilt at each load |
+| 1,9 | load thread | flag 248 set and flag 67 clear | character set loaded into a slot | rebuilt at each load |
+| - | thread | flag 67 set | character slot emptied (characters released) | no, reverts at reload |
+| 10-12 | thread | flag 67 set and other script test | character set loaded into a slot | no, reverts at reload |
+| table/argument | at load | other script test | effect starts | rebuilt at each load |
+| table/argument | at load | not other script test and other script test | effect stops | rebuilt at each load |
+| 0 | at load | not other script test and other script test | hidden, collision and walls off | rebuilt at each load |
+| table/argument | at load | not other script test | effect stops | rebuilt at each load |
+| 0,17 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| - | thread | none | character slot emptied (characters released) | no, reverts at reload |
+| table/argument | thread | none | character set loaded into a slot | no, reverts at reload |
+| table/argument | script trigger (table) | other script test | shown at end pose (finished) | flag 211 read at load |
+| - | script trigger (table) | other script test | character slot emptied (characters released) | flag 211 read at load |
+| table/argument | script trigger (table) | other script test | breakable made breakable | flag 211 read at load |
+| table/argument | at load | flag 211 clear and other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| table/argument | at load | flag 211 clear and other script test | breakable made unbreakable | rebuilt at each load |
+| table/argument | at load | flag 211 set and other script test | shown at end pose (finished) | rebuilt at each load |
+| table/argument | at load | flag 211 set and other script test | breakable broken by script | broken bit, saved |
+| 17 | animated trigger 9, script trigger 8/9 | object 9 not animating and other script test and other script test | animation loops | flag 211 read at load |
+| 9 | animated trigger 9, script trigger 8/9 | object 9 not animating and other script test and other script test | animation plays once | flag 211 read at load |
+| 17 | animated trigger 9, script trigger 8/9 | object 9 not animating and other script test and other script test | animation frozen at its current time | flag 211 read at load |
+| 9 | animated trigger 9, script trigger 8/9 | object 9 not animating and other script test and other script test | animation plays once backward from the end | flag 211 read at load |
+| 9 | at load | none | shown (pose from a variable) | rebuilt at each load |
+| 10 | at load | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 3-5 | script trigger 14 | other script test and flag 214 set and flag 216 clear | hidden, collision and walls off | no, reverts at reload |
+| 9 | script trigger 10 | other script test and flag 248 set and flag 281 clear | hidden, collision and walls off | flag 66,281 read at load |
+| 10 | script trigger 10 | other script test and flag 248 set and flag 281 clear | shown at start pose (draw, collision, pose at time 0) | flag 66,281 read at load |
+| 0-2 | script trigger 10 | other script test and flag 248 set and flag 281 clear | aim target active := true | flag 66,281 read at load |
+| 1,2 | at load | flag 214 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 2 | at load | flag 214 set and flag 283 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0-2 | every tick | other script test and flag 281 clear | aim target active := false | rebuilt each tick |
+| 0-2 | every tick | other script test and flag 281 clear | aim target active := true | rebuilt each tick |
+
+**Pack 0985**: Exterior, two fight branches with level-state cutscene chains and a debug skip
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | world-activate callback | other script test | ground-block collision layer word := a computed word | re-run when the world becomes current |
+| - | every tick, load thread | other script test | ground-block collision layer word := a computed word | flag written, not read at load by this pack |
+| 7-12 | every tick, load thread | none | effect stops | flag written, not read at load by this pack |
+| 0-4,7,8 | every tick, load thread | none | entity removed permanently (kill bit) | kill bit, saved |
+| 5 | load thread | level state 0 clear or other script test | entity removed permanently (kill bit) | kill bit, saved |
+| 6 | load thread | level state 0 clear or other script test | entity force-spawned (kill bit cleared) | rebuilt at each load |
+
+**Pack 0986**: Exterior, navmesh table with per-tick character assignment, trigger handlers and a debug-gated per-tick loop
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 86 clear and flag 85 clear | character set loaded into a slot | rebuilt at each load |
+| - | at load | none | ground-block collision layer word := a computed word | rebuilt at each load |
+| - | at load | none | placed-object display layer word := 2 x a computed word | rebuilt at each load |
+| - | at load, script trigger 1 | none | ground-block collision layer word := a computed word | flag 89 read at load |
+| - | at load, script trigger 1 | none | placed-object display layer word := 2 x a computed word | flag 89 read at load |
+| 0 | script trigger 2/3 | other script test | breakable broken by script | broken bit, saved |
+| 7 | script trigger 2/3 | other script test | hidden, collision and walls off | flag 88 read at load |
+| 2 | script trigger 1 | other script test | hidden, collision and walls off | flag 89 read at load |
+| 1 | script trigger 1 | other script test | shown at start pose (draw, collision, pose at time 0) | flag 89 read at load |
+| 1 | script trigger 1 | other script test | animation plays once | flag 89 read at load |
+| 3,4,8 | script trigger 7 | other script test | animation plays once | flag 87 read at load |
+| 3,4,6 | script trigger 7 | other script test | shown at start pose (draw, collision, pose at time 0) | flag 87 read at load |
+| 5 | script trigger 7 | other script test | hidden, collision and walls off | flag 87 read at load |
+| 2-5,7,8 | at load | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 2 | at load | other script test | animation loops | rebuilt at each load |
+| 1,3,4,8 | at load | not other script test | shown at end pose (finished) | rebuilt at each load |
+| 0 | at load | not other script test | breakable disabled | rebuilt at each load |
+| 6 | at load | not other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 0989**: Exterior, effect locators, a looping animation thread and a staged sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | table-driven | none | entity removed permanently (kill bit) | kill bit, saved |
+
+**Pack 0990**: Exterior, object setup, trigger registrations, lever-driven bobbing walkway and one control thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0-5,7,9,11,table/argument | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| table/argument | load thread | other script test | pose set to a computed time and frozen | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6... | other script test | hidden, collision and walls off | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6... | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 0,table/argument | script trigger 3/4/5/6... | other script test | animation plays once | no, reverts at reload |
+| 13,15,17,19,21,23 | at load | none | shown at end pose (finished) | rebuilt at each load |
+| table/argument | at load | none | follows a table-chosen locator of object 0 | rebuilt at each load |
+
+**Pack 0991**: Exterior, entity proximity set and villager group controller
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 8 | load thread | flag 86 clear | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 86 set | character set loaded into a slot | rebuilt at each load |
+| - | table-driven | other script test | character slot emptied (characters released) | unclear |
+| - | table-driven | not other script test | character slot emptied (characters released) | unclear |
+| - | thread | none | character slot emptied (characters released) | no, reverts at reload |
+| - | thread | other script test | character slot emptied (characters released) | no, reverts at reload |
+| table/argument,? | thread | other script test | character set loaded into a slot | no, reverts at reload |
+| table/argument | thread | other script test | character activated | no, reverts at reload |
+| table/argument | thread | other script test | character released (streaming may rebind) | kill bit, saved |
+| - | table-driven | none | character slot emptied (characters released) | unclear |
+| ? | table-driven | none | character set loaded into a slot | unclear |
+
+**Pack 1005**: Interior, proximity, on-enter and item conversations
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 86 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 86 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1008**: Interior, item-ask lines, on-enter line and an arrival
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 86 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 86 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1011**: Interior, item-ask lines, on-enter line and an arrival
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 86 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 86 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1014**: Interior, proximity pair, on-enter line and a flag-gated item removal
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 86 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 86 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1017**: Exterior, eight entity proximity routines with four dialogue sets, a three-thread setup and teleports
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 86 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 86 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1020**: Interior, item-ask lines, on-enter line and an arrival
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 86 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 86 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1023**: Exterior, the largest level script in this spec: 46 entity proximity registrations, 31 script-trigger registrations, 11 doors and a tattered-cloak sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 2 | load thread | flag 11 clear and flag 10 clear and (flag 127 clear or flag 136 set) | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | flag 11 clear and flag 10 clear and flag 136 set | character set loaded into a slot | rebuilt at each load |
+| 6 | load thread | flag 11 clear and flag 10 clear | character set loaded into a slot | rebuilt at each load |
+| - | thread | none | character slot emptied (characters released) | no, reverts at reload |
+| - | thread | other script test | character slot emptied (characters released) | no, reverts at reload |
+| 0,1,? | thread | other script test | character set loaded into a slot | no, reverts at reload |
+| 0,table/argument | thread | other script test | character activated | no, reverts at reload |
+| table/argument | thread | other script test | character released (streaming may rebind) | kill bit, saved |
+| - | thread | none | character slot emptied (characters released) | flag written, not read at load by this pack |
+| ? | thread | none | character set loaded into a slot | flag written, not read at load by this pack |
+| - | thread | not other script test and other script test | character slot emptied (characters released) | no, reverts at reload |
+| table/argument | thread | not other script test and other script test | character set loaded into a slot | no, reverts at reload |
+| 4 | script trigger 17 | none | shown at start pose (draw, collision, pose at time 0) | flag written, not read at load by this pack |
+| 4 | script trigger 17 | none | animation plays once | flag written, not read at load by this pack |
+| 4 | script trigger 17 | none | pose set to a fixed time and frozen | flag written, not read at load by this pack |
+| 4 | script trigger 17 | none | placed at world locator 498 | flag written, not read at load by this pack |
+| 4 | script trigger 17 | none | hidden, collision and walls off | flag written, not read at load by this pack |
+| - | every tick, load thread | other script test | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 5 | every tick, load thread | other script test | character set loaded into a slot | flag written, not read at load by this pack |
+| 0 | every tick, load thread | other script test | character activated | flag written, not read at load by this pack |
+| - | every tick, load thread | not other script test and other script test | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 3-5 | every tick, load thread | not other script test and other script test | character set loaded into a slot | flag written, not read at load by this pack |
+| 0 | every tick, load thread | not other script test and other script test | character activated | flag written, not read at load by this pack |
+| - | thread | flag 136 clear and other script test | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 2 | thread | flag 136 clear and other script test | character set loaded into a slot | flag written, not read at load by this pack |
+| - | at load, script trigger 36 | none | ground-block collision layer word := a computed word | flag written, not read at load by this pack |
+| - | at load, script trigger 36 | none | placed-object display layer word := 2 x a computed word | flag written, not read at load by this pack |
+| 1-3 | at load | flag 64 set and flag 248 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 5 | at load | (flag 150 clear or flag 10 set) and flag 15 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 5 | at load | not ((flag 150 clear or flag 10 set) and flag 15 clear) | shown at end pose (finished) | rebuilt at each load |
+| 0 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 1 | every tick | (flag 64 clear or flag 248 set) and object 1 shown | hidden, collision and walls off | rebuilt each tick |
+| 2 | every tick | (flag 64 clear or flag 248 set) and object 2 shown | hidden, collision and walls off | rebuilt each tick |
+| 3 | every tick | (flag 64 clear or flag 248 set) and object 3 shown | hidden, collision and walls off | rebuilt each tick |
+
+**Pack 1055**: Transition, world swap with two paths
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1056**: Exterior, arena combat lessons, per-entity dialogue and teleport callbacks
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 30 clear and flag 191 clear and flag 26 clear and flag 24 clear and flag 23 clear and flag 22 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | load thread | flag 30 clear and flag 191 clear and flag 26 clear and flag 24 clear and flag 23 clear and flag 22 clear | character set loaded into a slot | rebuilt at each load |
+| 1,7 | load thread | flag 30 clear and flag 191 clear and flag 26 clear and flag 24 clear and flag 23 clear | character set loaded into a slot | rebuilt at each load |
+| 0-7,10 | load thread | flag 30 clear and flag 191 clear and flag 26 clear and flag 24 clear and flag 23 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 2 | load thread | flag 30 clear and flag 191 clear and flag 26 clear and flag 24 clear | character set loaded into a slot | rebuilt at each load |
+| 7,8 | load thread | flag 30 clear and flag 191 clear and flag 26 clear and flag 24 clear and flag 174 clear | character set loaded into a slot | rebuilt at each load |
+| 12-14 | load thread | flag 30 clear and flag 191 clear and flag 26 clear and flag 24 clear | entity force-spawned (kill bit cleared) | rebuilt at each load |
+| 15-19 | load thread | flag 30 clear and flag 191 clear and flag 26 clear and flag 24 clear and other script test | entity force-spawned (kill bit cleared) | rebuilt at each load |
+| 0-7 | load thread | flag 30 clear and flag 191 clear and flag 26 clear and flag 24 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 4,7 | load thread | flag 30 clear and flag 191 clear and flag 26 clear | character set loaded into a slot | rebuilt at each load |
+| 0-7,10 | load thread | flag 30 clear and flag 191 clear and flag 26 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 7 | load thread | flag 30 clear and flag 29 clear | character set loaded into a slot | rebuilt at each load |
+| 0-7,10 | load thread | flag 30 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 6 | load thread | flag 30 set | character set loaded into a slot | rebuilt at each load |
+| 22-36 | at load | other script test | breakable disabled | rebuilt at each load |
+| 24,27,30,33 | breakable hook 24, breakable hook 27, breakable hook 30, breakable hook 33... | other script test | breakable broken by script | broken bit, saved |
+| 36 | breakable hook 24, breakable hook 27, breakable hook 30, breakable hook 33... | other script test and flag 629 clear | breakable broken by script | broken bit, saved |
+| - | every tick | none | world item spawned | rebuilt each tick |
+
+**Pack 1066**: Exterior, per-tick world masks with a button pass
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0,3 | load thread | other script test | character set loaded into a slot | no, reverts at reload |
+| 0,2,3,5 | load thread | not other script test | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | none | character set loaded into a slot | no, reverts at reload |
+| - | at load, every tick | none | ground-block collision layer word := a computed word | rebuilt at each load |
+| - | at load, every tick | none | placed-object display layer word := 2 x a computed word | rebuilt at each load |
+| 0 | every tick | flag 2 set and object 0 shown | hidden, collision and walls off | rebuilt each tick |
+
+**Pack 1077** (same code as 1129): Exterior, a flag-38 switch set with three threads and lever triggers
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| table/argument | load thread | other script test | pose set to a computed time and frozen | no, reverts at reload |
+| table/argument | thread | other script test | hidden, collision and walls off | no, reverts at reload |
+| table/argument | thread | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 24,table/argument | thread, load thread | other script test | animation plays once | no, reverts at reload |
+| table/argument | thread | not other script test and other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| table/argument | thread | not other script test and other script test | animation plays once | no, reverts at reload |
+| 28,44 | script trigger 21 | flag 307 clear and other script test | animation plays once | flag 36 read at load |
+| 27 | script trigger 21 | flag 307 clear and other script test | hidden, collision and walls off | flag 36 read at load |
+| 25,34 | script trigger 2 | flag 306 clear and other script test | animation plays once | flag 306 read at load |
+| 26 | script trigger 2 | flag 306 clear and other script test | hidden, collision and walls off | flag 306 read at load |
+| 24 | at load | flag 38 clear | shown at end pose (finished) | rebuilt at each load |
+| 12,46 | at load | flag 38 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 24 | at load | flag 38 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 46 | at load | flag 38 set | shown at end pose (finished) | rebuilt at each load |
+| 27,28,44 | at load | flag 36 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 28,44 | at load | flag 36 set | shown at end pose (finished) | rebuilt at each load |
+| 25,26,34 | at load | flag 306 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 25,34 | at load | flag 306 set | shown at end pose (finished) | rebuilt at each load |
+| 32 | at load | none | follows locator 1 of object 24 | rebuilt at each load |
+| 33 | at load | none | follows locator 2 of object 24 | rebuilt at each load |
+
+**Pack 1078**: Exterior, object state and button-press room with four trigger scripts registered from Init
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | at load, script trigger 1 | other script test | effect stops | flag 309,310 read at load |
+| table/argument | at load, script trigger 1 | other script test | effect starts | flag 309,310 read at load |
+| table/argument | script trigger 3/4/5/6... | none | hidden, collision and walls off | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6... | none | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6... | none | animation plays once | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6... | not other script test and other script test | effect starts | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6.../26/27... | other script test | hidden, collision and walls off | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6.../26/27... | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6.../26/27... | other script test | animation plays once | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6... | other script test | effect stops | no, reverts at reload |
+| 0 | script trigger 1 | flag 310 clear and other script test | hidden, collision and walls off | flag 310 read at load |
+| 1 | script trigger 1 | flag 310 clear and other script test | shown at start pose (draw, collision, pose at time 0) | flag 310 read at load |
+| 1 | script trigger 1 | flag 310 clear and other script test | animation plays once | flag 310 read at load |
+| 1 | script trigger 0 | other script test and flag 310 set and other script test and other script test and item 18 not held | hidden, collision and walls off | flag 311 read at load |
+| 0 | script trigger 0 | other script test and flag 310 set and other script test and other script test and item 18 not held | shown at start pose (draw, collision, pose at time 0) | flag 311 read at load |
+| 0 | script trigger 0 | other script test and flag 310 set and other script test and other script test and item 18 not held | animation plays once | flag 311 read at load |
+| table/argument | at load | none | shown (pose from a variable) | rebuilt at each load |
+| table/argument | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| table/argument | at load | other script test | effect stops | rebuilt at each load |
+| 1 | at load | flag 310 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | flag 310 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1079**: Transition, two-trigger object sequence with item gate
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | at load, script trigger 0/1 | other script test | effect stops | flag written, not read at load by this pack |
+| table/argument | at load, script trigger 0/1 | other script test | effect starts | flag written, not read at load by this pack |
+| table/argument | script trigger 0/1 | other script test and item 18 not held | hidden, collision and walls off | flag written, not read at load by this pack |
+| table/argument | script trigger 0/1 | other script test and item 18 not held | shown at start pose (draw, collision, pose at time 0) | flag written, not read at load by this pack |
+| table/argument | script trigger 0/1 | other script test and item 18 not held | animation plays once | flag written, not read at load by this pack |
+| 0,1,4,5 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1081**: Exterior, effect groups and a flag 41 scripted sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | at load, script trigger 2 | other script test | effect stops | flag 41 read at load |
+| table/argument | at load, script trigger 2 | other script test | effect starts | flag 41 read at load |
+| 3,5,6,8 | script trigger 2 | other script test and flag 41 clear | animation plays once | flag 41 read at load |
+| 4,5 | script trigger 2 | other script test and flag 41 clear | shown at start pose (draw, collision, pose at time 0) | flag 41 read at load |
+| 0 | script trigger 2 | other script test and flag 41 clear | breakable broken by script | broken bit, saved |
+| 3,4,6,7 | script trigger 2 | other script test and flag 41 clear | hidden, collision and walls off | flag 41 read at load |
+| 3,6-8 | at load | flag 41 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 5,8 | at load | flag 41 set | shown at end pose (finished) | rebuilt at each load |
+| 0 | at load | flag 41 set | breakable disabled | rebuilt at each load |
+
+**Pack 1083**: Exterior, object cascade on flag 620 and a slot-load thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 1,4 | load thread | flag 52 clear and flag 20 clear and flag 19 clear | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 52 clear and flag 20 clear | character set loaded into a slot | rebuilt at each load |
+| 2 | load thread | flag 52 set | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | none | character set loaded into a slot | no, reverts at reload |
+| 1 | script trigger 0 | other script test and flag 620 clear | shown at start pose (draw, collision, pose at time 0) | flag 620 read at load |
+| 5-19 | script trigger 0 | other script test and flag 620 clear | animation plays once | flag 620 read at load |
+| 0 | script trigger 0 | other script test and flag 620 clear | hidden, collision and walls off | flag 620 read at load |
+| table/argument | script trigger 1/2/3 | other script test | character activated | no, reverts at reload |
+| table/argument | script trigger 1/2/3 | other script test | animation plays once | no, reverts at reload |
+| 0,5-19 | at load | flag 620 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 5-19 | at load | flag 620 set | shown at end pose (finished) | rebuilt at each load |
+| 1 | at load | flag 620 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 2-4 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1089**: Transition, a timed crusher sequence with button stops, a hazard thread and a kill on timeout
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | at load, every tick, animated trigger 0 | other script test | effect stops | no, reverts at reload |
+| table/argument | at load, every tick, animated trigger 0 | other script test | effect starts | no, reverts at reload |
+| table/argument | every tick | none | pose set to a fixed time and frozen | rebuilt each tick |
+| table/argument | every tick | object (table) not animating | pose set to a computed time and frozen | rebuilt each tick |
+| table/argument | at load | none | follows a table-chosen locator of object 0 | rebuilt at each load |
+| table/argument | every tick | none | shown (pose from a variable) | rebuilt each tick |
+| table/argument | script trigger 0 | none | animation plays once backward from the end | no, reverts at reload |
+| table/argument | animated trigger 0 | other script test | pose set to a fixed time and frozen | no, reverts at reload |
+| 0,7-11,table/argument | animated trigger 0, script trigger 0 | other script test | animation plays once | no, reverts at reload |
+| 0,7-11 | every tick | none | shown at start pose (draw, collision, pose at time 0) | rebuilt each tick |
+| 0 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0,8-11 | every tick | other script test | play speed set from a module value | rebuilt each tick |
+| 0,8-11 | every tick | other script test | animation frozen at its current time | rebuilt each tick |
+
+**Pack 1090**: Exterior, hazard timer step, firing loops and hurt zones
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | every tick | other script test | animation plays once | rebuilt each tick |
+| table/argument | every tick | other script test | hidden, collision and walls off | rebuilt each tick |
+
+**Pack 1091**: Exterior, object setups, a button-prompt trigger, hazard triggers and character navmesh assignments
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0-17, 41, 71-133, 137-140, 135, 51-54, 136 | at load (Init and its set-up helper) | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 135, 51, 52, 53, 136, 54 | at load | none | follows locator 0 of pillars 75, 100, 111, 116, 130, 134 (follow true) | rebuilt at each load |
+| 71-134 (pillar i = object 71 + i) | load thread (start-up snap) | none (stage 4) | pose set to the stage-4 layout time (40/30 s each) and frozen; this also first shows pillar 134, which the set-up loop skips | rebuilt at each load |
+| 71-134 | every tick | busy word 1 (after a button press) | pose set to a computed time stepping toward the current stage's layout value (0.01, 0.005 or 0.0025 s per tick; snap within 0.0025 s) | rebuilt each tick |
+| 135, 51, 52, 53, 136, 54 | every tick | busy word 1 | pose set to time 0 and frozen (rides its pillar) | rebuilt each tick |
+| 138, 139, 140, 137 | load thread | none (available in stage 4) | shown at end pose (finished) | rebuilt at each load |
+| 135, 51, 52, 53, 136, 54 | load thread | none (not available in stage 4) | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 135, 51, 52, 53, 136, 54, 138, 139, 140, 137 | press: six animated triggers, script triggers 67-70 | hero inside, busy 0, button at its end time and not animating, row's stage differs from the current stage | every button not at time 0 shown at end pose, then animation plays once backward from the end (no wait) | no, reverts at reload |
+| the same ten | every tick | busy word 1 ended (no pillar moved); button not animating | row flag for the stage 1: at time 0 animation plays once, otherwise shown at end pose; flag 0: at end time animation plays once backward, otherwise shown at start pose | no, reverts at reload |
+| 1-6 | press, after a 30-tick wait | none | hidden, collision and walls off (platform piece 1, draw-only 2, hazard bodies 3-6; a later play call revives a hazard body) | no, reverts at reload |
+| aim targets 1-6 | press and load thread | stage: on only 1, 3, 6 in stage 1; 2, 5 in stage 0; 4 in stage 2 | aim target active := true / false | no, reverts at reload |
+| script groups 3-10 | press and load thread | stage: 3, 4 in stage 0; 5-8 in stage 1; 9, 10 in stage 2 | all released, then the stage's groups restored | no, reverts at reload |
+| slot A | press; busy ended; load thread | none | character slot emptied (press); then character set 0-3 loaded for stages 0-3, set 3 for stage 4 | no, reverts at reload |
+| 3 | script trigger 41 (mode-2 sequencer); animated trigger 3 | trigger 41 started and the mode word 0 | animation plays once at 0.6 (wait), 1.0 s later backward at -0.6 (wait), repeating; a forward play sets the body's hazard flag | no, reverts at reload |
+| 6, 10, 5, 4, 9, 8, 7 | script trigger 42 (mode-1 sequencer); animated triggers 4-10 | trigger 42 started and the mode word 1 | animations play forward at 1.6 and backward at -0.4 in the repeating order given in the moving-hazard bullet (SPEC-0044); a forward play sets the hazard flag | no, reverts at reload |
+| 2 (trigger 41), 17 (42), 16 down to 11 (43-48) | script triggers 41-48 | hero enters (state 1) | pose set to k/30 s for k = 0 to 10 (one per tick); after the hero leaves, k = 13 to 25 (clamped at the 0.8 s end) | no, reverts at reload |
+| 36-40, 33-35, 28-32, 23-27, 21-22, 18-20 | script triggers 43, 44, 45, 46, 47, 48 | hero enters (state 1) | animation plays once at 5.0 (no wait), 0.02 s apart; objects start hidden, stay at the end pose; a second entry plays nothing | no, reverts at reload |
+| 41, 0, 1 | script trigger 51 | button pressed, object 41 not finished | 41 plays once (no wait); 0 plays once (no wait); 1 plays once (wait) | no, reverts at reload |
+
+**Pack 1096**: Exterior, level state machine with hero pickup, timed boss sequence and debug shortcuts
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 6,10-13,16,19,22,table/argument | script trigger 5/0/1/2/3.../13... | other script test | animation plays once | no, reverts at reload |
+| 6,8,10,16 | script trigger 0/1/2/3.../13/14... | other script test | hidden, collision and walls off | no, reverts at reload |
+| table/argument | script trigger 0/1/2/3... | none | animation plays once | no, reverts at reload |
+| 1 | every tick | none | animation plays once | rebuilt each tick |
+| 1 | every tick | none | aim target active := true | rebuilt each tick |
+| 0 | load thread | none | entity removed permanently (kill bit) | kill bit, saved |
+| 0 | load thread | none | hidden, collision and walls off | flag 45 read at load |
+| 2-5 | load thread | none | animation plays once | flag 45 read at load |
+| - | load thread | other script test | world item spawned | flag 45 read at load |
+| 0 | world-activate callback | none | character set loaded into a slot | re-run when the world becomes current |
+| 0-5,14 | world-activate callback | none | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 1 | world-activate callback | none | aim target active := false | re-run when the world becomes current |
+| 0 | world-activate callback | none | entity force-spawned (kill bit cleared) | re-run when the world becomes current |
+| 6,8,10,12,13,16,17,19,22,31,33,35 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1098**: Exterior, flag-gated proximity dialogue set, hero-death callback and a large entity and slot routine set
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 10,11 | script trigger 9 | other script test | animation plays once | flag 622 read at load |
+| 14 | script trigger 9 | other script test | hidden, collision and walls off | flag 622 read at load |
+| - | script trigger 4 | flag 204 clear and flag 203 set | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 6 | script trigger 4 | flag 204 clear and flag 203 set | character set loaded into a slot | flag written, not read at load by this pack |
+| - | script trigger 0 | none | character slot emptied (characters released) | flag 22,27,29,642 read at load |
+| 4,5 | script trigger 0 | none | character set loaded into a slot | flag 22,27,29,642 read at load |
+| - | every tick, entity proximity 35, entity proximity 36, script trigger 10 | none | character slot emptied (characters released) | flag 151,502 read at load |
+| 21 | load thread | flag 31 clear and flag 30 clear and flag 501 set and item 72 not held and flag 504 clear and flag 503 clear | character set loaded into a slot | rebuilt at each load |
+| 0,9 | load thread | flag 31 clear and flag 30 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 31 set | character set loaded into a slot | rebuilt at each load |
+| - | thread | other script test | character slot emptied (characters released) | no, reverts at reload |
+| 19,table/argument | thread | other script test | character set loaded into a slot | no, reverts at reload |
+| 9,10 | script trigger 17/18/19/20 | not other script test | effect stops | flag written, not read at load by this pack |
+| table/argument | script trigger 17/18/19/20 | none | animation plays once | flag written, not read at load by this pack |
+| table/argument | script trigger 17/18/19/20 | none | hidden, collision and walls off | flag written, not read at load by this pack |
+| table/argument | script trigger 17/18/19/20 | none | shown at start pose (draw, collision, pose at time 0) | flag written, not read at load by this pack |
+| 7 | script trigger 17/18/19/20 | not other script test | animation plays once | flag written, not read at load by this pack |
+| 8 | table-driven | other script test | animation plays once | unclear |
+| 1 | at load | flag 30 clear and flag 31 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 10,11 | at load | flag 622 set | shown at end pose (finished) | rebuilt at each load |
+| 10,11,14 | at load | flag 622 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0,2,3,7,8,15,17,19,21 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 4 | at load | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 9,10 | at load | flag 30 clear or flag 91 set | effect stops | rebuilt at each load |
+| 0-3 | at load | none | effect stops | rebuilt at each load |
+| 0-2 | every tick | flag 642 clear | effect starts | rebuilt each tick |
+| 0-2 | every tick | flag 642 set | effect stops | rebuilt each tick |
+| 3 | every tick | flag 642 set and flag 632 clear | effect starts | rebuilt each tick |
+| 3 | every tick | flag 642 set and flag 632 clear | effect stops | rebuilt each tick |
+
+**Pack 1122**: Exterior, per-tick navmesh assignments, a wave sequence and the Faerie Sisters arena
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 2 | load thread | flag 31 clear and flag 30 clear | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | none | character set loaded into a slot | no, reverts at reload |
+| 4-18 | load thread | none | entity removed permanently (kill bit) | kill bit, saved |
+| 3 | load thread | none | shown at start pose (draw, collision, pose at time 0) | flag written, not read at load by this pack |
+| 0-2,4,5 | script trigger 5 | other script test and flag 320 clear and other script test | hidden, collision and walls off | flag 320 read at load |
+| 0-2,4,5 | script trigger 5 | other script test and flag 320 clear and other script test | shown at start pose (draw, collision, pose at time 0) | flag 320 read at load |
+| 1,2,4,5 | script trigger 5 | other script test and flag 320 clear and other script test | animation plays once | flag 320 read at load |
+| 3-5 | script trigger 5 | other script test and flag 320 clear and other script test | character set loaded into a slot | flag 320 read at load |
+| - | script trigger 5 | other script test and flag 320 clear and other script test | character slot emptied (characters released) | flag 320 read at load |
+| 2,4 | at load | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 4 | at load | other script test | shown at end pose (finished) | rebuilt at each load |
+| 1,4 | at load | not other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1130**: Transition, three button zones, a one-shot switch and a movie zone
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0,8,9,15-17,29,31,33 | script trigger 4/5/6/7 | other script test | hidden, collision and walls off | flag 675 read at load |
+| 7,10,12-14,18-22 | script trigger 4/5/6/7 | not other script test and other script test | hidden, collision and walls off | flag 675 read at load |
+| 7-10,12-22,27,28 | script trigger 4 | none | hidden, collision and walls off | flag 675 read at load |
+| 7,9-12,15,18,30,32,34 | script trigger 4 | other script test | shown at start pose (draw, collision, pose at time 0) | flag 675 read at load |
+| 14,17,22 | script trigger 4 | not other script test | shown at start pose (draw, collision, pose at time 0) | flag 675 read at load |
+| 14,17,22 | script trigger 4 | not other script test | animation plays once | flag 675 read at load |
+| 18 | script trigger 4 | not other script test and other script test | shown at start pose (draw, collision, pose at time 0) | flag 675 read at load |
+| 8,19,27,28 | script trigger 4 | none | shown at start pose (draw, collision, pose at time 0) | flag 675 read at load |
+| 8,19,27,28 | script trigger 4 | none | animation plays once | flag 675 read at load |
+| 1,7,9-11,30,32,34,table/argument | script trigger 4 | other script test | animation plays once | flag 675 read at load |
+| 1 | script trigger 2 | other script test and object 2 hidden and flag 675 clear | hidden, collision and walls off | flag 675 read at load |
+| 0,2 | script trigger 2 | other script test and object 2 hidden and flag 675 clear | shown at start pose (draw, collision, pose at time 0) | flag 675 read at load |
+| 2 | script trigger 2 | other script test and object 2 hidden and flag 675 clear | animation plays once | flag 675 read at load |
+| 29-34 | script trigger 5/6/7 | other script test and flag 675 clear and other script test | hidden, collision and walls off | no, reverts at reload |
+| 12-21,29-34 | script trigger 5/6/7 | other script test and flag 675 clear and other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 12-21,29-34 | script trigger 5/6/7 | other script test and flag 675 clear and other script test | animation plays once | no, reverts at reload |
+| 31,33 | table-driven | other script test | animation plays once | unclear |
+| 0,1,11,12,15,18,27,29,31,33 | at load | flag 675 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 1,27,29,31,33 | at load | flag 675 set | shown at end pose (finished) | rebuilt at each load |
+| 11,14,17,19 | at load | flag 675 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1131**: Interior, dialogue with an item check, a slot thread and four ask lines
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 203 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1133**: Interior, a multi-line dialogue with item checks and a slot thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 10 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 10 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1136**: Interior, dialogue with a flag-491 to flag-492 cascade and a slot thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 10 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 10 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1139**: Exterior, a teleport with a blackboard value and an entity dialogue
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | at load | flag 35 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | flag 35 set | shown at end pose (finished) | rebuilt at each load |
+
+**Pack 1140**: Interior, dialogue with a buy callback and a sequence of item checks
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 10 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 10 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1143**: Interior, dialogue with item trades and a slot chooser
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 10 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 10 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1148**: Interior, dialogue with item trades, a camera and a walk-to-entity pattern
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 496 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1150**: Interior, per-tick wandering for a table of entities, with idle loops, a slot thread and five proximity callbacks set at init
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 142 clear | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1152**: Exterior, a proximity ladder, two teleports, a world-activate branch and a slot choice
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 31 clear and flag 30 clear | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | none | character set loaded into a slot | no, reverts at reload |
+
+**Pack 1156**: Interior, library teleport and a slot-set chooser
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 31 clear and flag 30 set | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 31 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1159**: Interior, teleport, slot chooser and a looping entity animation
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 31 clear and flag 30 clear | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | none | character set loaded into a slot | no, reverts at reload |
+
+**Pack 1163**: Exterior, the Miamice catch game, a teleport with a prompt, a button prompt and a multi-stage entity and camera sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | entity proximity 7 | none | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 3,4 | entity proximity 7 | none | character set loaded into a slot | flag written, not read at load by this pack |
+| 0 | load thread | flag 31 clear and flag 11 clear and flag 30 clear | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | none | character set loaded into a slot | no, reverts at reload |
+| 5 | load thread | flag 29 clear | character set loaded into a slot | rebuilt at each load |
+| 0 | at load | flag 155 clear or other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1171**: Exterior, lever cutscenes, breakable flags and script group type 12
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 12,15,16,table/argument | script-group callback, script trigger 7/5/29/30/31/32 | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 1,2,11,15,table/argument | script-group callback, script trigger 7/5/29/30/31/32 | other script test | animation plays once | no, reverts at reload |
+| 11,15,table/argument | script-group callback, script trigger 7/5/29/30/31/32 | other script test | hidden, collision and walls off | no, reverts at reload |
+| table/argument | script-group callback | none | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| table/argument | script-group callback | none | pose set to a computed time and frozen | no, reverts at reload |
+| table/argument | script-group callback | none | animation loops | no, reverts at reload |
+| table/argument | script-group callback | other script test | pose set to a fixed time and frozen | no, reverts at reload |
+| table/argument | script-group callback | other script test | animation loops | no, reverts at reload |
+| 0-2,11,13,15,17,20,23,26 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| table/argument | at load | flag (table) set | breakable disabled | rebuilt at each load |
+| 17 | every tick | other script test and object 17 shown | animation loops | rebuilt each tick |
+| 20 | every tick | other script test and object 20 shown | animation loops | rebuilt each tick |
+| 23 | every tick | other script test and object 23 shown | animation loops | rebuilt each tick |
+| 26 | every tick | other script test and object 26 shown | animation loops | rebuilt each tick |
+
+**Pack 1173**: Exterior, teleport and arrival with a button-gated trigger
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0,table/argument | script trigger 1 | object (table) shown and other script test and flag 167 clear | animation plays once | flag 630 read at load |
+| table/argument | script trigger 1 | object (table) shown and other script test and flag 167 clear | hidden, collision and walls off | flag 630 read at load |
+| table/argument | script trigger 1 | object (table) shown and other script test and flag 167 clear | shown at start pose (draw, collision, pose at time 0) | flag 630 read at load |
+| 1 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | flag 630 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | flag 630 set | shown at end pose (finished) | rebuilt at each load |
+
+**Pack 1174**: Exterior, the Act 1 escape run and the Act 2 start: four arena sections of collapsing pillars, checkpoints, a stage thread and the act-start trigger
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| breakables 3-10 | world-activate callback | none | breakable enabled (intact) | re-run when the world becomes current |
+| breakables 3-10 | script trigger 22-29 (one each, in order; fired with object word 0 by the Sisters' ball) | breakable still intact | breakable broken by script; sound 9 at locator 65-72; the trigger is cleared from the act-1 trigger data | no, reverts at reload (the broken bit is saved for script indexes below 128, but the next arrival enables the breakable again) |
+| 37,49,61,73,85,97,109,120,133,145,157,168,180,192,204,216,228,240 (pillar solids) | world-activate callback | none | shown at start pose (draw, four wall records) | re-run when the world becomes current |
+| every piece, stump and fallen object of the 18 tiles (ids 26-36, 38-48, 50-60 and so on up to 229-239, plus 110-119, 121-132 and 158-167; the pillar tile table in SPEC-0044 lists them) | world-activate callback | none | hidden, collision and walls off | re-run when the world becomes current |
+| solid of tile 36-41, 44, 45, 47-53 | script trigger 36-41, 44, 45, 47-53 (object thread) | tile solid, fired with object word 0 (Sisters' ball) | hidden, collision and walls off | no, reverts at reload |
+| pieces of tile 36-41, 44, 45, 47-53 (11 objects, first one a static stump) | same, same pass | same | shown, animation plays once at speed 1.0; the stump brings four wall records | no, reverts at reload |
+| fade pieces of those tiles (the 10 pieces after the stump) | same tile, 0.9 s (sections 0-1) or 1.0 s (sections 2-3) after the hit, for 0.5 s | none | colour multiplier set (128, 128, 128, alpha falling 255 to 0) | no, reverts at reload |
+| fade pieces of those tiles | same tile, first pass after the fade end with no piece animating | none | hidden; only the stump stays shown (tile 53: the stump is object 26) | no, reverts at reload |
+| solid 109, 120, 157 | script trigger 42, 43, 46; tile 42 also by tile 43's link 1.7 s after tile 43's stamp | tile solid, fired with object word 0 | hidden, collision and walls off | no, reverts at reload |
+| pieces 110-118, 121-131, 158-166 | same, same pass | same | shown, animation plays once at speed 1.2 (the first piece is the stump with wall records) | no, reverts at reload |
+| fade pieces 111-116, 122-130, 159-165 | same tile, 1.1 s (tiles 42, 43) or 1.0 s (tile 46) after the hit, for 0.5 s | none | colour multiplier set (128, 128, 128, alpha falling 255 to 0) | no, reverts at reload |
+| fallen 119, 132, 167 | same tile, first pass after the fade end with no piece animating (tile 42 4.0 s, tile 43 3.17 s, tile 46 1.5 s) | none | all pieces including the stump hidden; fallen object shown at start pose with its ramp or column and wall records | no, reverts at reload |
+| effects 92-109 (one per tile, tile order) | script trigger 36-53 (object thread) | tile fired | effect starts (camera as listener) | no, reverts at reload |
+| 6 | object thread | tile 42 left its solid state and 0.85 s have passed | hidden (rail A whole rail) | no, reverts at reload |
+| 9-12 | same pass | same | shown, animation plays once at speed 1.0 (rail A falling pieces); hidden again when none still animates (about 49 ticks) | no, reverts at reload |
+| 6 | world-activate callback | none | shown at start pose (rail A) | re-run when the world becomes current |
+| 8 | world-activate callback | none | shown at start pose (rail B) | re-run when the world becomes current |
+| 8 | stage thread, camera 6 scene | tile 43 reached its rest state; two stage passes later | hidden (rail B) | no, reverts at reload |
+| 13,14 | object thread, first pass after the arrival | none | shown at time zero (barrier leaves) | re-run when the world becomes current |
+| 15,16 | object thread, first pass after the arrival | none | hidden | re-run when the world becomes current |
+| 13,14 | script trigger 5, hit 1 | barrier idle | shown at time zero, animation plays once (wobble 0.733 s) | no, reverts at reload |
+| 13,14 | script trigger 5, hit 2 | barrier idle after hit 1 | hidden | no, reverts at reload |
+| 15,16 | script trigger 5, hit 2 | same | shown at time zero, animation plays once (2.133 s and 1.2 s) | no, reverts at reload |
+| 15,16 | object thread, 1.5 s to 2.5 s after hit 2 | none | colour multiplier set (fade to clear) | no, reverts at reload |
+| 13-16 | object thread, first pass after 2.5 s with no piece animating | none | hidden; collision value 1 stays clear | no, reverts at reload |
+| 17-19 and 7 | world-activate callback | none | shown at time zero (17-19 break scene pieces; 7 collision wall box) | re-run when the world becomes current |
+| 17-19 | object thread | tile 53 out of its solid state (once) | animation plays once (0.933 s, 0.933 s, 0.8 s); stay shown at end pose | no, reverts at reload |
+| 7 | object thread | same | hidden, collision and walls off | no, reverts at reload |
+| effects 15-21 | world-activate callback | none | effect stops | re-run when the world becomes current |
+| effects 15-21 | object thread | tile 53 out of its solid state (once) | effect starts | no, reverts at reload |
+| 22,20 and 24,21 (gate leaf and helper) | world-activate callback; object thread, request 0 | section 2 scene requests rest | shown at time zero (rest look); 23, 25 hidden | re-run when the world becomes current |
+| 22,20 and 24,21 | object thread, gate request 1 (section 3 scene) | none | shown at time zero, animation plays once; at the end 22 and 24 hidden, 23 and 25 shown at time zero, helpers shown at end pose | no, reverts at reload |
+| 5 and 4 (collision boxes) with effects 50-53 and 35-38 | stage thread (sections 1, 2, 3) | barrier group raised or lowered | shown or hidden, collision and walls on or off, with their effects started or stopped | no, reverts at reload |
+| effects 22-23, 29-30, 32-34, 39-40, 42-49 | stage thread (sections 1, 2, 3) | barrier group raised or lowered | effects start or stop | no, reverts at reload |
+| effects 9-14 | at load | none | effect stops | rebuilt at each load |
+| effects 9-14 | stage thread, section 3 scene | none | effects start | no, reverts at reload |
+| - | object thread | tile 43 in state 1, once | world collision word := word OR 4 | level state only, not saved |
+| - | object thread | barrier first pass; hit 2; gate pairs closed or reopened | world collision word value 1 set, then cleared; value 2 set when a gate pair closes and cleared when it reopens | level state only, not saved |
+| 0 | load thread | none | character set loaded into a slot | no, reverts at reload |
+| 0-3 | load thread | none | character activated | no, reverts at reload |
+
+**Pack 1176**: Exterior, hero death watch and scripted encounter threads
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | load thread | none | entity removed permanently (kill bit) | kill bit, saved |
+| table/argument | load thread | none | character set loaded into a slot | no, reverts at reload |
+
+**Pack 1184**: Exterior, world-entry triggers with thread-driven slot loads and an activate-world camera
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | thread | none | character slot emptied (characters released) | no, reverts at reload |
+| table/argument | thread | flag 512 clear or flag 513 set | character set loaded into a slot | no, reverts at reload |
+| table/argument | thread | not (flag 512 clear or flag 513 set) | character set loaded into a slot | no, reverts at reload |
+| 7 | load thread | flag 84 clear and flag 82 clear and (flag 512 clear or flag 513 set) | character set loaded into a slot | rebuilt at each load |
+| 8 | load thread | flag 84 clear and flag 82 clear and flag 513 set | character set loaded into a slot | rebuilt at each load |
+| 15 | load thread | flag 84 clear and (flag 512 clear or flag 513 set) | character set loaded into a slot | rebuilt at each load |
+| 16 | load thread | flag 84 clear and flag 513 set | character set loaded into a slot | rebuilt at each load |
+| 30 | load thread | flag 84 set | character set loaded into a slot | rebuilt at each load |
+| - | every tick | flag 277 clear | placed-object display layer word := 2 x 1 | rebuilt each tick |
+| - | every tick | flag 277 clear | ground-block collision layer word := 1 | rebuilt each tick |
+| - | every tick | flag 277 set | placed-object display layer word := 2 x 2 | rebuilt each tick |
+| - | every tick | flag 277 set | ground-block collision layer word := 2 | rebuilt each tick |
+
+**Pack 1217**: Exterior, effect and object toggles, activate-world and player-activate callbacks, and scripted cutscenes
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| effects 10-23 | at load (record fill); world-activate callback | none | effect stops | rebuilt at each load; re-run when the world becomes current |
+| A groups 13+27r to 21+27r (r = 0-10) | record thread, outer state 1 entry | request 1 from intro A's stagger (10-20 ticks apart; Act 1 only, none after the skip intro) | shown at start pose, animation plays once forward (10.0 s); effect 10+r starts | no, reverts at reload |
+| A groups | record thread, outer state 1 later pass | no A object animating | hidden | no, reverts at reload |
+| B groups 22+27r to 30+27r | record thread, outer state 1 end | same | shown (idle loop: each member set to frame 0 and replayed whenever all have stopped); effect 10+r stops | no, reverts at reload |
+| B groups | record thread, outer state 2 (Act 3: request 2 from intro B; Act 1: after the rise) | none | idle loop as above | no, reverts at reload |
+| A and B groups, C groups 31+27r to 39+27r | record thread, outer state 3 entry | request 3: the hero hit the record's entity while the record is in state 2 | A, B hidden; C shown, animation plays once (1.0 s); effect 10+r starts | no, reverts at reload |
+| B groups, C groups | record thread, outer state 3 | no C object animating | B shown, A and C hidden; effect stops | no, reverts at reload |
+| A, B, C groups | record thread, outer state 4 (close) | request 4 from the outros or from the stage-end flags | A shown at end pose, animation plays backward; B and C hidden; then all hidden | no, reverts at reload |
+| P 364+4r | inner state 1 entry | inner request 1 (with the rise, or the set-back flags 15-17) | shown, animation plays once (1.0 s); Q, R, S hidden; R shown when it ends | no, reverts at reload |
+| Q 365+4r | inner state 3 entry | inner request 3 with the hit | shown, animation plays once (1.0 s), effect 23 moved to locator 55+3r and started; R shown when it ends | no, reverts at reload |
+| R 366+4r, 367+4r | inner state 4 entry | inner request 4: death of the record's entity, or the close | shown alone, animation plays once (0.53 s); 0.4 s later sound 10 and effect 21 at locator 56+3r | no, reverts at reload |
+| T 2+r (collision object) | inner state 4, when both R objects have stopped and the 0.4 s step has happened | none | shown (R stays shown) | no, reverts at reload |
+| S 408+13r to 420+13r | inner state 7 entry | inner request 7: a stage-locator flag of the boss (slam) | shown, animation plays once (1.0 s), sound 11 at locator 57+3r, effect 22; P, Q, R, T hidden; all inner objects hidden when it ends | no, reverts at reload |
+| inner objects of all eleven records | record thread, request 2 (intro B) | Act 3 | hidden (the records start in the idle loop) | no, reverts at reload |
+| gate groups 611-637 (A0), 638-664 (B0), 665-691 (A1), 692-718 (B1) and singles 0, 1 | gate stepper, request 1 (intro A and the skip intro) | gate state 1 | B shown at end pose and played backward (4.0 s), A hidden; single shown at start pose at the end of the entry pass; when B stops: B hidden, A and single shown, then A replayed from frame 0 whenever all stop | no, reverts at reload |
+| gate groups and singles | gate stepper, request 2 (intro B on both gates; the Act 3 branch where the fight is not due, on gate 0) | gate state 2 | A and single shown at start pose, B hidden; A looped | no, reverts at reload |
+| gate groups and singles of gate 1 | gate stepper, request 4 (outros) | gate state 4 | B shown at start pose and played forward (4.0 s), A and single hidden; then everything hidden | no, reverts at reload |
+| cage groups 597-603 (A) and 604-610 (B); extra 554 | thread routine 12 and intro A / skip intro: request 2; outro A: request 4 | Act 1 | A replayed at speed 2.5 while closed; request 4: B shown and played forward, A hidden, extra object played once (5.0 s), entity 3 animation 0, then both groups hidden | no, reverts at reload |
+| cage groups 555-596 (A and B of three cages); extras 553, 552, 551 | thread routine 12 and intro B: request 2; outro B: request 4 in turn | Act 3 | as the Act 1 cage, for entities 4, 5, 6 | no, reverts at reload |
+| entities 0-2 (Tentacles) | fight controller (stage spawns 1-3, and the set-back reruns) | stage start | entity force-spawned (kill bit cleared), moved to locators 13-18, aggressive | flag 82,278 read at load |
+| 0 | load thread | flag 83 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 83 set | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | none | character activated | flag 82,278 read at load |
+| 3-8 | load thread | none | entity removed permanently (kill bit) | kill bit, saved |
+| effects 10-23 | world-activate callback | none | effect stops | re-run when the world becomes current |
+
+**Pack 1230**: Exterior, a slot chooser, a treasure-map exchange and button-prompt triggers
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | at load | flag 64 set and flag 248 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| - | at load | flag 248 set | ground-block collision layer word := 1 | rebuilt at each load |
+| - | at load | flag 248 set | placed-object display layer word := 2 x 1 | rebuilt at each load |
+| 0 | every tick | (flag 64 clear or flag 248 set) and object 0 shown | hidden, collision and walls off | rebuilt each tick |
+
+**Pack 1238**: Exterior, a pickup watch, slot sets by flag and two threads
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 50 clear and flag 49 clear | character set loaded into a slot | rebuilt at each load |
+| 3 | load thread | flag 50 set | character set loaded into a slot | rebuilt at each load |
+| 2 | load thread | flag 50 set and (flag 567 clear or flag 568 set) | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 50 set and flag 568 set | character set loaded into a slot | rebuilt at each load |
+| 4 | load thread | flag 578 set and flag 579 clear | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1244**: Exterior, a hero swap with dialogue, an entity talk and a break sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 5,6 | script trigger 3 | other script test and flag 272 clear | animation plays once | flag written, not read at load by this pack |
+| 17-24 | script trigger 3 | other script test and flag 272 clear | breakable broken by script | broken bit, saved |
+| 1,4,5 | script trigger 3 | other script test and flag 272 clear | hidden, collision and walls off | flag written, not read at load by this pack |
+| 6 | script trigger 3 | other script test and flag 272 clear | shown at start pose (draw, collision, pose at time 0) | flag written, not read at load by this pack |
+| 0,1,4,5 | at load | flag 273 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1246**: Exterior, the Werelupe King arena: an entry walk, a level-state fight cascade and the reward
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 16-24 | script trigger 0 | level state 8 set | entity removed permanently (kill bit) | kill bit, saved |
+| 0,1,4 | script trigger 0 | flag 273 clear and level state 7 clear and level state 5 clear and level state 3 clear | shown at start pose (draw, collision, pose at time 0) | flag 273 read at load |
+| 5 | script trigger 0 | flag 273 clear and level state 7 clear and level state 5 clear and level state 3 clear | hidden, collision and walls off | flag 273 read at load |
+| 21 | script trigger 0 | flag 273 clear and level state 7 clear and level state 5 clear and level state 3 clear | entity removed permanently (kill bit) | kill bit, saved |
+| 21 | script trigger 0 | flag 273 clear and level state 7 clear and level state 5 clear and level state 3 clear | entity force-spawned (kill bit cleared) | flag 273 read at load |
+| 16-24 | script trigger 0 | flag 273 set | entity removed permanently (kill bit) | kill bit, saved |
+| 0,1,3 | script trigger 0 | flag 273 set | hidden, collision and walls off | flag 273 read at load |
+| 2 | script trigger 0 | flag 273 set | shown at start pose (draw, collision, pose at time 0) | flag 273 read at load |
+| 3,5 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1247**: Exterior, trigger set with object swaps, an item-and-AI check and two world callbacks
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 2, 3, 8, 10, 16, 18, 21, 24, 26, 29, 32, 34 | at load | flag 78 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 5, 7, 12, 15, 23, 31 | at load | flag 78 clear | shown at end pose (finished); triggers registered | rebuilt at each load |
+| 0, 1, 4, 7, 9, 11, 12, 15, 17, 19, 21, 23, 25, 27, 28, 31, 33, 35 | at load | flag 78 set | shown at start pose (draw, collision, pose at time 0); no trigger registered, nothing can move | rebuilt at each load |
+| effects 0-23 | at load | none | effect stops | rebuilt at each load |
+| 0, 1 | script trigger 0 | level state 0 clear, object word non-zero, state 1 | hidden, collision and walls off | no, reverts at reload |
+| 3, 2 | script trigger 0 | same | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 2, then 3 | script trigger 0 | same | animation plays once, one after the other (waited); effects 20-23 start then stop | no, reverts at reload |
+| 9, 11, 7 | script trigger 1 | state 1 at the start | hidden, collision and walls off | no, reverts at reload |
+| 8, 10, 6 | script trigger 1 | state 1 at the start | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 6, then 8, then 10 | script trigger 1 | state 1 at the start; 8 and 10 only if the plate is still held at the re-read | animation plays once, each waited; effects 13, 14, 15 start, 12-15 stop | no, reverts at reload |
+| 6 / 7 | script trigger 1 | released at the re-read | 6 hidden, 7 shown at start pose and plays once (no wait); end | no, reverts at reload |
+| 8, 10, 6 | script trigger 1 | state back to 0 | hidden, collision and walls off | no, reverts at reload |
+| 9, 11, 7 | script trigger 1 | state back to 0 | shown at start pose, then animation plays once (no wait) | no, reverts at reload |
+| 25, 27, 28, 23 | script trigger 2 | state 1 at the start | hidden, collision and walls off | no, reverts at reload |
+| 24, 26, 29, 22 | script trigger 2 | state 1 at the start | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 22, then 24, 26, 29 | script trigger 2 | state 1; 24, 26, 29 only if still held at the re-read | animation plays once, each waited (4.33 s, 1.0 s, 1.53 s); effects 16-19 start then stop | no, reverts at reload |
+| 24, 26, 29, 22 hidden; 25, 27, 28, 23 shown and play | script trigger 2 | state 0 or released | swap back; plays once (no wait) | no, reverts at reload |
+| 33, 35, 31 hidden; 32, 34, 30 shown | script trigger 3 | state 1 at the start | hidden / shown at start pose | no, reverts at reload |
+| 30, then 34 (no wait), 32 (wait) | script trigger 3 | state 1; 34 and 32 only if still held at the re-read | animation plays once (4.67 s, 7.33 s); effects 0-3 start then stop | no, reverts at reload |
+| 32, 34, 30 hidden; 33, 35, 31 shown and play | script trigger 3 | state 0 or released | swap back; plays once (no wait) | no, reverts at reload |
+| 17, 19, 12 hidden; 16, 18, 13 shown | script trigger 5 (trigger 6: 17, 19, 15 hidden; 16, 18, 14 shown) | state 1 and the other plate's record 0 at the start | hidden / shown at start pose | no, reverts at reload |
+| 13, then 16, 18 (trigger 6: 14, then 16, 18) | script triggers 5, 6 | same; 16 and 18 only if still held at the re-read | animation plays once, each waited; effects 4-7 (trigger 5 stops them, trigger 6 never does) | no, reverts at reload |
+| 12 hidden, 13 shown (trigger 6: 15 hidden, 14 shown) | script triggers 5, 6 | state 1 and the other plate's record non-zero | short branch: the pressed plate plays once (waited); effects 4-7 (trigger 6: 8-11) start then stop; panels untouched | no, reverts at reload |
+| 16, 18, 13 hidden; 17, 19, 12 shown and play (trigger 6: 14, 15) | script triggers 5, 6 | state 0 and the other plate's record 0 | swap back; plays once (no wait) | no, reverts at reload |
+| 13 hidden, 12 shown and plays (trigger 6: 14, 15) | script triggers 5, 6 | state 0 and the other plate's record non-zero | plate only | no, reverts at reload |
+| 5 hidden, 4 shown, 4 plays | script trigger 4 (registered only while flag 78 is clear) | first fire, hero lacks item 29 | altar gate shuts (waited, 1.53 s) | no, reverts at reload |
+| 4 hidden, 5 shown, 5 plays | script trigger 4 | 1.8 s after the hero holds item 29 | altar gate opens (waited, 1.0 s); flags 78, 269, 270 set | flag 78 saved; the pose is not |
+
+**Pack 1248**: Exterior, a multi-object sequence with sound and a dialogue exit state
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0-5,31,33,35,37,39,41,43-46 | script trigger 27/16/18/17 | other script test | animation plays once | no, reverts at reload |
+| 25 | script trigger 27 | other script test | shown at end pose (finished) | no, reverts at reload |
+| 25 | script trigger 27 | other script test | animation plays once backward from the end | no, reverts at reload |
+| 26,43-46 | script trigger 27 | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 0-5 | script trigger 16/18/17 | other script test | hidden, collision and walls off | no, reverts at reload |
+| 0-5 | at load | flag 79 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 25-30,33,37,41,43,45 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 27-30 | at load | none | animation loops | rebuilt at each load |
+
+**Pack 1249**: Exterior, trigger set with object swaps and teleport and world callbacks
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 13, 16, 20, 24 | at load | flag 80 clear | shown at end pose (finished) | rebuilt at each load |
+| 0, 2, 3, 4, 8, 10, 15, 19, 23, 44, 46, 48 | at load | flag 80 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 1, 5, 6, 7, 9, 10, 13, 16, 17, 20, 21, 24, 25, 43, 45, 47 | at load | flag 80 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| effects 0-15 | at load | none | effect stops | rebuilt at each load |
+| 12 | script trigger 2 | state 1, object word non-zero, fire-once word 0 | hidden, collision and walls off | no, reverts at reload |
+| 10 | script trigger 2 | same | pose set to time 0, then animation plays once (waited, 1.27 s): the entrance gate lowers | no, reverts at reload |
+| 12, 10 | script trigger 1 | state 1, object word non-zero | 12 hidden; 10 shown and set to time 0 (gate reopens at once); fire-once word cleared | no, reverts at reload |
+| 10, 13, 1 | script trigger 3 | state 1 at the start | hidden, collision and walls off | no, reverts at reload |
+| 0, 12, 11 | script trigger 3 | state 1 at the start | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 11, then 12, 0 | script trigger 3 | state 1; 12 and 0 only if still held at the re-read | animation plays once, each waited (0.333 s, 3.33 s, 1.6 s); effects 12-15 start then stop | no, reverts at reload |
+| 12, 11, 0 hidden; 10, 13, 1 shown and play | script trigger 3 | state 0 or released | swap back; plays once (no wait; 1 has no wall) | no, reverts at reload |
+| 17, 16 hidden; 15, 14 shown; 14, then 15 play | script trigger 4 | state 1; 15 only if still held | effects 8-11 start then stop; waited | no, reverts at reload |
+| 15, 14 hidden; 17, 16 shown and play | script trigger 4 | state 0 or released | swap back (no wait) | no, reverts at reload |
+| 21, 20 hidden; 19, 18 shown; 18, then 19 play | script trigger 5 | state 1; 19 only if still held | effects 4-7 start then stop; waited | no, reverts at reload |
+| 19, 18 hidden; 21, 20 shown and play | script trigger 5 | state 0 or released | swap back (no wait) | no, reverts at reload |
+| 25, 24 hidden; 23, 22 shown; 22, then 23 play | script trigger 6 | state 1; 23 only if still held | effects 0-3 start then stop; waited | no, reverts at reload |
+| 23, 22 hidden; 25, 24 shown; 24 plays (no wait), 25 plays (wait) | script trigger 6 | state 0 or released | swap back | no, reverts at reload |
+| 47, 48, 5, 2 | script trigger 18 | object word non-zero, state non-zero, button 0 | lever down (48 shown): 47, 5 hidden; 48, 2 shown; 48 plays (wait); 48 hidden, 47 shown; 2 plays (wait). Lever up (47 shown): 2, 48 hidden; 47, 5 shown; 47 plays (wait); 47 hidden, 48 shown; 5 plays (wait) | no, reverts at reload |
+| 45, 46, 6, 3 | script trigger 17 | same | same swap with 45, 46, 6, 3 | no, reverts at reload |
+| 43, 44, 7, 4 | script trigger 16 | same | same swap with 43, 44, 7, 4 | no, reverts at reload |
+| 9, 8 | script triggers 16, 17, 18 | the lever went up and the other two levers' up objects (47, 43, 45) are shown | 9 hidden; 8 shown at start pose and plays once (waited, 1.27 s); flag 80 set | flag 80 saved; the pose is not |
+
+**Pack 1250**: Exterior, a flag-77 pickup ritual and a world-143 entrance
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 7,8 | table-driven | other script test and flag 77 clear and other script test and object 8 hidden | hidden, collision and walls off | unclear |
+| 7,8 | table-driven | other script test and flag 77 clear and other script test and object 8 hidden | shown at start pose (draw, collision, pose at time 0) | unclear |
+| 0,7,8 | table-driven | other script test and flag 77 clear and other script test and object 7 shown and item 29 not held | hidden, collision and walls off | unclear |
+| 7,8 | table-driven | other script test and flag 77 clear and other script test and object 7 shown and item 29 not held | shown at start pose (draw, collision, pose at time 0) | unclear |
+| 7 | table-driven | other script test and flag 77 clear and other script test and object 7 shown and item 29 not held | animation plays once | unclear |
+| 0-9 | table-driven | other script test and flag 77 clear and other script test and object 7 shown and item 29 not held | effect starts | unclear |
+| 0-9 | table-driven | other script test and flag 77 clear and other script test and object 7 shown and item 29 not held | effect stops | unclear |
+| 8 | table-driven | other script test and flag 273 set and flag 275 clear | hidden, collision and walls off | unclear |
+| 0,7 | table-driven | other script test and flag 273 set and flag 275 clear | shown at start pose (draw, collision, pose at time 0) | unclear |
+| 7 | table-driven | other script test and flag 273 set and flag 275 clear | animation plays once backward from the end | unclear |
+
+**Pack 1251**: Interior, an item-activation thread, an on-enter callback and an item-ask dialogue chain
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | entity proximity 0 | (flag 585 clear or flag 586 set) and flag 457 set and item 49 not held | world item spawned | flag written, not read at load by this pack |
+
+**Pack 1257**: Exterior, a long trigger table, a teleport pair and a shop-style world swap
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | script trigger 0 | other script test and flag 676 clear | character activated | flag written, not read at load by this pack |
+| 0 | script trigger 0 | other script test and flag 676 clear | character released (streaming may rebind) | kill bit, saved |
+
+**Pack 1300**: Exterior, large entity-proximity set with flag-chained lines, an item-gated line, teleports with prompts and a boss-area set
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 2 | every tick | other script test | hidden, collision and walls off | rebuilt each tick |
+| 2 | every tick | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt each tick |
+| 2 | every tick | other script test | colour multiplier set | rebuilt each tick |
+| 1 | script trigger 5 | other script test | hidden, collision and walls off | no, reverts at reload |
+| 0 | script trigger 5 | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 5 | entity proximity 18 | other script test | hidden, collision and walls off | flag 400 read at load |
+| 5 | entity proximity 18 | other script test | shown at start pose (draw, collision, pose at time 0) | flag 400 read at load |
+| 5 | entity proximity 18 | other script test | colour multiplier set | flag 400 read at load |
+| 4 | entity proximity 18 | none | hidden, collision and walls off | flag 400 read at load |
+| 8 | script trigger 0 | other script test | effect stops | flag 227 read at load |
+| - | load thread, thread | none | character slot emptied (characters released) | no, reverts at reload |
+| 4,6,7,10-13,table/argument | load thread, thread | none | character set loaded into a slot | no, reverts at reload |
+| 0 | load thread, thread | none | character activated | no, reverts at reload |
+| - | script trigger 1 | other script test and flag 222 clear | character slot emptied (characters released) | flag 222 read at load |
+| 5,7,10 | load thread | flag 94 clear and flag 93 clear and flag 92 clear and flag 222 clear | character set loaded into a slot | rebuilt at each load |
+| 12 | load thread | flag 94 clear and flag 93 clear and flag 92 clear and flag 222 clear and flag 397 clear | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | flag 94 clear and flag 93 clear and flag 92 clear and flag 397 clear | character set loaded into a slot | rebuilt at each load |
+| 2,14 | load thread | flag 94 clear and flag 93 clear and flag 92 clear | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | flag 94 clear | character set loaded into a slot | rebuilt at each load |
+| 17 | thread | other script test | character set loaded into a slot | no, reverts at reload |
+| table/argument | thread | other script test | entity force-spawned (kill bit cleared) | no, reverts at reload |
+| table/argument | thread | not other script test | character set loaded into a slot | no, reverts at reload |
+| - | script trigger 2 | other script test | character slot emptied (characters released) | flag written, not read at load by this pack |
+| 21 | script trigger 2 | other script test | character set loaded into a slot | flag written, not read at load by this pack |
+| table/argument | script trigger 2 | other script test | entity force-spawned (kill bit cleared) | flag written, not read at load by this pack |
+| 1 | at load | flag 594 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0,2 | at load | flag 594 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 4 | at load | flag 400 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 5 | at load | flag 400 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 8 | at load | flag 227 clear | effect starts | rebuilt at each load |
+| 8 | at load | flag 227 set | effect stops | rebuilt at each load |
+
+**Pack 1324**: Exterior, scripted triggers, object sets and a camera sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 9-11,21-28 | script trigger 0/1/2/3/4 | none | hidden, collision and walls off | flag 239 read at load |
+| 11 | script trigger 0/1 | not (other script test) and other script test | animation loops | flag 239 read at load |
+| table/argument | script trigger 0/1 | none | animation loops | flag 239 read at load |
+| 9,10,15,17,19,table/argument | at load, script trigger 0/1/2.../2/3.../3... | other script test | hidden, collision and walls off | flag 239 read at load |
+| 14,16,18,20 | at load, script trigger 0/1/2.../2/3/4 | other script test | shown at start pose (draw, collision, pose at time 0) | flag 239 read at load |
+| table/argument | at load, script trigger 0/1/2... | not other script test | animation loops | flag 239 read at load |
+| 9,11 | script trigger 0/1/2/3... | not other script test | hidden, collision and walls off | flag 239 read at load |
+| table/argument | script trigger 0/1/2/3... | none | movable block moved to a locator | flag 239 read at load |
+| 0,table/argument | every tick | other script test | pose set to a computed time and frozen | rebuilt each tick |
+| 21,table/argument | script trigger 2/3/4 | none | shown at start pose (draw, collision, pose at time 0) | flag 239 read at load |
+| table/argument | script trigger 2/3/4 | none | movable block active := false | flag 239 read at load |
+| 22,28 | script trigger 2/3/4 | not other script test | shown at start pose (draw, collision, pose at time 0) | flag 239 read at load |
+| table/argument | script trigger 2/3/4 | none | movable block active := true | flag 239 read at load |
+| 0-2 | script trigger 2/3/4 | not other script test | movable block active := false | flag 239 read at load |
+| 16,18,20 | script trigger 2/3/4 | other script test | animation plays once | flag 239 read at load |
+| 0-2 | load thread | none | movable block moved to a locator | no, reverts at reload |
+| 29 | at load | none | animation loops | rebuilt at each load |
+| 0,14,15,17,19,21,table/argument | at load | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 21 | at load | not other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 16,18,20 | at load | not other script test | shown at end pose (finished) | rebuilt at each load |
+| 0-4 | at load | not other script test | movable block active := false | rebuilt at each load |
+| 3,4 | at load | not other script test | movable block moved to a locator | rebuilt at each load |
+
+**Pack 1327**: Exterior, seven entity proximity routines, the Act 3 start, a target-practice thread, per-tick item checks and an animated-object offset loop
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | at load | other script test | effect stops | rebuilt at each load |
+| table/argument | at load | other script test | effect starts | rebuilt at each load |
+| 1,5 | load thread | flag 94 clear and flag 93 clear and flag 92 clear | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | flag 94 clear | character set loaded into a slot | rebuilt at each load |
+| table/argument | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| table/argument | at load | none | extra position offset set | rebuilt at each load |
+| table/argument | every tick | other script test | extra position offset set | rebuilt each tick |
+| - | load thread | other script test | character slot emptied (characters released) | flag 228,233 read at load |
+| 0,6 | load thread | other script test | character set loaded into a slot | flag 228,233 read at load |
+| 0 | load thread | other script test | entity removed permanently (kill bit) | kill bit, saved |
+| 0 | load thread | other script test | entity force-spawned (kill bit cleared) | flag 228,233 read at load |
+| - | load thread | other script test and flag 230 set | character slot emptied (characters released) | rebuilt at each load |
+| 0 | load thread | other script test and flag 230 set | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | none | entity removed permanently (kill bit) | kill bit, saved |
+| 0 | load thread | none | entity force-spawned (kill bit cleared) | flag 228,233 read at load |
+| 0,1 | at load | flag 92 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 2 | at load | flag 92 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1335**: Exterior, six proximity routines, slot choices, a walk-to-entity sequence and movie triggers
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | thread | other script test | character set loaded into a slot | no, reverts at reload |
+| - | script trigger 5 | not other script test | character slot emptied (characters released) | flag 92 read at load |
+| 0 | script trigger 5 | not other script test | character set loaded into a slot | flag 92 read at load |
+| 1 | script trigger 7 | other script test and flag 240 set and flag 241 clear | hidden, collision and walls off | flag 241 read at load |
+| 0 | script trigger 7 | other script test and flag 240 set and flag 241 clear | shown at start pose (draw, collision, pose at time 0) | flag 241 read at load |
+| - | script trigger 7 | other script test and flag 240 set and flag 241 clear | character slot emptied (characters released) | flag 241 read at load |
+| 1 | script trigger 7 | other script test and flag 240 set and flag 241 clear | character set loaded into a slot | flag 241 read at load |
+| 7 | load thread | flag 94 clear and flag 93 clear and flag 92 clear | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | flag 94 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | at load | flag 241 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | flag 241 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1344**: Transition, two movie triggers, an animated toggle pair and a slot thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 3 | load thread | flag 94 clear and flag 93 clear and flag 92 clear | character set loaded into a slot | rebuilt at each load |
+| table/argument | load thread | none | character set loaded into a slot | no, reverts at reload |
+| 2-5 | script trigger 3/4 | flag 322 set and other script test and other script test and other script test | animation plays once | no, reverts at reload |
+| 2-5 | script trigger 3/4 | flag 322 set and other script test and other script test and other script test | animation plays once backward from the end | no, reverts at reload |
+| 0-5 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1350**: Exterior, entity conversations and three doors gated on flag 100
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 100 clear and flag 99 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 100 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1353**: Exterior, proximity conversations, button triggers and three threads
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 104 clear | character set loaded into a slot | rebuilt at each load |
+| 2 | load thread | flag 104 set | character set loaded into a slot | rebuilt at each load |
+| - | thread | none | character slot emptied (characters released) | no, reverts at reload |
+| 1 | thread | other script test | character set loaded into a slot | no, reverts at reload |
+| 3 | thread | not other script test and other script test | character set loaded into a slot | no, reverts at reload |
+| 2,table/argument | load thread | none | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| table/argument | load thread | none | extra yaw set | no, reverts at reload |
+| 3,4,6 | load thread | flag 694 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 5 | load thread | flag 694 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 3,4 | load thread | flag 694 set | shown at end pose (finished) | rebuilt at each load |
+| table/argument | script trigger 0/1/2 | other script test | extra yaw set | no, reverts at reload |
+| 3,4 | every tick | other script test | animation plays once | rebuilt each tick |
+| 6 | every tick | other script test | hidden, collision and walls off | rebuilt each tick |
+| 5 | every tick | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt each tick |
+| 0 | world-activate callback | other script test | effect starts | re-run when the world becomes current |
+| 0 | at load | none | effect stops | rebuilt at each load |
+
+**Pack 1358**: Exterior, six teleports, proximity dialogue set and boss-area triggers
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | at load, script trigger 0 | none | ground-block collision layer word := a computed word | no, reverts at reload |
+| - | at load, script trigger 0 | none | placed-object display layer word := 2 x a computed word | no, reverts at reload |
+| 0 | load thread | flag 102 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 102 set | character set loaded into a slot | rebuilt at each load |
+| - | thread | not other script test and other script test | character slot emptied (characters released) | no, reverts at reload |
+| table/argument | thread | not other script test | character set loaded into a slot | no, reverts at reload |
+| 0 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1363**: Exterior, gated init, teleports, triggers and a long Mortog thread
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 2 | script trigger 0 | other script test | extra position offset set | no, reverts at reload |
+| 0,1 | script trigger 0 | other script test | hidden, collision and walls off | no, reverts at reload |
+| 0,1 | script trigger 0 | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 0,1 | script trigger 0 | other script test | animation plays once | no, reverts at reload |
+| 3,4 | script trigger 1 | other script test | animation plays once | flag 693 read at load |
+| 0 | load thread | flag 106 clear | character set loaded into a slot | rebuilt at each load |
+| 2 | load thread | other script test | extra position offset set | flag 692 read at load |
+| 1 | load thread | other script test | hidden, collision and walls off | flag 692 read at load |
+| 0 | load thread | other script test | shown at start pose (draw, collision, pose at time 0) | flag 692 read at load |
+| 0 | load thread | other script test | animation plays once | flag 692 read at load |
+| - | thread | other script test | character slot emptied (characters released) | no, reverts at reload |
+| - | thread | not other script test and other script test | character slot emptied (characters released) | no, reverts at reload |
+| 1 | thread | not other script test and other script test | character set loaded into a slot | no, reverts at reload |
+| - | thread | not other script test | character slot emptied (characters released) | no, reverts at reload |
+| table/argument | thread | none | character set loaded into a slot | no, reverts at reload |
+| 3,4 | at load | flag 693 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 3,4 | at load | flag 693 set | shown at end pose (finished) | rebuilt at each load |
+| 0,2 | at load | flag 692 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0,2 | at load | flag 692 set | shown at end pose (finished) | rebuilt at each load |
+
+**Pack 1369**: Exterior, two triggers with a button-gated walk
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0,1 | script trigger 0 | other script test | animation plays once | no, reverts at reload |
+| 0,1 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1371**: Exterior, blackboard-gated start, triggers, hero death and a walk-in sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 8 | thread | other script test | character set loaded into a slot | no, reverts at reload |
+| 6,7 | thread | not other script test and other script test | character set loaded into a slot | no, reverts at reload |
+| 4,9,10 | script trigger 2/3/4 | other script test and flag 100 clear and other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| table/argument | script trigger 2/3/4 | other script test and flag 100 clear and other script test | animation plays once | no, reverts at reload |
+| - | script trigger 2/3/4 | other script test and flag 100 clear and other script test | character slot emptied (characters released) | no, reverts at reload |
+| 10 | every tick | none | shown at end pose (finished) | rebuilt each tick |
+| 10 | every tick | none | animation plays once | rebuilt each tick |
+| 4 | every tick | none | hidden, collision and walls off | rebuilt each tick |
+| 9 | every tick | flag 342 set and flag 343 set and flag 344 set | animation plays once | rebuilt each tick |
+| 8 | script trigger 1 | other script test | hidden, collision and walls off | flag 100,345 read at load |
+| 0 | script trigger 1 | other script test | effect starts | flag 100,345 read at load |
+| table/argument | thread | other script test | entity removed permanently (kill bit) | kill bit, saved |
+| table/argument | load thread | not other script test | character set loaded into a slot | no, reverts at reload |
+| 0 | at load | none | effect stops | rebuilt at each load |
+| 8 | at load | other script test and flag 345 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 1 | at load | other script test and flag 100 clear and flag 342 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 1 | at load | other script test and flag 100 clear and flag 342 clear | shown at end pose (finished) | rebuilt at each load |
+| 2 | at load | other script test and flag 100 clear and flag 344 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 3 | at load | other script test and flag 100 clear and flag 343 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 10 | at load | other script test | shown at end pose (finished) | rebuilt at each load |
+| 9 | at load | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 4,9,10 | at load | not other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1381**: Exterior, a hub with six warp pads, six outer stations, a block-push group and a return-to-hub routine
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| effects 0, 2-13 | at load | none | effect stops | rebuilt at each load |
+| 36,72,74, 37,76,78, 32,56,58, 33,60,62, 34,64,66, 35,68,70 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 36,37,32,33,34,35 | at load | none | animation loops (0.4 s blend) | rebuilt at each load |
+| 18,19,26-31,38-43,50-55,170-187 | at load | none | shown at start pose (draw, collision, pose at time 0); 20-25 are empty slots and do nothing | rebuilt at each load |
+| blocks 0-5 | at load | none | movable block active := false | rebuilt at each load |
+| 80-169 (light objects) | at load, world-activate callback, script trigger 31 (pad of station 3) | none | shown at start pose (draw only); trigger 138-227 bound to the return-to-hub routine | rebuilt at each load; re-run when the world becomes current |
+| 84,88,91,98,101,105,108,112,113,122,126,131,140,146,153,157,158,162,166 | every tick | the object's own clock above 6.0 (clock := 0) | shown at start pose; trigger object + 58 bound to the return-to-hub routine | rebuilt each tick |
+| same 19 objects | every tick | the object's clock above 2.0 and the object shown | hidden; trigger object + 58 bound to the no-op routine | rebuilt each tick |
+| 0-5 (hazards, no mesh) | thread (six hazard threads, started 0.4 s apart) | none | shown at start pose, animation plays once (1.47 s), effect 2 + 2k follows it | no, reverts at reload |
+| 0-5 | same thread, animation finished | none | hidden; effect 2 + 2k stops; effect 3 + 2k for one tick; trigger 12 + k bound to the damage routine for 1.5 s | no, reverts at reload |
+| 36,37,32,33,34,35 (loop object of station k) | script trigger 63, 5, 18, 33, 39, 54 | hero melee or shot hits the target while object 50 + k is shown | animation stops where it is | no, reverts at reload; the restore does not stop or start it |
+| piece objects (72,74), (76,78), (56,58), (60,62), (64,66), (68,70) | same | same | animation plays once at speed 0.5 (second one waited for) | no, reverts at reload; the restore leaves them at their start pose |
+| 170+3k, 171+3k | same | same | animation plays once (3.0 s) | flag 708 + k, read at the world-activate callback |
+| 172+3k and 38+k | same (172 + 3k first, 38 + k after the second camera track) | same | hidden, collision and walls off | flag 708 + k, read at the world-activate callback |
+| 50+k | same | same | animation plays once (4.0 s), then hidden | flag 708 + k, read at the world-activate callback |
+| 44+k | same | same | shown at start pose | flag 708 + k, read at the world-activate callback |
+| block k, effects 31 + 4k to 34 + 4k | same | same | movable block active := true; four effects attached | flag 708 + k, read at the world-activate callback |
+| 26+k (20+k is an empty slot) | movable-block contact (block group routine) | block k done word clear and armed word set | hidden, collision and walls off; flag 714 + k set | flag 714 + k, read at the world-activate callback |
+| 18 | same routine | the sixth piece is done (once) | animation plays once with a wait (4.0 s) | flags 714-719 all set and flag 337 clear, read at the world-activate callback |
+| 19 | same routine | same | hidden, collision and walls off after 18 ends | same |
+| blocks 6-56 | pad of station 5 (trigger 52) | none | movable blocks 6-56 moved to locators 12-62 | no, reverts at reload |
+| effects 2-13 and 0 | thread, script trigger (pads, return-to-hub routine) | pad or return used | effect starts (sparkle, hazard effects) or stops | no, reverts at reload |
+| 170,171 | world-activate callback | flag 708 set | shown at end pose (finished) | re-run when the world becomes current |
+| 38,50,172 | world-activate callback | flag 708 set | hidden, collision and walls off | re-run when the world becomes current |
+| 44 | world-activate callback | flag 708 set | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 0 | world-activate callback | flag 714 set | movable block moved to a locator | re-run when the world becomes current |
+| 20,26 | world-activate callback | flag 714 set | hidden, collision and walls off | re-run when the world becomes current |
+| 173,174 | world-activate callback | flag 709 set | shown at end pose (finished) | re-run when the world becomes current |
+| 39,51,175 | world-activate callback | flag 709 set | hidden, collision and walls off | re-run when the world becomes current |
+| 1 | world-activate callback | flag 709 set | movable block active := true | re-run when the world becomes current |
+| 45 | world-activate callback | flag 709 set | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 1 | world-activate callback | flag 715 set | movable block moved to a locator | re-run when the world becomes current |
+| 21,27 | world-activate callback | flag 715 set | hidden, collision and walls off | re-run when the world becomes current |
+| 176,177 | world-activate callback | flag 710 set | shown at end pose (finished) | re-run when the world becomes current |
+| 40,52,178 | world-activate callback | flag 710 set | hidden, collision and walls off | re-run when the world becomes current |
+| 2 | world-activate callback | flag 710 set | movable block active := true | re-run when the world becomes current |
+| 46 | world-activate callback | flag 710 set | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 2 | world-activate callback | flag 716 set | movable block moved to a locator | re-run when the world becomes current |
+| 22,28 | world-activate callback | flag 716 set | hidden, collision and walls off | re-run when the world becomes current |
+| 179,180 | world-activate callback | flag 711 set | shown at end pose (finished) | re-run when the world becomes current |
+| 41,53,181 | world-activate callback | flag 711 set | hidden, collision and walls off | re-run when the world becomes current |
+| 3 | world-activate callback | flag 711 set | movable block active := true | re-run when the world becomes current |
+| 47 | world-activate callback | flag 711 set | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 3 | world-activate callback | flag 717 set | movable block moved to a locator | re-run when the world becomes current |
+| 23,29 | world-activate callback | flag 717 set | hidden, collision and walls off | re-run when the world becomes current |
+| 182,183 | world-activate callback | flag 712 set | shown at end pose (finished) | re-run when the world becomes current |
+| 42,54,184 | world-activate callback | flag 712 set | hidden, collision and walls off | re-run when the world becomes current |
+| 4 | world-activate callback | flag 712 set | movable block active := true | re-run when the world becomes current |
+| 48 | world-activate callback | flag 712 set | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 4 | world-activate callback | flag 718 set | movable block moved to a locator | re-run when the world becomes current |
+| 24,30 | world-activate callback | flag 718 set | hidden, collision and walls off | re-run when the world becomes current |
+| 185,186 | world-activate callback | flag 713 set | shown at end pose (finished) | re-run when the world becomes current |
+| 43,55,187 | world-activate callback | flag 713 set | hidden, collision and walls off | re-run when the world becomes current |
+| 5 | world-activate callback | flag 713 set | movable block active := true | re-run when the world becomes current |
+| 49 | world-activate callback | flag 713 set | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 5 | world-activate callback | flag 719 set | movable block moved to a locator | re-run when the world becomes current |
+| 25,31 | world-activate callback | flag 719 set | hidden, collision and walls off | re-run when the world becomes current |
+| 18 | world-activate callback | flag 714 set and flag 715 set and flag 716 set and other script test | shown at end pose (finished) | re-run when the world becomes current |
+| 19 | world-activate callback | flag 714 set and flag 715 set and flag 716 set and other script test | hidden, collision and walls off | re-run when the world becomes current |
+
+**Pack 1382**: Exterior, six element pedestals, floor switches and the final-fight gate
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 2,4,6,7,10,12,13,28,table/argument | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| table/argument | script trigger (table) | other script test | effect starts | no, reverts at reload |
+| 0,1,table/argument | script trigger (table)/2/3/4/5/6... | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| table/argument | script trigger (table) | other script test | character activated | no, reverts at reload |
+| table/argument | at load, every tick | other script test | effect stops | rebuilt at each load |
+| table/argument | at load, every tick | other script test | hidden, collision and walls off | rebuilt at each load |
+| - | script trigger (table) | other script test | world item spawned | no, reverts at reload |
+| 32-40,43,48,49 | every tick | none | entity removed permanently (kill bit) | kill bit, saved |
+| - | every tick | none | character slot emptied (characters released) | rebuilt each tick |
+| 28 | every tick | none | hidden, collision and walls off | rebuilt each tick |
+| 1 | every tick | none | effect starts | rebuilt each tick |
+| table/argument | script trigger 3/4/5/6... | none | hidden, collision and walls off | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6... | none | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 0-3,table/argument | table-driven | none | character activated | unclear |
+| table/argument | table-driven | none | entity force-spawned (kill bit cleared) | unclear |
+| 0 | table-driven | other script test and entity 32 dead | character released (streaming may rebind) | kill bit, saved |
+| 1 | table-driven | other script test and entity 33 alive | character released (streaming may rebind) | kill bit, saved |
+| 2 | table-driven | other script test and entity 34 alive | character released (streaming may rebind) | kill bit, saved |
+| 3 | table-driven | other script test and entity 35 alive | character released (streaming may rebind) | kill bit, saved |
+| 1,2,21-26,table/argument | script trigger 2/3/4/5/6... | other script test | hidden, collision and walls off | no, reverts at reload |
+| 27 | script trigger 2 | other script test | shown at end pose (finished) | no, reverts at reload |
+| 15-20,27 | script trigger 2 | other script test | animation plays once backward from the end | no, reverts at reload |
+| table/argument | script trigger 3/4/5/6... | other script test | animation plays once | no, reverts at reload |
+| - | script trigger 11/12/13/14... | other script test | character slot emptied (characters released) | no, reverts at reload |
+| table/argument | script trigger 11/12/13/14... | other script test | character set loaded into a slot | no, reverts at reload |
+| 1-3 | at load | none | effect stops | rebuilt at each load |
+
+**Pack 1391**: Transition, three triggers with a camera shake and an animation poll
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1392**: Exterior, many scripted triggers, button prompts and a per-tick hero fall
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 10,12,14,20,22,24,table/argument | script trigger (table)/1/2/3/4.../25... | other script test | animation plays once | no, reverts at reload |
+| 11,13,15 | script trigger 1/2/3/4.../11/12... | none | hidden, collision and walls off | no, reverts at reload |
+| 10,12,14 | script trigger 1/2/3/4.../11/12... | not other script test and other script test | animation plays once | no, reverts at reload |
+| 11,13,15 | script trigger 6/25/13/26/23/27 | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 13-18 | script trigger 25/26/27 | other script test | effect starts | no, reverts at reload |
+| 1,10,12,14,table/argument | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 11,13,15 | at load | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 20,22,24 | at load | other script test | shown at end pose (finished) | rebuilt at each load |
+| 20,22,24 | at load | not other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 13-18 | at load | not other script test | effect stops | rebuilt at each load |
+
+**Pack 1393**: Exterior, object setups, triggers and threads
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 1, 10, 12, 27, 29, 49, 51 (room 0); 3, 14, 16, 31, 33, 53, 55 (room 1); 5, 18, 20, 35, 37, 57, 59 (room 2); 7, 22, 46, 39, 41, 61, 63 (room 3); 9, 24, 46, 43, 45, 65, 67 (room 4) | at load | none | shown at start pose (draw, collision, pose at time 0); the closed form (29, 33, 37, 41, 45) is the collision | rebuilt at each load |
+| 49, 51 | script trigger 0 (room 0 opening) | hero inside, state 1, area-active 0, once-only latch clear | shown; 48, 50 hidden; 49, 51 play once (no wait); room 0 gate-state := 1 | no, reverts at reload |
+| odd gates (49, 51; 53, 55; 57, 59; 61, 63; 65, 67) | script triggers 1, 7, 13, 19 (room entry; 19 does rooms 3 and 4) | state 1, area-active 1, room's gate-state 0 | shown at start pose; even gates (48, 50; 52, 54; 56, 58; 60, 62; 64, 66) hidden, collision and walls off (none); odd gates play once (no wait); gate-state := 1 | no, reverts at reload |
+| entry levers 12, 16, 20, 46 (rooms 3 and 4 share 46) | script triggers 1, 7, 13, 19 | state 1, area-active 1 | animation plays once forward (0.75, wait) then backward (-0.75, no wait) | no, reverts at reload |
+| plate levers 10, 14, 18, 22, 24 | script triggers 1, 7, 13, 19 | plate latch 1 | animation plays once backward (-0.6, no wait); latch := 0 | no, reverts at reload |
+| 26, 30, 34, 38, 42 (door pictures); 27, 31, 35, 39, 43 and 28, 32, 36, 40, 44 hidden | script triggers 1, 7, 13, 19, alarm triggers 5, 9, 15, 16, 22 and the room threads | guard-door state 0 (open) and no hero on the plate | door picture shown at start pose; animation object and open form hidden, collision and walls off; door picture plays once (no wait, 4.0 s) | no, reverts at reload |
+| 29, 33, 37, 41, 45 (closed forms) | same | same | shown at start pose (collision on at once, before the door picture finishes closing); door state := 1 | no, reverts at reload |
+| plate levers 10, 14, 18, 22, 24 | script triggers 2, 8, 14, 23, 24 (plates) | state 1, area-active 1, plate latch 0, gate-state 1 | animation plays once (0.6, waited, 0.889 s); latch := 1 | no, reverts at reload |
+| 27, 31, 35, 39, 43 shown; 26, 30, 34, 38, 42 hidden | same | guard-door state 1 (closed) | animation object shown at start pose; door picture hidden; then the animation object plays once (waited, 2.2 s) | no, reverts at reload |
+| 28, 32, 36, 40, 44 shown; 29, 33, 37, 41, 45 hidden | same | same, 1.0 s after the door animation ends | open form shown (ground and contact), closed form hidden, collision and walls off; 1.0 s later the camera returns and door state := 0 | no, reverts at reload |
+| even gates (48, 50; 52, 54; 56, 58; 60, 62; 64, 66) | alarm triggers 5, 9, 15, 16, 22 and room threads 0-3 (every 10 ticks while a guard is aggressive) | area-active non-zero, gate-state 1 | shown at start pose; odd gates hidden; even gates play once (no wait, 0.933 s); gate-state := 0 | no, reverts at reload |
+| statues 0, 2, 4, 6, 8 shown; 1, 3, 5, 7, 9 hidden | same | gate-state 1 | shown at start pose and plays once (no wait, 4.2 s); the other hidden | no, reverts at reload |
+| statues 1, 3, 5, 7, 9 shown; 0, 2, 4, 6, 8 hidden | same | statue latch 0, 2.0 s after the camera starts | swapped back to the static pose; latch := 1 (once per load) | no, reverts at reload |
+| statues 1, 3, 5, 7, 9 | script triggers 4, 11, 18, 21 and the alarm handlers | hero inside; gate-state 0 | extra rotation about axis 2 toward the hero (rate 0.015) | no, reverts at reload |
+| entity records of each room (guards) | room entry; trigger 0; alarm | entry: every populated record; alarm: gate-state 1 | entry: deactivated, moved to home locator, activated (a kill bit is cleared), behaviour 6; alarm: made visible and aggressive | kill bit cleared by the entry reset; otherwise no, reverts at reload |
+
+**Pack 1394**: Exterior, timer and button hero-swap triggers with a hero-death gate
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 2 | every tick, herodeathcallback, script trigger 0/16... | other script test | extra offset and rotation cleared | no, reverts at reload |
+| 2 | herodeathcallback, script trigger 0/1/10... | not other script test | extra offset and rotation cleared | no, reverts at reload |
+| 2 | script trigger 16/17/18/15 | other script test | extra position offset set | no, reverts at reload |
+| 0,2 | every tick | other script test | hidden, collision and walls off | rebuilt each tick |
+| 0,2 | every tick | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt each tick |
+| 0 | every tick | other script test | animation plays once | rebuilt each tick |
+| 1,2,7,8,10,12,14,16 | script trigger 15/16/18/17/13 | other script test | hidden, collision and walls off | no, reverts at reload |
+| 2-8,10,12,14,16 | script trigger 15/16/18/17/13 | other script test | animation plays once | no, reverts at reload |
+| 1,2,7,8,11,13,15,17 | script trigger 15/16/18/17/13 | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 5-8 | script trigger 17/13 | other script test | animation plays once backward from the end | no, reverts at reload |
+| 9 | script trigger 11 | other script test | hidden, collision and walls off | flag written, not read at load by this pack |
+| 3 | script trigger 11 | other script test | effect starts | flag written, not read at load by this pack |
+| 1,3-6,10,12,14,16 | at load | none | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 7,8 | at load | none | shown at end pose (finished) | rebuilt at each load |
+| 9 | at load | flag 0 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 3 | at load | flag 0 clear | effect stops | rebuilt at each load |
+| 2 | every tick | other script test | extra position offset set | rebuilt each tick |
+
+**Pack 1397**: Exterior, block-pushing puzzle room with button callbacks and ambient effects
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| - | table-driven | none | world item spawned | unclear |
+| table/argument | table-driven | other script test and flag 687 clear | movable block active := false | unclear |
+| 1,6 | table-driven | other script test and flag 687 clear | hidden, collision and walls off | unclear |
+| 2,7 | table-driven | other script test and flag 687 clear | shown at start pose (draw, collision, pose at time 0) | unclear |
+| 0,2,3 | table-driven | other script test and flag 687 clear | animation plays once | unclear |
+| table/argument | table-driven | none | entity force-spawned (kill bit cleared) | unclear |
+| table/argument | table-driven | none | animation plays once | unclear |
+| 25,27,68,69,table/argument | table-driven | other script test | animation plays once | unclear |
+| 8 | table-driven | other script test and other script test and flag 699 clear | animation plays once | unclear |
+| 8 | table-driven | other script test and other script test and flag 699 clear | hidden, collision and walls off | unclear |
+| 26,28,46,47,49-55,68,69,table/argument | table-driven | other script test | shown at start pose (draw, collision, pose at time 0) | unclear |
+| 25,27,35,40,45,46,49-55,68,69,table/argument | table-driven | other script test | hidden, collision and walls off | unclear |
+| 40,49-54,table/argument | table-driven | other script test | extra yaw set | unclear |
+| 49-54 | table-driven | other script test | extra offset and rotation cleared | unclear |
+| 41,48,table/argument | table-driven | other script test | extra position offset set | unclear |
+| table/argument | table-driven | none | effect starts | unclear |
+| table/argument | table-driven | none | effect stops | unclear |
+| 12,table/argument | table-driven | other script test | effect starts | unclear |
+| - | table-driven | other script test | world item spawned | unclear |
+| table/argument | table-driven | other script test | effect stops | unclear |
+| 0-4 | every tick | other script test | entity removed permanently (kill bit) | kill bit, saved |
+| 41,48 | every tick | other script test | extra position offset set | rebuilt each tick |
+
+**Pack 1398**: Exterior, triggers for a boss cage and a dialogue set
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | at load, script trigger 34 | other script test | effect stops | flag 723 read at load |
+| table/argument | at load, script trigger 34 | other script test | effect starts | flag 723 read at load |
+| - | load thread | none | character slot emptied (characters released) | no, reverts at reload |
+| table/argument | load thread | none | character set loaded into a slot | no, reverts at reload |
+| 0-2,8,10 | every tick | other script test | hidden, collision and walls off | rebuilt each tick |
+| 3,4,11 | every tick | other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt each tick |
+| 3-7,11 | every tick | other script test | animation plays once | rebuilt each tick |
+| 3,4,11,table/argument | script trigger 38/40/41/42/43 | other script test | hidden, collision and walls off | no, reverts at reload |
+| 1,2,10,table/argument | script trigger 38/40/41/42/43 | other script test | shown at start pose (draw, collision, pose at time 0) | no, reverts at reload |
+| 1,2,8,10,table/argument | script trigger 38/35/40/41/42/43 | other script test | animation plays once | no, reverts at reload |
+| 0,1,table/argument | script trigger 34 | other script test | character released (streaming may rebind) | kill bit, saved |
+| 0,1 | script trigger 34 | other script test | character activated | flag 723 read at load |
+| 8 | script trigger 34 | other script test | hidden, collision and walls off | flag 723 read at load |
+| 7,9 | script trigger 34 | other script test | animation plays once | flag 723 read at load |
+| 15 | every tick | other script test | effect starts | rebuilt each tick |
+| 16 | script trigger 37 | flag 356 set | effect starts | no, reverts at reload |
+| 0-2,5-7,9,10,15,17,19,21 | at load | flag 106 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 15 | at load | flag 106 clear | effect stops | rebuilt at each load |
+| 1,2,10 | at load | flag 106 clear and flag 720 clear | shown at end pose (finished) | rebuilt at each load |
+| 5,6 | at load | flag 106 clear and flag 721 clear | shown at end pose (finished) | rebuilt at each load |
+| 7 | at load | flag 106 clear and flag 722 clear | shown at end pose (finished) | rebuilt at each load |
+| 9 | at load | flag 106 clear and flag 723 set | shown at end pose (finished) | rebuilt at each load |
+| 15,17,19,21 | at load | flag 106 clear and flag 724 clear | shown at end pose (finished) | rebuilt at each load |
+| 1,2,5-7,9,10,15,17,19,21 | at load | flag 106 set | shown at end pose (finished) | rebuilt at each load |
+| 16 | at load | none | effect stops | rebuilt at each load |
+
+**Pack 1405**: Interior, a long entity-control helper with treasure-map and item-ask lines
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 104 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1407**: Interior, the same long entity-control helper as 1405, with a different dialogue
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 100 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1409**: Interior, proximity conversations and per-tick entity wander
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 106 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1411**: Exterior, script-trigger set with a shared sign routine, six entity dialogue routines, the mosaic and the Altador story steps
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | every tick, load thread | other script test | effect stops | flag written, not read at load by this pack |
+| table/argument | every tick, load thread | other script test | effect starts | flag written, not read at load by this pack |
+| table/argument | load thread | other script test | hidden, collision and walls off | flag written, not read at load by this pack |
+| table/argument | load thread | other script test | shown at start pose (draw, collision, pose at time 0) | flag written, not read at load by this pack |
+| table/argument | load thread | other script test | animation plays once | flag written, not read at load by this pack |
+| 1 | load thread | flag 98 clear and flag 96 set | character set loaded into a slot | rebuilt at each load |
+| 0 | load thread | flag 98 set | character set loaded into a slot | rebuilt at each load |
+| 2-4 | script trigger 0 | other script test and (other script test) | shown at start pose (draw, collision, pose at time 0) | flag 334 read at load |
+| 0 | script trigger 0 | other script test and (other script test) | animation plays once | flag 334 read at load |
+| 1 | script trigger 17 | flag 335 set and flag 336 clear | hidden, collision and walls off | flag 336 read at load |
+| 0 | script trigger 16 | flag 337 set and flag 338 clear | effect starts | flag 338 read at load |
+| 0 | at load | flag 334 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 2-4 | at load | flag 334 set | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | flag 334 set | shown at end pose (finished) | rebuilt at each load |
+| 1 | at load | flag 336 clear | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+| 0 | at load | flag 338 clear | effect stops | rebuilt at each load |
+
+**Pack 1414**: Exterior, proximity conversations, teleport loads and a world-activation hero move
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 102 clear | character set loaded into a slot | rebuilt at each load |
+| 1 | load thread | flag 102 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1417**: Interior, an on-enter dialogue, a random line and a long entity-control helper
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 102 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1419**: Interior, an on-enter dialogue, a random line and a long entity-control helper
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 100 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1421**: Interior, entity proximity conversation room
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 102 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1423**: Interior, entity proximity room with item ask-about
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 106 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1425**: Interior, a blackboard value on init, an on-enter dialogue and a long entity-control helper
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0 | load thread | flag 106 set | character set loaded into a slot | rebuilt at each load |
+
+**Pack 1428**: Exterior, flag-gated trigger set, hero swap and act-start sequence
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| table/argument | at load, every tick, load thread | other script test | effect stops | flag 330 read at load |
+| table/argument | at load, every tick, load thread | not other script test | effect starts | flag 330 read at load |
+| 1,table/argument | every tick | other script test | effect stops | rebuilt each tick |
+| 1,table/argument | every tick | not other script test and other script test | effect starts | rebuilt each tick |
+| 1,table/argument | every tick | not other script test and other script test | effect stops | rebuilt each tick |
+| 1 | load thread | none | entity force-spawned (kill bit cleared) | flag 330 read at load |
+| 3,table/argument | load thread | none | shown at start pose (draw, collision, pose at time 0) | flag 330 read at load |
+| 24-26 | load thread | none | effect starts | flag 330 read at load |
+| table/argument | load thread | none | animation plays once | flag 330 read at load |
+| 0,1 | load thread | none | entity removed permanently (kill bit) | kill bit, saved |
+| 0 | load thread | flag 329 set and flag 330 clear and other script test and other script test | effect starts | rebuilt at each load |
+| 0 | world-activate callback | none | effect stops | re-run when the world becomes current |
+| 0,1,11-20,24-26 | at load | none | effect stops | rebuilt at each load |
+| 2-10 | at load | other script test | effect stops | rebuilt at each load |
+| 0-2 | at load | not other script test | shown at start pose (draw, collision, pose at time 0) | rebuilt at each load |
+
+**Pack 1432**: Exterior, the final fight (hero swaps, fight clock, finale and timeout ending)
+
+| Object / part | When | Condition | Change | Persists |
+| --- | --- | --- | --- | --- |
+| 0-2 | table-driven | none | shown at start pose (draw, collision, pose at time 0) | unclear |
+| 3,4 | table-driven | none | effect starts | unclear |
+| 18-25 | world-activate callback | other script test | effect stops | re-run when the world becomes current |
+| 18-25 | world-activate callback | not other script test | effect starts | re-run when the world becomes current |
+| 0-2 | table-driven | none | hidden, collision and walls off | unclear |
+| 0,5-7 | table-driven | none | entity removed permanently (kill bit) | kill bit, saved |
+| table/argument | table-driven | other script test | entity force-spawned (kill bit cleared) | unclear |
+| table/argument | load thread | other script test and level state 11 set and other script test and other script test | entity force-spawned (kill bit cleared) | no, reverts at reload |
+| 0-2 | world-activate callback | none | shown at start pose (draw, collision, pose at time 0) | re-run when the world becomes current |
+| 3,4 | at load | none | effect stops | rebuilt at each load |
+
 ## Edge cases and error handling
 
 - **Null world.** A registration with a null world is refused: nothing is registered (High).
@@ -1031,7 +3031,7 @@ The loader's init field is the module container's load hook at +0x18 (section 1)
 - **Trigger index out of range.** Ignored (High).
 - **No free thread slot.** ControlThreadStart starts nothing and returns no value; no caller reads a result (High). The same holds when ControlThreadsAllocate was never called.
 - **Second ControlThreadsAllocate.** It replaces the table; threads started from the old table are no longer stepped. No disc module does this (High).
-- **51st thread (no defined outcome in the original).** When all 50 thread slots of a world are alive and another thread is needed (a callback run, control thread, Update run or sequence), the original continues with a null thread; its behavior is not defined. No disc case is known to reach it. A clean build may refuse the start (Medium).
+- **51st thread (no defined outcome in the original).** When all 50 thread slots of a world are alive and another thread is needed (a callback run, control thread, Update run or sequence), the original continues with a null thread; its behavior is not defined. No disc case is known to reach it. A clean build may refuse the start (Medium). Confirmed 2026-11-09 (High): the thread allocator prints a debug message and returns null when the pool is exhausted.
 - **Re-enable after break (quirk).** SetBreakableActive(true) on a broken object returns it to state 1; its broken pieces are not restored (Medium).
 - **Lock entry kept after opening (quirk).** A chest's key lock entry is not removed when the chest opens, so a later press of the same chest is blocked by the key rule again unless the object's active state gates the press first (Medium).
 - **Failure messages (Medium).** Two failure paths carry debug messages in the original: an activation of an AI index with no matching entity (nothing is activated), and a script control-thread start with every thread slot busy (no thread is started). Whether this build prints either message is not established. The clean side must not depend on the output (Open question 62; no effect on play). Default if unresolved (rewrite choice): print nothing and take the no-effect path.
@@ -1045,7 +3045,7 @@ The loader's init field is the module container's load hook at +0x18 (section 1)
 - **LoopSound without a refresh.** A LoopSound voice that no VisitLoopSound refreshes stops about 4 updates after it starts (row 228; High).
 - **Leave-interior entry bound (quirk, reproduce; High).** StartLeaveInterior (row 278) bounds its entry index by the interior slot's entry count but takes the record from the exterior's list. An index valid for the exterior but at or above the interior's count lands on exterior entry 0; an index below the interior's count but at or above the exterior's count reads past the exterior's list. No level module passes an index other than -1.
 - **SetGameOver ignores its argument.** Any value sets the same flag to 1 (High).
-- **Animation state codes** (Medium): 0 = loop, 2 = play once, 4 = finished (after deactivation), 5 = animating (not written by the sampled wrappers), 6 = animating and finished, 8 = finished at the end of a seek, 9 = seeking to a time, 10 = stopped. IsObjAnimating is true for 0, 2, 5 and 6. IsObjAnimFinished is true for 4, 6 and 8. Writers (High for the constants): the boot program stores the constant codes 0, 2, 4, 8, 9 and 10 and no constant 5 or 6. The per-tick advance moves a clip that reaches its end from 6 to 4 and from 2 to 8, and for codes 0 and 5 it wraps the clip and keeps the code. The clip time grows once per tick by the 1/60 step times the speed, each product and sum truncated toward zero in single precision (SPEC-0008); the clip is finished on the first tick whose time is at or above its length, the length being (key count - 1) x 0.06666667 (single precision, also truncated). Because the truncated sum falls just short, the finished state arrives one tick later than the ideal arithmetic says for forward play (a clip of K keys at speed 1.0 takes 4 (K - 1) + 1 ticks); the rule for every speed, the backward case and the test vectors are stated once in SPEC-0028, Clip duration in ticks (High). The first advance after the call is in the next tick's world step. Nothing else writes the state word of a placed object: the on-disc values are 3 and 7, no script call passes a state number, and the other stores to a word at that offset belong to different records (characters, effects, a module's own set-up block). States 5 and 6 are therefore never reached in play (Medium-High): IsObjAnimating is true only in states 0 and 2, and IsObjAnimFinished only in states 4 and 8 (SPEC-0048, Open questions, R-0048 part 3).
+- **Animation state codes** (Medium): 0 = loop, 2 = play once, 4 = finished (after deactivation), 5 = animating (not written by the sampled wrappers), 6 = animating and finished, 8 = finished at the end of a seek, 9 = seeking to a time, 10 = stopped. IsObjAnimating is true for 0, 2, 5 and 6. IsObjAnimFinished is true for 4, 6 and 8. Writers (High for the constants): the boot program stores the constant codes 0, 2, 4, 8, 9 and 10 and no constant 5 or 6. The per-tick advance moves a clip that reaches its end from 6 to 4 and from 2 to 8, and for codes 0 and 5 it wraps the clip and keeps the code. The clip time grows once per tick by the 1/60 step times the speed, each product and sum truncated toward zero in single precision (SPEC-0008); the clip is finished on the first tick whose time is at or above its length, the length being (key count - 1) x 0.06666667 (single precision, also truncated). Because the truncated sum falls just short, the finished state arrives one tick later than the ideal arithmetic says for forward play (a clip of K keys at speed 1.0 takes 4 (K - 1) + 1 ticks); the rule for every speed, the backward case and the test vectors are stated once in SPEC-0028, Clip duration in ticks (High). The first advance after the call is in the next tick's world step. Nothing else writes the state word of a placed object: the on-disc values are 3 and 7, no script call passes a state number, and the other stores to a word at that offset belong to different records (characters, effects, a module's own set-up block). States 5 and 6 are therefore never reached in play (Medium-High): IsObjAnimating is true only in states 0 and 2, and IsObjAnimFinished only in states 4 and 8 (SPEC-0048, Open questions, R-0048 part 3). Resolved: states 1, 5, 6 and 7 have no writer anywhere (state 7 is a disc value of four objects of the unused pack 1298); the generic rules (drawn unless 3 or 4, stepped only in 0, 2, 5 and 6, no collision rule reads the state) are all they have, and a rewrite adds no special case (SPEC-0028, States 1, 5, 6 and 7).
 - **Entity and hero request codes** (Medium): 0x01 = return to idle; 0x33 = one-shot animation (the wait polls for 0x33); 0x37 = loop animation; 0x34 = walking and orienting (WalkHeroAndOrient polls for it); 0x32 = walking (WalkHero polls for 0x32; WalkEntity polls the behaviour class 23 or 24 instead, row 106).
 - **Waits without a timeout.** The waiting wrappers do not time out (Medium-High: the walk, play-animation and wait-till-leave-trigger wrappers each poll their state with a one-tick sleep and keep no counter or limit). A thread waiting on a state that never changes stays paused.
 - **Repeated modules.** Ten packs use a module identical to another one (see Where it lives on the disc). A clean implementation can share one module definition across them.
@@ -1237,7 +3237,7 @@ Reading the table: "trigger n" is a script trigger with index n; "proximity" is 
 | 906 | 0037 | Thread: loads set 0. |
 | 934 | 0045 | Hold thread of trigger 1: while the hero stays in the volume it loads sets 1 and 10 by flag 248, waits for the hero to leave and resets the slot. |
 | 947 | 0037 | Teleport 0: empty. Trigger 2: latch. |
-| 950 | 0032 | Thread: long fall, camera 4, then the normal camera (10 s) and idle. |
+| 950 | 0032 | Thread: long fall, camera 4, then the normal camera (distance 10) and idle. |
 | 984 | 0039 | On-enter callback 0: line chooser by flags 67, 202 and 150. |
 | 985 | 0041 | Trigger 4: empty. |
 | 990 | 0042 | Trigger 2: camera 7, long fall, normal camera. |
@@ -1307,7 +3307,7 @@ Reading the table: "trigger n" is a script trigger with index n; "proximity" is 
 9. **Asset group mapping.** Resolved in part: GetAssetGroupCharacterRange selects the run of entity-id entries whose signed slot byte matches the key (row 215; SPEC-0006, Tag 0x12). The key is local to the current pack; membership is given by that pack’s entity-id table, not by a global group-name table. Examples from live callers and their pack data: in pack 934, key 4 contains three Crokabeks and key 6 contains eleven Flower/Spore Monsters; in pack 1300, key 17 contains Seradar, King Hagen, King Skarl, Lucy, Patricia, Hubert and Queen Fyora, while key 21 contains Old Knight, Master Torak, Servant Faun, Gord the Merchant, Old Lady, Kell the Beggar and Queen Fyora. Queen Fyora also occurs in key 17. Pack 777’s caller passes -1, selecting slot byte 0xFF; that pack’s table has no entries for that key, so the host follows its documented no-match output rule. Other callers use computed keys or other module-local memberships. These examples identify table membership, not designer-facing group names. Resolved (proactive (open close-out)): the key is the region number itself, so there is no further name-to-number rule; designer-facing group names are not encoded on the disc (unknowable), and a rewrite keeps the pack and numeric key. [High for the slot-key rule and listed memberships; Medium-High for the bounded caller set.]
 10. **Unindexed callbacks.** Resolved: the 117 callback and thread entry points in 86 modules that the function index omits are decoded. They are listed by module, with what each does in play, in the section on callbacks that the function index of the level modules does not list; each is described in its module section (High). One statement in a module section was wrong and is corrected there: the second activation filter of module 1096 admits every record ordinal except 0; it is not empty.
 11. **Negative animation time.** Resolved: PlayAnim's float is a speed factor, not a time; a negative value first moves the object to the end of its animation and then plays it backwards (row 2; High).
-12. Resolved: **Header hooks.** The load hook (+0x18) is a table of routines the loader calls after linking, and the unload hook (+0x1C) the same before unlinking; the word at +0x24 is zero in every sampled module (Layout section 1; Medium). The rewrite implements level modules natively and needs only the load-time constructors' effects, which are given per module. Answers: proactive (open close-out).
+12. Resolved: **Header hooks.** Corrected 2026-11-09 (High): the load hook (+0x18) is one routine the loader calls once, with no arguments, after registering the module, and the unload hook (+0x1C) one routine called before unlinking; the word at +0x24 counts an extra-word table at +0x20 and is zero in every sampled module (Layout section 1). The rewrite implements level modules natively and needs only the load-time constructors' effects, which are given per module. Answers: proactive (open close-out).
 13. **Symbol link rule.** Resolved (High): an import is bound to the host function whose table key has the same low 16 bits as the import's link number (Layout 1.1); the rule holds for all 5,171 imports and 509 exports on disc.
 14. **Exit semantics.** Resolved: Exit is called when the world's script manager is torn down, just before the module is unloaded (Behavior section 1; High). It runs at the start of the world reset, before the world's own tables are cleared, so the hero, the item and flag stores and the on-screen timer are as play left them. After it the module is unlinked and the rest of the reset runs (actor entries, render and effect state, world sounds; SPEC-0055 Open question 1). The teardown cancels no script thread or callback task by itself and runs no callback other than Exit; their storage goes with the rewound pool. Three modules rely on Exit running: 800 (item 9 for the hero if missing), 934 (on-screen timer cleared) and 1248 (flag 79 set when objects 0 and 2 are inactive and object 1 is active); 160 of the 173 modules have an empty one and 10 have none. A module streamed into a buffer of another family (packs 1429, 1430 and 1431 in the exterior buffer) has no Exit bound, so none runs for it (High). Test vector: leaving pack 1248 with objects 0 and 2 inactive and object 1 active sets flag 79; with object 0 active it does not.
 15. **Family changes.** Resolved: no. The family is selected once per load, at load completion, from the buffer that holds the pack, and its Update and Exit are stored on the world then. Swapping which buffer is current does not call the family entries again, and the same load completion step holds all the call sites. A pack reached through a different buffer is a fresh load with its own family call (Behavior 1.1; High).
@@ -1389,6 +3389,10 @@ Reading the table: "trigger n" is a script trigger with index n; "proximity" is 
 90. **ItemActivate region argument (row 198).** Resolved: the first integer is a slot number of the world, checked against the created-slot count and the slot's result word. The items come from the item placements of the character region loaded into that slot; modules 1056 and 1096 pass slot 0 in play (row 198 and the note after the Category 21 table).
 
 91. **Resolved (R-0104): Rope aim scan outputs.** Return 0 means no selection, 1 a character aim candidate, and 2 a Rope Gun anchor; the anchor pass can replace a character result. The scan stores a world-space shot aim point independently of anchor selection: selected character aim point plus half its motion height, or camera position plus 150 units along camera-forward when no character passes. The point is not the raw right-stick coordinate.
+92. **Special-thread names (added 2026-11-09).** The per-tick step runs eleven special threads in the order given in Behavior section 1 (the Update thread is slot 4, High). The spec calls slots 1 and 2 the enter-interior and leave-interior sequences; the code-side description of the same slots names them only by their positions in the manager (a world callback and a further hook thread). The slot order is confirmed; the two names are not independently confirmed (Medium).
+93. **Load-override word (added 2026-11-09).** The tick saves and restores the world's load-override word (world +0x57C4) around the trigger pass, and restores it during a hero swap. What the word selects for the load is not described here (open).
+94. **IsHeroDead method (added 2026-11-09).** The call forwards to the hero object's own "is dead" method; that the method is the state-16 test has not been separately verified (Medium).
+95. **Eye w lane of SetToNormalCamera (distance, angle) (added 2026-11-09).** The eye's w is the hero's w plus the direction length times the distance; whether the pose setter uses that lane is unknown.
 
 ## Confidence
 
@@ -1426,8 +3430,3 @@ Reading the table: "trigger n" is a script trigger with index n; "proximity" is 
 ## Appendix: Uncatalogued host names
 
 None. Every host name in the boot program's host table now has a catalogue row. The rows outside the first group are rows 286 to 294 (Category 15) and rows 295 to 388 (Categories 16 to 23). The nine family entry names (Init, Update and Exit) are records 397 to 405 of the host table, but they have no bound function and are not catalogue rows (Layout, section 1.2; Open question 48). Row 242 (memset) is host record 1 and is a host record like the others; it has no game-state effect.
-
-
-
-
-

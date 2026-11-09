@@ -17,7 +17,7 @@ Not part of the shipped game: no level places the nest or a valve (Summary). Thi
 
 **A. Initial values.**
 - Nest (the character of monster row 12, record 0 of its world): state 1 (active) from the first tick. It never attacks and has no hit points; it is not hittable.
-- Valves (three, found by monster row 13, 14, 15; Layout): state 0, HP 3, spider count 5 / 3 / 2 for valves 0 / 1 / 2, countdown 0, spawn-once flag clear, hit window closed (all zero at start; Medium).
+- Valves (three, found by monster row 13, 14, 15; Layout): state 0, HP 3, spider count 5 / 3 / 2 for valves 0 / 1 / 2, countdown 0, spawn-once flag clear, hit window closed (all zero at start; High, confirmed against the code on 2026-11-08 together with the valve state table, the hit window, the spawn offsets 5.0, 10.0, 10.0 and 0.0, the despawn at clip 58, and the destroyed valve's 1000 damage with state 6 playing clip 0 and then 4 each tick). The spawn-once flag is set before the navigation lookup, so a failed lookup (-1) loses that cycle's spawn.
 - Spiders: every placed character whose placement code is 5 (valve 0), 7 (valve 1) or 6 (valve 2) joins that valve's list in level order, is hidden and set to the dead state 16, so it counts as dead. HP when revealed: Spyder 25, Poison Spyder 16, Giant Spyder 150. Positions and facings come from the level.
 - Disc tunables: spider counts, valve HP, HP per hit (Layout, 0x2DB0A0 to 0x2DB0B0) and the four launch constants (0x2DB0B8 to 0x2DB0C4). Everything else is a fixed value or a spider animation fact (section 9e).
 - "Valve point" means the world position of the valve's root bone (bone 0). The valve forward axis is the third row of that bone's world frame and its up axis the second row (forward: Medium-High; up: High).

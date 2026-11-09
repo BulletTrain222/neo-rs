@@ -968,7 +968,7 @@ Death hook (SPEC-0038 Behavior 34): base state 16, the flyer is grounded (countd
 | Hero action | Result |
 |---|---|
 | Melee swing (Tor, Roberta's swats) | Tested against the flyer's bone capsules with the ordinary swing cylinder (radius 1.0, length weapon reach + 2.0, SPEC-0036 Hit detection); height is not special-cased. A hovering flyer is reachable while it is within about 4 to 5 units horizontally and within about 2 units above the hero's hand level. Strafing flyers hover 2.0 to 2.5 units above the hero's feet at 5 to 12 units on flat ground (the 2.0 floor holds up to 10 units, 0.2 d beyond), so they are in reach mainly when they swoop or back off close; they are not hittable during a dodge |
-| Roberta's shots | Straight shots that hit a bone capsule. A shot that crosses the flyer's capsule hits it; Spellbooks and the Swamp Crokabek may dodge (75 for the Swamp Crokabek, 30 for the Spellbooks, rolled once per shot while the hold is below 1); the other two do not in practice |
+| Roberta's shots | Straight shots that hit a bone capsule. A shot that crosses the flyer's capsule hits it; Spellbooks and the Swamp Crokabek may dodge (75 for the Swamp Crokabek, 30 for the Spellbooks, rolled again on every tick a shot is on course while the hold is below 1 and no hit reaction runs, so nearly every first shot is dodged); the other two do not in practice |
 | Jump attacks | A hero in the air meets a flyer at its hover height without the ground-reach penalty |
 | Mote power objects and cylinders | Test the row cylinder from the feet up by the row height (1.2 to 2.0), so a flyer hovering well above the hero's feet can be missed (Medium) |
 | First hit on a Crokabek in the air | Reaction kind 7: it falls, plays clip 13 for about 110 ticks (not hittable the whole time, nor during the 17-tick re-launch), then fights on the ground for int[300, 900) ticks (Mountain 600 to 899, Swamp 300 to 899) and takes off |
@@ -1439,11 +1439,11 @@ The weapon centre stays 0.7 ahead of the book at its own height, so a hero is to
 
 #### Defence and counters
 
-Melee dodge 29 of 100 for any swing weight, once per swing: clip 7 (77 ticks, backward about 11 units), unhittable meanwhile; hold then int[30, 60]. Missile dodge: 29 of 100 per shot with a 180-tick look-ahead (so it starts when the shot's path meets the body within 3 seconds), plays clip 10 or 11 sideways. A dodge opens the counters when it was against a Tor swing: lunge 49 percent or bite 24 percent on the first eligible tick. Hit reaction kind 6: the book stops, plays clip 3 for 37 ticks recoiling 6.4 units, outer 0 afterwards.
+Melee dodge 29 of 100 for any swing weight, once per swing: clip 7 (77 ticks, backward about 11 units), unhittable meanwhile; hold then int[30, 60]. Missile dodge: a 29-in-100 roll on every agro tick for each hero shot whose path meets the body within the 180-tick look-ahead (so it starts when the shot's path meets the body within 3 seconds, and a shot that is on course for n ticks is dodged with probability 1 - 0.71^n: 0.94 for n = 8, 0.50 for n = 2), plays clip 10 or 11 sideways for 61 ticks; the exit then holds defence off for int[30, 60] ticks, and a landed hit keeps it in its 37-tick reaction with no defence. A dodge opens the counters when it was against a Tor swing: lunge 49 percent or bite 24 percent on the first eligible tick. Hit reaction kind 6: the book stops, plays clip 3 for 37 ticks recoiling 6.4 units, outer 0 afterwards.
 
 #### Hero actions against this enemy
 
-Face it and it never starts an attack (unless it counters); show it your back and it attacks at once. A swing that it dodges (29 percent) may be answered by a lunge or a bite. A hero guarding with L1 blocks the bite when facing it. Roberta's shots are dodged on 29 of 100 per shot.
+Face it and it never starts an attack (unless it counters); show it your back and it attacks at once. A swing that it dodges (29 percent) may be answered by a lunge or a bite. A hero guarding with L1 blocks the bite when facing it. Roberta's shots face a 29-in-100 dodge roll on every tick they are on course (about 94 of 100 first shots from 10 units); a shot that finds it unaware (wandering) lands doubled, and her quick chain then keeps it in its 37-tick reaction for the next shots.
 
 #### Edge cases for implementers
 
@@ -1501,7 +1501,7 @@ The shot is the only damage source: one 30-damage projectile per attack. It is a
 
 #### Defence and counters
 
-As the Biting Spellbook: melee dodge 29 of 100, missile dodge 29 of 100 per shot with a 180-tick look-ahead. Counter code 2 at chance 50: after a dodge of a Tor swing the book fires a counter shot if the hero is farther than 10 units (the band), which is rare because the dodge needs the hero to be in melee reach.
+As the Biting Spellbook: melee dodge 29 of 100, missile dodge a 29-in-100 roll on every tick a shot is on course within the 180-tick look-ahead. In the lesson the book is in state 0 until the first hit (no defence runs there), so the first shot always lands (doubled); after that it is as the Biting Spellbook: about 5 landed hits and 30 magic for its 35 health with a fast press rhythm (3.5 s), more when the rhythm slips. Counter code 2 at chance 50: after a dodge of a Tor swing the book fires a counter shot if the hero is farther than 10 units (the band), which is rare because the dodge needs the hero to be in melee reach.
 
 #### Hero actions against this enemy
 
@@ -3410,7 +3410,7 @@ The Burrows Lower Elites share the room with the eight sentry Bashers, two Bone 
 
 ### Evil Harris (row 150)
 
-Evil Harris is a small striker that behaves like the Biting Spellbook: it circles at 8 to 13 units and attacks only when the hero has turned away from it. Face it and it never swings. It is weak (75 hit points, two 10-damage swings) and has no recovery between attacks. Three Harris wander Fyora's Library and six more wander the Park Shrine, where they are scripted props that cannot be killed.
+Evil Harris is a small striker that behaves like the Biting Spellbook: it circles at 8 to 13 units and attacks only when the hero has turned away from it. Face it and it never swings. It is weak (75 hit points, two 10-damage swings) and has no recovery between attacks. Three Harris wander the lap of the Endless Staircase (pack 1299, the library tower; the roster lists them under the Library) and six more wander the Park Shrine, where they are scripted props that cannot be killed.
 
 #### Identity and tunables
 
@@ -3472,7 +3472,7 @@ Harris has no clip 73, so after a killing blow on the hero the setter drops stra
 
 #### Where it is met and how it starts
 
-- **Fyora's Library (3).** Default 5, R 100, no pause, no alarm group. The three Harris wander over a 100-unit square about their homes, never pausing, among the Library's Biting Spellbooks. Killable.
+- **Endless Staircase, pack 1299 (3).** Embedded records, default 5, R 100, no pause, no alarm group, no drop: at (-114.9, 27.1, -73.3), (-125.4, 29.3, -59.6) and (-141.5, 34.4, -74.8) on the pad-puzzle lap. They take the pack's only (ground) mesh at start and wander over a 100-unit square about their homes, never pausing; the library hall's Biting Spellbooks (pack 1327) are a different pack. Killable.
 - **Park Shrine (7).** Six Harris (region 1403, script entities 16 to 21) are loaded only after the stage 4 arm trigger and wander the whole mesh (R 0, no pause). Each update the Shrine script sets all six undamageable (hit-point loss is skipped; hit reactions and the switch to agro still happen), so they can never be killed there. While stage 4 is armed the script also restores all six (entities 16 to 21) to full health. The stage-4 trigger is a 2.2 by 2.2 column at (0.405, 1043.506) that only a Harris can fire (SPEC-0043): the Harris that enters it is removed for good and counts as one of the six passes, so each of the six must be driven into the column by ordinary movement (wandering, backing away from a closing hero, or the sword knock-back of about 14.6 units straight away from the hero). On each pass the script sets the behaviour code of all six to 0 and moves them to random points of a 12-point list round the arena, then sets it back to 5 (wander) for the survivors. One more Harris (region 1404, default 0, beside a 5-hit-point type-102 creature, both placed at the column's centre) is used by the same script and the script moves it onto the firer's spot for the pass scene. The mesh the Shrine Harris use is ground mesh 0 (SPEC-0043).
 - Because no Harris has a group, a hit or a notice involves only that Harris.
 
@@ -3542,7 +3542,7 @@ The Harris reaches 3.4 to 3.8 ahead at the tick, less than its 5.0 start range, 
 
 #### Defence and counter rules
 
-Melee defence, once per hero swing (conditions as the other rows): r1 at most the block chance (0) never passes; r2 below the dodge chance gives outer 5: quick swings 24 %, normal and heavy 14 %. A dodge sets the hold to 180 and plays 55 (45 ticks, a 4-unit hop back); the hold is then redrawn int[60, 120]. Missile defence: any hero shot whose 180-tick look-ahead path meets the body is dodged with probability 99 % (roll below 100), the dodge plays 53 or 54 for 57 ticks. There is no block and no counter.
+Melee defence, once per hero swing (conditions as the other rows): r1 at most the block chance (0) never passes; r2 below the dodge chance gives outer 5: quick swings 24 %, normal and heavy 14 %. A dodge sets the hold to 180 and plays 55 (45 ticks, a 4-unit hop back); the hold is then redrawn int[60, 120]. Missile defence: a roll below 100 (99 in 100) on every tick a hero shot's 180-tick look-ahead path meets the body, so practically every shot that arrives while the Harris is in agro and outside a hit reaction is dodged; the dodge plays 53 or 54 for 57 ticks and the exit holds defence off for int[60, 120] ticks, the only open window. A shot that finds it unaware (wandering, not yet in agro) lands doubled, and a chain of shots then keeps it in its 116-tick reaction: 11 landed hits (70 magic, about 6 s) kill it when the first shot finds it unaware, 15 shots and 12 hits (80 magic, 8.3 s) when it is already in agro. There is no block and no counter.
 
 #### Hero actions against this enemy
 
@@ -3550,7 +3550,7 @@ Melee defence, once per hero swing (conditions as the other rows): r1 at most th
 |---|---|
 | Faces the Harris and fights it | it never attacks; swings land 76 % (quick) or 86 % (normal, heavy); each hit keeps it staggered for 116 ticks and knocks it back about 15 units |
 | Turns away within 15 units | the Harris closes to 5 units and swings: 10 damage, then the second swing, about every 70 to 80 ticks in all |
-| Roberta's shots | 99 % dodged |
+| Roberta's shots | A 99-in-100 roll on every tick a shot is on course: dodged unless it finds the Harris unaware or inside a hit reaction (a landed hit locks it for 116 ticks, so a chain keeps landing) |
 | Hits it in the Park Shrine | hit reaction and agro, but no hit-point loss |
 | Walks past a wandering Harris at 30 units | not noticed standing (reach 21); noticed with probability 0.04 per cycle when walking |
 | Kills it (Library) | 75 hit points: 19 undefended starting-sword hits of 4; the corpse is gone in about 48 ticks |
