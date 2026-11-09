@@ -373,6 +373,13 @@ impl Serpent {
 
     fn bite(&mut self, v: &View, w: &Words, b: Bite, rng: &mut Rng, a: &mut Act) {
         let ended = |n: u32| v.clip.0 == n && v.clip.1;
+        // Every tick of the bite the serpent faces the hero on the flat plane (SPEC-0016
+        // Bite-state details, confirmed 2026-11-09).
+        let to = [v.hero[0] - v.position[0], 0.0, v.hero[2] - v.position[2]];
+        let l = to[0].hypot(to[2]);
+        if l > 1e-6 {
+            a.face = Some(([to[0] / l, 0.0, to[2] / l], 1.0));
+        }
         let (chance, range) = w.by_phase(self.phase);
         let next = match b {
             Bite::Decide => {

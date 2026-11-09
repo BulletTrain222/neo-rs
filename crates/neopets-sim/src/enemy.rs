@@ -281,6 +281,10 @@ pub struct View<'a> {
     /// any hero shot is live.
     pub missile_threat: bool,
     pub hero_shot_live: bool,
+    /// How many live hero shot slots' look-ahead paths meet the body (each rolls both defence
+    /// chances), and whether the LAST live slot's does (outer 6's repeated test).
+    pub missile_hits: u8,
+    pub missile_last: bool,
     /// The characters a caster may pick, this enemy's id, whether it is wounded, and the sight
     /// test from it to a point (Behavior 43).
     pub candidates: &'a [Candidate],
@@ -2338,12 +2342,16 @@ impl Enemy {
             self.swing_latch = true;
         }
         if self.outer != 10 && !(self.outer == 2 && self.seq == 5) && self.defence_hold < 1 && v.missile_threat {
+            // Every slot whose path meets the body rolls both chances, with no break after the
+            // first success; the later success wins (SPEC-0038 Missile defence).
             let mut to = None;
-            if rng.range(1, 100) < d.missile.0 as i32 {
-                to = Some(6);
-            }
-            if rng.range(1, 100) < d.missile.1 as i32 {
-                to = Some(8);
+            for _ in 0..v.missile_hits.max(1) {
+                if rng.range(1, 100) < d.missile.0 as i32 {
+                    to = Some(6);
+                }
+                if rng.range(1, 100) < d.missile.1 as i32 {
+                    to = Some(8);
+                }
             }
             if let Some(o) = to {
                 self.start_defence(o, rng);
@@ -2368,8 +2376,9 @@ impl Enemy {
 
     fn start_defence(&mut self, outer: u32, rng: &mut Rng) {
         self.outer = outer;
-        // Outer 6 picks its dodge, 53 or 54, by int[0, 1].
-        self.inner = if outer == 6 { 53 + rng.range(0, 1) as u32 } else { 0 };
+        // Outer 6 picks its dodge (53 or 54) when it runs, from the shot test then.
+        let _ = rng;
+        self.inner = 0;
         self.through = None;
         self.block_hit = false;
         self.defence_hold = self.p.defence.hold;
@@ -2387,6 +2396,17 @@ impl Enemy {
     fn defence(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
         match self.outer {
             5 | 6 => {
+                // Outer 6 repeats the shot test while neither dodge clip is current: the last
+                // live slot meeting the body plays 53 or 54 by int[0, 1]; with none it takes the
+                // defence exit at once (SPEC-0038 Missile defence, refined 2026-11-09).
+                if self.outer == 6 && self.inner == 0 {
+                    if v.missile_last || (v.missile_hits == 0 && v.missile_threat) {
+                        self.inner = 53 + rng.range(0, 1) as u32;
+                    } else {
+                        self.defence_exit(rng);
+                        return;
+                    }
+                }
                 let id = if self.outer == 5 { 55 } else { self.inner };
                 if self.through(id, v, a) {
                     self.defence_exit(rng);
@@ -2492,11 +2512,12 @@ impl Enemy {
                 let (dmin, dmax) = self.p.desired;
                 let (tmin, tmax) = self.p.retreat;
                 if !self.route {
-                    self.inner = if near_waypoint { 4 } else { 3 };
-                    if self.inner == 4 {
-                        self.hold_anim(25, 0.25, v, a);
-                    } else {
-                        self.walk(0, v.hero, v, a);
+                    // No route: gait 0 and steer to the hero as in outer 1; inner 4 when the
+                    // stored goal is within 1.0, otherwise the inner state is left unchanged
+                    // (SPEC-0038 outer 3, corrected 2026-11-09).
+                    self.walk(0, v.hero, v, a);
+                    if near_waypoint {
+                        self.inner = 4;
                     }
                 } else {
                     match self.inner {
@@ -3096,6 +3117,8 @@ mod tests {
             hero_recover: false,
             l1_held: false,
             missile_threat: false,
+            missile_hits: 0,
+            missile_last: false,
             hero_shot_live: false,
             candidates: &[],
             self_id: 0,

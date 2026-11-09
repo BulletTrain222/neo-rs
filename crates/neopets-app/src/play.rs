@@ -5008,6 +5008,14 @@ impl Play {
                 let (r1, r2) = (fan_draw(&mut self.rng), fan_draw(&mut self.rng));
                 dir = fan(dir, r1, r2);
             }
+            // The armed filter (SPEC-0036 Roberta shot projectile): a full release with one of the
+            // spawn-path Motes builds its slot shot unarmed, so it never flies and its slot stays
+            // free; the spawned object delivers the power. The chooser and the first shot's cost
+            // have run.
+            if full && matches!(mote, Some(161 | 162 | 164 | 165 | 166 | 169 | 171 | 173)) {
+                launched += 1;
+                continue;
+            }
             self.hero_shots.push(Shot {
                 position: anchor,
                 dir,
@@ -13213,7 +13221,10 @@ impl Play {
             v.sees = Some(&sees);
             let body = Cylinder::from_base(p, [0.0, 1.0, 0.0], row.radius, row.height);
             let look = e.p.defence.hold.max(0) as f32;
-            v.missile_threat = shot_paths.iter().any(|&(s, vel)| neopets_sim::combat::segment_meets(s, add(s, scale(vel, look)), &body));
+            let meets: Vec<bool> = shot_paths.iter().map(|&(s, vel)| neopets_sim::combat::segment_meets(s, add(s, scale(vel, look)), &body)).collect();
+            v.missile_threat = meets.iter().any(|&m| m);
+            v.missile_hits = meets.iter().filter(|&&m| m).count() as u8;
+            v.missile_last = meets.last().copied().unwrap_or(false);
             let outer_before = e.outer;
             let before = (e.outer, e.inner, e.seq, e.selected);
             let state_before = e.state;
@@ -13938,8 +13949,12 @@ impl Play {
         }
         let ta = self.heal_tables.0.first().copied().unwrap_or(500);
         let tb = self.heal_tables.1.first().copied().unwrap_or(300);
-        let a = neopets_sim::quick::heal(ta, pa, self.hero_hp, self.hero_max, true);
-        let b = neopets_sim::quick::heal(tb, pb, self.hero_mp, self.hero_mp_max, true);
+        // Items 58 and 59 use the factor 1.0 directly (T + 1); the others p x 0.01.
+        let (a, b) = match id {
+            58 => (neopets_sim::quick::heal_factor(ta, 1.0, self.hero_hp, self.hero_max, true), neopets_sim::quick::heal(tb, pb, self.hero_mp, self.hero_mp_max, true)),
+            59 => (neopets_sim::quick::heal(ta, pa, self.hero_hp, self.hero_max, true), neopets_sim::quick::heal_factor(tb, 1.0, self.hero_mp, self.hero_mp_max, true)),
+            _ => (neopets_sim::quick::heal(ta, pa, self.hero_hp, self.hero_max, true), neopets_sim::quick::heal(tb, pb, self.hero_mp, self.hero_mp_max, true)),
+        };
         if a.is_none() && b.is_none() {
             self.cue(162);
             self.last_pickup = format!("use of item {id} refused on tick {}", self.ticks);
@@ -15465,6 +15480,7 @@ impl Play {
                 level: &level,
                 far,
                 aim_point,
+                hero_climbing: matches!(self.loco.state, 30 | 34 | 35 | 38 | 47),
             };
             let Some(s) = c.sister.as_mut() else { continue };
             let before = s.state;
@@ -19996,6 +20012,8 @@ fn enemy_view<'a>(
         hero_recover: false,
         l1_held: false,
         missile_threat: false,
+        missile_hits: 0,
+        missile_last: false,
         hero_shot_live: false,
         candidates: &[],
         self_id: 0,

@@ -256,7 +256,21 @@ pub fn heal(table: i32, percent: i32, current: i32, max: i32, forced: bool) -> O
     if percent <= 0 {
         return None;
     }
-    let h = (table as f32 * percent as f32 / 100.0 + 1.0) as i32;
+    heal_factor(table, rz(percent as f64 * 0.01f32 as f64), current, max, forced)
+}
+
+/// A single-precision result rounded toward zero (the PS2 FPU's arithmetic, SPEC-0008).
+pub fn rz(x: f64) -> f32 {
+    let f = x as f32;
+    if f != 0.0 && (f as f64).abs() > x.abs() { f32::from_bits(f.to_bits() - 1) } else { f }
+}
+
+/// SPEC-0036 / SPEC-0021 Consumable healing with the pool factor given: heal = trunc((T x
+/// factor) + 1.0) in truncating single precision (items 58 and 59 pass 1.0 and heal T + 1;
+/// a percent p passes p x 0.01, so 100 percent heals exactly T and a Red Juppie (8) on T 400
+/// heals 32).
+pub fn heal_factor(table: i32, factor: f32, current: i32, max: i32, forced: bool) -> Option<i32> {
+    let h = rz(rz(table as f64 * factor as f64) as f64 + 1.0) as i32;
     let missing = max - current;
     if h < missing || (forced && missing > 0) { Some(max.min(current + h)) } else { None }
 }
@@ -304,12 +318,13 @@ mod tests {
 
     #[test]
     fn heal_vectors() {
-        // Vectors 8 to 12 and 52.
-        assert_eq!(heal(500, 20, 0, 1000, false), Some(101));
-        assert_eq!(heal(400, 20, 0, 1000, false), Some(81));
-        assert_eq!(heal(500, 100, 100, 150, true), Some(150), "501 clamped to the missing amount");
-        assert_eq!(heal(300, 50, 0, 1000, false), Some(151));
-        assert_eq!(heal(500, 15, 0, 1000, false), Some(76));
+        // The truncating single-precision rule (SPEC-0021 Consumable healing, SPEC-0036): one
+        // below the exact-decimal value where p x 0.01 is not exact.
+        assert_eq!(heal(500, 20, 0, 1000, false), Some(100));
+        assert_eq!(heal(400, 20, 0, 1000, false), Some(80));
+        assert_eq!(heal(500, 100, 100, 150, true), Some(150), "500 clamped to the missing amount");
+        assert_eq!(heal(300, 50, 0, 1000, false), Some(150));
+        assert_eq!(heal(500, 15, 0, 1000, false), Some(75));
         assert_eq!(heal(300, 100, 10, 90, false), None, "301 is not smaller than the missing 80");
         assert_eq!(heal(300, 100, 10, 90, true), Some(90));
         assert_eq!(heal(500, 20, 150, 150, true), None, "nothing missing");
@@ -353,5 +368,14 @@ mod tests {
         assert_eq!(out.use_item, Some(145));
         p.used(145, 0);
         assert_eq!(p.marker, -1);
+    }
+
+    #[test]
+    fn juppie_heals_truncate() {
+        // SPEC-0036 vectors: Red Juppie (8) heals Roberta 32 (T 400) and Tor 40 (T 500);
+        // Purple (8) heals 40 (T 500) and 24 (T 300); 100 percent heals T; factor 1.0 heals T + 1.
+        let h = |t, p| heal(t, p, 0, 10_000, true).unwrap();
+        assert_eq!((h(400, 8), h(500, 8), h(300, 8), h(400, 100)), (32, 40, 24, 400));
+        assert_eq!(heal_factor(400, 1.0, 0, 10_000, true), Some(401));
     }
 }

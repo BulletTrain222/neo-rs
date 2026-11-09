@@ -661,10 +661,12 @@ impl Ixi {
                 a.anim = Some(0x16);
                 a.travel = Some((0, v.hero));
                 if d < 6.0 {
+                    // Below the roll: the slam, sub-step 6, with the hit latch cleared; else the
+                    // run past (SPEC-0014 charge steps, confirmed 2026-11-09).
                     if rng.range(0, 100) < w.slam_chance {
+                        self.hit = false;
                         self.state = State::Charge(6, target);
                     } else {
-                        self.hit = false;
                         self.state = State::Charge(5, target);
                     }
                 }

@@ -183,6 +183,9 @@ pub struct View<'a> {
     pub far: Option<Vec3>,
     /// The point of DFS_Act1_SetIndices' fourth word (a locator), when it is not -1.
     pub aim_point: Option<Vec3>,
+    /// The hero hangs or climbs (action state 30, 34, 35, 38 or 47): the alternate ball's aim
+    /// error applies (SPEC-0011 Alternate-loop ball).
+    pub hero_climbing: bool,
 }
 
 /// What a sister asks for this tick.
@@ -535,7 +538,19 @@ impl Sister {
                 a.face = Some(0.25);
                 if v.clip.0 == 17 && v.frame_bits & 0x20 != 0 && !fired {
                     let mut ball = shot(10, 16, 6, w.ball_damage, (-1, 0), 240, 460, w.projectile_speed[0], owner, v);
-                    if let Some(p) = self.aim_at {
+                    // With no named target and the hero hanging or climbing, the aim takes a random
+                    // error of up to 8.0 vertically and 8.0 sideways (two independent draws).
+                    let aim = self.aim_at.or_else(|| {
+                        v.hero_climbing.then(|| {
+                            let t = [v.hero[0], v.hero[1] + 2.0, v.hero[2]];
+                            let (dx, dz) = (t[0] - ball.start[0], t[2] - ball.start[2]);
+                            let l = dx.hypot(dz).max(1e-6);
+                            let side = [-dz / l, 0.0, dx / l];
+                            let (up, across) = (rng.frange(-8.0, 8.0), rng.frange(-8.0, 8.0));
+                            [t[0] + side[0] * across, t[1] + up, t[2] + side[2] * across]
+                        })
+                    });
+                    if let Some(p) = aim {
                         let to = [p[0] - ball.start[0], p[1] - ball.start[1], p[2] - ball.start[2]];
                         let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(1e-6);
                         let speed = (ball.velocity[0].powi(2) + ball.velocity[1].powi(2) + ball.velocity[2].powi(2)).sqrt();
@@ -697,7 +712,7 @@ mod tests {
     }
 
     fn view(level: &dyn Fn(u16) -> bool, hp: i32) -> View<'_> {
-        View { position: [20.0, 0.0, 0.0], hero: [0.0; 3], hp, max_hp: 100, hit: None, missiles_near: 0, clip: (1, false), progress: 0.0, frame_bits: 0, blocked: false, level, far: None, aim_point: None }
+        View { position: [20.0, 0.0, 0.0], hero: [0.0; 3], hp, max_hp: 100, hit: None, missiles_near: 0, clip: (1, false), progress: 0.0, frame_bits: 0, blocked: false, level, far: None, aim_point: None, hero_climbing: false }
     }
 
     #[test]
