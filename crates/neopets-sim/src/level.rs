@@ -1668,7 +1668,21 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         1371 => {
             state.set_word(pack, 1, -1);
-            vec![Action::StopEffect { slot: 0 }, reg(2, 2), reg(3, 2), reg(4, 2), reg(1, 1), reg(0, 0), Action::InitObjOn { obj: 1, end: false }]
+            let mut v = vec![Action::StopEffect { slot: 0 }, reg(2, 2), reg(3, 2), reg(4, 2), reg(1, 1), reg(0, 0)];
+            // The object poses of branch B (SPEC-0041 1371 On reload): 8 at its start while 345
+            // is clear; 1 at its end with 342 set, else its start; 2 and 3 at their start; 10 at
+            // its end and 9 at its start; 4 is not set up.
+            if !state.flag(345) {
+                v.push(Action::InitObjOn { obj: 8, end: false });
+            }
+            v.extend([
+                Action::InitObjOn { obj: 1, end: state.flag(342) },
+                Action::InitObjOn { obj: 2, end: false },
+                Action::InitObjOn { obj: 3, end: false },
+                Action::InitObjOn { obj: 10, end: true },
+                Action::InitObjOn { obj: 9, end: false },
+            ]);
+            v
         }
         // SPEC-0042 1350 Init: with flag 100 T0 (0) and S1 (1); S2 (2), S3 (3 to 5); thread A
         // loads set 1 (100) or 0 (region 1351 + set). The teleports (context 13) and the
@@ -2505,7 +2519,19 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         1074 => vec![Action::LoadRegion { slot: 0, region: Some(if state.flag(481) && !state.flag(482) { 1076 } else { 1075 }) }],
         // SPEC-0042 1079 Init: handler T on triggers 0 and 1. The four object setups (their ids
         // are not given), the debug helper and thread D (debug-only calls) make no call here.
-        1079 => vec![reg(0, 1), reg(1, 1)],
+        // SPEC-0042 1079 Init: handler T on triggers 0 and 1; objects 1, 0, 5 and 4 at their start
+        // poses (2 and 7 are not set up); the effects of script groups 0 and 1 stopped (each
+        // sequence starts its group's again at its end).
+        1079 => vec![
+            reg(0, 1),
+            reg(1, 1),
+            Action::InitObjOn { obj: 1, end: false },
+            Action::InitObjOn { obj: 0, end: false },
+            Action::InitObjOn { obj: 5, end: false },
+            Action::InitObjOn { obj: 4, end: false },
+            Action::GroupEffectsStop { group: 0 },
+            Action::GroupEffectsStop { group: 1 },
+        ],
         // SPEC-0032 699 Init: display mask 2 (265 set; 266 set) or 1; the collision mask is that
         // base with bit 4 (220 clear) or 8; S0 and S1 on triggers 0 and 1.
         699 => {
@@ -2901,8 +2927,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             // SPEC-0045 842 Init and open question 23: the object helper starts the 49 fires of
             // script group 0 when s is 53 or none and stops them for 54 to 59. The build ran
             // neither, so the fires, on from the load, burned for good (user's report 41).
-            v.push(if matches!(s, None | Some(53)) { Action::GroupEffects { group: 0 } } else { Action::GroupEffectsStop { group: 0 } });
-            v.push(if matches!(s, None | Some(53) | Some(54) | Some(57)) { Action::InitObjOn { obj: 0, end: false } } else { Action::DeactivateObj { obj: 0 } });
+            v.extend(props_842(s));
             state.set(197, true);
             v.extend((5..=8).map(|i| reg(i, 5)));
             if !state.flag(198) {
@@ -6095,6 +6120,16 @@ fn plate2_1324(index: u16, s: &mut GameState) -> Vec<Action> {
         Action::ReturnCamera { preset: -1, release: true },
     ]);
     v
+}
+
+/// SPEC-0045 842 stage props (object 0 with effect group 0), from the stage (the highest of
+/// flags 53 to 59): none or 53, the fires started and object 0 at its start; 54 or 57, the fires
+/// stopped and object 0 at its start; 55, 56, 58, 59, the fires stopped and object 0 off.
+fn props_842(s: Option<u16>) -> Vec<Action> {
+    vec![
+        if matches!(s, None | Some(53)) { Action::GroupEffects { group: 0 } } else { Action::GroupEffectsStop { group: 0 } },
+        if matches!(s, None | Some(53) | Some(54) | Some(57)) { Action::InitObjOn { obj: 0, end: false } } else { Action::DeactivateObj { obj: 0 } },
+    ]
 }
 
 /// SPEC-0044 1393 room records (R-0090, R-0105): the outer-gate pairs (even, odd), the statue
@@ -9797,6 +9832,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                         wait(0.5),
                         Action::CameraShakeMode { kind: 0, duration: 0.5, strength: 1.0 },
                         Action::Bits { word: 1, set: 0, clear: 1 },
+                        // The group of the path that ran (0 for index 0, 1 for index 1) starts.
+                        Action::GroupEffects { group: call.index as usize },
                     ]);
                 }
             } else {
@@ -10632,7 +10669,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (1335, 9) if state.flag(236) && !state.flag(402) => state.set(402, true),
         // SPEC-0045 842 trigger 1 (entering): with no stage 53 set and the opening camera 5; with
         // stage 54 line 201.
-        (842, 1) if call.object && call.state == 1 => match stage_842(state) {
+        (842, 1) if call.object && call.state == 1 => {
+            match stage_842(state) {
             None => {
                 state.set(53, true);
                 out.actions.extend([
@@ -10649,7 +10687,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
             Some(54) => out.actions.push(Action::Message { line: 201 }),
             _ => {}
-        },
+            }
+            // Trigger 1 also re-applies the stage props, so they follow a stage change mid-visit
+            // (SPEC-0045 842 Linked object changes).
+            let s = stage_842(state);
+            out.actions.extend(props_842(s));
+        }
         // Trigger 0 (entering, 54 clear): line 197.
         (842, 0) if call.object && call.state == 1 && !state.flag(54) => out.actions.extend([Action::HoldHero, Action::Message { line: 197 }, Action::ReturnCamera { preset: -1, release: true }]),
         // Trigger 3 (54 set, 199 clear): entity 19's conversation, lines 206 to 212 on cameras 16
@@ -11641,18 +11684,24 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
                     Action::PlayAnim { obj: to, speed: 1.0, wait: true },
                 ]);
+                // The completion step (SPEC-0041 1249 gate panels, test vector 2): 9 hidden, panel
+                // 8 shown and played (1.27 s), then flag 80.
                 if !up && (0..3u8).all(|j| state.word(pack, 30 + j) != 0) {
-                    state.set(80, true);
-                    out.actions.push(Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 });
+                    out.actions.extend([
+                        Action::DeactivateObj { obj: 9 },
+                        Action::InitObjOn { obj: 8, end: false },
+                        Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 },
+                        Action::PlayAnim { obj: 8, speed: 1.0, wait: true },
+                        Action::SetFlag { flag: 80, on: true },
+                    ]);
                 }
                 out.actions.extend([Action::ReturnCamera { preset: -1, release: true }, Action::Sleep { ticks: 1 }, Action::Bits { word: 33, set: 0, clear: 1 }]);
             }
         }
-        // 1249 CB10 (trigger 0, the body): line 0 once with 269 clear (object 36's finish taken).
-        (1249, 10) if call.state == 1 && call.object && !state.flag(269) && state.word(pack, 34) == 0 => {
-            state.set_word(pack, 34, 1);
-            out.actions.push(Action::Message { line: 0 });
-        }
+        // 1249 CB10 (trigger 0): line 0 needs object 36's animation to have finished, and this
+        // module never sets up or plays object 36, so the line never appears (SPEC-0041 1249
+        // CB10, Medium-High): nothing is done.
+        (1249, 10) => {}
         // SPEC-0041 1247 CB7 (trigger 4): holding item 29 sets 78, 269 and 270 at once; else on the
         // first fire object 5 off, 4 on, camera 8, object 4 played, the normal camera, SetAI_Agro
         // on 10 (no effect on a dead AI), the wait for item 29, 1.8 s, object 4 off, 5 on, camera
@@ -21049,8 +21098,11 @@ mod tests {
             s.set_word(1249, 33, 0);
         }
         assert!(!s.flag(80));
-        on_trigger(1249, 8, press(17), &mut s);
-        assert!(s.flag(80));
+        let out = on_trigger(1249, 8, press(17), &mut s).actions;
+        // The completion: 9 hidden, 8 shown and played, then flag 80 (set by the action).
+        let flag = out.iter().position(|a| *a == Action::SetFlag { flag: 80, on: true }).expect("flag 80");
+        let play = out.iter().position(|a| *a == Action::PlayAnim { obj: 8, speed: 1.0, wait: true }).expect("panel 8");
+        assert!(play < flag && out.contains(&Action::DeactivateObj { obj: 9 }));
         // 1247 CB7: holding item 29 sets the three flags at once.
         let mut t = GameState::default();
         t.give(29, 1);
