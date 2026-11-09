@@ -11094,12 +11094,35 @@ impl Play {
         } else {
         let trunks = self.near_trunks(self.camera.eye);
         let fol = followed(&self.loco, w);
+        // The camera's ground world (SPEC-0027 Ground clearance step 2, Two worlds at an
+        // exterior and interior door): the current world when it has ground under the eye
+        // (probed from 2.5 above), else the other resident world when it has, else the current
+        // one. The eye pass and the clip read that world's geometry; the sight line keeps the
+        // current world. The near trunks belong to the current world only.
+        let other = self.other.as_ref();
+        let ground_world = |e: [f32; 3]| -> &World {
+            if w.probe(e[0], e[2], e[1] + 2.5).found {
+                return w;
+            }
+            match other {
+                Some(o) if o.probe(e[0], e[2], e[1] + 2.5).found => o,
+                _ => w,
+            }
+        };
+        let no_trunks: Vec<([f32; 3], f32)> = Vec::new();
+        let trunks_of = |g: &World| if std::ptr::eq(g, w) { &trunks } else { &no_trunks };
         self.camera.update(
             &fol,
             pad,
             |x, z, c| w.probe(x, z, c).height,
-            |e| clip_eye(w, &trunks, fol.focus(), e),
-            |e| eye_prims(w, &trunks, e, false),
+            |e| {
+                let g = ground_world(*e);
+                clip_eye(g, trunks_of(g), fol.focus(), e)
+            },
+            |e| {
+                let g = ground_world(e);
+                eye_prims(g, trunks_of(g), e, false)
+            },
             |a, c| eye_line_clear(w, a, c),
         );
         }
