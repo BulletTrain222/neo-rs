@@ -3649,6 +3649,12 @@ impl Play {
                 Action::InitObjOn { obj, .. } | Action::PlayAnim { obj, .. } | Action::LoopAnim { obj, speed: _ } | Action::StopAnim { obj } | Action::DeactivateObj { obj }
                     if [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).is_some_and(|w| obj < w.object_anims.len()) =>
                 {
+                    // PlayAnim, LoopAnim and DeactivateObj clear the offset and rotation mode byte, so
+                    // a stored offset or turn stops applying (SPEC-0028 Run-time object changes).
+                    if matches!(a, Action::PlayAnim { .. } | Action::LoopAnim { .. } | Action::DeactivateObj { .. }) {
+                        self.obj_offset.remove(&(pack, obj));
+                        self.obj_yaw.remove(&(pack, obj));
+                    }
                     let w = if self.world.pack == pack { &mut self.world } else { self.other.as_mut().unwrap() };
                     let (m, o) = (&w.motions[obj], &mut w.object_anims[obj]);
                     match a {

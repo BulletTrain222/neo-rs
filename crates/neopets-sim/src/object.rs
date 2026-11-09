@@ -104,7 +104,8 @@ impl Default for ObjAnim {
 }
 
 impl ObjAnim {
-    /// InitObjOn and ActivateObj: drawn, at time 0 in state 9, or at the end in state 8.
+    /// InitObjOn and ActivateObj (SPEC-0028 state table): drawn, at time 0 in state 10 on a clip
+    /// of two or more keys (state 8 on a one-key clip), or at the end in state 8.
     pub fn init_on(&mut self, m: &Motion, end: bool) {
         self.scripted = true;
         self.drawn = true;
@@ -113,7 +114,7 @@ impl ObjAnim {
             self.state = 8;
         } else {
             self.time = 0.0;
-            self.state = 9;
+            self.state = if m.duration() > 0.0 { 10 } else { 8 };
         }
     }
 
@@ -227,8 +228,9 @@ impl ObjAnim {
         matches!(self.state, 0 | 2 | 5 | 6)
     }
 
+    /// IsObjAnimFinished: true in states 4 (after DeactivateObj or a play-and-hide) and 8.
     pub fn finished(&self) -> bool {
-        self.state == 8
+        matches!(self.state, 4 | 8)
     }
 
     /// The draw gate (section 10): with the gate byte 1, drawn while the state is not 3 or 4.
@@ -324,7 +326,11 @@ mod tests {
         let mut o = ObjAnim::default();
         assert!(!o.visible());
         o.init_on(&m, false);
-        assert_eq!((o.state, o.time, o.visible()), (9, 0.0, true));
+        // State 10 on a clip of two or more keys, not finished (SPEC-0028 state table).
+        assert_eq!((o.state, o.time, o.visible(), o.finished()), (10, 0.0, true, false));
+        let mut gone = o;
+        gone.deactivate();
+        assert!(gone.finished(), "IsObjAnimFinished is true after DeactivateObj");
         // One second of play at speed 1 ends on tick 60 or 61 (single-precision sums).
         o.play(&m, 1.0);
         let mut n = 0;
