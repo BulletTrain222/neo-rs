@@ -1001,8 +1001,10 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
         // SPEC-0045 1023: every teleport shows context 13 (index 10 shows 3 while flag 35 is
         // clear; taken as 13 here).
         (1023, 0..=10) => Some(13),
-        // SPEC-0045 1163: index 0 on contact (kind 26, no prompt), index 1 context 26.
-        (1163, 0) => Some(0),
+        // SPEC-0045 1163: index 0 is registered with kind 26 (the routine itself shows no
+        // prompt; the door step posts context 26 and starts it on a Square press), index 1
+        // context 26.
+        (1163, 0) => Some(26),
         (1163, 1) => Some(26),
         // SPEC-0044 1056: the arrival registers indices 0 to 2 with message 13.
         (1056, 0..=2) => Some(13),

@@ -1281,7 +1281,10 @@ fn step_sim(
     let mut elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     // SPEC-0026 Movies: the movies queued last frame play now, and while one plays the whole
     // game loop waits (no ticks, no input to the game).
-    if let Some(mv) = movies.as_deref_mut() {
+    // SPEC-0026 hand-off step 1 (added 2026-11-09): while a world load is in progress no queued
+    // movie starts; the queue is kept and the game runs on until the load completes.
+    let loading = play.as_deref().is_some_and(|p| p.play.job_pack().is_some());
+    if let Some(mv) = movies.as_deref_mut().filter(|mv| !(loading && mv.idle())) {
         let playing = mv.step(elapsed, vpad.held(bindings::CROSS) || vpad.held(bindings::START), archive.as_deref_mut().map(|a| &mut a.disc));
         // The played word is set as each movie starts, whoever queued it.
         if let (Some(m), Some(p)) = (mv.started.take(), play.as_deref_mut()) {

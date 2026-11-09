@@ -554,7 +554,9 @@ impl World {
     /// its centre lie within the width, and its distance to the plane be at most the body
     /// radius plus 1.5 (951's exit door stands 2.66 behind the wall that stops the hero).
     pub fn touched_door(&self, p: [f32; 3]) -> Option<usize> {
-        self.door_within(p, contact::HERO_RADIUS + 1.5)
+        // SPEC-0018 door use: the slab test of the reference point with margin 1 = 1.5 and
+        // margin 2 = 3.0 x the body radius (code pass 2026-11-09).
+        self.planes.iter().position(|pl| door_slab(pl, p, 1.5, 3.0 * contact::HERO_RADIUS))
     }
 
     fn door_within(&self, p: [f32; 3], reach: f32) -> Option<usize> {
@@ -759,6 +761,23 @@ impl Recorder {
 }
 
 /// The door touch test of a plane: within `reach` of it, inside its width and height.
+/// Point against a slab with margins (SPEC-0018, door and hero-use bounds): u along the face
+/// normal; a level face (|n.y| > 0.9) needs u below 0.05 (n.y >= 0) or margin 1, the width
+/// coordinate in [-m2, w + m2] and the up coordinate in [-m2, h + m2]; a wall needs |u| <= m2,
+/// the same width window and the up coordinate in [-m1, h]. All inclusive.
+fn door_slab(pl: &TeleportPlane, p: [f32; 3], m1: f32, m2: f32) -> bool {
+    let d = [p[0] - pl.p[0], p[1] - pl.p[1], p[2] - pl.p[2]];
+    let dot = |v: [f32; 3]| v[0] * d[0] + v[1] * d[1] + v[2] * d[2];
+    let (u, s, v) = (dot(pl.f), dot(pl.d), dot(pl.q));
+    let across = (-m2..=pl.w + m2).contains(&s);
+    if pl.f[1].abs() > 0.9 {
+        let limit = if pl.f[1] >= 0.0 { 0.05 } else { m1 };
+        u < limit && across && (-m2..=pl.h + m2).contains(&v)
+    } else {
+        u.abs() <= m2 && across && (-m1..=pl.h).contains(&v)
+    }
+}
+
 fn plane_touched(pl: &TeleportPlane, p: [f32; 3], reach: f32) -> bool {
     let d = [p[0] - pl.p[0], p[1] + 1.75 - pl.p[1], p[2] - pl.p[2]];
     let dot = |v: [f32; 3]| v[0] * d[0] + v[1] * d[1] + v[2] * d[2];
@@ -5642,6 +5661,9 @@ impl Play {
         if matches!(stage, 1 | 2) {
             self.deactivate_pet();
         }
+        // The act start's exchange and heal arm no HUD timer: the bars stay hidden until the
+        // first real change.
+        self.hud.forget_seen();
         self.last_swap = format!("act start {stage}: mode {mode}, hero {} on tick {}", self.hero_index, self.ticks);
     }
 
@@ -5904,8 +5926,12 @@ impl Play {
             if let Some(cue) = level::block_sound(self.world.pack) {
                 self.sound.play(neopets_sim::sound::AREA, cue, neopets_sim::sound::Play::default());
             }
-            let voice = if self.hero_index == 0 { 33 } else { 57 };
-            self.sound.play(neopets_sim::sound::VOICE, voice, neopets_sim::sound::Play::default());
+            // The strain voice is not played at the start of 144, the positive side move
+            // (SPEC-0033 block code pass (d)).
+            if step.request != neopets_sim::block::ANIM_SIDE_POS {
+                let voice = if self.hero_index == 0 { 33 } else { 57 };
+                self.sound.play(neopets_sim::sound::VOICE, voice, neopets_sim::sound::Play::default());
+            }
             if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
                 let b = &self.world.blocks[hold.block];
                 println!("      block {} push toward {} for {} ticks on tick {} from {:?}", hold.block, b.dir, b.n, self.ticks, b.position);

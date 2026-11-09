@@ -387,6 +387,13 @@ impl Hud {
         Bar { middle: l - w.inset, cap_x: l + w.inset + w.cap, fill: width(cur), dividers: if step > 0 { ((max - base) / step).max(0) } else { 0 } }
     }
 
+    /// A change made without the HUD hooks (an act start's hero exchange and heal, whose hooks
+    /// are empty; SPEC-0023 draw gate, SPEC-0053): the next tick takes the new values as seen and
+    /// arms nothing.
+    pub fn forget_seen(&mut self) {
+        self.seen = None;
+    }
+
     /// One in-play tick. `hold` keeps G0, G1 and C at 240 (the quick panel is open).
     pub fn tick(&mut self, v: Values, hold: bool, w: &Words) {
         // A health or pool change through the character accessors re-arms C.

@@ -2,9 +2,9 @@
 //! scan over the world's aim targets (SPEC-0030 row 126; SPEC-0033 State 27), the rope manager
 //! and hero state 27's phases 0 to 4 (SPEC-0033 State 27).
 //!
-//! Stand-ins (the spec leaves these open): the rope's outbound travel moves the endpoint
-//! `OUT_STEP` a tick straight toward its target and attaches on arrival (the spec's scalar
-//! update and its W-lane attach test are not established in world units); phases 3 and 4 hold
+//! The outbound travel is the resolved scalar update (SPEC-0033 State 27): s starts at 1.0 and
+//! falls by 0.5 / (2 |A - M|) a step (floor 0.01); the endpoint is M + the old direction x the
+//! stored length + unit(G - endpoint) x s; it attaches within 0.5 of G. Stand-ins: phases 3 and 4 hold
 //! the hero without gravity (the spec adds the pulls to the hero's motion and names no gravity
 //! rule for them). Not built: the reticle and the aim view object (whose marker model is absent
 //! from the disc), the behaviour-record release gate, cue 185's span gate, the character aim
@@ -27,7 +27,8 @@ pub const HANG_DROP: f32 = 2.5;
 pub const HANG_GATE: f32 = 0.35;
 pub const HANG_PULL: f32 = 0.15;
 /// This build's outbound step a tick (stand-in, see the module note).
-pub const OUT_STEP: f32 = 4.0;
+/// The attach distance of the outbound update.
+pub const ATTACH: f32 = 0.5;
 /// The hero state and the item.
 pub const STATE: u8 = 27;
 pub const ITEM: u16 = 36;
@@ -143,6 +144,11 @@ pub struct Rope {
     pub a: Vec3,
     pub g: Vec3,
     pub q: Vec3,
+    /// The outbound scalar s and its step, the stored rope length |Q - M| and direction.
+    pub s: f32,
+    pub ds: f32,
+    pub length: f32,
+    pub dir: Vec3,
 }
 
 impl Rope {
@@ -161,6 +167,10 @@ impl Rope {
         let d = unit(sub(self.a, m));
         self.g = sub(self.a, [TARGET_BACK * d[0], TARGET_BACK * d[1], TARGET_BACK * d[2]]);
         self.q = m;
+        self.s = 1.0;
+        self.ds = -0.5 / (2.0 * len(sub(self.a, m)).max(1e-6));
+        self.length = 0.0;
+        self.dir = d;
         self.state = RopeState::Out;
     }
 
@@ -171,12 +181,18 @@ impl Rope {
             RopeState::Idle => self.q = m,
             RopeState::Out => {
                 let d = sub(self.g, self.q);
-                if len(d) <= OUT_STEP {
-                    self.q = self.g;
+                if len(d) < ATTACH {
                     self.state = RopeState::Attached;
                 } else {
+                    self.s = (self.s + self.ds).max(0.01);
                     let u = unit(d);
-                    self.q = [self.q[0] + OUT_STEP * u[0], self.q[1] + OUT_STEP * u[1], self.q[2] + OUT_STEP * u[2]];
+                    let q: Vec3 = std::array::from_fn(|k| m[k] + self.dir[k] * self.length + u[k] * self.s);
+                    let r = sub(q, m);
+                    self.length = len(r);
+                    if self.length > 1e-6 {
+                        self.dir = unit(r);
+                    }
+                    self.q = q;
                 }
             }
             RopeState::Attached => {}
@@ -370,7 +386,7 @@ mod tests {
 
     #[test]
     fn reel_stops_on_contact() {
-        let mut rope = Rope { state: RopeState::Attached, anchor: Some(0), a: [0.0, 20.0, 20.0], g: [0.0, 19.4, 19.4], q: [0.0, 19.4, 19.4] };
+        let mut rope = Rope { state: RopeState::Attached, anchor: Some(0), a: [0.0, 20.0, 20.0], g: [0.0, 19.4, 19.4], q: [0.0, 19.4, 19.4], ..Rope::default() };
         let mut h = RopeHero { phase: 3, fired: true };
         let v = View { p: [0.0; 3], m: [0.0, 1.0, 0.0], touched: true, ..View::default() };
         assert!(h.tick(v, &mut rope).exit);

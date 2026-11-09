@@ -102,6 +102,11 @@ impl Movies {
 
     /// Advance by `elapsed_ns` with Cross or Start `held`. Returns true while a movie plays (the
     /// game loop is suspended for the whole frame).
+    /// No movie is playing (one may still be queued).
+    pub fn idle(&self) -> bool {
+        self.current.is_none()
+    }
+
     pub fn step(&mut self, elapsed_ns: u64, held: bool, disc: Option<&mut neopets_data::Disc>) -> bool {
         let busy = self.current.is_some() || !self.queue.is_empty();
         let playing = self.step_queue(elapsed_ns, held, disc);

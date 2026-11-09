@@ -638,17 +638,28 @@ impl Hold {
         let side_axis = b.direction((m + 1) % 4).unwrap_or([0.0; 3]);
         let (pp, sv) = (dot(stick, normal), dot(stick, side_axis));
         let stick_on = dot(stick, stick) > 0.0;
+        // Dominance is strict: a tie goes to the side branch (SPEC-0033 block code pass (a)).
         let (request, d) = if !stick_on {
             (ANIM_STILL, -1)
-        } else if pp.abs() >= sv.abs() {
-            if pp < 0.0 || clip.action == ANIM_PULL { (ANIM_PULL, (m + 2) % 4) } else { (ANIM_PUSH, m) }
+        } else if pp.abs() > sv.abs() {
+            if pp < 0.0 { (ANIM_PULL, (m + 2) % 4) } else { (ANIM_PUSH, m) }
         } else if sv > 0.0 {
             (ANIM_SIDE_POS, (m + 1) % 4)
         } else {
             (ANIM_SIDE_NEG, (m + 3) % 4)
         };
-        // 41 and 42 return to 40 at progress 0.95, so the next cycle starts the clip again.
-        step.request = if matches!(clip.action, ANIM_PULL | ANIM_PUSH) && clip.progress >= 0.95 { ANIM_STILL } else { request };
+        // (c): the four move clips return to 40 at progress 0.95, so the next cycle starts the
+        // clip again; a started clip keeps running until then when the stick is released (the
+        // same dominance and sign asks for the same clip anyway); another dominance or sign
+        // switches at once.
+        let moving = matches!(clip.action, ANIM_PULL | ANIM_PUSH | ANIM_SIDE_POS | ANIM_SIDE_NEG);
+        step.request = if moving && clip.progress >= 0.95 {
+            ANIM_STILL
+        } else if moving && !stick_on {
+            clip.action
+        } else {
+            request
+        };
         // The move: once per clip cycle, while the playing clip is the move's and its phase is
         // strictly between 0.05 and 0.15; n = keys - whole cursor - 2 (doubled for the push).
         if d >= 0 && clip.action == request && clip.progress > 0.05 && clip.progress < 0.15 {
