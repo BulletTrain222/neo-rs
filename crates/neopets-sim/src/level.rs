@@ -567,6 +567,10 @@ pub struct GameState {
     /// IsAI_Dead for the current world's entity ids (SPEC-0030 row 45), filled by the host
     /// each tick: a bound character's dead test, else its kill memory of this load.
     pub ai_dead: BTreeSet<usize>,
+    /// Pack 1091's module data tables (module bytes 0x4118 to 0x498F), handed over by the host
+    /// at load (SPEC-0044 1091, R-0269): button rows at 0, rope rows at 0x190, chest rows at
+    /// 0x250, the five stage layouts at 0x5F8.
+    pub tables_1091: Vec<u8>,
     /// The current world's breakable states by index (SPEC-0048: 0 disabled, 1 intact and
     /// breakable, 2 broken, 3 intact and not breakable), filled by the host each tick.
     pub breakables: std::collections::BTreeMap<usize, i32>,
@@ -2423,9 +2427,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // (Low or not listed) are not reproduced.
         1091 => {
             let mut v: Vec<Action> = (3..=10).map(|host| Action::RegisterAnimTrigger { host, index: 0, routine: 10 + host as u8 }).collect();
-            v.extend((1..=3).map(|target| Action::TargetActive { target, on: false }));
             v.extend((41..=48).map(|i| reg(i, 41)));
             v.push(reg(51, 51));
+            v.extend(init_1091(state));
             v
         }
         // SPEC-0032 950 Init: thread F (in Update) and S0 on trigger 0.
@@ -3457,8 +3461,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // from the spec's list) with their six-trigger blocks 16 to 87 on handler S (routine 4);
         // the fall handler on trigger 2 and the prompt handler on triggers 3 to 8. Words: 0 the
         // lever word (-1 at load); 12 to 23 whether that pair's even object is active; 100 + 10k
-        // record k (Walk990). Not built: moving objects 39 to 50 onto animated locators 0 to 11
-        // (the spec does not name the host), the five animation-linked sounds and the log mode.
+        // record k (Walk990). Objects 39 to 50 follow locators 0 to 11 of object 0, the lever lift,
+        // so the walkway rises and falls with it (R-0270). Not built: the five animation-linked
+        // sounds and the log mode.
         990 => {
             state.blackboard.insert((2, 78), 2);
             state.set_word(990, 0, -1);
@@ -3470,6 +3475,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             let mut v: Vec<Action> = [15, 13, 17, 19, 21, 23].map(|obj| Action::InitObjOn { obj, end: true }).to_vec();
             v.extend([0, 1, 2, 7, 3, 4, 5, 11, 9].map(|obj| Action::InitObjOn { obj, end: false }));
+            v.extend((0..12).map(|k| Action::AttachObj { obj: 39 + k, host: 0, locator: k }));
             v.extend((39..=50).map(|obj| Action::InitObjOn { obj, end: false }));
             v.push(reg(2, 2));
             v.extend((3..=8).map(|i| reg(i, 3)));
@@ -4076,6 +4082,195 @@ fn pass_1398(firer: usize, s: &mut GameState) -> Vec<Action> {
             Action::PlayAnim { obj: 9, speed: 1.0, wait: true },
         ]);
         v.extend(thread6_1398(2));
+        v.push(Action::ReturnCamera { preset: -1, release: true });
+    }
+    v
+}
+
+/// SPEC-0044 1091 stage puzzle (R-0269): module words. 100 the stage (start 4), 101 the busy
+/// word, 110 + i pillar i's clip time in 1/10,000 s, 180 + r whether button row r's object sits
+/// at its end time.
+const W1091_STAGE: u8 = 100;
+const W1091_BUSY: u8 = 101;
+const W1091_PILLAR: u8 = 110;
+const W1091_BUTTON: u8 = 180;
+/// The pillars' clip end time, 2.1333 s ((33 - 1) / 15), in 1/10,000 s.
+const END_1091: i32 = 21333;
+
+/// Word `i` of pack 1091's module tables (i32, little-endian), 0 when the tables are absent.
+fn word_1091(s: &GameState, i: usize) -> i32 {
+    s.tables_1091.get(4 * i..4 * i + 4).map_or(0, |b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// Button row r (0 to 9): object, host pillar (or -1), second locator word, trigger index, the
+/// stage it selects, and the five per-stage availability flags.
+fn button_1091(s: &GameState, r: usize) -> [i32; 10] {
+    std::array::from_fn(|k| word_1091(s, 10 * r + k))
+}
+
+/// Pillar i's target time for a stage, in 1/10,000 s: the stage's block of the five layouts
+/// (0, 1, 2 and 4 their own, any other stage block 3), value v as v/30 s, 65 the clip end.
+fn layout_1091(s: &GameState, stage: i32, i: usize) -> i32 {
+    let block = if matches!(stage, 0..=2 | 4) { stage as usize } else { 3 };
+    let at = 0x5F8 + 2 * (block * 64 + i);
+    let v = s.tables_1091.get(at..at + 2).map_or(65, |b| u16::from_le_bytes([b[0], b[1]]) as i32);
+    if v == 65 { END_1091 } else { (v * 10_000 + 15) / 30 }
+}
+
+/// The rope-target and chest-group states of a stage: SetTargetActive per rope row (word 3 +
+/// stage; stages 3 and 4 have no column, so off), then all eight chest groups released and
+/// those of the stage restored.
+fn stage_states_1091(s: &GameState, stage: i32) -> Vec<Action> {
+    let mut v = Vec::new();
+    for r in 0..6 {
+        let row: [i32; 8] = std::array::from_fn(|k| word_1091(s, 100 + 8 * r + k));
+        let on = (0..=2).contains(&stage) && row[3 + stage as usize] == 1;
+        if let Ok(target) = usize::try_from(row[0]) {
+            v.push(Action::TargetActive { target, on });
+        }
+    }
+    let chests: Vec<(i32, i32)> = (0..8).map(|r| (word_1091(s, 148 + 2 * r), word_1091(s, 149 + 2 * r))).collect();
+    v.extend(chests.iter().filter_map(|&(g, _)| usize::try_from(g).ok()).map(|group| Action::DeactivateGroup { group }));
+    v.extend(chests.iter().filter(|&&(_, st)| st == stage).filter_map(|&(g, _)| usize::try_from(g).ok()).map(|group| Action::ReactivateGroup { group }));
+    v
+}
+
+/// The slot thread: character set 0 to 3 for stages 0 to 3, set 3 for stage 4, into slot
+/// store A (region 1091 + 1 + set). The navmesh assignment after the load is not built.
+fn slot_1091(stage: i32) -> Action {
+    let set = if (0..=3).contains(&stage) { stage as u32 } else { 3 };
+    Action::LoadRegion { slot: 0, region: Some(1092 + set) }
+}
+
+/// The button states for a stage. At start-up: an available button at its end pose, the
+/// others at the start pose. After the pillars settle, per button object not animating:
+/// unavailable at its end, played backward; unavailable otherwise, start pose; available at
+/// time 0, played forward; available otherwise, end pose.
+fn buttons_1091(s: &mut GameState, stage: i32, startup: bool) -> Vec<Action> {
+    let mut v = Vec::new();
+    for r in 0..10 {
+        let row = button_1091(s, r);
+        let Ok(obj) = usize::try_from(row[0]) else { continue };
+        let avail = (0..=4).contains(&stage) && row[5 + stage as usize] == 1;
+        let at_end = s.word(1091, W1091_BUTTON + r as u8) == 1;
+        if !startup && s.animating.contains(&obj) {
+            continue;
+        }
+        match (startup, avail, at_end) {
+            (true, a, _) => v.push(Action::InitObjOn { obj, end: a }),
+            (false, false, true) => v.push(Action::PlayAnim { obj, speed: -1.0, wait: false }),
+            (false, false, false) => v.push(Action::InitObjOn { obj, end: false }),
+            (false, true, false) => v.push(Action::PlayAnim { obj, speed: 1.0, wait: false }),
+            (false, true, true) => v.push(Action::InitObjOn { obj, end: true }),
+        }
+        s.set_word(1091, W1091_BUTTON + r as u8, avail as i32);
+    }
+    v
+}
+
+/// Init's part of the stage puzzle: the objects shown at time 0, the six pillar buttons linked
+/// to locator 0 of their pillars, the press triggers, and the start-up thread (stage 4: the
+/// pillars snapped to its layout, its buttons, targets and chest groups, character set 3).
+fn init_1091(s: &mut GameState) -> Vec<Action> {
+    s.set_word(1091, W1091_STAGE, 4);
+    s.set_word(1091, W1091_BUSY, 0);
+    let mut v: Vec<Action> = [41usize, 0, 1, 2].into_iter().chain(3..=17).chain(71..=133).chain(137..=140).map(|obj| Action::InitObjOn { obj, end: false }).collect();
+    for r in 0..10 {
+        let row = button_1091(s, r);
+        let Ok(obj) = usize::try_from(row[0]) else { continue };
+        v.push(Action::InitObjOn { obj, end: false });
+        if let (Ok(host), Ok(locator)) = (usize::try_from(row[1]), usize::try_from(row[2])) {
+            v.push(Action::AttachObj { obj, host, locator });
+            v.push(Action::RegisterAnimTrigger { host, index: locator as u16, routine: 60 + r as u8 });
+        } else if let Ok(index) = u16::try_from(row[3]) {
+            v.push(Action::RegisterTrigger { index, routine: 66 });
+        }
+    }
+    // The start-up thread. Pillar 134 is posed (and so shown) by its set-time call.
+    v.push(Action::InitObjOn { obj: 134, end: false });
+    for i in 0..64 {
+        let time = layout_1091(s, 4, i);
+        s.set_word(1091, W1091_PILLAR + i as u8, time);
+        v.push(Action::SetObjTime { obj: 71 + i, seconds: time as f32 / 10_000.0 });
+    }
+    v.extend(buttons_1091(s, 4, true));
+    v.extend(stage_states_1091(s, 4));
+    v.push(slot_1091(4));
+    v
+}
+
+/// A press on button row r: busy 0, its object not animating and at its end time, and a stage
+/// other than the current one. The stage is set, slot store A reset, every button not at time
+/// 0 shown at its end and played backward, hero animation 141 (waited), the camera shake, 30
+/// ticks, objects 1 to 6 deactivated, the stage's targets and chest groups, busy 1.
+fn press_1091(s: &mut GameState, r: usize) -> Vec<Action> {
+    let row = button_1091(s, r);
+    let Ok(obj) = usize::try_from(row[0]) else { return Vec::new() };
+    let stage = row[4];
+    if s.word(1091, W1091_BUSY) != 0 || s.animating.contains(&obj) || s.word(1091, W1091_BUTTON + r as u8) != 1 || stage == s.word(1091, W1091_STAGE) {
+        return Vec::new();
+    }
+    s.set_word(1091, W1091_STAGE, stage);
+    let mut v = vec![Action::LoadRegion { slot: 0, region: None }];
+    for k in 0..10 {
+        if s.word(1091, W1091_BUTTON + k as u8) == 1 {
+            if let Ok(b) = usize::try_from(button_1091(s, k)[0]) {
+                v.extend([Action::InitObjOn { obj: b, end: true }, Action::PlayAnim { obj: b, speed: -1.0, wait: false }]);
+            }
+            s.set_word(1091, W1091_BUTTON + k as u8, 0);
+        }
+    }
+    v.extend([
+        Action::HoldHero,
+        Action::HeroAnim { anim: 141, wait: true },
+        Action::CameraShake { t: 3.0, a: 0.3, s: 25.0, p4: 0.5, r: 0.8, phi: 0.5, z: 0.2 },
+        Action::Sleep { ticks: 30 },
+    ]);
+    v.extend((1..=6).map(|obj| Action::DeactivateObj { obj }));
+    v.extend(stage_states_1091(s, stage));
+    v.push(Action::Bits { word: W1091_BUSY, set: 1, clear: 0 });
+    v
+}
+
+/// Update while busy: each pillar's time steps toward its layout value (0.01 s above 0.03 away,
+/// 0.005 s above 0.02, else 0.0025 s; within 0.0025 it snaps), the pillar buttons held at time
+/// 0; on the first tick nothing moves, busy 0, the stage's buttons, the slot thread, control
+/// back and the normal camera.
+fn puzzle_1091(s: &mut GameState) -> Vec<Action> {
+    if s.word(1091, W1091_STAGE) < 0 {
+        s.set_word(1091, W1091_STAGE, 0);
+    }
+    if s.word(1091, W1091_BUSY) != 1 || s.tables_1091.is_empty() {
+        return Vec::new();
+    }
+    let stage = s.word(1091, W1091_STAGE);
+    let mut v = Vec::new();
+    let mut moved = false;
+    for i in 0..64 {
+        let (now, want) = (s.word(1091, W1091_PILLAR + i as u8), layout_1091(s, stage, i));
+        let d = (want - now).abs();
+        if d == 0 {
+            continue;
+        }
+        let next = if d <= 25 {
+            want
+        } else {
+            let step = if d > 300 { 100 } else if d > 200 { 50 } else { 25 };
+            now + step * (want - now).signum()
+        };
+        moved = true;
+        s.set_word(1091, W1091_PILLAR + i as u8, next);
+        v.push(Action::SetObjTime { obj: 71 + i, seconds: next as f32 / 10_000.0 });
+    }
+    for r in 0..6 {
+        if let Ok(obj) = usize::try_from(button_1091(s, r)[0]) {
+            v.push(Action::SetObjTime { obj, seconds: 0.0 });
+        }
+    }
+    if !moved {
+        s.set_word(1091, W1091_BUSY, 0);
+        v.extend(buttons_1091(s, stage, false));
+        v.push(slot_1091(stage));
         v.push(Action::ReturnCamera { preset: -1, release: true });
     }
     v
@@ -9313,6 +9508,14 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // SPEC-0044 1091 trigger 51 (Medium): with object 41 not animating, context 4; a press
         // walks the hero to locator 9 (oriented), plays object 41, hero animation 140 and objects
         // 0 and 1.
+        // SPEC-0044 1091 Press: the six pillar buttons' animated triggers (routines 60 to 65, one per
+        // row) and script triggers 67 to 70 (routine 66, the row found by its trigger index).
+        (1091, 60..=66) if call.state != 0 => {
+            let row = if routine == 66 { (6..10).find(|&r| button_1091(state, r)[3] == call.index as i32) } else { Some((routine - 60) as usize) };
+            if let Some(r) = row {
+                out.actions.extend(press_1091(state, r));
+            }
+        }
         (1091, 51) if call.object && call.state != 0 && !state.animating.contains(&41) => {
             if call.square && !state.talking {
                 out.actions.extend([
@@ -12320,7 +12523,10 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
 pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> {
     let mut out = Vec::new();
     match pack {
-        1091 => out = sequencer_1091(state),
+        1091 => {
+            out = sequencer_1091(state);
+            out.extend(puzzle_1091(state));
+        }
         // SPEC-0045 1023 Update, the tattered-cloak check: flag 11 and the cloak worn set 303;
         // then the cloak watcher.
         1023 => {

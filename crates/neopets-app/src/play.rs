@@ -58,6 +58,9 @@ const START_TRANSITION: u32 = 691;
 /// A world pack resident in a buffer: what the hero's update and the camera read of it.
 pub struct World {
     pub pack: u32,
+    /// Pack 1091's module data tables (module bytes 0x4118 to 0x498F: the wall-button, rope-target
+    /// and chest rows and the five stage layouts; SPEC-0044 1091, R-0269); empty for other packs.
+    pub module_tables: Vec<u8>,
     pub kind: Kind,
     pub buffer: Buffer,
     /// The placed effects (type 39), by slot.
@@ -225,6 +228,7 @@ impl World {
     pub fn test_stage(pack: u32) -> Self {
         World {
             pack,
+            module_tables: Vec::new(),
             kind: Kind::Exterior,
             buffer: Buffer::Exterior,
             placed_effects: Vec::new(),
@@ -312,6 +316,7 @@ impl World {
             pack,
             kind,
             buffer,
+            module_tables: if pack == 1091 { neopets_data::travel::module_payload(&bytes, &chain.chunks).and_then(|m| m.get(0x4118..0x4990)).map(<[u8]>::to_vec).unwrap_or_default() } else { Vec::new() },
             placed_effects: neopets_data::effect::placed(&bytes, &chain.chunks),
             patches: neopets_data::foliage::patches(&bytes, &chain.chunks),
             lights: neopets_data::light::light_sets(&bytes, &chain.chunks).iter().map(light_record).collect(),
@@ -2628,6 +2633,7 @@ impl Play {
         // (SPEC-0026; SPEC-0025 Loading): before, it did not, so the road module of 691 next to
         // the farm never loaded its bandits.
         play.init_other();
+        play.before_init();
         let mut init = level::on_init(play.world.pack, &mut play.state);
         init.extend(play.group_setup());
         play.apply(&init);
@@ -3073,7 +3079,7 @@ impl Play {
     /// The current world's Init (a world loaded by a door job).
     fn run_init(&mut self) {
         self.kills_load(self.world.pack);
-        self.revive_broken();
+        self.before_init();
         let mut init = level::on_init(self.world.pack, &mut self.state);
         init.extend(self.group_setup());
         self.apply(&init);
@@ -3171,7 +3177,7 @@ impl Play {
         if let Some(o) = self.other.take() {
             let current = std::mem::replace(&mut self.world, o);
             self.kills_load(self.world.pack);
-            self.revive_broken();
+            self.before_init();
             let mut init = level::on_init(self.world.pack, &mut self.state);
             if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
                 println!("      Init of other world {}: {} actions", self.world.pack, init.len());
@@ -7181,6 +7187,26 @@ impl Play {
             return u16::try_from(ordinal).ok().filter(|&b| b < 256);
         }
         self.entity_of(pack, region, ordinal).and_then(|e| u16::try_from(e).ok()).filter(|&b| b < 256)
+    }
+
+    /// What a world needs before its Init runs: the start-mode revival of broken breakables and,
+    /// for pack 1091, its module tables handed to the level state.
+    fn before_init(&mut self) {
+        self.revive_broken();
+        if self.world.pack == 1091 {
+            self.state.tables_1091 = self.world.module_tables.clone();
+        }
+        // NEOPETS_TRACE_1091: pack 1091's button, rope and chest rows as read from the module (diagnostic).
+        if self.world.pack == 1091 && std::env::var_os("NEOPETS_TRACE_1091").is_some() {
+            let w = |i: usize| self.state.tables_1091.get(4 * i..4 * i + 4).map_or(0, |b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+            for r in 0..10 {
+                println!("1091 button row {r}: {:?}", (0..10).map(|k| w(10 * r + k)).collect::<Vec<_>>());
+            }
+            for r in 0..6 {
+                println!("1091 rope row {r}: {:?}", (0..8).map(|k| w(100 + 8 * r + k)).collect::<Vec<_>>());
+            }
+            println!("1091 chest rows: {:?}", (0..16).map(|k| w(148 + k)).collect::<Vec<_>>());
+        }
     }
 
     /// SPEC-0048 Start mode and reset: after the group set-up and before Init, every entry whose

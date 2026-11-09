@@ -326,3 +326,11 @@ mod tests {
         assert_eq!((n.get(0), n.get(1), n.get(2), n.get(3), n.get(-1)), (-1, 602, 11, -1, -1));
     }
 }
+
+/// A pack's level module payload (its type-37 chunk, starting "SNR2"; SPEC-0030 section 1),
+/// for the module data tables a level's script reads (SPEC-0044 1091 stage layouts).
+pub fn module_payload<'a>(bytes: &'a [u8], top: &[Chunk]) -> Option<&'a [u8]> {
+    let c = top.iter().find(|c| c.kind == MODULE)?;
+    let m = bytes.get(c.payload.clone())?;
+    (m.get(..4) == Some(b"SNR2")).then_some(m)
+}
