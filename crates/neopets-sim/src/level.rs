@@ -1037,6 +1037,8 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
                     Action::PlaySound { cue: 9, locator: None },
                     Action::PlayAnim { obj: 10, speed: 1.0, wait: false },
                     Action::PlayAnim { obj: 11, speed: 1.0, wait: true },
+                    // Then 1.5 s before the camera returns (SPEC-0045 934 cellar doors).
+                    wait(1.5),
                     Action::ReturnCamera { preset: -1, release: true },
                 ]);
             }
@@ -4647,17 +4649,22 @@ fn breakable_intact(s: &GameState, id: usize) -> bool {
 fn lift_move_956(state: &mut GameState) -> Vec<Action> {
     let up = state.word(956, 2) == 0;
     state.set_word(956, 2, up as i32);
-    let s = if up { 1.0 } else { -1.0 };
-    let mut v = vec![Action::LoopAnim { obj: 17, speed: -s }, Action::EntityAnim { entity: 6, anim: 64, looped: true, wait: false }];
-    if up {
-        v.push(Action::PlaySound { cue: 8, locator: None });
+    // Going down only loops 17 at +1.0 and plays 9 at -1.0 (no sound, no entity loop, no stop at
+    // the end; SPEC-0043 956 Lift). Going up adds entity 6's loop and sound 8, and when 9 stops
+    // the sound is killed, entity 6 released and 17 stopped.
+    if !up {
+        return vec![Action::LoopAnim { obj: 17, speed: 1.0 }, Action::PlayAnim { obj: 9, speed: -1.0, wait: false }, Action::WaitObj { obj: 9 }];
     }
-    v.extend([Action::PlayAnim { obj: 9, speed: s, wait: false }, Action::WaitObj { obj: 9 }]);
-    if up {
-        v.push(Action::KillSound { cue: 8, locator: None });
-    }
-    v.extend([Action::ReleaseEntity { entity: 6 }, Action::StopAnim { obj: 17 }]);
-    v
+    vec![
+        Action::LoopAnim { obj: 17, speed: -1.0 },
+        Action::EntityAnim { entity: 6, anim: 64, looped: true, wait: false },
+        Action::PlaySound { cue: 8, locator: None },
+        Action::PlayAnim { obj: 9, speed: 1.0, wait: false },
+        Action::WaitObj { obj: 9 },
+        Action::KillSound { cue: 8, locator: None },
+        Action::ReleaseEntity { entity: 6 },
+        Action::StopAnim { obj: 17 },
+    ]
 }
 
 /// SPEC-0043 956's lift readiness: 64 clear and 211 set, or all four knights free (then 211).
@@ -6169,6 +6176,9 @@ const W1393_PLATE: u8 = 20;
 const W1393_GATE: u8 = 30;
 const W1393_ALARMED: u8 = 40;
 const W1393_TICK: u8 = 50;
+/// The plate-standing word of rooms 0 to 2 (1 while the hero stands on the plate; triggers 3,
+/// 10 and 17): while set, the entry and alarm handlers do not close the door.
+const W1393_STAND: u8 = 60;
 
 /// The gate arrangement: `odd` activates the odd members (open), else the even ones; both
 /// selected animations play at +1.0 without wait.
@@ -6200,17 +6210,22 @@ fn close_1393(i: usize, s: &mut GameState, sound: bool) -> Vec<Action> {
 /// guard reset (animation 81, off, home, on, 82 with the cloak, behaviour 6); the plate unlatches.
 fn entry_1393(i: usize, s: &mut GameState) -> Vec<Action> {
     let r = &ROOMS_1393[i];
+    // The entry lever forward (waited), sound 12, then back; the plate lever is reset only when
+    // the plate latch is set (SPEC-0044 1393 Room entry).
     let mut v = vec![
         Action::PlayAnim { obj: r.entry, speed: 0.75, wait: true },
+        Action::PlaySound { cue: 12, locator: None },
         Action::PlayAnim { obj: r.entry, speed: -0.75, wait: false },
-        Action::PlayAnim { obj: r.plate, speed: -0.6, wait: false },
     ];
+    if s.word(1393, W1393_PLATE + i as u8) != 0 {
+        v.push(Action::PlayAnim { obj: r.plate, speed: -0.6, wait: false });
+    }
     // The open gate arrangement only when the gate-state is 0; the room is then armed (1).
     if s.word(1393, W1393_GATE + i as u8) == 0 {
         v.extend(gates_1393(r, true));
         s.set_word(1393, W1393_GATE + i as u8, 1);
     }
-    if s.word(1393, W1393_OPEN + i as u8) != 0 {
+    if s.word(1393, W1393_OPEN + i as u8) != 0 && s.word(1393, W1393_STAND + i as u8) == 0 {
         v.extend(close_1393(i, s, true));
     }
     for &(entity, locator) in r.guards {
@@ -6238,14 +6253,17 @@ fn plate_1393(i: usize, s: &mut GameState) -> Vec<Action> {
         return Vec::new();
     }
     s.set_word(1393, W1393_PLATE + i as u8, 1);
-    let mut v = vec![Action::PlayAnim { obj: r.plate, speed: 1.0, wait: false }];
+    // The plate lever forward at +0.6 with a wait; a closed door: +0x1C on, +0x18 off, the room
+    // camera, sound 7, the +0x1C clip with a wait, 1 s, the forms swapped, 1 s, the camera back.
+    let mut v = vec![Action::PlayAnim { obj: r.plate, speed: 0.6, wait: true }];
     if s.word(1393, W1393_OPEN + i as u8) == 0 {
         s.set_word(1393, W1393_OPEN + i as u8, 1);
         v.extend([
             Action::InitObjOn { obj: r.door.1, end: false },
             Action::DeactivateObj { obj: r.door.0 },
             camera(r.camera),
-            Action::PlayAnim { obj: r.door.1, speed: 1.0, wait: false },
+            Action::PlaySound { cue: 7, locator: None },
+            Action::PlayAnim { obj: r.door.1, speed: 1.0, wait: true },
             wait(1.0),
             Action::InitObjOn { obj: r.forms.0, end: false },
             Action::DeactivateObj { obj: r.forms.1 },
@@ -6271,7 +6289,7 @@ fn alarm_1393(i: usize, s: &mut GameState) -> Vec<Action> {
     for &(entity, _) in r.guards {
         v.extend([Action::Agro { entity }, Action::DisableInvisibility { entity }]);
     }
-    if s.word(1393, W1393_OPEN + i as u8) != 0 {
+    if s.word(1393, W1393_OPEN + i as u8) != 0 && s.word(1393, W1393_STAND + i as u8) == 0 {
         v.extend(close_1393(i, s, false));
     }
     s.set_word(1393, W1393_GATE + i as u8, 0);
@@ -6284,7 +6302,12 @@ fn alarm_1393(i: usize, s: &mut GameState) -> Vec<Action> {
     if s.word(1393, W1393_ALARMED + i as u8) == 0 {
         s.set_word(1393, W1393_ALARMED + i as u8, 1);
         v.extend([camera(r.camera), wait(2.0), release_camera()]);
+    } else {
+        v.push(wait(2.0));
     }
+    // The waking statue (+0x10) gives way to the static one (+0x14) after 2.0 s, and only the
+    // static one turns toward the hero (SPEC-0044 1393, resolved).
+    v.extend([Action::InitObjOn { obj: r.statue.1, end: false }, Action::DeactivateObj { obj: r.statue.0 }]);
     v.push(Action::AlignObj { obj: r.statue.1, t: ALIGN_1393 });
     v
 }
@@ -6360,8 +6383,8 @@ fn trigger_1393(call: TriggerCall, s: &mut GameState) -> Vec<Action> {
                 v
             }
         },
-        // Statue triggers 4, 11, 18 and 21 turn +0x14 toward the hero. Triggers 3, 10 and 17 are registered;
-        // their bodies are not described.
+        // Statue triggers 4, 11, 18 and 21 turn +0x14 toward the hero while the room's gate-state
+        // is 0 (alarmed).
         4 | 11 | 18 | 21 => {
             let i = match call.index {
                 4 => 0,
@@ -6369,7 +6392,21 @@ fn trigger_1393(call: TriggerCall, s: &mut GameState) -> Vec<Action> {
                 18 => 2,
                 _ => 3,
             };
+            if s.word(1393, W1393_GATE + i as u8) != 0 {
+                return Vec::new();
+            }
             vec![Action::AlignObj { obj: ROOMS_1393[i].statue.1, t: ALIGN_1393 }]
+        }
+        // Plate standing (triggers 3, 10, 17 for rooms 0 to 2): the word is 1 while the hero is
+        // inside and 0 once he leaves.
+        3 | 10 | 17 => {
+            let i = match call.index {
+                3 => 0,
+                10 => 1,
+                _ => 2,
+            };
+            s.set_word(1393, W1393_STAND + i as u8, matches!(call.state, 1 | 2) as i32);
+            Vec::new()
         }
         _ => Vec::new(),
     }
@@ -10626,13 +10663,15 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // 236, 92 and movie 20; 1 s and the fade in.
         (1335, 5) => {
             if call.square && !state.talking {
-                out.actions.push(Action::FadeOut { seconds: FADE, wait: true });
+                // The bed's fades are black: 1.0 s out with a wait, movie 20, 1.0 s, then 1.0 s in
+                // without a wait (SPEC-0043 1335 Rest scene detail).
+                out.actions.push(Action::FadeOut { seconds: 1.0, wait: true });
                 if state.flag(235) && !state.flag(92) {
                     state.set(236, true);
                     state.set(92, true);
                     out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 1, region: None }, Action::LoadRegion { slot: 0, region: Some(1336) }, Action::PlayFmv { movie: 20 }]);
                 }
-                out.actions.extend([wait(1.0), Action::FadeIn { seconds: FADE, wait: true }]);
+                out.actions.extend([wait(1.0), Action::FadeIn { seconds: 1.0, wait: false }]);
             } else {
                 out.prompt = Some(32);
             }
@@ -14860,7 +14899,12 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     }
     match pack {
         // SPEC-0045 934's activate-world routine: objects 10 and 11 again.
-        934 => vec![Action::InitObjOn { obj: 10, end: false }, Action::InitObjOn { obj: 11, end: false }],
+        // SPEC-0045 934 activate-world: both cellar doors at their start pose, and the door scene's
+        // latch cleared, so the scene plays again on each return from the cellar.
+        934 => {
+            state.set_word(934, 13, 0);
+            vec![Action::InitObjOn { obj: 10, end: false }, Action::InitObjOn { obj: 11, end: false }]
+        }
         // SPEC-0044 1411's arrival reads and resets its value for eW 178.
         1411 => {
             state.take_message(2, 178);
@@ -15390,9 +15434,10 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             _ => Vec::new(),
         },
         // SPEC-0037 1299 activate-world: the value for eW 150 is read and reset; any value but -1
-        // returns the normal camera.
+        // runs SetToNormalCamera(10.0, 0.0, true) (the eye in front of the hero, clear of the
+        // wall panel behind entry 0; SPEC-0027 Arrival census).
         1299 => {
-            if state.take_message(2, 150) != -1 { vec![Action::ReturnCamera { preset: -1, release: true }] } else { Vec::new() }
+            if state.take_message(2, 150) != -1 { vec![Action::NormalCamera { distance: 10.0, angle: 0.0, release: true }] } else { Vec::new() }
         }
         // SPEC-0037 1220 activate-world A2 (Medium order): with value 1 (type 3) for eW 131 a
         // cut to black, 1 s, a 0.5 s fade in, the hero to locator 25, camera 4 (wait), 0.5 s and
@@ -18218,8 +18263,14 @@ fn talk_rotated(pack: u32, routine: u8, s: &mut GameState) -> Option<Vec<Action>
             vec![Action::Talk { line: 10 + c as u16 }]
         }
         (1011, _) => cycle_in(s, pack, 0, 0, &three(13)),
-        // 1335: own counters; entity 34 first draws, and a 1 shows nothing and leaves its counter.
-        (1335, 34) if draw(s, pack, 1, 3) == 1 => Vec::new(),
+        // 1335: own counters; entity 34 first draws, and a 1 shows nothing but still advances its
+        // counter, so that line is skipped (SPEC-0043 1335 entity 34).
+        (1335, 34) if draw(s, pack, 1, 3) == 1 => {
+            let w = 11 + 2 * 34;
+            let c = s.word(pack, w);
+            s.set_word(pack, w, c + 1);
+            Vec::new()
+        }
         (1335, 34) => cycle_shared(s, pack, 34, &three(3)),
         (1335, 31) => cycle_shared(s, pack, 31, &three(15)),
         (1335, 32) => cycle_shared(s, pack, 32, &three(9)),
