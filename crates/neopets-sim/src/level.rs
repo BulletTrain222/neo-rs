@@ -7142,17 +7142,21 @@ fn talk_1300(routine: u8, s: &mut GameState) -> Vec<Action> {
         // The reward scene: object 5 shown (its colour ramp is not built) and object 4 off.
         5 => {
             s.set(400, true);
+            // Hero animation 0, line 104, 1.0 s fades, camera 4, the canvas (object 5) over 5 s
+            // with object 4 off when that ramp ends (the alpha ramp itself is not drawn), the
+            // normal camera with control released (SPEC-0045 1300 entity 18).
             vec![
+                Action::HeroAnim { anim: 0, wait: false },
                 Action::Talk { line: 104 },
-                Action::FadeOut { seconds: FADE, wait: true },
+                Action::FadeOut { seconds: 1.0, wait: true },
                 Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
-                Action::DeactivateObj { obj: 4 },
+                Action::FadeIn { seconds: 1.0, wait: true },
                 Action::InitObjOn { obj: 5, end: false },
-                Action::FadeIn { seconds: FADE, wait: true },
                 wait(5.0),
-                Action::FadeOut { seconds: FADE, wait: true },
+                Action::DeactivateObj { obj: 4 },
+                Action::FadeOut { seconds: 1.0, wait: true },
                 Action::ReturnCamera { preset: -1, release: true },
-                Action::FadeIn { seconds: FADE, wait: true },
+                Action::FadeIn { seconds: 1.0, wait: true },
                 Action::Talk { line: 105 },
             ]
         }
@@ -11638,13 +11642,15 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // SPEC-0059 section 5, the 758 finish gate (trigger 15, entering): object 2 forward; armed
         // (word 1) and not finished (word 2): finished, T frozen on the clock, objects 6 and 3
         // played; then, after the hero leaves, object 2 backward.
+        // The gate plays forward with a wait (21 ticks) before the finish test; object 3 is waited
+        // and the backward play after the firer leaves is waited too (SPEC-0045 758 Finish gate).
         (758, 15) if call.state == 1 => {
-            out.actions.push(Action::PlayAnim { obj: 2, speed: 1.0, wait: false });
+            out.actions.push(Action::PlayAnim { obj: 2, speed: 1.0, wait: true });
             if state.word(pack, 1) == 1 && state.word(pack, 2) == 0 {
                 state.set_word(pack, 2, 1);
-                out.actions.extend([Action::FreezeTrial, Action::PlayAnim { obj: 6, speed: 1.0, wait: false }, Action::PlayAnim { obj: 3, speed: 1.0, wait: false }]);
+                out.actions.extend([Action::FreezeTrial, Action::PlayAnim { obj: 6, speed: 1.0, wait: false }, Action::PlayAnim { obj: 3, speed: 1.0, wait: true }]);
             }
-            out.actions.extend([Action::WaitInside { index: call.index }, Action::PlayAnim { obj: 2, speed: -1.0, wait: false }]);
+            out.actions.extend([Action::WaitInside { index: call.index }, Action::PlayAnim { obj: 2, speed: -1.0, wait: true }]);
         }
         // The judge (trigger 14, entering, finished): the walk to locator 148; t = T truncated
         // qualifies at 45, at 90 with 433 clear, at 180 with 433 and 431 clear; a pass sets 435
@@ -17603,7 +17609,8 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
                 Action::Talk { line: 159 },
                 Action::ActivateTimer { start: 0.0, limit: 0.0, up: true },
                 Action::HoldHero,
-                Action::FadeOut { seconds: 0.5, wait: true },
+                // The keeper's start fades out over 1.0 s before the course reset.
+                Action::FadeOut { seconds: 1.0, wait: true },
                 Action::InitObjOn { obj: 6, end: false },
                 Action::InitObjOn { obj: 3, end: false },
                 Action::SetBreakableActive { id: 17, on: true },
