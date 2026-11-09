@@ -495,9 +495,225 @@ fn boxed(st: &mut EyeState, eye: &mut Vec3, b: &BoxShape, ctx: &EyeCtx) {
     st.nudge(eye, s, dist, ctx);
 }
 
+/// The hero body radius the occlusion clip reads from the focus object's motion record.
+pub const CLIP_BODY_RADIUS: f32 = 1.175;
+
+/// The face test of the occlusion clip (SPEC-0027 Camera on world entry, Face test): the eye
+/// shifted r_h against the normal, the plane fraction window -0.02 to 1.02, the run widened 0.25
+/// and the vertical window from 0.25 below the depth to 0.25 under the top; a hit closer than
+/// 1.2 r_h (as coded, ell - t) snaps the eye to the focus.
+pub fn clip_face(eye: Vec3, focus: Vec3, w: &WallEdge) -> Option<Vec3> {
+    let rh = CLIP_BODY_RADIUS;
+    if w.top[1] == 0.0 {
+        return None;
+    }
+    let n = [w.face[0], w.face[1], w.face[2]];
+    let shifted = sub(eye, scale(n, rh));
+    let (df, de) = (plane(w.face, focus), plane(w.face, shifted));
+    if df == de {
+        return None;
+    }
+    let t = df / (df - de);
+    if !(-0.02..=1.02).contains(&t) {
+        return None;
+    }
+    let x = add(focus, scale(sub(shifted, focus), t));
+    let u = plane(w.run, x);
+    let top = w.edge_height(x) + 0.25;
+    if !(-0.25..=w.length + 0.25).contains(&u) || x[1] < top - w.height - 0.25 || x[1] > top - 0.25 {
+        return None;
+    }
+    let ell = len(sub(eye, focus));
+    Some(if ell - t < 1.2 * rh { focus } else { add(focus, scale(sub(eye, focus), t)) })
+}
+
+/// The ray from s along unit u against a sphere: the nearest root in (0, len), else the far one.
+fn ray_sphere(s: Vec3, u: Vec3, l: f32, c: Vec3, r: f32) -> Option<f32> {
+    let m = sub(s, c);
+    let b = dot(m, u);
+    let disc = b * b - (dot(m, m) - r * r);
+    if disc < 0.0 {
+        return None;
+    }
+    let q = disc.sqrt();
+    [-b - q, -b + q].into_iter().find(|&t| t > 0.0 && t < l)
+}
+
+/// The ray against a capped finite cylinder: the entry t0 if in (0, len), else the exit t1.
+fn ray_cylinder(s: Vec3, u: Vec3, l: f32, base: Vec3, axis: Vec3, length: f32, radius: f32) -> Option<f32> {
+    let m = sub(s, base);
+    let (mh, uh) = (dot(m, axis), dot(u, axis));
+    let (mr, ur) = (sub(m, scale(axis, mh)), sub(u, scale(axis, uh)));
+    let (a, b, c) = (dot(ur, ur), 2.0 * dot(mr, ur), dot(mr, mr) - radius * radius);
+    let (mut t0, mut t1) = if a < 1e-9 {
+        if c > 0.0 {
+            return None;
+        }
+        (f32::NEG_INFINITY, f32::INFINITY)
+    } else {
+        let disc = b * b - 4.0 * a * c;
+        if disc < 0.0 {
+            return None;
+        }
+        let q = disc.sqrt();
+        ((-b - q) / (2.0 * a), (-b + q) / (2.0 * a))
+    };
+    if uh.abs() < 1e-9 {
+        if mh < 0.0 || mh > length {
+            return None;
+        }
+    } else {
+        let (mut c0, mut c1) = (-mh / uh, (length - mh) / uh);
+        if c0 > c1 {
+            std::mem::swap(&mut c0, &mut c1);
+        }
+        t0 = t0.max(c0);
+        t1 = t1.min(c1);
+    }
+    if t0 > t1 {
+        return None;
+    }
+    [t0, t1].into_iter().find(|&t| t > 0.0 && t < l)
+}
+
+/// The exact rectangle crossing (fraction in [0, 1], in-plane coordinates in [0, extent]); the
+/// plane normal is axes[2], the in-plane axes axes[0] and axes[1].
+fn rect_fraction(a: Vec3, c: Vec3, origin: Vec3, axes: [Vec3; 3], extents: [f32; 3]) -> Option<f32> {
+    let n = axes[2];
+    let (sa, sc) = (dot(n, sub(a, origin)), dot(n, sub(c, origin)));
+    if sa == sc {
+        return None;
+    }
+    let t = sa / (sa - sc);
+    if !(0.0..=1.0).contains(&t) {
+        return None;
+    }
+    let x = sub(add(a, scale(sub(c, a), t)), origin);
+    let within = |u: f32, e: f32| u >= e.min(0.0) && u <= e.max(0.0);
+    (within(dot(axes[1], x), extents[1]) && within(dot(axes[0], x), extents[0])).then_some(t)
+}
+
+/// The box ray test: the smallest fraction of the five faces the segment crosses (the four sides
+/// and the bottom; never the top), after the ball prefilter of 20 x the largest extent.
+fn box_fraction(s: Vec3, e: Vec3, b: &BoxShape) -> Option<f32> {
+    let biggest = b.extents.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let v = sub(e, s);
+    let k = (dot(sub(b.origin, s), v) / dot(v, v).max(1e-12)).clamp(0.0, 1.0);
+    if len(sub(add(s, scale(v, k)), b.origin)) >= 20.0 * biggest {
+        return None;
+    }
+    // (axis index, high face): +-B, +-A and the bottom (V = 0).
+    let faces = [(2usize, true), (2, false), (1, true), (1, false), (0, false)];
+    let mut best: Option<f32> = None;
+    for (k, high) in faces {
+        let n = b.axes[k];
+        let o = if high { add(b.origin, scale(n, b.extents[k])) } else { b.origin };
+        let others: Vec<usize> = (0..3).filter(|&j| j != k).collect();
+        let axes = [b.axes[others[0]], b.axes[others[1]], n];
+        let extents = [b.extents[others[0]], b.extents[others[1]], 0.0];
+        if let Some(t) = rect_fraction(s, e, o, axes, extents) {
+            best = Some(best.map_or(t, |m| m.min(t)));
+        }
+    }
+    best
+}
+
+/// The occlusion clip (SPEC-0027 Camera on world entry, Occlusion clip): the eye is pulled along
+/// the line toward the focus by each primitive in order, each seeing the eye left by the one
+/// before. Frame records by the face test; spheres by three parallel rays 1.5 apart; cylinders
+/// and trunks as capped cylinders (within 50 horizontally of the eye); flat rectangles by the
+/// exact rectangle crossing from the focus lowered by |V.y| (the zero nudge omitted); boxes by
+/// the first of five faces entered. The rounds and boxes start from S = the focus lowered by
+/// 1.0. Not built: the wall-face groups and the plate pool.
+pub fn occlusion_clip(eye: Vec3, focus: Vec3, prims: &[EyePrim]) -> Vec3 {
+    let mut e = eye;
+    let down = [focus[0], focus[1] - 1.0, focus[2]];
+    let round = |e: Vec3, hit: &dyn Fn(Vec3, Vec3, f32) -> Option<f32>| -> Option<Vec3> {
+        let v = sub(e, down);
+        let l = len(v);
+        if l <= 0.0 {
+            return None;
+        }
+        let u = scale(v, 1.0 / l);
+        hit(down, u, l).map(|t| add(down, scale(u, t - 0.05)))
+    };
+    let near = |e: Vec3, q: Vec3| (q[0] - e[0]).powi(2) + (q[2] - e[2]).powi(2) < 2500.0;
+    for p in prims {
+        let moved = match *p {
+            EyePrim::Wall(w) => clip_face(e, focus, &w),
+            EyePrim::Sphere { centre, radius } => round(e, &|s, u, l| {
+                let side = scale(unit([-u[2], 0.0, u[0]]), 1.5);
+                [s, add(s, side), sub(s, side)].into_iter().find_map(|o| ray_sphere(o, u, l, centre, radius))
+            }),
+            EyePrim::Cylinder { base, axis, length, radius } if near(e, base) => {
+                round(e, &|s, u, l| ray_cylinder(s, u, l, base, unit(axis), length, radius))
+            }
+            EyePrim::Trunk { base, length, radius } if near(e, base) => {
+                round(e, &|s, u, l| ray_cylinder(s, u, l, base, [0.0, 1.0, 0.0], length, radius))
+            }
+            EyePrim::Panel { origin, axes, extents } => {
+                let s = [focus[0], focus[1] - axes[0][1].abs(), focus[2]];
+                let shifted = sub(e, scale(axes[2], 0.05));
+                rect_fraction(s, shifted, origin, axes, extents).map(|t| add(s, scale(sub(e, s), t)))
+            }
+            EyePrim::Box(b) => box_fraction(down, e, &b).map(|t| add(down, scale(sub(e, down), t))),
+            _ => None,
+        };
+        if let Some(m) = moved {
+            e = m;
+        }
+    }
+    e
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_face_vectors() {
+        // SPEC-0027 Test vectors for the clip: plane z = 0, run x 0 to 40, top 20, depth 20.
+        let w = wall_z0();
+        let f = [10.0, 5.0, 8.0];
+        let z = |e: Vec3, f: Vec3| clip_face(e, f, &w).map(|p| p[2]);
+        assert!((z([10.0, 5.0, 0.5], f).unwrap() - 1.08357).abs() < 1e-4);
+        assert!((z([10.0, 5.0, -3.0], f).unwrap() - 0.77207).abs() < 1e-4);
+        assert!((z([10.0, 5.0, 0.0], f).unwrap() - 1.02452).abs() < 1e-4);
+        assert!(z([10.0, 5.0, 2.0], f).is_none());
+        assert_eq!(clip_face([10.0, 5.0, 0.3], [10.0, 5.0, 1.2], &w), Some([10.0, 5.0, 1.2]));
+        assert!((z([10.0, 5.0, 1.0], [10.0, 5.0, 3.5]).unwrap() - 1.11905).abs() < 1e-4);
+        assert!(z([50.0, 5.0, -3.0], [50.0, 5.0, 8.0]).is_none());
+        // Top cut: true top 20, D = 120.
+        let deep = WallEdge { height: 120.0, top: [0.0, 1.0, 0.0, 100.0], ..w };
+        assert!(clip_face([10.0, 19.6, -3.0], [10.0, 19.6, 8.0], &deep).is_some());
+        assert!(clip_face([10.0, 19.9, -3.0], [10.0, 19.9, 8.0], &deep).is_none());
+        // Doorway: A x 0 to 10 and B x 14 to 24.
+        let a = WallEdge { length: 10.0, ..w };
+        let b = WallEdge { run: [1.0, 0.0, 0.0, -14.0], ..a };
+        let door = [EyePrim::Wall(a), EyePrim::Wall(b)];
+        assert_eq!(occlusion_clip([12.0, 5.0, -3.0], [12.0, 5.0, 8.0], &door), [12.0, 5.0, -3.0]);
+        let e = occlusion_clip([9.0, 5.0, -3.0], [12.0, 5.0, 8.0], &door);
+        assert!((e[0] - 10.02875).abs() < 1e-3 && (e[2] - 0.77207).abs() < 1e-4, "{e:?}");
+    }
+
+    #[test]
+    fn clip_rectangle_box_and_trunk_vectors() {
+        let f = [10.0, 5.0, 8.0];
+        // Rectangle in z = 0 (normal +z, V vertical): eye (10, 4.72398, 0.03620).
+        let axes = [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+        let panel = EyePrim::Panel { origin: [0.0, -50.0, 0.0], axes, extents: [100.0, 40.0, 0.0] };
+        let e = occlusion_clip([10.0, 5.0, -3.0], f, &[panel]);
+        assert!((e[1] - 4.72398).abs() < 1e-4 && (e[2] - 0.03620).abs() < 1e-4, "{e:?}");
+        // Box x 0 to 4, z 0 to 4, y 0 to 6: eye (2, 4.18182, 4.0).
+        let b = BoxShape { origin: [0.0; 3], axes, extents: [6.0, 4.0, 4.0] };
+        let e = occlusion_clip([2.0, 4.5, -3.0], [2.0, 5.0, 8.0], &[EyePrim::Box(b)]);
+        assert!((e[1] - 4.18182).abs() < 1e-4 && (e[2] - 4.0).abs() < 1e-4, "{e:?}");
+        // Trunk: eye (-20, 45, 0), focus (20, 45, 0), base y 40, radius 4.95, height 25: blocked.
+        let t = EyePrim::Trunk { base: [0.0, 40.0, 0.0], length: 25.0, radius: 4.95 };
+        assert_ne!(occlusion_clip([-20.0, 45.0, 0.0], [20.0, 45.0, 0.0], &[t]), [-20.0, 45.0, 0.0]);
+        // 55 away horizontally: skipped.
+        assert_eq!(occlusion_clip([-55.0, 45.0, 0.0], [20.0, 45.0, 0.0], &[t]), [-55.0, 45.0, 0.0]);
+    }
 
     fn ctx<'a>(clear: &'a dyn Fn(Vec3, Vec3) -> bool, moving: bool) -> EyeCtx<'a> {
         EyeCtx { focus: [0.0, 3.5, 20.0], forward: [0.0, 0.0, 1.0], first: [1.0, 0.0, 0.0], moving, hold: false, heading: [0.0; 3], clear }

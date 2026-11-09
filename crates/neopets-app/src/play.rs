@@ -2280,11 +2280,8 @@ impl Play {
             None
         };
         let loco = Locomotion::spawn([spawn[0], y, spawn[2]], facing);
-        let camera = FollowCamera::attach(
-            &followed(&loco, &world),
-            |x, z, c| world.probe(x, z, c).height,
-            |e| push_eye(&world, e),
-        );
+        let first = followed(&loco, &world);
+        let camera = FollowCamera::attach(&first, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(&world, &[], first.focus(), e));
         let mut kinds = HashMap::new();
         kinds.insert(world.pack, world.kind);
         if let Some(o) = &other {
@@ -2903,8 +2900,9 @@ impl Play {
         // The traversal holds of the world left behind end with the arrival.
         (self.ladder, self.ledge, self.hang, self.climb, self.panel, self.hold) = (None, None, None, None, None, None);
         let f = followed(&self.loco, &self.world);
+        let trunks = self.near_trunks(self.camera.eye);
         let world = &self.world;
-        self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| push_eye(world, e));
+        self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
     }
 
     /// Make the other world current and land on its plane k (teleport landing).
@@ -2941,8 +2939,9 @@ impl Play {
             self.grab_cooldown = 60;
         }
         let f = followed(&self.loco, &self.world);
+        let trunks = self.near_trunks(self.camera.eye);
         let world = &self.world;
-        self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| push_eye(world, e));
+        self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
         self.fade = Default::default();
         self.bars = Default::default();
     }
@@ -3481,8 +3480,9 @@ impl Play {
                 Action::NormalCamera { distance, angle, release } => {
                     self.cut = None;
                     let f = followed(&self.loco, &self.world);
+                    let trunks = self.near_trunks(self.camera.eye);
                     let world = &self.world;
-                    self.camera.place_orbit(&f, distance, angle, |x, z, c| world.probe(x, z, c).height, |e| push_eye(world, e));
+                    self.camera.place_orbit(&f, distance, angle, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
                     if release {
                         self.held = false;
                         self.hero_walk = None;
@@ -3556,8 +3556,9 @@ impl Play {
                     // table places the camera at that locator (SPEC-0030 row 35).
                     self.cut = None;
                     let f = followed(&self.loco, &self.world);
+                    let trunks = self.near_trunks(self.camera.eye);
                     let world = &self.world;
-                    self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| push_eye(world, e));
+                    self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
                     if let Some((at, _)) = usize::try_from(preset).ok().and_then(|k| self.locator(pack, k)) {
                         self.camera.eye = at;
                         self.camera.reset();
@@ -10969,12 +10970,13 @@ impl Play {
             self.camera.blend_step(f, |e| push_eye(w, e));
         } else {
         let trunks = self.near_trunks(self.camera.eye);
+        let fol = followed(&self.loco, w);
         self.camera.update(
-            &followed(&self.loco, w),
+            &fol,
             pad,
             |x, z, c| w.probe(x, z, c).height,
-            |e| push_eye(w, e),
-            |e| eye_prims(w, &trunks, e),
+            |e| clip_eye(w, &trunks, fol.focus(), e),
+            |e| eye_prims(w, &trunks, e, false),
             |a, c| eye_line_clear(w, a, c),
         );
         }
@@ -20016,19 +20018,20 @@ fn eye_line_clear(world: &World, a: [f32; 3], c: [f32; 3]) -> bool {
 /// (kind 1 class 0 or 1 and not 2; kind 3 class 0 or 4 and not 5; zero-radius 4 and 7 class 0 or
 /// 5; boxes class 0 or 3), then the near tree trunks. This build's choices: list A is taken
 /// within 60 units horizontally of the eye instead of by grid cell, and the current world stands
-/// in for the camera's ground world.
-fn eye_prims(world: &World, trunks: &[([f32; 3], f32)], e: [f32; 3]) -> Vec<neopets_sim::eye_pass::EyePrim> {
+/// in for the camera's ground world. With `clip` the list serves the occlusion clip instead.
+fn eye_prims(world: &World, trunks: &[([f32; 3], f32)], e: [f32; 3], clip: bool) -> Vec<neopets_sim::eye_pass::EyePrim> {
     use neopets_sim::eye_pass::EyePrim;
     use neopets_sim::trigger::Shape;
     let mask = world.collis_mask;
-    let mut out: Vec<EyePrim> = world.blocks.iter().filter(|b| b.active != 0).map(|b| EyePrim::Box(b.shape())).collect();
+    // The clip has no movable-block source and reads no frame gate word.
+    let mut out: Vec<EyePrim> = if clip { Vec::new() } else { world.blocks.iter().filter(|b| b.active != 0).map(|b| EyePrim::Box(b.shape())).collect() };
     if let Some(g) = &world.ground {
         let mut frames = g.frames_at(e[0], e[2]);
         frames.extend(g.object_frames_world(e[0], e[2], &|o| world.owner_poses.get(&o).copied()).into_iter().map(|(_, f)| f));
         out.extend(
             frames
                 .into_iter()
-                .filter(|f| f.kind != 6 && (f.gate == 0 || f.gate & mask != 0))
+                .filter(|f| f.kind != 6 && (clip || f.gate == 0 || f.gate & mask != 0))
                 .map(|f| EyePrim::Wall(WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind })),
         );
     } else {
@@ -20056,6 +20059,12 @@ fn eye_prims(world: &World, trunks: &[([f32; 3], f32)], e: [f32; 3]) -> Vec<neop
     }
     out.extend(trunks.iter().map(|&(base, radius)| EyePrim::Trunk { base, length: 25.0, radius }));
     out
+}
+
+/// The occlusion clip of a placement or recentre (SPEC-0027 Camera on world entry): the eye
+/// pulled toward the hero's focus by the cell's frame records, list A and the near trunks.
+fn clip_eye(world: &World, trunks: &[([f32; 3], f32)], focus: [f32; 3], e: &mut [f32; 3]) {
+    *e = neopets_sim::eye_pass::occlusion_clip(*e, focus, &eye_prims(world, trunks, *e, true));
 }
 
 fn push_eye(world: &World, e: &mut [f32; 3]) {

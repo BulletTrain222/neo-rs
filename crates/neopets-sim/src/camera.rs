@@ -6,8 +6,8 @@
 //! recentre's line test use the caller's segment query (`clear`).
 //! The hold and the side lean frame the hero's target (the host's point). The eye pass after the
 //! spring (contact list, failure flag, stuck timer, side swing) is `eye_pass` over the host's
-//! primitives; the host's `push` stands in for the occlusion clip of the recentre commit and the
-//! pull-in setter. Not covered: the script override profile, the turn leans of states 0x12 and
+//! primitives; the host's `push` hook is the occlusion clip of the recentre commit and the
+//! pull-in setter (`eye_pass::occlusion_clip` in the app). Not covered: the script override profile, the turn leans of states 0x12 and
 //! 0x17, the camera visibility test, scripted plays, shakes, the fade ramp and modes other than 0.
 
 use crate::eye_pass::{eye_pass, EyeCtx, EyePrim, EyeState};
@@ -146,7 +146,7 @@ pub struct Followed {
 }
 
 impl Followed {
-    fn focus(&self) -> Vec3 {
+    pub fn focus(&self) -> Vec3 {
         add(self.position, [0.0, self.height, 0.0])
     }
 }
@@ -410,7 +410,16 @@ impl FollowCamera {
         let (k, damping) = (p.stiffness, p.damping());
         for i in 0..3 {
             self.velocity[i] += -k * (self.eye[i] - t[i]) - damping * self.velocity[i];
-            self.eye[i] += self.velocity[i];
+        }
+        // The contact-normal exception (SPEC-0027 Eye frozen against a remembered wall): with the
+        // hero idle and the stuck counter 0, the move is skipped when the velocity has a
+        // non-positive dot with any listed contact normal.
+        let v = self.velocity;
+        let pinned = !hero.moving
+            && self.eye_state.stuck == 0
+            && self.eye_state.contacts.iter().any(|(n, _)| n[0] * v[0] + n[1] * v[1] + n[2] * v[2] <= 0.0);
+        if !pinned {
+            self.eye = add(self.eye, v);
         }
         // Step 11: ground clearance, the eye pass with its stuck timer, R3 recentre.
         self.clear_ground(&ground);
