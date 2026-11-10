@@ -2921,11 +2921,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                     Action::WaitLoads,
                     wait(0.5),
                     in_,
-                    // The spec waits on this walk; this build's Seradar of set 6 stops short of
-                    // locator 41 (its walk never ends on the navmesh here), so the walk is not
-                    // waited on and the scene goes on while he walks (deviation, see STATUS).
-                    Action::WalkEntity { entity: 10, locator: 41, wait: false, orient: true, stop: 1.1 },
-                    wait(2.0),
+                    Action::WalkEntity { entity: 10, locator: 41, wait: true, orient: true, stop: 1.1 },
                     out_,
                     Action::ReturnCamera { preset: -1, release: true },
                     Action::LoadRegion { slot: 4, region: None },

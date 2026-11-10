@@ -8407,16 +8407,32 @@ impl Play {
             }
         }
         list.extend(self.world.blocks.iter().filter(|b| b.active != 0).map(|b| Obstacle { point: b.position, radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner: 0, both_lanes: false }));
-        list.extend(self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0).filter(|c| {
-            !c.enemy.as_ref().is_some_and(|e| e.is_dead() || e.hidden(c.anim.clip_state().action))
-        }).map(|c| Obstacle { point: c.position, radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner: c.walker.as_ref().map_or(0, |w| w.avoid_id), both_lanes: false }));
-        let list = std::sync::Arc::new(list);
+        // The character source is "the region's character list" (SPEC-0029 2a), read as the walker's own region
+        // load, as SPEC-0030 uses the words (this build's reading, asked as R-0279): a walker steers round the
+        // characters of its own region slot only, not those of the world's other regions.
+        let people: Vec<(u8, Obstacle)> = self
+            .characters
+            .iter()
+            .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0)
+            .filter(|c| !c.enemy.as_ref().is_some_and(|e| e.is_dead() || e.hidden(c.anim.clip_state().action)))
+            .map(|c| (c.slot, Obstacle { point: c.position, radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner: c.walker.as_ref().map_or(0, |w| w.avoid_id), both_lanes: false }))
+            .collect();
+        let mut by_slot: HashMap<u8, std::sync::Arc<Vec<Obstacle>>> = HashMap::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == pack) {
+            let slot = c.slot;
             if let Some(w) = c.walker.as_mut() {
-                w.avoid = list.clone();
+                w.avoid = by_slot
+                    .entry(slot)
+                    .or_insert_with(|| {
+                        let mut own = list.clone();
+                        own.extend(people.iter().filter(|p| p.0 == slot).map(|p| p.1));
+                        std::sync::Arc::new(own)
+                    })
+                    .clone();
             }
         }
-        self.avoid = list;
+        list.extend(people.into_iter().map(|p| p.1));
+        self.avoid = std::sync::Arc::new(list);
     }
 
     /// SPEC-0036 Aimed timed object, tick step 3: during the cloud's 6 s, with the countdown run out, every actor
