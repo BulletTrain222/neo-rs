@@ -13336,7 +13336,7 @@ impl Play {
         // SPEC-0038 Behavior 45: the attack manager's frame, before the enemies read their wait
         // flags; the capacity from the selected hero's weapon and body item.
         let h = self.hero_index.min(1);
-        let capacity = neopets_sim::attackmgr::capacity(h, self.equipment.entries[0][h], self.equipment.entries[2][h]);
+        let capacity = if self.cheats.swarm { f32::MAX } else { neopets_sim::attackmgr::capacity(h, self.equipment.entries[0][h], self.equipment.entries[2][h]) };
         let members: HashMap<u64, neopets_sim::attackmgr::Member> = self
             .characters
             .iter()
@@ -20725,6 +20725,9 @@ pub struct Cheats {
     pub noclip: bool,
     /// The developer menu's Hero Haste slider: 0 off, else 2x and up in half steps (`haste_factor`).
     pub haste: u8,
+    /// The developer menu's "every enemy attacks": the attack manager's capacity is unlimited, so no enemy waits
+    /// in line (SPEC-0038 Behavior 45 departed from on request; a test tool, not part of the game).
+    pub swarm: bool,
 }
 
 impl Cheats {

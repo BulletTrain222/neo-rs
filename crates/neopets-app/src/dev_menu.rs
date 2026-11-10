@@ -193,6 +193,7 @@ enum Entry {
     Weapon,
     Armour,
     Noclip,
+    Swarm,
     Haste,
     Extra,
     Group,
@@ -211,7 +212,7 @@ enum Entry {
 
 /// The menu's sections and their entries, in display order.
 const SECTIONS: [(&str, &[Entry]); 8] = [
-    ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Haste, Entry::Magic, Entry::Charge]),
+    ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Swarm, Entry::Haste, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
     ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group]),
     ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Wireframe, Entry::EventLog, Entry::HideHud]),
@@ -221,9 +222,10 @@ const SECTIONS: [(&str, &[Entry]); 8] = [
     ("COLLISION VIEW", &[Entry::Collision, Entry::CollisionLayer]),
 ];
 
-const ENTRIES: [Entry; 34] = [
+const ENTRIES: [Entry; 35] = [
     Entry::God,
     Entry::Noclip,
+    Entry::Swarm,
     Entry::Haste,
     Entry::Magic,
     Entry::Charge,
@@ -297,7 +299,7 @@ fn other_column(i: usize) -> usize {
 
 fn kind(e: Entry) -> Kind {
     match e {
-        Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam | Entry::Inspector | Entry::Collision | Entry::Wireframe | Entry::EventLog | Entry::HideHud => Kind::Toggle,
+        Entry::God | Entry::Noclip | Entry::Swarm | Entry::Magic | Entry::Charge | Entry::FreeCam | Entry::Inspector | Entry::Collision | Entry::Wireframe | Entry::EventLog | Entry::HideHud => Kind::Toggle,
         Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Armour | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight | Entry::CollisionLayer => Kind::Choice,
         _ => Kind::Action,
     }
@@ -880,6 +882,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             p.cheats.magic = !p.cheats.magic;
             format!("Infinite magic {}", on(p.cheats.magic))
         }
+        Entry::Swarm => {
+            p.cheats.swarm = !p.cheats.swarm;
+            format!("Every enemy attacks {}", on(p.cheats.swarm))
+        }
         Entry::Charge => {
             p.cheats.charge = !p.cheats.charge;
             format!("Infinite Mote charge {}", on(p.cheats.charge))
@@ -1097,6 +1103,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Noclip => ("No clip (walk through walls)".into(), on(p.cheats.noclip)),
         Entry::Haste => ("Hero Haste".into(), if p.cheats.haste == 0 { "OFF".to_string() } else { format!("{}x", p.cheats.haste_factor()) }),
         Entry::Magic => ("Infinite magic".into(), on(p.cheats.magic)),
+        Entry::Swarm => ("Every enemy attacks (no waiting in line)".into(), on(p.cheats.swarm)),
         Entry::Charge => ("Infinite Mote charge".into(), on(p.cheats.charge)),
         Entry::FreeCam => ("Free camera (F2)".into(), on(dev.free.is_some())),
         Entry::Speed => ("Game speed (apply: 1x)".into(), speed_label(dev.speed)),

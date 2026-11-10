@@ -4904,7 +4904,7 @@ fn play_trace(
     play.fight_target = std::env::var("NEOPETS_TRACE_TARGET").ok().filter(|n| !n.is_empty());
     // NEOPETS_TRACE_CHEATS="god,magic,charge": the developer menu's cheats from the start.
     if let Ok(v) = std::env::var("NEOPETS_TRACE_CHEATS") {
-        play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge"), noclip: v.contains("noclip"), haste: 0 };
+        play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge"), noclip: v.contains("noclip"), haste: 0, swarm: v.contains("swarm") };
     }
     // NEOPETS_TRACE_HASTE=k: the developer menu's Hero Haste slider at step k (17 is 10x; diagnostic).
     if let Some(k) = std::env::var("NEOPETS_TRACE_HASTE").ok().and_then(|v| v.parse::<u8>().ok()) {
@@ -6875,7 +6875,7 @@ fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     }
     if t == 5 {
         if let Ok(v) = std::env::var("NEOPETS_TRACE_CHEATS") {
-            play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge"), noclip: v.contains("noclip"), haste: play.cheats.haste };
+            play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge"), noclip: v.contains("noclip"), haste: play.cheats.haste, swarm: v.contains("swarm") };
         }
         if let Some(k) = std::env::var("NEOPETS_TRACE_HASTE").ok().and_then(|v| v.parse::<u8>().ok()) {
             play.cheats.haste = k;
