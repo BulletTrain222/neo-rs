@@ -272,6 +272,24 @@ pub fn spawn(
                 }
             }
         }
+        // SPEC-0003 TEST for a scrolling part (a waterfall, a water surface): its texels at or
+        // above 120 of 128 write depth in the original, so what is drawn after it and lies behind
+        // it stays hidden; the blended draw below writes none. A cut core that scrolls with it
+        // writes that depth (user report 105: the 1335 waterfalls showed the plants and lattices
+        // behind them in front).
+        if let (true, None, Some(t), Some(speed)) = (scrolling, env, p.texture, p.scroll) {
+            if std::env::var_os("NEOPETS_NO_SCROLL_CORE").is_none() && m.textures[t].image.rgba.chunks_exact(4).any(|q| q[3] >= 240) {
+                let core = materials.add(StandardMaterial { base_color_texture: Some(images.add(model_texture(&m.textures[t]))), unlit: true, alpha_mode: AlphaMode::Mask(120.0 / 128.0), cull_mode: None, ..default() });
+                let mut c = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(core), Transform::IDENTITY, part, b.sigs[i], UvScroll(speed), bevy::light::NotShadowCaster));
+                count += 1;
+                if let Some(z) = p.zone {
+                    c.insert(ZoneGate(pack, z));
+                }
+                if let Some((at, d1, _)) = p.cull {
+                    c.insert(DrawCull(Vec3::from(at), d1));
+                }
+            }
+        }
         let mut e = match env {
             // An environment-mapped pass 0 is drawn by the pass-1 shader with view-generated UVs
             // (pass1.rs), its texture shared per model texture.

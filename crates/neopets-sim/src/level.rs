@@ -2941,9 +2941,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0043 1335 Init: 235; the triggers (0 to 3 shared, 5 to 9; 4 does nothing); object
         // 1 (241 clear) or 0; the slot chooser (94: none; 93: set 2; 92: set 1 or 0 by 241, into
-        // slot 0; else set 7 into slot 1; region 1336 + set). The walk thread (entity 36 along
-        // group 0's points) is not built (the navmesh assignment runs in Update); the line-37
-        // thread runs in Update.
+        // slot 0; else set 7 into slot 1; region 1336 + set). The walk thread, Kekou's guided
+        // tour, runs last when 92 is clear (`tour_1335`); the navmesh assignment runs in Update and
+        // the line-37 thread in Update.
         1335 => {
             state.set(235, true);
             let mut v: Vec<Action> = (0..=3).map(|i| reg(i, 1)).collect();
@@ -2957,6 +2957,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.push(Action::LoadRegion { slot: 0, region: Some(1336 + f(241) as u32) });
             } else {
                 v.push(Action::LoadRegion { slot: 1, region: Some(1343) });
+            }
+            if !f(92) {
+                v.extend(tour_1335());
             }
             v
         }
@@ -3839,6 +3842,28 @@ fn chase_start(state: &mut GameState) -> Vec<Action> {
     state.remove_all(32);
     state.set(127, true);
     v.extend(chase(state));
+    v
+}
+
+/// SPEC-0043 1335 walk thread, the guided tour (started by Init while flag 92 is clear): Kekou
+/// (entity 36) set to run, then for each of the ten points of script group 0 (locators 4 to 13)
+/// a waited walk (stop 1.1) and a wait until the hero is within 54.0 of that point; line 21 after
+/// the first point; after the tenth, line 22, 10 s, line 23, then the walks back in reverse order
+/// with no distance test. It sets no flag. Not reproduced: the thread steps only while 1335 is
+/// the current world (here it also steps while the hero is in the transition world). User report
+/// 106: Kekou stood still and did not speak, as the thread was not built.
+fn tour_1335() -> Vec<Action> {
+    use Action::*;
+    let walk = |locator| WalkEntity { entity: 36, locator, wait: true, orient: true, stop: 1.1 };
+    let mut v = vec![WaitLoads, MoveType { entity: 36, kind: 1 }];
+    for locator in 4..=13 {
+        v.extend([walk(locator), WaitHeroNear { locator, distance: 54.0 }]);
+        if locator == 4 {
+            v.push(Message { line: 21 });
+        }
+    }
+    v.extend([Message { line: 22 }, wait(10.0), Message { line: 23 }]);
+    v.extend((4..=13).rev().map(walk));
     v
 }
 
