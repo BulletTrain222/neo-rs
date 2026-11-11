@@ -5336,7 +5336,7 @@ impl Play {
                     let p0 = w.apply(base);
                     let axis = unit(w.cols[1]);
                     let v = sub_v(s.position, p0);
-                    let t = (v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2]).clamp(0.0, length);
+                    let t = (v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2]).clamp(length.min(0.0), length.max(0.0));
                     let q = add(p0, scale(axis, t));
                     let d = sub_v(s.position, q);
                     (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= radius + s.radius
@@ -17663,7 +17663,9 @@ impl Play {
             let d: [f32; 3] = std::array::from_fn(|k| p[k] - b.origin[k]);
             let mut q = b.origin;
             for k in 0..3 {
-                let along = (d[0] * b.axes[k][0] + d[1] * b.axes[k][1] + d[2] * b.axes[k][2]).clamp(0.0, b.extents[k]);
+                // Extents are signed as stored (some disc boxes are negative), so the range is ordered.
+                let e = b.extents[k];
+                let along = (d[0] * b.axes[k][0] + d[1] * b.axes[k][1] + d[2] * b.axes[k][2]).clamp(e.min(0.0), e.max(0.0));
                 for i in 0..3 {
                     q[i] += along * b.axes[k][i];
                 }
@@ -17713,7 +17715,7 @@ impl Play {
                         if seen.insert(f.start.map(f32::to_bits)) {
                             let e = WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind };
                             let (a, s) = ((p[0] - f.start[0]) * f.face[0] + (p[2] - f.start[2]) * f.face[2], (p[0] - f.start[0]) * f.run[0] + (p[2] - f.start[2]) * f.run[2]);
-                            let along = (s - s.clamp(0.0, f.length)).abs();
+                            let along = (s - s.clamp(f.length.min(0.0), f.length.max(0.0))).abs();
                             rows.push((e.push(p, contact::HERO_RADIUS + 0.3).is_some(), a.hypot(along), format!("wall (type {}), {:.1} long, {:.1} tall", f.kind, f.length, f.height)));
                         }
                     }
