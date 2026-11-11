@@ -24,7 +24,7 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 21;
+pub const ROWS: usize = 22;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
@@ -90,11 +90,15 @@ pub struct DisplaySettings {
     pub dpad_hud: bool,
     /// Menu pictures carry their edges out to the window's sides (this build's option; off draws the original 512 x 448 frame).
     pub menu_edges: bool,
+    /// The neighbouring world drawn in full (this build's default) or gated by the disc's zone
+    /// tables as the original draws it (SPEC-0006 Zones), which hides some of its pieces from
+    /// parts of the current world (user reports 112, 114 and 116).
+    pub original_neighbour: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false }
     }
 }
 
@@ -136,6 +140,7 @@ impl DisplaySettings {
                 "button pictures" => s.xbox_buttons = v == "xbox",
                 "dpad hud" => s.dpad_hud = v != "false",
                 "menu edges" => s.menu_edges = v != "false",
+                "original neighbour" => s.original_neighbour = v == "true",
                 _ => {}
             }
         }
@@ -144,7 +149,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -165,7 +170,8 @@ impl DisplaySettings {
             self.movies,
             if self.xbox_buttons { "xbox" } else { "playstation" },
             self.dpad_hud,
-            self.menu_edges
+            self.menu_edges,
+            self.original_neighbour
         )
     }
 
@@ -275,6 +281,7 @@ impl DisplaySettings {
             ("Button pictures".into(), if self.xbox_buttons { "Xbox".into() } else { "PlayStation".into() }),
             ("D-pad HUD".into(), if self.dpad_hud { "On".into() } else { "Off".into() }),
             ("Menu edges".into(), if self.menu_edges { "Extended".into() } else { "Original".into() }),
+            ("Neighbour world".into(), if self.original_neighbour { "Original".into() } else { "Full".into() }),
         ]
     }
 
@@ -320,6 +327,7 @@ impl DisplaySettings {
             18 => self.xbox_buttons = !self.xbox_buttons,
             19 => self.dpad_hud = !self.dpad_hud,
             20 => self.menu_edges = !self.menu_edges,
+            21 => self.original_neighbour = !self.original_neighbour,
             _ => {}
         }
     }
@@ -584,6 +592,7 @@ const HELP: [&str; ROWS + 1] = [
     "The button pictures in boxes and menus: the game's PlayStation ones, or Xbox A, B, X and Y.",
     "The D-pad picture on the HUD during play. Off hides it; the D-pad still works.",
     "How menus fill a wide window. Extended carries each picture's edge colours out to the sides; Original keeps the 512 x 448 frame with bars.",
+    "Full always draws the whole of the next area beside you; Original hides some of its pieces from parts of this area, as the PS2 game does.",
     "Back to Options.",
 ];
 
@@ -749,7 +758,7 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(true), [17, 18, 19, 20]);
-        assert_eq!(page_rows(false), (0..17).collect::<Vec<_>>());
+        assert_eq!(page_rows(false), (0..17).chain([21]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));
         // 21:9 in a 16:9 window: letterbox 823 high.

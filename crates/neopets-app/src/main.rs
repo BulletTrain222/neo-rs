@@ -3168,7 +3168,8 @@ fn sync_zones(
     let no_zones = std::env::var_os("NEOPETS_NO_ZONES").is_some();
     for (e, g, s, cull, mut v) in &mut parts {
         // NEOPETS_NO_ZONES: every zone-gated part drawn (diagnostic).
-        let zone_ok = g.is_none_or(|g| no_zones || state.play.zone_visible(g.0, g.1));
+        // The neighbouring world's parts skip the zone gate unless its Original setting is on.
+        let zone_ok = g.is_none_or(|g| no_zones || (g.0 != current && !settings.original_neighbour) || state.play.zone_visible(g.0, g.1));
         // A repeat of one current part, or a part whose box the current parts' boxes cover by
         // 90 percent together (the sum of the covered parts, overlaps counted twice): 696's town
         // copy straddles several of 1023's parts.
