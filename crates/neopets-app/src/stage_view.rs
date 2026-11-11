@@ -167,6 +167,19 @@ fn tiles() -> Image {
 }
 
 /// Spawn the stage's floor, ring and centre mark, each tagged with `part`.
+/// The reed field's plain world: the same tiled floor and nothing else (no ring, marks, pillars
+/// or wall).
+pub fn spawn_floor(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>, part: impl Component + Copy) {
+    let floor = materials.add(StandardMaterial {
+        base_color_texture: Some(images.add(tiles())),
+        perceptual_roughness: 1.0,
+        reflectance: 0.1,
+        uv_transform: bevy::math::Affine2::from_scale(Vec2::splat(2.0 * HALF / (8.0 * TILE))),
+        ..default()
+    });
+    commands.spawn((Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(HALF)).mesh())), MeshMaterial3d(floor), Transform::IDENTITY, bevy::light::NotShadowCaster, part));
+}
+
 pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>, part: impl Component + Copy) {
     let floor = materials.add(StandardMaterial {
         base_color_texture: Some(images.add(tiles())),

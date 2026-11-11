@@ -27,8 +27,8 @@ pub fn models(disc: &mut Disc, index: &ArchiveIndex, play: &Play, pack: u32) -> 
     ids.extend(patches.iter().filter_map(|p| p.kind.far));
     ids.sort_unstable();
     ids.dedup();
-    // The test stage's plants borrow their models from a disc pack (the reed field: 909).
-    let source = if pack == crate::play::STAGE_PACK { play.stage_foliage.unwrap_or(pack) } else { pack };
+    // The test stage's plants borrow their models from a disc pack (the reed field's world: 909).
+    let source = if pack == crate::play::STAGE_PACK || pack == crate::play::FIELD_PACK { play.stage_foliage.unwrap_or(pack) } else { pack };
     let bytes = index.read(disc, source)?;
     let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
     let mut shared: Option<(Vec<u8>, Vec<neopets_data::resource::Chunk>)> = None;

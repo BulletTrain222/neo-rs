@@ -13225,12 +13225,27 @@ impl Play {
     /// current in place of the loaded one, dropping that world, its characters, scenes and
     /// threads, and put the hero at the stage's origin facing +Z.
     pub fn enter_test_stage(&mut self) {
-        self.world = World::test_stage(STAGE_PACK);
-        // A plain stage has no plants (the reed field adds its own after this).
+        self.enter_flat(STAGE_PACK);
+    }
+
+    /// Make a flat world of this build current (the test stage, or the reed field's plain
+    /// world), dropping the loaded world, its characters, scenes and threads, and put the hero at
+    /// its origin facing +Z.
+    fn enter_flat(&mut self, pack: u32) {
+        self.world = World::test_stage(pack);
+        // The reed field is a plain world of its own: no arena wall and no pillars.
+        if pack == FIELD_PACK {
+            self.world.boxes.clear();
+            self.world.all_boxes.clear();
+            self.world.push_spheres.clear();
+            self.world.all_spheres.clear();
+        }
+        // A flat world has no plants (the reed field adds its own after this).
         self.foliage.remove(&STAGE_PACK);
+        self.foliage.remove(&FIELD_PACK);
         self.stage_foliage = None;
         self.other = None;
-        self.kinds.insert(STAGE_PACK, Kind::Exterior);
+        self.kinds.insert(pack, Kind::Exterior);
         self.state.reset_levels();
         self.threads.clear();
         self.characters.clear();
@@ -13238,42 +13253,38 @@ impl Play {
         // A fade or letterbox the dropped world's scene had started would never be undone.
         self.fade = Default::default();
         self.bars = Default::default();
-        // The stage has no region of its own to load.
-        self.slot_regions.insert((STAGE_PACK, EMBEDDED_SLOT), STAGE_PACK);
+        // The flat world has no region of its own to load.
+        self.slot_regions.insert((pack, EMBEDDED_SLOT), pack);
         self.arrive(([0.0; 3], [0.0, 0.0, 1.0]));
         self.activated();
     }
 
-    /// Developer menu: the reed field, the flat test stage covered in standing reeds (this
-    /// build's own test world, not the original's). The reeds are the disc's own (foliage key 8,
-    /// SPEC-0060 Behavior 9: models 202 and 203), borrowed from pack 909, which registers them;
-    /// they bend, are cut and drop as in play. They stand on a 3-unit grid with a small jitter,
-    /// a random yaw and the key's scale range, inside the stage wall (radius 47), with a clearing
-    /// of radius 6 at the centre where the hero starts and none inside the stone pillars, in 20 by
-    /// 20 patches. NEOPETS_REED_FIELD=1 starts the game there.
+    /// Developer menu: the reed field, a plain flat world of this build's own (not the
+    /// original's; no wall, pillars or arena marks) covered in standing reeds. The reeds are the
+    /// disc's own (foliage key 8, SPEC-0060 Behavior 9: models 202 and 203), borrowed from pack
+    /// 909, which registers them; they bend, are cut and drop as in play. They stand on a 3-unit
+    /// grid with a jitter of 0.6, a random yaw and the key's scale range over a square 160 units
+    /// across, with a clearing of radius 6 at the centre where the hero starts, in 20 by 20
+    /// patches. NEOPETS_REED_FIELD=1 starts the game there.
     pub fn enter_reed_field(&mut self) -> String {
         use neopets_sim::foliage as fo;
-        self.enter_test_stage();
+        self.enter_flat(FIELD_PACK);
         let Some(kind) = fo::kind(8) else { return "No reed kind".into() };
         self.stage_foliage = Some(909);
-        let mut rng = neopets_sim::rng::Rng::seeded(STAGE_PACK);
+        let mut rng = neopets_sim::rng::Rng::seeded(FIELD_PACK);
         let mut patches = Vec::new();
-        let (step, wall, clear) = (3.0f32, 47.0f32, 6.0f32);
-        // Not inside the stage's storm-stone pillars.
-        let rocks = crate::stage_view::rock_spheres();
-        let mut x0 = -wall;
-        while x0 < wall {
-            let mut z0 = -wall;
-            while z0 < wall {
+        let (step, half, clear) = (3.0f32, 80.0f32, 6.0f32);
+        let mut x0 = -half;
+        while x0 < half {
+            let mut z0 = -half;
+            while z0 < half {
                 let mut plants = Vec::new();
                 let mut x = x0;
                 while x < x0 + 20.0 {
                     let mut z = z0;
                     while z < z0 + 20.0 {
                         let (px, pz) = (x + rng.frange(-0.6, 0.6), z + rng.frange(-0.6, 0.6));
-                        let r = px.hypot(pz);
-                        let in_rock = rocks.iter().any(|(c, rad)| (px - c[0]).hypot(pz - c[2]) < rad + 1.5);
-                        if r < wall && r > clear && !in_rock {
+                        if px.hypot(pz) > clear {
                             let yaw = rng.frange(-std::f32::consts::PI, std::f32::consts::PI);
                             let scale = rng.frange(kind.s0, fo::scale_max(&kind));
                             plants.push(fo::Placed { position: [px, 0.0, pz], yaw, scale, colour: [128, 128, 128, 128] });
@@ -13291,8 +13302,8 @@ impl Play {
             x0 += 20.0;
         }
         let n: usize = patches.iter().map(|p| p.plants.len()).sum();
-        self.foliage.insert(STAGE_PACK, patches);
-        format!("Reed field: {n} reeds on the flat test stage")
+        self.foliage.insert(FIELD_PACK, patches);
+        format!("Reed field: {n} reeds on a plain flat world")
     }
 
     /// Whether the current world is the developer test stage.
@@ -20877,6 +20888,8 @@ pub const START_STAGES: [&[u16]; 9] = [&[], &[0], &[0, 1], &[0, 1, 2], &[4], &[4
 /// The fights. Act 1 fights take the enlistment gear of step 7 (sword 99, armour 120).
 /// The developer test stage's pack number (none on the disc uses it).
 pub const STAGE_PACK: u32 = 90_000;
+/// The reed field's plain flat world (this build's own, not a disc pack).
+pub const FIELD_PACK: u32 = 90_001;
 
 pub const BOSSES: &[BossStart] = &[
     // Step 9: the Act 1 Juppie fight is due with 145 set and 82 and 83 clear; trigger 0.

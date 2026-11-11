@@ -2469,6 +2469,7 @@ fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, par
                 WorldPart::Foliage(_) => "foliage",
                 WorldPart::Objects(..) => "objects",
                 WorldPart::Stage => "stage",
+                WorldPart::Field => "field",
                 WorldPart::MaskTree(..) => "mask tree",
             }).or_else(|| chars.contains(x).then_some("characters"))
         });
@@ -2498,6 +2499,8 @@ enum WorldPart {
     Objects(u32, u32),
     /// The developer test stage's floor and ring (stage_view.rs; this build's own art).
     Stage,
+    /// The reed field's plain floor (stage_view.rs; this build's own art).
+    Field,
     /// Pack 1299's display node 401 (the role-401 tree of its type-8 container), drawn with the
     /// looping-door puzzle's own mask word, not the display word or the story layers
     /// (SPEC-0046 The pack 1299 mask tree; SPEC-0028).
@@ -2623,7 +2626,9 @@ fn sync_worlds(
     }
     // The test stage has no disc scene: its own floor under the default sky dome.
     if p.on_test_stage() {
-        want = vec![WorldPart::Stage, WorldPart::Dome(neopets_data::area::dome_for_slot(None))];
+        // The reed field's world is a plain floor; the test stage has the arena.
+        let floor = if p.world.pack == play::FIELD_PACK { WorldPart::Field } else { WorldPart::Stage };
+        want = vec![floor, WorldPart::Dome(neopets_data::area::dome_for_slot(None))];
         // The reed field's plants.
         if p.foliage.get(&p.world.pack).is_some_and(|v| !v.is_empty()) && !no_foliage {
             want.push(WorldPart::Foliage(p.world.pack));
@@ -2767,6 +2772,10 @@ fn sync_worlds(
             stage_view::spawn(&mut commands, &mut meshes, &mut materials, &mut images, *part);
             continue;
         }
+        if let WorldPart::Field = *part {
+            stage_view::spawn_floor(&mut commands, &mut meshes, &mut materials, &mut images, *part);
+            continue;
+        }
         if let WorldPart::Foliage(pack) = *part {
             let _load = crate::perf::span("load:foliage");
             match foliage_view::models(disc, index, p, pack) {
@@ -2832,7 +2841,7 @@ fn sync_worlds(
                 }
                 Ok((!data.parts.is_empty()).then_some(data))
             }),
-            WorldPart::Foliage(_) | WorldPart::Objects(..) | WorldPart::Stage => Ok(None),
+            WorldPart::Foliage(_) | WorldPart::Objects(..) | WorldPart::Stage | WorldPart::Field => Ok(None),
         };
         match model {
             // A scene is kept and spawned below, merged (scene_merge.rs), once the twins of the
