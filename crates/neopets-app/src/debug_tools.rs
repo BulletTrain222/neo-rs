@@ -227,7 +227,9 @@ pub fn save_report(
     let Some(state) = state else { return };
     let p = &state.play;
     let root = std::path::Path::new("private/reports");
-    let n = std::fs::read_dir(root).map_or(0, |r| r.count()) + 1;
+    // One past the highest numbered folder, so a removed folder never makes a new report land on
+    // an old one.
+    let n = std::fs::read_dir(root).map_or(0, |r| r.flatten().filter_map(|e| e.file_name().to_str()?.parse::<usize>().ok()).max().unwrap_or(0)) + 1;
     let dir = root.join(format!("{n:03}"));
     if let Err(e) = std::fs::create_dir_all(&dir) {
         error!("Bug report: could not make {}: {e}", dir.display());
