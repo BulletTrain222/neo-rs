@@ -5351,6 +5351,13 @@ impl Play {
                 ((touches && body.is_none()) || cloud).then_some(i)
             });
             let Some(i) = hit else {
+                // SPEC-0048 Break routes, Roberta's shot: the first intact breakable whose volume
+                // the shot sphere meets takes the contact rule, once per shot (the query consumes
+                // its active flag), and the shot is disarmed. It had no breakable route, so shots
+                // passed through barrels (user report 110).
+                if self.shot_breakable(s.position, s.radius, s.element) {
+                    continue;
+                }
                 // SPEC-0036 World contact: the first solid collider of the cell disarms the shot
                 // (its surface byte picks the cue, at the collider); then the cell's surface
                 // records (byte +0x4C not 6) met by the shot's path, the last match's byte
@@ -10570,9 +10577,14 @@ impl Play {
                 }
             }
         }
-        // Volumes whose routine tests no object word fire for any actor body inside (SPEC-0043
-        // 1335 triggers 8 and 9), with object 0.
-        let any_actor = level::actor_triggers(pack);
+        // Volumes whose routine tests no object word (SPEC-0043 1335 triggers 8 and 9) still fire
+        // only for bodies that reach them: SPEC-0030 Fire paths has NPCs and enemies test only
+        // cell list B and the placed objects' volumes, never these world volumes, so the hero's
+        // body and shots (above) fire them and no other character does (R-0282). Firing them for
+        // every body let Seradar, seated at the centre of trigger 8 and inside trigger 9, start
+        // movie 21 the moment the rest set flag 236 (user report 107). NEOPETS_ACTOR_TRIGGERS
+        // brings back the any-body reading (diagnostic).
+        let any_actor = if std::env::var_os("NEOPETS_ACTOR_TRIGGERS").is_some() { level::actor_triggers(pack) } else { &[] };
         if !any_actor.is_empty() {
             let bodies: Vec<[f32; 3]> = self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none()).map(|c| c.position).collect();
             for v in self.world.volumes.iter().filter(|v| any_actor.contains(&v.index)) {
@@ -17964,6 +17976,42 @@ impl Play {
 
     /// The hero route's contact rule on every active breakable the test picks (SPEC-0036 Contact
     /// routines and cues; SPEC-0048 Element gate on hits).
+    /// SPEC-0048 Break routes for Roberta's shot (step 3): the first intact breakable (state 1 or
+    /// 3, with a volume) that the sphere at `at` of radius `r` meets, by its volume kind (1 a
+    /// sphere, 3 a flat-ended cylinder, 4 or 7 the box; kind 2 is not built), then the element
+    /// gate with the shot's own kind (the entry's class 0, the shot's kind, or 7), the hook, the
+    /// break from state 1 with the push from the shooter, and cue 144. Returns whether the shot
+    /// met one (then it is used up, whether or not the gate passed).
+    fn shot_breakable(&mut self, at: [f32; 3], r: f32, element: i32) -> bool {
+        let meets = |v: &neopets_data::world::Volume| match v.kind {
+            1 => {
+                let d = sub_v(at, v.centre);
+                (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= v.radius + r
+            }
+            3 => {
+                let cyl = neopets_sim::combat::Cylinder::from_base(v.centre, unit(v.axis), v.radius + r, v.height);
+                neopets_sim::combat::segment_meets(at, at, &cyl)
+            }
+            4 | 7 => segment_box(at, at, v.centre, v.axes, v.extents),
+            _ => false,
+        };
+        let Some(v) = self.world.breakables.iter().filter(|b| matches!(b.state, 1 | 3)).filter_map(|b| b.volume).find(|v| meets(v)) else { return false };
+        let e_t = self.world.breakables.iter().find(|b| b.volume == Some(v)).map_or(0, |b| b.element as i32);
+        if std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
+            println!("      shot meets breakable volume kind {} at {:?}: element {e_t} against shot kind {element}", v.kind, v.centre.map(|c| c.round()));
+        }
+        if !(e_t == 0 || e_t == 7 || e_t == element) {
+            return true;
+        }
+        // The gate is passed: the contact routine runs on that entry alone, as a family of the
+        // entry's own class (so the shared gate passes it), with the cue the shot always plays.
+        self.break_family = Some(e_t);
+        self.breakable_contact(|w| *w == v);
+        self.break_family = None;
+        self.sound.play(neopets_sim::sound::MAIN, 144, neopets_sim::sound::Play { emitter: Some(v.centre), ..Default::default() });
+        true
+    }
+
     fn breakable_contact(&mut self, test: impl Fn(&neopets_data::world::Volume) -> bool) {
         // SPEC-0048 Break routes step 3: an attack contact gives the pieces their push.
         self.break_from = Some(self.loco.position());

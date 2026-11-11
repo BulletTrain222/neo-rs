@@ -3158,8 +3158,10 @@ fn sync_zones(
     // NEOPETS_TRACE_VIS: parts whose visibility changes, counted and printed every 300 frames
     // (diagnostic, for flicker).
     let trace = std::env::var_os("NEOPETS_TRACE_VIS").is_some();
+    let no_zones = std::env::var_os("NEOPETS_NO_ZONES").is_some();
     for (e, g, s, cull, mut v) in &mut parts {
-        let zone_ok = g.is_none_or(|g| state.play.zone_visible(g.0, g.1));
+        // NEOPETS_NO_ZONES: every zone-gated part drawn (diagnostic).
+        let zone_ok = g.is_none_or(|g| no_zones || state.play.zone_visible(g.0, g.1));
         // A repeat of one current part, or a part whose box the current parts' boxes cover by
         // 90 percent together (the sum of the covered parts, overlaps counted twice): 696's town
         // copy straddles several of 1023's parts.
@@ -3882,9 +3884,12 @@ struct AtmosOverlay;
 /// the purple haze of the gated zones was missing).
 fn sync_atmos_overlay(mut commands: Commands, state: Option<Res<PlayState>>, mut overlays: Query<(&mut BackgroundColor, &mut Visibility), With<AtmosOverlay>>) {
     let out = state.as_ref().map(|s| s.play.atmos_out);
-    // Only while a gated zone gives a blend factor above 0 (the story's haze): an ungated zone's
-    // overlay, such as Meridell's warm one, is not drawn (the user's choice).
-    let byte = out.map_or(0.0, |o| if o.blend > 0.0 { o.b[3].round().clamp(0.0, 255.0) * o.blend.min(1.0) } else { 0.0 });
+    // Drawn whenever vector B's alpha byte is above 0 (SPEC-0046 step 10, draw 2). A gated zone
+    // with its blend factor above 0 keeps the user-tuned weight below; an ungated zone (blend
+    // 0, such as the 1335 palace's (160, 84, 171) at 16: user report 108, the purple was
+    // missing) takes the spec's weight alpha / 128. It had been left out by the user's choice
+    // for Meridell's warm (255, 214, 128) at 10, when its weight was far stronger.
+    let byte = out.map_or(0.0, |o| o.b[3].round().clamp(0.0, 255.0));
     // The weight is 1 - Ad with Ad the frame alpha an opaque draw leaves, 0x80, normalized over
     // 255: about 0.5 (the source alpha byte is only the gate). NEOPETS_ATMOS_WEIGHT overrides it
     // (diagnostic). The alpha-byte / 128 weight (0.22) left the land with no haze (user's report 72).
@@ -3896,7 +3901,12 @@ fn sync_atmos_overlay(mut commands: Commands, state: Option<Res<PlayState>>, mut
     // 1 - (1 - w)^2.2 (about 0.78 for w = 0.5).
     // The user found the full gamma-space weight (0.78) too strong and 0.5 too weak; this build
     // uses the exponent 1.4 (about 0.62), between the two (R-0260).
-    let wl = 1.0 - (1.0 - (w * gate).clamp(0.0, 1.0)).powf(1.4);
+    // The ungated weight a = alpha / 128 is a gamma-space blend toward B. The UI blends in linear
+    // light, where a brighter overlay lifts dark pixels far more (the 1344 cellar went solid
+    // purple); 0.6 a matches the gamma-space result for mid-tones (encoded 50 to 100) over
+    // (160, 84, 171): a = 0.125 gives about 0.075.
+    let spec_w = out.map_or(0.0, |o| 0.6 * o.b[3].clamp(0.0, 128.0) / 128.0);
+    let wl = if gate > 0.0 { 1.0 - (1.0 - (w * gate).clamp(0.0, 1.0)).powf(1.4) } else { spec_w };
     let colour = out.map(|o| Color::srgba(o.b[0].clamp(0.0, 255.0) / 255.0, o.b[1].clamp(0.0, 255.0) / 255.0, o.b[2].clamp(0.0, 255.0) / 255.0, wl));
     match overlays.iter_mut().next() {
         Some((mut bg, mut vis)) => {
