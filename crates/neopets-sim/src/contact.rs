@@ -122,16 +122,24 @@ pub fn resolve_spheres(p: &mut Vec3, spheres: &[(Vec3, f32)]) -> bool {
 
 /// Push a point out of every box it is inside, in order, and report whether any pushed.
 pub fn resolve(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> bool {
-    let mut hit = false;
+    resolve_floor(p, boxes, r).0
+}
+
+/// `resolve`, also reporting whether a push was out of a top face whose normal (the box's V
+/// axis) has a vertical part above 0.9: the character's floor flag, so a hero stands on a box top
+/// (SPEC-0018 Zero-radius contact of a character, boxes of positive thickness).
+pub fn resolve_floor(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> (bool, bool) {
+    let (mut hit, mut floor) = (false, false);
     for b in boxes {
-        if let Some((_, n, dist)) = push(*p, b, r) {
+        if let Some((face, n, dist)) = push(*p, b, r) {
             for k in 0..3 {
                 p[k] += n[k] * dist;
             }
             hit = true;
+            floor |= face == 1 && n[1].abs() > 0.9;
         }
     }
-    hit
+    (hit, floor)
 }
 
 /// The slide response for a cylinder contact (SPEC-0018 Cylinders (kind 3) against the hero,
@@ -561,5 +569,17 @@ mod tests {
         flat.face = [0.0, 1.0, 0.0, 0.0];
         assert_eq!(flat.push([0.0, 0.5, 5.0], 1.175), None, "near-horizontal face");
         assert!((w.edge_height([0.0, 0.0, 0.0]) - 4.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn box_top_sets_floor() {
+        let b = BoxShape { origin: [0.0, 0.0, 0.0], axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [2.0, 4.0, 4.0] };
+        // Feet 0.05 under the top bound (2.0 - 0.1): the top gate pushes up, floor flag set.
+        let mut p = [2.0, 1.85, 2.0];
+        assert_eq!(resolve_floor(&mut p, &[b], HERO_RADIUS), (true, true));
+        assert!((p[1] - 1.9).abs() < 1e-5);
+        // A side push sets no floor flag.
+        let mut q = [-0.5, 1.0, 2.0];
+        assert_eq!(resolve_floor(&mut q, &[b], HERO_RADIUS), (true, false));
     }
 }

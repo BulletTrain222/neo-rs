@@ -13,6 +13,8 @@ pub const ROPE_GUN: u16 = 36;
 pub const DISTANCE: f32 = 10.0;
 /// The resting model scale (data word 0x2DD254).
 pub const SCALE: f32 = 0.3;
+/// The scale a change into mode 3 or 4 glides to (0.08 s from 2.0).
+pub const LOCK_SCALE: f32 = 0.2;
 
 /// One glide channel: the value moves to `target` over `left` seconds.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -71,11 +73,14 @@ pub struct AimView {
     pub scale: Glide,
     /// The colour vector's four lanes.
     pub colour: [Glide; 4],
+    /// The scale a change into mode 3 or 4 glides to: 0.2 in the spec; a host may hold the
+    /// marker larger while it is on a target (this build's choice).
+    pub lock_scale: f32,
 }
 
 impl Default for AimView {
     fn default() -> Self {
-        Self { mode: 0, active: false, mode_time: 0.0, time: 0.0, spin: Glide::new(0.0), scale: Glide::new(SCALE), colour: [Glide::new(0.0); 4] }
+        Self { mode: 0, active: false, mode_time: 0.0, time: 0.0, spin: Glide::new(0.0), scale: Glide::new(SCALE), colour: [Glide::new(0.0); 4], lock_scale: LOCK_SCALE }
     }
 }
 
@@ -89,7 +94,7 @@ impl AimView {
             self.mode = mode;
             self.mode_time = 0.0;
             if matches!(mode, 3 | 4) {
-                self.scale.start(2.0, 0.2, 0.08);
+                self.scale.start(2.0, self.lock_scale, 0.08);
                 let c = if mode == 3 { [0.4, 0.0, 0.0] } else { [0.0, 0.4, 0.0] };
                 for (k, lane) in self.colour.iter_mut().enumerate() {
                     let v = if k < 3 { c[k] } else { 0.1 };
@@ -168,6 +173,12 @@ mod tests {
             assert!((g - w).abs() < 1e-4, "{got:?}");
         }
         assert_eq!(v.rgba()[..3], [0.4, 0.0, 0.0]);
+        // A host's larger lock scale is held after the glide.
+        let mut w = AimView { lock_scale: 0.6, ..AimView::default() };
+        for _ in 0..8 {
+            w.step(DT, 3, false);
+        }
+        assert!((w.scale.value - 0.6).abs() < 1e-6);
         assert!((v.rgba()[3] - 1.0).abs() < 1e-6);
     }
 

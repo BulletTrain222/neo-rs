@@ -2457,7 +2457,9 @@ impl Play {
             attack: None,
             attack_latch: false,
             aim: Default::default(),
-            aim_view: Default::default(),
+            // The user's choice (not the spec's 0.2): the marker stays twice its resting size
+            // while it is on a target.
+            aim_view: neopets_sim::aimview::AimView { lock_scale: 0.6, ..Default::default() },
             rope: Default::default(),
             rope_hero: None,
             rope_y: 0.0,
@@ -4774,7 +4776,17 @@ impl Play {
         let Some(pool) = self.pools.get(&pack) else { return false };
         let slots: Vec<(usize, neopets_sim::items::WorldItem)> = pool.slots.iter().enumerate().filter_map(|(i, s)| Some((i, (*s)?))).collect();
         let cands: Vec<neopets_sim::shop::Candidate> = slots.iter().map(|(_, it)| neopets_sim::shop::Candidate { position: it.position, flag: it.flag, ready: it.ready() }).collect();
-        let Some(k) = neopets_sim::shop::buyable(&cands, self.pickup_point(), self.loco.facing) else { return false };
+        // The chooser's point is the hero's position (SPEC-0050 section 3 measures distance and
+        // facing "toward the item" from the hero; R-0281 asks which point). It was the pickup
+        // search point 2.0 ahead, which put an item close in front behind the point, so the
+        // facing test failed unless the hero stood exactly in line (user report 99).
+        // NEOPETS_TRACE_BUY (diagnostic): the stock and the pick every 30 ticks.
+        if std::env::var_os("NEOPETS_TRACE_BUY").is_some() && self.ticks % 30 == 0 {
+            let h = self.loco.position();
+            let list: Vec<String> = slots.iter().filter(|(_, it)| it.flag == 1).map(|(_, it)| format!("{} at {:.1},{:.1},{:.1} ({:.1} away)", it.id, it.position[0], it.position[1], it.position[2], (it.position[0] - h[0]).hypot(it.position[2] - h[2]))).collect();
+            println!("      buy tick {}: hero {:.1},{:.1} pick {:?} stock {list:?}", self.ticks, h[0], h[2], neopets_sim::shop::buyable(&cands, h, self.loco.facing).map(|k| slots[k].1.id));
+        }
+        let Some(k) = neopets_sim::shop::buyable(&cands, self.loco.position(), self.loco.facing) else { return false };
         let (i, it) = slots[k];
         self.buyable = Some(i);
         if !self.square_now {
@@ -11850,17 +11862,21 @@ impl Play {
                 }
                 // SPEC-0033 Behavior 13: the box push does nothing for a hero in state 21, 38 or 41.
                 let before = *p;
+                let mut box_floor = false;
                 if !noclip && !matches!(hero_state, 21 | 38 | 41) {
                     // SPEC-0018 Pack 1056 stairs: the plain push; with the true tilted ramp normal
-                    // the feet never enter the top gate (the build's R-0244 rule is gone).
-                    contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
+                    // the feet never enter the top gate (the build's R-0244 rule is gone). A top
+                    // face sets the floor flag, so a box top holds the hero (user report 100).
+                    box_floor = contact::resolve_floor(p, &world.boxes, contact::HERO_RADIUS).1;
                 }
                 // SPEC-0028 Character versus moving placed objects: into each object's rest frame,
                 // its boxes and spheres, the push back to world space.
                 for (pose, boxes, spheres) in &object_solids {
                     let local = rest_point(pose, *p);
                     let mut q = local;
-                    let hit = contact::resolve(&mut q, boxes, contact::HERO_RADIUS) | contact::resolve_spheres(&mut q, spheres);
+                    let (hit, top) = contact::resolve_floor(&mut q, boxes, contact::HERO_RADIUS);
+                    box_floor |= top && world_vector(pose, [0.0, 1.0, 0.0])[1] > 0.9;
+                    let hit = hit | contact::resolve_spheres(&mut q, spheres);
                     if hit {
                         let d = world_vector(pose, [q[0] - local[0], q[1] - local[1], q[2] - local[2]]);
                         for k in 0..3 {
@@ -11953,7 +11969,7 @@ impl Play {
                 if moved || c.floor || c.side_touch {
                     touched.set(true);
                 }
-                c.floor || on_top
+                c.floor || on_top || box_floor
             },
         );
         self.touched = touched.get();
