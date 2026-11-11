@@ -2624,6 +2624,10 @@ fn sync_worlds(
     // The test stage has no disc scene: its own floor under the default sky dome.
     if p.on_test_stage() {
         want = vec![WorldPart::Stage, WorldPart::Dome(neopets_data::area::dome_for_slot(None))];
+        // The reed field's plants.
+        if p.foliage.get(&p.world.pack).is_some_and(|v| !v.is_empty()) && !no_foliage {
+            want.push(WorldPart::Foliage(p.world.pack));
+        }
     }
     // NEOPETS_NO_OBJECTS / NEOPETS_NO_MASKTREE: those world parts left out (diagnostic).
     if std::env::var_os("NEOPETS_NO_OBJECTS").is_some() {
@@ -6689,6 +6693,11 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
             // NEOPETS_TRACE_ROBERTA=1: start as Roberta (diagnostic).
             if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
                 play.trace_select_hero(1);
+            }
+            // NEOPETS_REED_FIELD=1: start on the reed field (the developer menu's test world).
+            if std::env::var_os("NEOPETS_REED_FIELD").is_some() {
+                let line = play.enter_reed_field();
+                info!("{line}");
             }
             // The HUD's art: the front-end database and texture sheet of resource 532.
             match index.read(disc, neopets_data::frontend::RESOURCE).and_then(|b| neopets_data::frontend::Frontend::parse(&b)) {

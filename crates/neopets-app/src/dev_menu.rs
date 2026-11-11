@@ -209,13 +209,14 @@ enum Entry {
     EventLog,
     HideHud,
     AimMarker,
+    ReedField,
 }
 
 /// The menu's sections and their entries, in display order.
 const SECTIONS: [(&str, &[Entry]); 8] = [
     ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Swarm, Entry::Haste, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
-    ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group]),
+    ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group, Entry::ReedField]),
     ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Wireframe, Entry::EventLog, Entry::HideHud, Entry::AimMarker]),
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::Spawn, Entry::BossFight, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Armour, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints, Entry::Gallery]),
@@ -223,7 +224,7 @@ const SECTIONS: [(&str, &[Entry]); 8] = [
     ("COLLISION VIEW", &[Entry::Collision, Entry::CollisionLayer]),
 ];
 
-const ENTRIES: [Entry; 36] = [
+const ENTRIES: [Entry; 37] = [
     Entry::God,
     Entry::Noclip,
     Entry::Swarm,
@@ -237,6 +238,7 @@ const ENTRIES: [Entry; 36] = [
     Entry::Start,
     Entry::Extra,
     Entry::Group,
+    Entry::ReedField,
     Entry::Report,
     Entry::Inspector,
     Entry::Wireframe,
@@ -976,6 +978,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             String::new()
         }
         Entry::CloudBeast => p.dev_cloud_beast(),
+        Entry::ReedField => p.enter_reed_field(),
         Entry::BossFight => {
             let b = crate::play::BOSSES[dev.boss_at % crate::play::BOSSES.len()];
             dev.boss = Some(dev.boss_at % crate::play::BOSSES.len());
@@ -1131,6 +1134,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Hero => (format!("Switch hero  (now {})", if p.hero_index == 0 { "Tor" } else { "Roberta" }), String::new()),
         Entry::Kill => ("Defeat every enemy here".into(), String::new()),
         Entry::CloudBeast => ("Spawn the Cloud Beast here (cut boss)".into(), String::new()),
+        Entry::ReedField => ("Reed field (flat test world)".into(), String::new()),
         Entry::BossFight => {
             let n = crate::play::BOSSES.len();
             (format!("Boss fight: {}", crate::play::BOSSES[dev.boss_at % n].name), format!("{} of {n}", dev.boss_at % n + 1))

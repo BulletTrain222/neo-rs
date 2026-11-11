@@ -1888,6 +1888,8 @@ pub struct Play {
     overrides: HashMap<u64, neopets_sim::status::Override>,
     /// The resident worlds' foliage (SPEC-0060), by pack.
     pub foliage: HashMap<u32, Vec<LivePatch>>,
+    /// The disc pack whose foliage models the test stage's plants borrow (the reed field).
+    pub stage_foliage: Option<u32>,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
@@ -2454,6 +2456,7 @@ impl Play {
             displays: HashMap::new(),
             overrides: HashMap::new(),
             foliage: HashMap::new(),
+            stage_foliage: None,
             attack: None,
             attack_latch: false,
             aim: Default::default(),
@@ -13223,6 +13226,9 @@ impl Play {
     /// threads, and put the hero at the stage's origin facing +Z.
     pub fn enter_test_stage(&mut self) {
         self.world = World::test_stage(STAGE_PACK);
+        // A plain stage has no plants (the reed field adds its own after this).
+        self.foliage.remove(&STAGE_PACK);
+        self.stage_foliage = None;
         self.other = None;
         self.kinds.insert(STAGE_PACK, Kind::Exterior);
         self.state.reset_levels();
@@ -13236,6 +13242,57 @@ impl Play {
         self.slot_regions.insert((STAGE_PACK, EMBEDDED_SLOT), STAGE_PACK);
         self.arrive(([0.0; 3], [0.0, 0.0, 1.0]));
         self.activated();
+    }
+
+    /// Developer menu: the reed field, the flat test stage covered in standing reeds (this
+    /// build's own test world, not the original's). The reeds are the disc's own (foliage key 8,
+    /// SPEC-0060 Behavior 9: models 202 and 203), borrowed from pack 909, which registers them;
+    /// they bend, are cut and drop as in play. They stand on a 3-unit grid with a small jitter,
+    /// a random yaw and the key's scale range, inside the stage wall (radius 47), with a clearing
+    /// of radius 6 at the centre where the hero starts and none inside the stone pillars, in 20 by
+    /// 20 patches. NEOPETS_REED_FIELD=1 starts the game there.
+    pub fn enter_reed_field(&mut self) -> String {
+        use neopets_sim::foliage as fo;
+        self.enter_test_stage();
+        let Some(kind) = fo::kind(8) else { return "No reed kind".into() };
+        self.stage_foliage = Some(909);
+        let mut rng = neopets_sim::rng::Rng::seeded(STAGE_PACK);
+        let mut patches = Vec::new();
+        let (step, wall, clear) = (3.0f32, 47.0f32, 6.0f32);
+        // Not inside the stage's storm-stone pillars.
+        let rocks = crate::stage_view::rock_spheres();
+        let mut x0 = -wall;
+        while x0 < wall {
+            let mut z0 = -wall;
+            while z0 < wall {
+                let mut plants = Vec::new();
+                let mut x = x0;
+                while x < x0 + 20.0 {
+                    let mut z = z0;
+                    while z < z0 + 20.0 {
+                        let (px, pz) = (x + rng.frange(-0.6, 0.6), z + rng.frange(-0.6, 0.6));
+                        let r = px.hypot(pz);
+                        let in_rock = rocks.iter().any(|(c, rad)| (px - c[0]).hypot(pz - c[2]) < rad + 1.5);
+                        if r < wall && r > clear && !in_rock {
+                            let yaw = rng.frange(-std::f32::consts::PI, std::f32::consts::PI);
+                            let scale = rng.frange(kind.s0, fo::scale_max(&kind));
+                            plants.push(fo::Placed { position: [px, 0.0, pz], yaw, scale, colour: [128, 128, 128, 128] });
+                        }
+                        z += step;
+                    }
+                    x += step;
+                }
+                if !plants.is_empty() {
+                    let reeds = plants.iter().map(|q| fo::Reed::new(q.yaw)).collect();
+                    patches.push(LivePatch { kind, model: 202, centre: [x0 + 10.0, 0.0, z0 + 10.0], plants, bushes: Vec::new(), reeds, zone: 0, on: true, overrides: [0.0; 4] });
+                }
+                z0 += 20.0;
+            }
+            x0 += 20.0;
+        }
+        let n: usize = patches.iter().map(|p| p.plants.len()).sum();
+        self.foliage.insert(STAGE_PACK, patches);
+        format!("Reed field: {n} reeds on the flat test stage")
     }
 
     /// Whether the current world is the developer test stage.
