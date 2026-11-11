@@ -1434,6 +1434,8 @@ pub struct Play {
     /// The Rope Gun (SPEC-0036 Right-stick aim mode; SPEC-0033 State 27): the aim mode, the
     /// world's rope manager, state 27's phases and the right stick's converted Y this tick.
     pub aim: neopets_sim::rope::AimMode,
+    /// The aim-view marker object (SPEC-0033 section 23), drawn with a stand-in (R-0280).
+    pub aim_view: neopets_sim::aimview::AimView,
     pub rope: neopets_sim::rope::Rope,
     rope_hero: Option<neopets_sim::rope::RopeHero>,
     rope_y: f32,
@@ -2455,6 +2457,7 @@ impl Play {
             attack: None,
             attack_latch: false,
             aim: Default::default(),
+            aim_view: Default::default(),
             rope: Default::default(),
             rope_hero: None,
             rope_y: 0.0,
@@ -6238,7 +6241,9 @@ impl Play {
     fn edge_step(&mut self, input: &HeroInput) {
         // The grab cooldown (Behavior 20) the panel and ladder grabs share.
         self.grab_cooldown = self.grab_cooldown.saturating_sub(1);
-        if self.rope_step(input) {
+        let roped = self.rope_step(input);
+        self.aim_view_step();
+        if roped {
             return;
         }
         self.panel_step(input);
@@ -11172,6 +11177,11 @@ impl Play {
         }
         self.l1_held = input.guard;
         self.rope_y = -neopets_sim::camera::converter_a(pad.right_y);
+        // NEOPETS_TRACE_AIM=n (diagnostic): the right stick pushed up on tick n, starting aim mode;
+        // the aim view's mode changes are printed.
+        if std::env::var("NEOPETS_TRACE_AIM").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(self.ticks) {
+            self.rope_y = 87.5;
+        }
         self.ticks += 1;
         // The hit flashes run down one frame a tick (60 ticks a second).
         self.hero_flash = self.hero_flash.saturating_sub(1);
@@ -16979,6 +16989,62 @@ impl Play {
     /// attached (SPEC-0033 State 27).
     pub fn rope_line(&self) -> Option<([f32; 3], [f32; 3])> {
         (self.rope.state != neopets_sim::rope::RopeState::Idle && self.loco.state == neopets_sim::rope::STATE).then(|| (self.rope_muzzle(), self.rope.q))
+    }
+
+    /// SPEC-0036 Right-stick aim mode, the aim view mode, and SPEC-0033 section 23, the marker
+    /// object it steps: 4 with a rope anchor selected (scan result 2), 2 for Tor in aim mode, 3
+    /// when the character pass found one (scan result 1: the best-so-far character passing its
+    /// distance-adjusted threshold, within 110 of the eye with a clear sightline from 1.5 below
+    /// it), 1 in aim mode, else 0. Not built: the camera lock-word gate (the aim mode is only on
+    /// in hero control here).
+    fn aim_view_step(&mut self) {
+        use neopets_sim::aimview as av;
+        let aiming = self.aim.on;
+        let tor = self.hero_index == 0;
+        let anchor = aiming && self.rope.anchor.is_some();
+        let character = aiming && !anchor && !tor && {
+            let (forward, _) = self.camera.rows();
+            let eye = self.camera.eye;
+            let low = [eye[0], eye[1] - 1.5, eye[2]];
+            let pack = self.world.pack;
+            let mut best = f32::MIN;
+            let mut hit = false;
+            for c in self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.townsfolk.is_none() && c.row.is_some()) {
+                let d = [c.position[0] - eye[0], c.position[1] - eye[1], c.position[2] - eye[2]];
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                if !(l < 110.0 && l > 0.0) {
+                    continue;
+                }
+                let score = (forward[0] * d[0] + forward[1] * d[1] + forward[2] * d[2]) / l;
+                if score > best && self.world.ground.as_ref().is_none_or(|g| g.segment_clear(low, c.position, true)) {
+                    best = score;
+                    hit |= score > av::character_threshold(l);
+                    if self.ticks % 30 == 0 && std::env::var_os("NEOPETS_TRACE_AIM").is_some() {
+                        println!("      aim scan tick {}: {} at {:.1} scores {:.5} (needs {:.5})", self.ticks, c.name, l, score, av::character_threshold(l));
+                    }
+                }
+            }
+            hit
+        };
+        let mode = av::mode(aiming, tor, anchor, character);
+        let rope_gun = self.state.has_item(av::ROPE_GUN);
+        let was = self.aim_view.mode;
+        self.aim_view.step(1.0 / 60.0, mode, rope_gun);
+        if was != self.aim_view.mode && std::env::var_os("NEOPETS_TRACE_AIM").is_some() {
+            println!("      aim view tick {}: mode {} -> {} (asked {mode}), scale {:.3}, colour {:?}", self.ticks, was, self.aim_view.mode, self.aim_view.scale.value, self.aim_view.rgba());
+        }
+    }
+
+    /// The aim-view marker's draw frame when it is active: its centre (the camera eye plus 10
+    /// times the forward row), its spin angle, its scale and its colour (SPEC-0033 section 23).
+    pub fn aim_marker(&self) -> Option<([f32; 3], [f32; 3], f32, f32, [f32; 4])> {
+        let v = &self.aim_view;
+        if !v.active {
+            return None;
+        }
+        let (forward, _) = self.camera.rows();
+        let at = add(self.camera.eye, forward.map(|c| c * neopets_sim::aimview::DISTANCE));
+        Some((at, forward, v.spin.value, v.scale.value, v.rgba()))
     }
 
     /// SPEC-0036 Right-stick aim mode and SPEC-0033 State 27, after the hero update: the aim

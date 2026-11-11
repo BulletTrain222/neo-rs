@@ -41,14 +41,16 @@ pub struct Switches {
     pub wireframe: u8,
     pub log: bool,
     pub hide_hud: bool,
+    /// The stand-in aim marker is not drawn (R-0280).
+    pub no_aim_marker: bool,
     pub report: bool,
 }
 
 impl Switches {
-    /// NEOPETS_DEBUG="inspector,collision,wireframe,wireonly,log,hud": the tools on from the start, for picture runs (diagnostic).
+    /// NEOPETS_DEBUG="inspector,collision,wireframe,wireonly,log,hud,noaim": the tools on from the start, for picture runs (diagnostic).
     pub fn from_env() -> Self {
         let v = std::env::var("NEOPETS_DEBUG").unwrap_or_default();
-        Self { inspector: v.contains("inspector"), collision: v.contains("collision") || v.contains("lineonly"), lines_only: v.contains("lineonly"), gallery: v.contains("gallery"), note_open: false, collision_layer: if v.contains("layersolid") { 1 } else { 0 }, wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), report: false }
+        Self { inspector: v.contains("inspector"), collision: v.contains("collision") || v.contains("lineonly"), lines_only: v.contains("lineonly"), gallery: v.contains("gallery"), note_open: false, collision_layer: if v.contains("layersolid") { 1 } else { 0 }, wireframe: if v.contains("wireonly") { 2 } else if v.contains("wireframe") { 1 } else { 0 }, log: v.contains("log"), hide_hud: v.contains("hud"), no_aim_marker: v.contains("noaim"), report: false }
     }
 }
 

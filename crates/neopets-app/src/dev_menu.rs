@@ -208,6 +208,7 @@ enum Entry {
     Wireframe,
     EventLog,
     HideHud,
+    AimMarker,
 }
 
 /// The menu's sections and their entries, in display order.
@@ -215,14 +216,14 @@ const SECTIONS: [(&str, &[Entry]); 8] = [
     ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Swarm, Entry::Haste, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
     ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group]),
-    ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Wireframe, Entry::EventLog, Entry::HideHud]),
+    ("DEBUG TOOLS", &[Entry::Report, Entry::Inspector, Entry::Wireframe, Entry::EventLog, Entry::HideHud, Entry::AimMarker]),
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::Spawn, Entry::BossFight, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Armour, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints, Entry::Gallery]),
     ("STORY", &[Entry::Flag]),
     ("COLLISION VIEW", &[Entry::Collision, Entry::CollisionLayer]),
 ];
 
-const ENTRIES: [Entry; 35] = [
+const ENTRIES: [Entry; 36] = [
     Entry::God,
     Entry::Noclip,
     Entry::Swarm,
@@ -241,6 +242,7 @@ const ENTRIES: [Entry; 35] = [
     Entry::Wireframe,
     Entry::EventLog,
     Entry::HideHud,
+    Entry::AimMarker,
     Entry::Heal,
     Entry::Hero,
     Entry::Kill,
@@ -299,7 +301,7 @@ fn other_column(i: usize) -> usize {
 
 fn kind(e: Entry) -> Kind {
     match e {
-        Entry::God | Entry::Noclip | Entry::Swarm | Entry::Magic | Entry::Charge | Entry::FreeCam | Entry::Inspector | Entry::Collision | Entry::Wireframe | Entry::EventLog | Entry::HideHud => Kind::Toggle,
+        Entry::God | Entry::Noclip | Entry::Swarm | Entry::Magic | Entry::Charge | Entry::FreeCam | Entry::Inspector | Entry::Collision | Entry::Wireframe | Entry::EventLog | Entry::HideHud | Entry::AimMarker => Kind::Toggle,
         Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Armour | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight | Entry::CollisionLayer => Kind::Choice,
         _ => Kind::Action,
     }
@@ -1029,6 +1031,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             dev.debug.log = !dev.debug.log;
             format!("Event log {}", if dev.debug.log { "on" } else { "off" })
         }
+        Entry::AimMarker => {
+            dev.debug.no_aim_marker = !dev.debug.no_aim_marker;
+            format!("Aim marker {}", if dev.debug.no_aim_marker { "off" } else { "on" })
+        }
         Entry::HideHud => {
             dev.debug.hide_hud = !dev.debug.hide_hud;
             format!("HUD {}", if dev.debug.hide_hud { "hidden" } else { "shown" })
@@ -1152,6 +1158,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Wireframe => ("Wireframe (Enter to change)".into(), crate::debug_tools::wireframe_name(dev.debug.wireframe).into()),
         Entry::EventLog => ("Event log".into(), on(dev.debug.log)),
         Entry::HideHud => ("Hide HUD".into(), on(dev.debug.hide_hud)),
+        Entry::AimMarker => ("Aim marker (stand-in, R-0280)".into(), on(!dev.debug.no_aim_marker)),
         Entry::Neopoints => (format!("Add Neopoints ({} now)", p.state.neopoints), format!("+{}", AMOUNTS[dev.amount])),
         Entry::Flag => {
             let q = flag_quests(dev, dev.flag);

@@ -981,7 +981,7 @@ fn main() {
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot, sync_haze, sync_atmos_overlay),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_aim_marker, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -3181,6 +3181,87 @@ struct ShotMarker(usize);
 /// leaves open; this is this build's stand-in: one thin gold cylinder.
 #[derive(Component)]
 struct RopeStrand;
+
+/// The aim-view marker's stand-in (SPEC-0033 section 23; R-0280): the disc's marker model is not
+/// found, so this build draws its own, shaped after public footage at the user's request: a thin
+/// eight-pointed star outline (points at radius 1, notches at 0.78), in the plane facing the
+/// camera, turned by the spin angle about the forward row and scaled by M,
+/// unlit in the object's colour (its lanes doubled, a guess at the colour scale) with the fourth
+/// lane as opacity. Hidden with the developer menu's "Aim marker" switch.
+#[derive(Component)]
+struct AimMarker;
+
+/// A flat star outline in the xy plane: `points` points at radius `outer`, notches at `inner`,
+/// drawn as a band `width` wide centred on the outline (this build's own geometry).
+fn aim_star_mesh(points: usize, outer: f32, inner: f32, width: f32) -> Mesh {
+    let n = points * 2;
+    let corner = |k: usize| {
+        let a = k as f32 * std::f32::consts::TAU / n as f32 + std::f32::consts::FRAC_PI_2;
+        let r = if k % 2 == 0 { outer } else { inner };
+        Vec2::new(r * a.cos(), r * a.sin())
+    };
+    let mut positions = Vec::with_capacity(n * 2);
+    for k in 0..n {
+        let (p, a, b) = (corner(k), corner((k + n - 1) % n), corner((k + 1) % n));
+        // The mitred offset of the corner, half the band each side, its length capped.
+        let n1 = (p - a).perp().normalize();
+        let n2 = (b - p).perp().normalize();
+        let miter = (n1 + n2).normalize();
+        let len = (0.5 * width / miter.dot(n1)).min(2.0 * width);
+        for q in [p + miter * len, p - miter * len] {
+            positions.push([q.x, q.y, 0.0]);
+        }
+    }
+    let mut indices = Vec::with_capacity(n * 6);
+    for k in 0..n {
+        let (a, b) = (2 * k as u32, 2 * ((k + 1) % n) as u32);
+        indices.extend_from_slice(&[a, a + 1, b, b, a + 1, b + 1]);
+    }
+    let normals = vec![[0.0, 0.0, 1.0]; positions.len()];
+    Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_indices(bevy::mesh::Indices::U32(indices))
+}
+
+fn sync_aim_marker(
+    mut commands: Commands,
+    state: Option<Res<PlayState>>,
+    dev: Res<dev_menu::DevMenu>,
+    mut root: Query<(&mut Transform, &mut Visibility), With<AimMarker>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut material: Local<Option<Handle<StandardMaterial>>>,
+) {
+    let Some(state) = state else { return };
+    let Some(handle) = material.clone() else {
+        let m = materials.add(StandardMaterial { base_color: Color::srgba(0.66, 0.0, 0.0, 1.0), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, ..default() });
+        let star = meshes.add(aim_star_mesh(8, 1.0, 0.78, 0.07));
+        *material = Some(m.clone());
+        commands
+            .spawn((AimMarker, Transform::default(), Visibility::Hidden))
+            .with_children(|c| {
+                c.spawn((Mesh3d(star), MeshMaterial3d(m), Transform::default(), bevy::light::NotShadowCaster));
+            });
+        return;
+    };
+    let Ok((mut t, mut vis)) = root.single_mut() else { return };
+    match state.play.aim_marker().filter(|_| !dev.debug.no_aim_marker) {
+        Some((at, forward, spin, scale, rgba)) => {
+            let f = Vec3::from(forward).normalize_or_zero();
+            let look = Transform::from_translation(Vec3::from(at)).looking_to(f, Vec3::Y);
+            set_if(&mut t, look.with_rotation(look.rotation * Quat::from_rotation_z(spin)).with_scale(Vec3::splat(scale)));
+            set_if(&mut vis, Visibility::Visible);
+            if let Some(mut m) = materials.get_mut(&handle) {
+                let c = Color::srgba((2.0 * rgba[0]).min(1.0), (2.0 * rgba[1]).min(1.0), (2.0 * rgba[2]).min(1.0), rgba[3].clamp(0.0, 1.0));
+                if m.base_color != c {
+                    m.base_color = c;
+                }
+            }
+        }
+        None => set_if(&mut vis, Visibility::Hidden),
+    }
+}
 
 /// A pool shot's trail model part (SPEC-0029 Visual update): pool slot, owner and table entry.
 #[derive(Component)]
