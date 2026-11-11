@@ -18574,6 +18574,12 @@ impl Play {
             let p = self.loco.position();
             self.world.probe(p[0], p[2], p[1] + 2.5)
         };
+        // NEOPETS_TRACE_ZONE (diagnostic): the probe in each resident world every 60 ticks.
+        if std::env::var_os("NEOPETS_TRACE_ZONE").is_some() && self.ticks % 60 == 0 {
+            let p = self.loco.position();
+            let other = self.other.as_ref().map(|o| (o.pack, o.world_id, o.probe(p[0], p[2], p[1] + 2.5)));
+            println!("      zone tick {}: current {} id {} found {} zone {:?}; other {:?}; row now {:?}", self.ticks, self.world.pack, self.world.world_id, hit.found, hit.zone, other.map(|(pk, id, h)| (pk, id, h.found, h.zone)), self.zones);
+        }
         self.zones.active = Some(0);
         self.zones.update(self.world.zones.as_ref(), self.world.world_id, hit.zone.filter(|_| hit.found));
         // The cell flag of each region character: 1 without a ground entry, else the zone query
