@@ -75,6 +75,9 @@ pub struct RobertaAttack {
     spin_step: bool,
     spins: u8,
     spin_ending: bool,
+    /// This build's endless-spin cheat (not the original's): while attack is held the spin
+    /// replays with no limit (the original stops after ten replays).
+    pub endless_spin: bool,
 }
 
 impl RobertaAttack {
@@ -204,10 +207,11 @@ impl RobertaAttack {
                     if clip.progress >= 0.2 {
                         self.spin_step |= pressed;
                     } else if self.f > 4 {
-                        if self.spin_step && self.spins < 10 {
+                        let endless = self.endless_spin && held;
+                        if (self.spin_step || endless) && (self.spins < 10 || endless) {
                             self.f = 0;
                             self.spin_step = false;
-                            self.spins += 1;
+                            self.spins = self.spins.saturating_add(1);
                             self.cleared = true;
                         } else {
                             self.spin_ending = true;
@@ -835,5 +839,29 @@ mod tests {
         }
         assert_eq!(d.step(13, 0), (false, false));
         assert_eq!(d.glow, 0.0);
+    }
+
+    #[test]
+    fn endless_spin_replays_while_held() {
+        // The spin clip loops (progress 0 to 1 in 20 ticks); with the cheat on and attack held
+        // the spin never chooses its end clip, well past the original's ten replays.
+        let run = |endless: bool| {
+            let mut a = RobertaAttack::start_with(2);
+            a.endless_spin = endless;
+            let mut t = 0u32;
+            for _ in 0..1200 {
+                let progress = (t % 20) as f32 / 20.0;
+                a.tick(true, false, None, Clip { action: SPIN_CW, progress });
+                t += 1;
+                if a.spin_ending || a.sub != 6 {
+                    break;
+                }
+            }
+            (a.spin_ending, a.spins)
+        };
+        let (ended, spins) = run(true);
+        assert!(!ended && spins > 10, "{spins}");
+        // Without it, holding (no presses) gives no replay: the end clip is chosen at once.
+        assert!(run(false).0);
     }
 }

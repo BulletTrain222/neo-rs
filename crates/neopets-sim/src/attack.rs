@@ -50,6 +50,9 @@ pub struct TorAttack {
     pub cleared: bool,
     /// The Mote in word 2, which picks the power clip (the host's word).
     pub mote: Option<u16>,
+    /// This build's endless-spin cheat (not the original's): the clockwise and counter-clockwise
+    /// attacks start again at their end while attack is held.
+    pub endless_spin: bool,
 }
 
 /// SPEC-0036 Attack animation choice, Tor.
@@ -164,7 +167,13 @@ impl TorAttack {
                     _ => LUNGE,
                 };
                 if done(self, id) {
-                    self.go(0);
+                    if self.endless_spin && held && self.sub != 9 {
+                        let sub = self.sub;
+                        self.go(sub);
+                        self.restart = true;
+                    } else {
+                        self.go(0);
+                    }
                 }
             }
             _ => self.go(0),

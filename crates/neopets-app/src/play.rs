@@ -5006,6 +5006,7 @@ impl Play {
             }
         }
         let before = a.sub;
+        a.endless_spin = self.cheats.spin;
         match a.tick(input.attack_held, input.attack, mote, Clip { action: c.action, progress: c.progress }) {
             Some((action, restart)) => {
                 self.loco.set_attack(Some(action));
@@ -11594,6 +11595,7 @@ impl Play {
         if let Some(a) = self.attack.as_mut() {
             let c = self.hero.clip_state();
             a.mote = self.equipment.motes[0][2];
+            a.endless_spin = self.cheats.spin;
             // SPEC-0036 Tor arm-table point: in the flick lunge a contact puts him back at the last position without one.
             if a.sub == 9 {
                 if self.touched && a.f > 0 {
@@ -13263,7 +13265,7 @@ impl Play {
     /// original's; no wall, pillars or arena marks) covered in standing reeds. The reeds are the
     /// disc's own (foliage key 8, SPEC-0060 Behavior 9: models 202 and 203), borrowed from pack
     /// 909, which registers them; they bend, are cut and drop as in play. They stand on a 3-unit
-    /// grid with a jitter of 0.6, a random yaw and the key's scale range over a square 160 units
+    /// grid with a jitter of 0.6, a random yaw and the key's scale range over a square 320 units
     /// across, with a clearing of radius 6 at the centre where the hero starts, in 20 by 20
     /// patches. NEOPETS_REED_FIELD=1 starts the game there.
     pub fn enter_reed_field(&mut self) -> String {
@@ -13273,7 +13275,7 @@ impl Play {
         self.stage_foliage = Some(909);
         let mut rng = neopets_sim::rng::Rng::seeded(FIELD_PACK);
         let mut patches = Vec::new();
-        let (step, half, clear) = (3.0f32, 80.0f32, 6.0f32);
+        let (step, half, clear) = (3.0f32, 160.0f32, 6.0f32);
         let mut x0 = -half;
         while x0 < half {
             let mut z0 = -half;
@@ -20969,6 +20971,9 @@ pub struct Cheats {
     /// The developer menu's "every enemy attacks": the attack manager's capacity is unlimited, so no enemy waits
     /// in line (SPEC-0038 Behavior 45 departed from on request; a test tool, not part of the game).
     pub swarm: bool,
+    /// The developer menu's "endless spin": holding attack keeps Roberta's spin and Tor's
+    /// clockwise and counter-clockwise attacks going with no end (a test tool, not the original).
+    pub spin: bool,
 }
 
 impl Cheats {
