@@ -2625,6 +2625,13 @@ fn sync_worlds(
     if p.on_test_stage() {
         want = vec![WorldPart::Stage, WorldPart::Dome(neopets_data::area::dome_for_slot(None))];
     }
+    // NEOPETS_NO_OBJECTS / NEOPETS_NO_MASKTREE: those world parts left out (diagnostic).
+    if std::env::var_os("NEOPETS_NO_OBJECTS").is_some() {
+        want.retain(|w| !matches!(w, WorldPart::Objects(..)));
+    }
+    if std::env::var_os("NEOPETS_NO_MASKTREE").is_some() {
+        want.retain(|w| !matches!(w, WorldPart::MaskTree(..)));
+    }
     if *shown == want {
         return;
     }

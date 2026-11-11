@@ -211,7 +211,49 @@ pub fn spawn(
             println!("FLAT {pack} part {i} tex {:?} mean {mean:.3} up {:.3} area {:.0} lo {:.0},{:.0},{:.0} hi {:.0},{:.0},{:.0}", p.texture, up / f32::max(all, 1e-6), all / 2.0, lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
         }
     }
+    // NEOPETS_TRACE_COVER="x,z;x,z;...": for each point, the parts with a triangle over it and
+    // the height there (diagnostic, for holes in the level mesh).
+    if let Ok(v) = std::env::var("NEOPETS_TRACE_COVER") {
+        for pt in v.split(';').filter_map(|e| e.split_once(',')).filter_map(|(a, b)| Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?))) {
+            let mut hits = Vec::new();
+            for (i, p) in m.parts.iter().enumerate() {
+                for t in p.indices.chunks_exact(3) {
+                    let [a, b, c] = [t[0], t[1], t[2]].map(|k| p.positions[k as usize]);
+                    let d = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2]);
+                    if d.abs() < 1e-9 {
+                        continue;
+                    }
+                    let u = ((pt.0 - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (pt.1 - a[2])) / d;
+                    let w = ((b[0] - a[0]) * (pt.1 - a[2]) - (pt.0 - a[0]) * (b[2] - a[2])) / d;
+                    if u >= 0.0 && w >= 0.0 && u + w <= 1.0 {
+                        let y = a[1] + u * (b[1] - a[1]) + w * (c[1] - a[1]);
+                        hits.push(format!("part {i} tex {:?} y {y:.2}", p.texture));
+                        break;
+                    }
+                }
+            }
+            println!("COVER {pack} ({:.1}, {:.1}): {}", pt.0, pt.1, hits.join("; "));
+        }
+    }
+    // NEOPETS_TRACE_PART="pack:i": one part's material facts (diagnostic).
+    if let Some((pk, pi)) = std::env::var("NEOPETS_TRACE_PART").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.trim().parse::<u32>().ok()?, b.trim().parse::<usize>().ok()?)))) {
+        if pk == pack {
+            if let Some(p) = m.parts.get(pi) {
+                let ta = p.texture.and_then(|t| m.textures.get(t)).map(|t| {
+                    let a: Vec<u8> = t.image.rgba.chunks_exact(4).map(|q| q[3]).collect();
+                    (a.iter().copied().min(), a.iter().copied().max(), a.iter().map(|&x| x as u32).sum::<u32>() / a.len().max(1) as u32)
+                });
+                let ca: Vec<[u8; 4]> = p.raw_colors.iter().take(6).copied().collect();
+                println!("PART {pack}:{pi} tex {:?} alpha reg {:?} scroll {:?} pass {} pass1 {} env {} lit {} texture alpha min/max/mean {ta:?} vertex colours {ca:?}", p.texture, p.alpha.map(|a| format!("{a:#x}")), p.scroll, p.pass, p.pass1.is_some(), p.env_map, p.lit);
+            }
+        }
+    }
+    // NEOPETS_HIDE_PART="pack:i,i,...": those parts are not spawned (diagnostic).
+    let hidden: Vec<usize> = std::env::var("NEOPETS_HIDE_PART").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| (a.trim().parse::<u32>().ok()? == pack).then(|| b.split(',').filter_map(|x| x.trim().parse().ok()).collect()))).unwrap_or_default();
     for (i, p) in m.parts.iter().enumerate() {
+        if hidden.contains(&i) {
+            continue;
+        }
         let env = p.texture.filter(|_| p.env_map && !no_pass1);
         let scrolling = p.scroll.is_some() && p.texture.is_some();
         let fades = p.flipbook.is_none() && crate::vertex_fades(p);
@@ -235,7 +277,12 @@ pub fn spawn(
         // SPEC-0003 TEST: a pixel at or above 120 of 128 writes depth, a softer one only blends. A fading part's triangles
         // solid at all three corners draw as solid, so that what lies behind them stays hidden (user's F8 view 16); the rest
         // blend. Done by triangle, as Bevy's prepass does not see vertex alpha (see `vertex_fades`).
-        let layer = (soft || fades) && lies_flat(p);
+        // A flat fading strip (a path edge) is drawn only blended, with no solid core, so ambient
+        // occlusion draws no crease along it (user's F8 view 20). A flat part that is soft only
+        // through its texture keeps the cut core of SPEC-0003: without it the 758 street wrote no
+        // depth and the water drawn after it showed through (user report 115).
+        // NEOPETS_SOFT_LAYER brings back the layer for those too (diagnostic).
+        let layer = (fades || (soft && std::env::var_os("NEOPETS_SOFT_LAYER").is_some())) && lies_flat(p);
         let split = (fades && !layer && !scrolling && env.is_none()).then(|| split_fading(p)).filter(|(solid, _)| !solid.is_empty());
         let mesh = match &split {
             Some((solid, faded)) => {
