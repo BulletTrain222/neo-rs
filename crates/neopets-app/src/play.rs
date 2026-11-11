@@ -5220,7 +5220,10 @@ impl Play {
         let p = self.loco.position();
         let fw = unit([self.loco.facing[0], 0.0, self.loco.facing[2]]);
         let frame = [[fw[2], 0.0, -fw[0]], [0.0, 1.0, 0.0], fw];
-        for (k, (show, id, at)) in [(shown.0, neopets_sim::roberta::HOLD_EFFECT, p), (shown.1, neopets_sim::roberta::GLOW_EFFECT, [p[0], p[1] + 0.5, p[2]])].into_iter().enumerate() {
+        // SPEC-0036 Roberta charge-up hold effect: 239 at the weapon-tip frame T (SPEC-0034
+        // 3.17), as the attack driver computes it; the leap glow at the hero + (0, 0.5, 0).
+        let tip = self.weapon_tip().unwrap_or(p);
+        for (k, (show, id, at)) in [(shown.0, neopets_sim::roberta::HOLD_EFFECT, tip), (shown.1, neopets_sim::roberta::GLOW_EFFECT, [p[0], p[1] + 0.5, p[2]])].into_iter().enumerate() {
             match (show, self.r_fx[k]) {
                 (true, None) => {
                     let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, id, at, frame));
@@ -7259,6 +7262,14 @@ impl Play {
                 _ => None,
             })
             .collect()
+    }
+
+    /// SPEC-0034 3.17: the weapon tip T = attach point 0 + R x its third axis, moved 0.2 toward
+    /// the camera eye.
+    fn weapon_tip(&self) -> Option<[f32; 3]> {
+        let (base, z0) = self.weapon_line()?;
+        let p = add(base, scale(z0, self.weapon_reach()));
+        Some(add(p, scale(unit(sub_v(self.camera.eye, p)), 0.2)))
     }
 
     /// The drawn weapon's base point and long axis: its frame's third axis, in the hand or stowed.
@@ -17302,25 +17313,31 @@ impl Play {
         } else {
             keep(&mut fx.line, None, n, None);
             keep(&mut fx.light, None, t, None);
-            keep(&mut fx.aura, idx.map(|k| tb.aura[k]), pos, None);
-            keep(&mut fx.charge, idx.filter(|_| !charged).map(|k| tb.charge[k]), pos, None);
+            // SPEC-0034 3.17: the Mote aura and the charge-up effect at the T frame, only while
+            // the wand is drawn (they were at the hero's feet: user report 101).
+            keep(&mut fx.aura, idx.filter(|_| drawn).map(|k| tb.aura[k]), t, None);
+            keep(&mut fx.charge, idx.filter(|_| drawn && !charged).map(|k| tb.charge[k]), t, None);
         }
         // The full-charge burst and the charged-hold loop.
         if sub == 1 && charged && !fx.burst_done {
             fx.burst_done = true;
             let burst = idx.map_or(if h == 0 { 243 } else { 240 }, |k| tb.burst[h.min(1)][k]);
             let hold = idx.map_or(if h == 0 { -1 } else { 245 }, |k| tb.hold[h.min(1)][k]);
-            keep(&mut fx.hold, Some(hold), n, Some(t));
+            // The charged-hold loop: Tor's at N with its target T, Roberta's at T with no target.
+            let (at, target) = if h == 0 { (n, Some(t)) } else { (t, None) };
+            keep(&mut fx.hold, Some(hold), at, target);
             fx.burst = Some(burst);
         } else if sub == 1 && fx.burst_done {
             let id = fx.hold.map(|(id, _)| id);
-            keep(&mut fx.hold, id, n, Some(t));
+            let (at, target) = if h == 0 { (n, Some(t)) } else { (t, None) };
+            keep(&mut fx.hold, id, at, target);
         } else if sub != 1 {
             fx.burst_done = false;
             keep(&mut fx.hold, None, n, None);
         }
+        // The full-charge burst at the T frame (origin T, not the hero's position).
         if let Some(burst) = fx.burst.take().filter(|&b| b >= 0) {
-            self.effects.one_shot(&table, burst, pos, frame, &mut self.rng);
+            self.effects.one_shot(&table, burst, t, frame, &mut self.rng);
         }
         // The swing glows (Tor) and the spin glow (Roberta): on a sub-state change the timer and
         // the started flag reset and the old glow is released to play out; the glow starts once

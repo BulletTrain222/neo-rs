@@ -633,6 +633,25 @@ struct SimText;
 struct BrowserText;
 
 fn main() {
+    // A crash's message, place and backtrace are also appended to private/crash.log (with the
+    // time), so a crash in a window started without a console can be read afterwards.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let thread = std::thread::current().name().unwrap_or("?").to_string();
+        let trace = std::backtrace::Backtrace::force_capture();
+        let text = format!("--- crash at unix time {when}, thread {thread}
+{info}
+{trace}
+");
+        if std::fs::create_dir_all("private").is_ok() {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("private/crash.log") {
+                let _ = f.write_all(text.as_bytes());
+            }
+        }
+        default_hook(info);
+    }));
     let mut args = std::env::args().skip(1);
     let mut explicit = None;
     let mut smoke_test = false;
@@ -6024,6 +6043,19 @@ fn play_trace(
                 let world = [&play.world].into_iter().chain(play.other.as_ref()).find(|w| w.pack == c.pack);
                 let ground = world.and_then(|w| w.ground_at(c.position[0], c.position[2], c.position[1] + 5.0));
                 println!("      char {} {:?} entity {:?} at ({:.1}, {:.1}, {:.1}) inactive {} deactivated {} enemy {} ground {:?} fly {}", c.name, c.pack, c.entity, c.position[0], c.position[1], c.position[2], c.inactive, c.deactivated, c.enemy.is_some(), ground.map(|g| (g * 10.0).round() / 10.0), c.row.map_or(0, |r| r.can_fly));
+            }
+        }
+        // NEOPETS_TRACE_REPORT=n (diagnostic): every n ticks, the text a bug report writes (not its
+        // shadow part), built and dropped, so a panic in it shows in a trace.
+        if let Some(n) = std::env::var("NEOPETS_TRACE_REPORT").ok().and_then(|v| v.parse::<u64>().ok()).filter(|&n| n > 0) {
+            if play.ticks % n == 0 {
+                let mut len = 0;
+                for part in [play.debug_inspect(), play.scene_status(), play.status(), play.objects_near(), play.placed_summary(), play.debug_nearby(100.0)] {
+                    len += part.len();
+                }
+                let (a, b) = play.recorder.export();
+                len += a.len() + b.len() + play.recorder.history_csv().len();
+                println!("      report text tick {}: {len} bytes", play.ticks);
             }
         }
         // NEOPETS_TRACE_BLOCKERS=tick: what pushes the hero on that tick (diagnostic).
