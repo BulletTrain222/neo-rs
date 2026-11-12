@@ -1256,11 +1256,17 @@ pub fn show_panel(
 ) {
     let _span = crate::perf::span("show_panel");
     for mut n in &mut windows {
-        n.display = if dev.open && !dev.picking { Display::Flex } else { Display::None };
+        let d = if dev.open && !dev.picking { Display::Flex } else { Display::None };
+        if n.display != d {
+            n.display = d;
+        }
     }
     let status = !dev.open && (dev.free.is_some() || dev.speed != NORMAL);
     for mut n in &mut boxes {
-        n.display = if status { Display::Flex } else { Display::None };
+        let d = if status { Display::Flex } else { Display::None };
+        if n.display != d {
+            n.display = d;
+        }
     }
     let Some(play) = play else { return };
     let p = &play.play;

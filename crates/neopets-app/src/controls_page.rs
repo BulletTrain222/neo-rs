@@ -474,7 +474,10 @@ pub fn show_page(
 ) {
     let _span = crate::perf::span("show_page");
     for mut n in &mut windows {
-        n.display = if page.open { Display::Flex } else { Display::None };
+        let d = if page.open { Display::Flex } else { Display::None };
+        if n.display != d {
+            n.display = d;
+        }
     }
     if !page.open {
         return;

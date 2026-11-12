@@ -24,7 +24,7 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 22;
+pub const ROWS: usize = 23;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
@@ -42,6 +42,9 @@ pub const SHADOW_QUALITY: [&str; 4] = ["Very Low", "Low", "Medium", "High"];
 pub const SHADOW_DISTANCES: [f32; 5] = [50.0, 100.0, 150.0, 200.0, 300.0];
 /// The frame rate limits, frames per second; 0 is uncapped.
 pub const FPS_LIMITS: [u32; 4] = [30, 60, 120, 0];
+
+/// The graphics APIs on offer (main.rs `render_settings`; Windows only, read at start).
+pub const GRAPHICS_APIS: [&str; 2] = ["Vulkan", "DX12"];
 
 /// The graphics presets (`DisplaySettings::apply_preset`).
 pub const PRESETS: [&str; 3] = ["Low", "Medium", "High"];
@@ -94,11 +97,15 @@ pub struct DisplaySettings {
     /// tables as the original draws it (SPEC-0006 Zones), which hides some of its pieces from
     /// parts of the current world (user reports 112, 114 and 116).
     pub original_neighbour: bool,
+    /// The graphics API on Windows (index into GRAPHICS_APIS), taken at the next start: this
+    /// build's option. Vulkan is faster with the display on the discrete GPU; DX12 can be faster
+    /// when a laptop's display hangs off its integrated GPU.
+    pub graphics_api: usize,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0 }
     }
 }
 
@@ -141,6 +148,7 @@ impl DisplaySettings {
                 "dpad hud" => s.dpad_hud = v != "false",
                 "menu edges" => s.menu_edges = v != "false",
                 "original neighbour" => s.original_neighbour = v == "true",
+                "graphics api" => s.graphics_api = GRAPHICS_APIS.iter().position(|a| a.eq_ignore_ascii_case(v)).unwrap_or(s.graphics_api),
                 _ => {}
             }
         }
@@ -149,7 +157,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -171,7 +179,8 @@ impl DisplaySettings {
             if self.xbox_buttons { "xbox" } else { "playstation" },
             self.dpad_hud,
             self.menu_edges,
-            self.original_neighbour
+            self.original_neighbour,
+            GRAPHICS_APIS[self.graphics_api].to_lowercase()
         )
     }
 
@@ -282,6 +291,7 @@ impl DisplaySettings {
             ("D-pad HUD".into(), if self.dpad_hud { "On".into() } else { "Off".into() }),
             ("Menu edges".into(), if self.menu_edges { "Extended".into() } else { "Original".into() }),
             ("Neighbour world".into(), if self.original_neighbour { "Original".into() } else { "Full".into() }),
+            ("Graphics API".into(), GRAPHICS_APIS[self.graphics_api].into()),
         ]
     }
 
@@ -328,6 +338,7 @@ impl DisplaySettings {
             19 => self.dpad_hud = !self.dpad_hud,
             20 => self.menu_edges = !self.menu_edges,
             21 => self.original_neighbour = !self.original_neighbour,
+            22 => self.graphics_api = step(self.graphics_api, GRAPHICS_APIS.len()),
             _ => {}
         }
     }
@@ -593,6 +604,7 @@ const HELP: [&str; ROWS + 1] = [
     "The D-pad picture on the HUD during play. Off hides it; the D-pad still works.",
     "How menus fill a wide window. Extended carries each picture's edge colours out to the sides; Original keeps the 512 x 448 frame with bars.",
     "Full always draws the whole of the next area beside you; Original hides some of its pieces from parts of this area, as the PS2 game does.",
+    "Vulkan runs fastest on most computers. DX12 can be faster on a laptop whose screen is wired to its built-in graphics (for example a gaming laptop in its hybrid or battery GPU mode). Takes effect after a restart.",
     "Back to Options.",
 ];
 
@@ -758,7 +770,7 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(true), [17, 18, 19, 20]);
-        assert_eq!(page_rows(false), (0..17).chain([21]).collect::<Vec<_>>());
+        assert_eq!(page_rows(false), (0..17).chain([21, 22]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));
         // 21:9 in a 16:9 window: letterbox 823 high.

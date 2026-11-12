@@ -643,11 +643,15 @@ struct BrowserText;
 ///   with World shadows off, slower with them on.
 /// On DX12 wgpu lacks buffer binding arrays, so Bevy cannot draw the standard material
 /// bindless: each of the world's 300 to 400 materials is its own batch with its own buffer
-/// writes in every view. Vulkan is the better choice everywhere but that one case.
+/// writes in every view. Vulkan is the better choice everywhere but that one case, so it is the
+/// default; the Display page's Graphics API row (saved settings, read here at start) chooses DX12
+/// instead, with Vulkan then the fallback.
 fn render_settings() -> bevy::render::settings::WgpuSettings {
+    use bevy::render::settings::Backends;
     let mut s = bevy::render::settings::WgpuSettings::default();
     if cfg!(target_os = "windows") && std::env::var_os("WGPU_BACKEND").is_none() {
-        s.backends = Some(bevy::render::settings::Backends::VULKAN | bevy::render::settings::Backends::DX12);
+        let dx12 = display::GRAPHICS_APIS[display::DisplaySettings::load().graphics_api] == "DX12";
+        s.backends = Some(if dx12 { Backends::DX12 } else { Backends::VULKAN | Backends::DX12 });
     }
     s
 }
@@ -1055,7 +1059,7 @@ fn main() {
         app.add_plugins((bevy::render::diagnostic::RenderDiagnosticsPlugin, bevy::diagnostic::LogDiagnosticsPlugin { wait_duration: std::time::Duration::from_secs(4), ..default() }));
     }
     if perf::perf_enabled() {
-        app.init_resource::<perf::PerfLog>().add_systems(First, perf::perf_first).add_systems(Last, (perf::perf_last, perf_kinds));
+        app.init_resource::<perf::PerfLog>().add_systems(First, perf::perf_first).add_systems(Last, (perf::perf_last, perf_kinds, perf::perf_text));
         perf::add_render_timing(&mut app);
     }
     audio_view::register(&mut app);
@@ -2121,14 +2125,31 @@ fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut huds: Query<&mut Node, With<H
     }
 }
 
-fn show_sim(driver: Res<SimDriver>, play: Option<Res<PlayState>>, mut texts: Query<&mut Text, With<SimText>>) {
+/// Whether the developer info panel is shown (F6). Its texts are written only then: a changed
+/// text is laid out and measured again every frame, hidden or not (performance pass of
+/// 2026-11-12: the two texts changed on every frame of play while the panel was hidden).
+fn hud_shown(huds: &Query<&Node, With<Hud>>) -> bool {
+    huds.iter().any(|n| n.display != Display::None)
+}
+
+/// Writes a text only when it differs (a write marks it changed even with the same words).
+fn set_text(text: &mut Mut<Text>, s: String) {
+    if text.0 != s {
+        text.0 = s;
+    }
+}
+
+fn show_sim(driver: Res<SimDriver>, play: Option<Res<PlayState>>, mut texts: Query<&mut Text, With<SimText>>, huds: Query<&Node, With<Hud>>) {
     let _span = crate::perf::span("show_sim");
+    if !hud_shown(&huds) {
+        return;
+    }
     let d = &*driver;
     let play_line = play
         .map(|p| format!("{}\n{}\n{}\n", p.play.status(), p.play.status_camera(), p.play.status_worlds()))
         .unwrap_or_default();
     for mut text in &mut texts {
-        text.0 = play_line.clone() + &format!(
+        set_text(&mut text, play_line.clone() + &format!(
             "SIMULATION LOOP - fixed 1/60 s step (SPEC-0007); no gameplay systems yet\n\
              Tick {} at {} Hz | {} this frame | {} dropped | alpha {:.2}\n\
              Input: move ({}, {}) from WASD / arrows / left stick",
@@ -2139,7 +2160,7 @@ fn show_sim(driver: Res<SimDriver>, play: Option<Res<PlayState>>, mut texts: Que
             d.clock.alpha(),
             d.input.move_x,
             d.input.move_y,
-        );
+        ));
     }
 }
 
@@ -2151,11 +2172,12 @@ fn show_browser(
     mut models: ResMut<ModelView>,
     mut texts: Query<&mut Text, With<BrowserText>>,
     play_request: Option<Res<PlayRequest>>,
+    huds: Query<&Node, With<Hud>>,
 ) {
     let _span = crate::perf::span("show_browser");
     let Some(mut archive) = archive else {
         for mut text in &mut texts {
-            text.0 = "RESOURCE BROWSER\nNo validated ISO, so the archive is unavailable.".into();
+            set_text(&mut text, "RESOURCE BROWSER\nNo validated ISO, so the archive is unavailable.".into());
         }
         return;
     };
@@ -2231,15 +2253,17 @@ fn show_browser(
         ),
         None => "No textures in this resource.".into(),
     };
+    // The view above is loaded whatever the panel shows (the viewer draws its model); the
+    // panel's text is built only while it is shown.
+    if !hud_shown(&huds) {
+        return;
+    }
     let entry = match &browser.typing {
         Some(t) => format!("Go to: {t}_   (Enter to jump, Esc to cancel)"),
         None => "Type a number and press Enter | [ ] step 1 | PgUp/PgDn step 100".into(),
     };
     for mut text in &mut texts {
-        text.0 = format!(
-            "RESOURCE BROWSER - archive index (SPEC-0001/0002), textures (SPEC-0003)\n{}\n{model_line}\n{texture_line}\n{entry}",
-            view.text
-        );
+        set_text(&mut text, format!("RESOURCE BROWSER - archive index (SPEC-0001/0002), textures (SPEC-0003)\n{}\n{model_line}\n{texture_line}\n{entry}", view.text));
     }
 }
 
@@ -7118,9 +7142,12 @@ fn sync_fade(
         }
     }
     let h = state.play.bars.height() / 448.0 * 100.0;
+    // Written only on change: a changed node makes Bevy lay out the whole UI again.
     for (mut node, mut vis) in &mut bars {
-        node.height = Val::Percent(h);
-        *vis = if h > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
+        if node.height != Val::Percent(h) {
+            node.height = Val::Percent(h);
+        }
+        set_if(&mut vis, if h > 0.0 { Visibility::Inherited } else { Visibility::Hidden });
     }
     if overlay.is_empty() {
         commands.spawn((
@@ -7136,9 +7163,12 @@ fn sync_fade(
     let f = &state.play.fade;
     for (mut colour, mut vis) in &mut overlay {
         let a = f.opacity();
-        *vis = if a > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
+        set_if(&mut vis, if a > 0.0 { Visibility::Inherited } else { Visibility::Hidden });
         let c = f.colour.map(|v| v as f32 / 255.0);
-        colour.0 = Color::srgba(c[0], c[1], c[2], a);
+        let want = Color::srgba(c[0], c[1], c[2], a);
+        if colour.0 != want {
+            colour.0 = want;
+        }
     }
 }
 

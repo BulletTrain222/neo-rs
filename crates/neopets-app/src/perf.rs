@@ -131,7 +131,10 @@ pub fn perf_overlay(
     };
     *last_pos = hero;
     for mut n in &mut panels {
-        n.display = if overlay.on { Display::Flex } else { Display::None };
+        let d = if overlay.on { Display::Flex } else { Display::None };
+        if n.display != d {
+            n.display = d;
+        }
     }
     if !overlay.on {
         return;
@@ -241,6 +244,36 @@ pub fn perf_enabled() -> bool {
 
 pub fn perf_first(mut log: ResMut<PerfLog>) {
     log.start = Some(std::time::Instant::now());
+}
+
+/// NEOPETS_PERF: every 240 frames, the UI texts changed per frame and the first words of the
+/// ones that changed most (a changed text is laid out and measured again).
+#[allow(clippy::type_complexity)]
+pub fn perf_text(changed: Query<(Entity, &Text), Changed<Text>>, nodes: Query<(Entity, Option<&Name>, Has<ImageNode>, Option<&ChildOf>), Changed<Node>>, texts: Query<&Text>, children: Query<&Children>, mut tally: Local<(u32, usize, usize, std::collections::HashMap<Entity, (usize, String)>)>) {
+    tally.0 += 1;
+    for (e, name, image, parent) in &nodes {
+        tally.2 += 1;
+        // A changed node, named by its name, its first child's text, or its parent's.
+        let child_text = children.get(e).ok().and_then(|c| c.iter().find_map(|k| texts.get(k).ok())).map(|t| t.0.chars().take(30).collect::<String>());
+        let label = name.map(|n| n.to_string()).or(child_text).unwrap_or_else(|| format!("{}{e:?} parent {:?}", if image { "image " } else { "" }, parent.map(|p| p.parent())));
+        let entry = tally.3.entry(e).or_insert((0, String::new()));
+        entry.0 += 1;
+        entry.1 = format!("node {}", label.replace('\n', " "));
+    }
+    for (e, t) in &changed {
+        tally.1 += 1;
+        let entry = tally.3.entry(e).or_insert((0, String::new()));
+        entry.0 += 1;
+        entry.1 = t.0.chars().take(40).collect::<String>().replace('\n', " ");
+    }
+    if tally.0 % 240 != 0 {
+        return;
+    }
+    let mut top: Vec<(usize, String)> = tally.3.values().cloned().collect();
+    top.sort_by(|a, b| b.0.cmp(&a.0));
+    let list: Vec<String> = top.iter().take(6).map(|(n, s)| format!("{n}x {s:?}")).collect();
+    info!("perf: texts changed per frame {:.2}, nodes changed per frame {:.1}; most: {}", tally.1 as f32 / 240.0, tally.2 as f32 / 240.0, list.join("; "));
+    *tally = Default::default();
 }
 
 pub fn perf_last(

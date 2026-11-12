@@ -478,10 +478,11 @@ pub fn sync_hud(
         return;
     };
     let _ = root;
-    root_node.left = Val::Px(ox);
-    root_node.top = Val::Px(oy);
-    root_node.width = Val::Px(512.0 * s);
-    root_node.height = Val::Px(448.0 * s);
+    // Written only on change: a changed node makes Bevy lay out the whole UI again.
+    let root_place = (Val::Px(ox), Val::Px(oy), Val::Px(512.0 * s), Val::Px(448.0 * s));
+    if (root_node.left, root_node.top, root_node.width, root_node.height) != root_place {
+        (root_node.left, root_node.top, root_node.width, root_node.height) = root_place;
+    }
     let hud = &p.hud;
     let mb = &p.monster_bar;
     // The owned count of an item id (0 for -1 or an item not held).
