@@ -55,8 +55,50 @@ pub fn models(disc: &mut Disc, index: &ArchiveIndex, play: &Play, pack: u32) -> 
     Ok(out)
 }
 
+/// Whether static plants are merged per patch (NEOPETS_FOLIAGE_NOMERGE: one entity per plant and
+/// part, as before; diagnostic).
+pub fn merge_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NEOPETS_FOLIAGE_NOMERGE").is_none())
+}
+
+/// One mesh holding a copy of `src` for each transform, its positions moved and its normals
+/// turned by each (the plants' scales are uniform, so a normal only turns), its other attributes
+/// repeated and its indices offset per copy. None for an attribute kind it does not handle.
+pub fn merged_copies(src: &Mesh, transforms: &[Transform]) -> Option<Mesh> {
+    use bevy::mesh::{Indices, VertexAttributeValues as V};
+    let n = src.count_vertices();
+    let mut out = Mesh::new(src.primitive_topology(), bevy::asset::RenderAssetUsages::default());
+    for (attr, values) in src.attributes() {
+        let merged = match values {
+            V::Float32x3(p) if attr.id == Mesh::ATTRIBUTE_POSITION.id => V::Float32x3(transforms.iter().flat_map(|t| p.iter().map(move |q| t.transform_point(Vec3::from(*q)).to_array())).collect()),
+            V::Float32x3(p) if attr.id == Mesh::ATTRIBUTE_NORMAL.id => V::Float32x3(transforms.iter().flat_map(|t| p.iter().map(move |q| (t.rotation * Vec3::from(*q)).normalize_or_zero().to_array())).collect()),
+            V::Float32x3(p) => V::Float32x3(transforms.iter().flat_map(|_| p.iter().copied()).collect()),
+            V::Float32x2(p) => V::Float32x2(transforms.iter().flat_map(|_| p.iter().copied()).collect()),
+            V::Float32x4(p) => V::Float32x4(transforms.iter().flat_map(|_| p.iter().copied()).collect()),
+            _ => return None,
+        };
+        out.insert_attribute(attr.clone(), merged);
+    }
+    let indices: Vec<u32> = match src.indices() {
+        Some(Indices::U16(i)) => i.iter().map(|&k| k as u32).collect(),
+        Some(Indices::U32(i)) => i.clone(),
+        None => (0..n as u32).collect(),
+    };
+    out.insert_indices(Indices::U32((0..transforms.len()).flat_map(|k| indices.iter().map(move |&i| i + (k * n) as u32)).collect()));
+    Some(out)
+}
+
 /// Spawn one world's plants: each model's parts once as meshes, a material per (part material,
 /// plant colour), one entity per plant and part; bush parts carry `BushPart`.
+///
+/// With `merge` (the Display page's Full distant foliage): a patch of plants that never move
+/// (no bushes or reeds, drawn by a near model) is one entity per model part, its plants merged
+/// into one mesh, shown and hidden with its patch by the zone gate (performance pass of
+/// 2026-11-12: the plants were about half of the world's 8,000 entities, each costing Bevy's
+/// per-entity work every frame), and the far twins, which Full detail never shows, are not
+/// spawned. The original distant foliage keeps one entity per plant, which its per-plant
+/// distances need.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn<C: Component + Copy>(
     commands: &mut Commands,
@@ -68,6 +110,7 @@ pub fn spawn<C: Component + Copy>(
     materials: &mut Assets<StandardMaterial>,
     pass1_materials: &mut Assets<crate::pass1::Pass1Material>,
     images: &mut Assets<Image>,
+    merge: bool,
 ) -> usize {
     let Some(patches) = play.foliage.get(&pack) else { return 0 };
     let mut assets: HashMap<u16, Vec<(usize, Handle<Mesh>, Handle<StandardMaterial>)>> = HashMap::new();
@@ -102,7 +145,7 @@ pub fn spawn<C: Component + Copy>(
         let lod = |role: Role, plane_x: bool| FoliageLod { distances, near: p.kind.near.is_some(), far: p.kind.far.is_some(), role, plane_x };
         // A family with both models also has its far sprites, shown only by the original's
         // distance rule (the Display page's "Distant foliage").
-        if let (Some(_), Some(f)) = (p.kind.near, p.kind.far) {
+        if let (Some(_), Some(f), false) = (p.kind.near, p.kind.far, merge) {
             if let Some(model) = models.get(&f) {
                 let plane_x = quad_in_x(model);
                 let parts = assets.entry(f).or_insert_with(|| crate::part_assets(model, meshes, materials, images)).clone();
@@ -155,6 +198,28 @@ pub fn spawn<C: Component + Copy>(
                     })
                     .clone()
             };
+            // A patch of plants that never move: one entity per model part for all its plants.
+            if merge && !bush && !far_only {
+                let transforms: Vec<Transform> = p.plants.iter().map(|q| Transform::from_translation(Vec3::from(q.position)).with_rotation(Quat::from_rotation_y(q.yaw)).with_scale(Vec3::splat(q.scale))).collect();
+                let whole = |mesh: &Handle<Mesh>, meshes: &mut Assets<Mesh>| meshes.get(mesh).and_then(|m| merged_copies(m, &transforms)).map(|m| meshes.add(m));
+                for (i, mesh, material) in &parts {
+                    let Some(m) = whole(mesh, meshes) else { continue };
+                    let base = tinted.entry((material.id(), [0; 4])).or_insert_with(|| materials.add(materials.get(material).cloned().unwrap_or_default())).clone();
+                    match env.get(i) {
+                        Some(em) => commands.spawn((Mesh3d(m), MeshMaterial3d(em.clone()), Transform::IDENTITY, Visibility::Visible, tag, PatchPart { pack, patch: pi })),
+                        None => commands.spawn((Mesh3d(m), MeshMaterial3d(base), Transform::IDENTITY, Visibility::Visible, tag, PatchPart { pack, patch: pi })),
+                    };
+                }
+                for (_, mesh, material, scroll) in &second {
+                    let Some(m) = whole(mesh, meshes) else { continue };
+                    let mut e = commands.spawn((Mesh3d(m), MeshMaterial3d(material.clone()), Transform::IDENTITY, Visibility::Visible, tag, PatchPart { pack, patch: pi }, bevy::light::NotShadowCaster));
+                    if let Some(s) = scroll {
+                        e.insert(crate::pass1::Pass1Scroll(*s));
+                    }
+                }
+                count += p.plants.len();
+                continue;
+            }
             for (k, q) in p.plants.iter().enumerate() {
                 let transform = Transform::from_translation(Vec3::from(q.position)).with_rotation(Quat::from_rotation_y(q.yaw)).with_scale(Vec3::splat(q.scale));
                 let visibility = if cut { Visibility::Hidden } else { Visibility::Visible };
@@ -201,6 +266,23 @@ pub fn spawn<C: Component + Copy>(
                 count += usize::from(!cut);
             }
         }
+    }
+    if std::env::var_os("NEOPETS_TRACE_FOLIAGE_COUNT").is_some() {
+        let mut kinds: std::collections::BTreeMap<&str, (usize, usize)> = Default::default();
+        for p in patches {
+            let parts = |id: Option<u16>| id.and_then(|i| models.get(&i)).map_or(0, |m| m.parts.len());
+            let n = p.plants.len();
+            let kind = if !p.bushes.is_empty() { "bush" } else if !p.reeds.is_empty() { "reed" } else if p.kind.near.is_none() { "far-only sprite" } else { "static near" };
+            let e = kinds.entry(kind).or_default();
+            e.0 += n;
+            e.1 += n * if kind == "far-only sprite" { parts(p.kind.far) } else { parts(p.kind.near) };
+            if p.kind.near.is_some() && p.kind.far.is_some() {
+                let f = kinds.entry("far twin (Original only)").or_default();
+                f.0 += n;
+                f.1 += n * parts(p.kind.far);
+            }
+        }
+        println!("foliage {pack}: {} patches; plants and entities by kind {kinds:?}", patches.len());
     }
     count
 }

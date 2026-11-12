@@ -2526,7 +2526,7 @@ fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, par
             parts.get(x).ok().map(|p| match p {
                 WorldPart::Scene(..) => "scene",
                 WorldPart::Dome(_) => "dome",
-                WorldPart::Foliage(_) => "foliage",
+                WorldPart::Foliage(..) => "foliage",
                 WorldPart::Objects(..) => "objects",
                 WorldPart::Stage => "stage",
                 WorldPart::Field => "field",
@@ -2552,8 +2552,9 @@ enum WorldPart {
     /// The world's static scene with its world layer mask (SPEC-0046 Culling).
     Scene(u32, u32),
     Dome(u32),
-    /// The world's foliage patches (SPEC-0060).
-    Foliage(u32),
+    /// The world's foliage patches (SPEC-0060), and whether static patches are merged (the
+    /// Display page's Full distant foliage): a change of that setting builds them again.
+    Foliage(u32, bool),
     /// The world's placed objects (type 29), each on its own transform (SPEC-0028 7.1), built
     /// with the world's display mask word.
     Objects(u32, u32),
@@ -2652,6 +2653,7 @@ fn sync_worlds(
     mut built: Local<std::collections::HashMap<WorldPart, scene_merge::Built>>,
     mut sigs: ResMut<SceneSigs>,
     mut pending_fresh: Local<Vec<WorldPart>>,
+    settings: Res<display::DisplaySettings>,
 ) {
     let _span = crate::perf::span("sync_worlds");
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
@@ -2666,14 +2668,15 @@ fn sync_worlds(
     let mut want = vec![WorldPart::Scene(p.world.pack, layers(p.world.pack)), WorldPart::Objects(p.world.pack, mask(p.world.pack))];
     // NEOPETS_PERF_NOFOLIAGE: no foliage drawn (diagnostic, to measure its cost).
     let no_foliage = std::env::var_os("NEOPETS_PERF_NOFOLIAGE").is_some();
+    let merge_foliage = !settings.original_foliage && foliage_view::merge_enabled();
     if p.foliage.contains_key(&p.world.pack) && !no_foliage {
-        want.push(WorldPart::Foliage(p.world.pack));
+        want.push(WorldPart::Foliage(p.world.pack, merge_foliage));
     }
     if let (true, Some(o)) = (p.other_drawn(), &p.other) {
         want.push(WorldPart::Scene(o.pack, layers(o.pack)));
         want.push(WorldPart::Objects(o.pack, mask(o.pack)));
         if p.foliage.contains_key(&o.pack) && !no_foliage {
-            want.push(WorldPart::Foliage(o.pack));
+            want.push(WorldPart::Foliage(o.pack, merge_foliage));
         }
     }
     if let Some((pack, m)) = p.mask_tree() {
@@ -2691,7 +2694,7 @@ fn sync_worlds(
         want = vec![floor, WorldPart::Dome(neopets_data::area::dome_for_slot(None))];
         // The reed field's plants.
         if p.foliage.get(&p.world.pack).is_some_and(|v| !v.is_empty()) && !no_foliage {
-            want.push(WorldPart::Foliage(p.world.pack));
+            want.push(WorldPart::Foliage(p.world.pack, merge_foliage));
         }
     }
     // NEOPETS_NO_OBJECTS / NEOPETS_NO_MASKTREE: those world parts left out (diagnostic).
@@ -2836,11 +2839,11 @@ fn sync_worlds(
             stage_view::spawn_floor(&mut commands, &mut meshes, &mut materials, &mut images, *part);
             continue;
         }
-        if let WorldPart::Foliage(pack) = *part {
+        if let WorldPart::Foliage(pack, merge) = *part {
             let _load = crate::perf::span("load:foliage");
             match foliage_view::models(disc, index, p, pack) {
                 Ok(models) => {
-                    let n = foliage_view::spawn(&mut commands, p, pack, &models, *part, &mut meshes, &mut materials, &mut pass1_materials, &mut images);
+                    let n = foliage_view::spawn(&mut commands, p, pack, &models, *part, &mut meshes, &mut materials, &mut pass1_materials, &mut images, merge);
                     info!("foliage of {pack}: {n} plants of {} models", models.len());
                 }
                 Err(e) => error!("foliage of {pack}: {e}"),
@@ -2901,7 +2904,7 @@ fn sync_worlds(
                 }
                 Ok((!data.parts.is_empty()).then_some(data))
             }),
-            WorldPart::Foliage(_) | WorldPart::Objects(..) | WorldPart::Stage | WorldPart::Field => Ok(None),
+            WorldPart::Foliage(..) | WorldPart::Objects(..) | WorldPart::Stage | WorldPart::Field => Ok(None),
         };
         match model {
             // A scene is kept and spawned below, merged (scene_merge.rs), once the twins of the
