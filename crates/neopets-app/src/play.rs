@@ -1549,6 +1549,10 @@ pub struct Play {
     rebind: Vec<(u32, usize)>,
     /// Entities deactivated before their characters loaded.
     pending_off: std::collections::HashSet<(u32, usize)>,
+    /// Slot characters switched off by SlotCharacter (pack, region, record ordinal): kept across
+    /// world loads and checked when the record spawns (user's report 121: on a world swap the
+    /// switch ran before the world was resident and the assassin spawned active).
+    slot_off: std::collections::HashSet<(u32, u32, usize)>,
     /// Script holds (an entity animation) asked for an entity not bound yet, by (pack, entity):
     /// the animation and the tick it lapses (120 ticks on: this build's bridge for its own
     /// binding order, not a game rule), applied when the entity is bound. 985's thread grabs the Werelupe King
@@ -2557,6 +2561,7 @@ impl Play {
             gesture: Default::default(),
             gesture_words,
             pending_off: Default::default(),
+            slot_off: Default::default(),
             pending_holds: Default::default(),
             pending_navmesh: Vec::new(),
             juppie_words,
@@ -4132,10 +4137,21 @@ impl Play {
                     }
                 }
                 Action::SlotCharacter { region, n, on } => {
-                    // The record's entity: region j = region - pack - 1 at ordinal n.
-                    let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
-                    let j = region.checked_sub(pack + 1)?;
-                    let entity = world.entities.iter().position(|&(r, o)| r as u32 == j && o as usize == n)?;
+                    if on {
+                        self.slot_off.remove(&(pack, region, n));
+                    } else {
+                        self.slot_off.insert((pack, region, n));
+                    }
+                    // The record's entity (region j = region - pack - 1 at ordinal n), when the
+                    // world is resident: every character bound to it follows.
+                    let entity = self.entity_of(pack, region, n)?;
+                    if !on {
+                        for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.entity == Some(entity)) {
+                            c.inactive = true;
+                            c.deactivated = true;
+                            c.script_walk = None;
+                        }
+                    }
                     let a = if on { Action::ActivateEntity { entity } } else { Action::DeactivateEntity { entity } };
                     return self.execute(a, pack);
                 }
@@ -9561,8 +9577,8 @@ impl Play {
                 // SPEC-0016 Start of the fight (rewrite choice): the Plague Serpent's controller
                 // starts at the intro's release with its initial values, so it is held from load.
                 held: row.is_some_and(|r| r.class == Some(2)),
-                inactive: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
-                deactivated: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
+                inactive: self.slot_off.contains(&(pack, region, pl.ordinal)) || self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
+                deactivated: self.slot_off.contains(&(pack, region, pl.ordinal)) || self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
                 // SPEC-0015 Variant: the spit flag from the Act 3 marker (story flag 0x53).
                 boss: row.filter(|r| r.class == Some(18)).map(|_| {
                     let mut j = neopets_sim::juppie::Juppie::default();
