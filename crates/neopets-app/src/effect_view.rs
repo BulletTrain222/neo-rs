@@ -32,6 +32,11 @@ pub fn sync_trails(
     mut images: ResMut<Assets<Image>>,
 ) {
     let _span = crate::perf::span("sync_trails");
+    // NEOPETS_PERF_NOFX: the effect and trail meshes are not updated (diagnostic, to measure
+    // their uploads).
+    if std::env::var_os("NEOPETS_PERF_NOFX").is_some() {
+        return;
+    }
     let Some(state) = state else { return };
     let play = &state.play;
     let (mut positions, mut uvs, mut colours, mut indices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -108,8 +113,27 @@ pub fn sync_effects(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut anchor: Local<Option<Handle<Mesh>>>,
 ) {
     let _span = crate::perf::span("sync_effects");
+    // A mesh of the effect and trail batches' layout (position, UV, colour; 32-bit indices) that
+    // never changes. Bevy keeps each vertex layout in its own GPU buffers and frees the changed
+    // meshes before placing them again, destroying a buffer left empty; with only the per-frame
+    // batches in it, the buffers were destroyed and made anew every frame, about 1 ms a frame in
+    // view 27 (performance pass of 2026-11-12). The anchor keeps them alive.
+    if anchor.is_none() {
+        let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+        m.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4]);
+        m.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 4]);
+        m.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4]);
+        m.insert_indices(Indices::U32(vec![0, 0, 0]));
+        *anchor = Some(meshes.add(m));
+    }
+    // NEOPETS_PERF_NOFX: the effect and trail meshes are not updated (diagnostic, to measure
+    // their uploads).
+    if std::env::var_os("NEOPETS_PERF_NOFX").is_some() {
+        return;
+    }
     let Some(state) = state else { return };
     let Some(camera) = cameras.iter().next() else { return };
     let (right, up) = (camera.right().as_vec3(), camera.up().as_vec3());
@@ -188,3 +212,4 @@ pub fn sync_effects(
         *vis = if by_group.contains_key(&b.0) { Visibility::Visible } else { Visibility::Hidden };
     }
 }
+

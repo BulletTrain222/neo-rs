@@ -112,8 +112,14 @@ pub fn sync_shadows(
     mut parts: Query<(&VolumeMesh, &Mesh3d, &mut Visibility)>,
     mut made: Local<Option<(Handle<ShadowSubtract>, Handle<ShadowAdd>)>>,
     mut stamp: Local<Option<(u64, usize)>>,
+    mut anchor: Local<Option<Handle<Mesh>>>,
 ) {
     let _span = crate::perf::span("sync_shadows");
+    // A position-only mesh that never changes, so the volumes' GPU buffers are not destroyed
+    // and made anew each time both volumes are rebuilt (see effect_view's anchor).
+    if anchor.is_none() {
+        *anchor = Some(meshes.add(empty_mesh()));
+    }
     let f = FACTORS[settings.char_shadows.min(FACTORS.len() - 1)];
     let (down, up) = (Vec4::splat(f), Vec4::splat(1.0 / f));
     let Some(state) = state else { return };
