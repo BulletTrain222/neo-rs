@@ -632,6 +632,19 @@ struct SimText;
 #[derive(Component)]
 struct BrowserText;
 
+/// The graphics API: DX12 on Windows unless WGPU_BACKEND names another. On a laptop whose
+/// display hangs off the integrated GPU, Vulkan's present copied every frame across at a cost
+/// that follows the window size (about 6.5 ms a frame at 1920 x 1080 on the user's RX 6700S);
+/// DX12 measured 1 to 3 ms a frame faster in the user's views with the same picture
+/// (performance pass of 2026-11-12).
+fn render_settings() -> bevy::render::settings::WgpuSettings {
+    let mut s = bevy::render::settings::WgpuSettings::default();
+    if cfg!(target_os = "windows") && std::env::var_os("WGPU_BACKEND").is_none() {
+        s.backends = Some(bevy::render::settings::Backends::DX12);
+    }
+    s
+}
+
 fn main() {
     // A crash's message, place and backtrace are also appended to private/crash.log (with the
     // time), so a crash in a window started without a console can be read afterwards.
@@ -974,7 +987,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
+        }).set(bevy::render::RenderPlugin { render_creation: render_settings().into(), ..default() }))
         .init_resource::<dev_menu::DevMenu>()
         .init_resource::<states_menu::StatesMenu>()
         .init_resource::<dev_spawn::SpawnPicker>()
