@@ -154,6 +154,9 @@ pub enum Action {
     /// DeactivateEntity (row 114) and ActivateEntity (row 116).
     DeactivateEntity { entity: usize },
     ActivateEntity { entity: usize },
+    /// CharacterActivate / CharacterDeactivate (rows 211 and 213) of character `n` of the slot
+    /// holding character region `region`; the host maps it to that record's entity.
+    SlotCharacter { region: u32, n: usize, on: bool },
     /// SetAI_HitPointsPercentage (row 49).
     HitPointsPercent { entity: usize, percent: f32 },
     /// LetterBoxOn and LetterBoxOff (rows 140 and 139).
@@ -1907,7 +1910,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([reg(0, 8), Action::CollisMask { mask: 1 }]);
             }
             if state.flag(256) && !state.flag(258) {
-                v.extend([reg(1, 3), Action::LoadRegion { slot: 1, region: Some(755) }]);
+                // SlotLoad(second slot, set 1, keep false, ...): with keep false nothing streams,
+                // so its character (the Gelert Assassin) stays off until trigger 1's
+                // CharacterActivate (user's report 119).
+                v.extend([reg(1, 3), Action::LoadRegion { slot: 1, region: Some(755) }, Action::SlotCharacter { region: 755, n: 0, on: false }]);
             }
             v.push(Action::LoadRegion { slot: 0, region: Some(if state.flag(427) && !state.flag(428) { 756 } else { 754 }) });
             v
@@ -12295,7 +12301,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             if !state.movies.contains(&36) {
                 state.queue_movie(36);
                 // SetToNormalCamera (SPEC-0039 753 trigger 1: (5.0, 3.14)).
-                out.actions.extend([Action::MoveHero { locator: 3 }, Action::NormalCamera { distance: 5.0, angle: std::f32::consts::PI, release: true }]);
+                out.actions.extend([
+                    Action::MoveHero { locator: 3 },
+                    Action::NormalCamera { distance: 5.0, angle: std::f32::consts::PI, release: true },
+                    Action::SlotCharacter { region: 755, n: 0, on: true },
+                ]);
                 out.actions.extend((15..=48).map(|slot| Action::StartEffect { slot, camera: false }));
                 state.set_level(1, true);
             }
@@ -13326,6 +13336,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 };
                 if end {
                     state.queue_movie(37);
+                    out.push(Action::SlotCharacter { region: 755, n: 0, on: false });
                     state.set(258, true);
                     out.extend((15..=48).map(|slot| Action::StopEffect { slot }));
                 }

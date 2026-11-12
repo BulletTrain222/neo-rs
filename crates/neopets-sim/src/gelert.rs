@@ -812,11 +812,27 @@ impl Gelert {
             1 => {
                 let mut pick = self.choose(v, w, rng);
                 // The landing point.
-                let (lo, hi) = match pick {
+                let range = |pick: Shadow| match pick {
                     Shadow::Dagger => (w.at(0x002D_AD14), w.at(0x002D_AD14)),
                     Shadow::Heal => (w.at(0x002D_AD28), w.at(0x002D_AD2C)),
                     Shadow::LightArc => (w.at(0x002D_AD34), w.at(0x002D_AD38)),
                     _ => (w.at(0x002D_AD3C), w.at(0x002D_AD40)),
+                };
+                // Up to 10 tries at a random distance from the hero, at the hero's height; when
+                // all fail the attack becomes just appear at the boss's own position (4.7; the
+                // boss's own position, not the hero's: user's report 118).
+                let search = |pick: &mut Shadow, rng: &mut Rng| {
+                    let (lo, hi) = range(*pick);
+                    for _ in 0..10 {
+                        let ang = rng.frange(0.0, std::f32::consts::TAU);
+                        let r = rng.frange(lo as f32, hi as f32);
+                        let p = [v.hero[0] + r * ang.cos(), v.hero[1], v.hero[2] + r * ang.sin()];
+                        if (v.walkable)(p) {
+                            return p;
+                        }
+                    }
+                    *pick = Shadow::JustAppear;
+                    v.position
                 };
                 let land = if pick == Shadow::BackStab {
                     let f = [v.hero_facing[0], 0.0, v.hero_facing[2]];
@@ -824,24 +840,12 @@ impl Gelert {
                     if (v.walkable)(p) {
                         p
                     } else {
+                        // Not on a mesh: the shadow dagger with its own 15-unit search.
                         pick = Shadow::Dagger;
-                        v.hero
+                        search(&mut pick, rng)
                     }
                 } else {
-                    let mut found = None;
-                    for _ in 0..10 {
-                        let ang = rng.frange(0.0, std::f32::consts::TAU);
-                        let r = rng.frange(lo as f32, hi as f32);
-                        let p = [v.hero[0] + r * ang.cos(), v.hero[1], v.hero[2] + r * ang.sin()];
-                        if (v.walkable)(p) {
-                            found = Some(p);
-                            break;
-                        }
-                    }
-                    found.unwrap_or_else(|| {
-                        pick = Shadow::JustAppear;
-                        v.hero
-                    })
+                    search(&mut pick, rng)
                 };
                 a.place = Some(land);
                 a.face = Some(1.0);

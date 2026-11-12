@@ -332,7 +332,7 @@ pub fn sync_hud(
     // Mote panel cells under node 392 with their subtrees (diagnostic).
     static DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if std::env::var_os("NEOPETS_TRACE_HUDNODES").is_some() && !DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        let show = |n: usize| { let d = f.nodes[n]; format!("node {n} key {} kind {} handler {} arg {} data {} at ({},{}) {}x{} sprite {:?}", d.key, d.kind, d.handler, d.arg, d.data, d.x, d.y, d.width, d.height, f.sprite(n).map(|s| (s.asset, s.frames, s.frame, s.columns, s.rows))) };
+        let show = |n: usize| { let d = f.nodes[n]; format!("node {n} key {} kind {} handler {} mode {} arg {} data {} at ({},{}) {}x{} sprite {:?}", d.key, d.kind, d.handler, d.mode, d.arg, d.data, d.x, d.y, d.width, d.height, f.sprite(n).map(|s| (s.asset, s.frames, s.frame, s.columns, s.rows))) };
         for k in [164u32, 166, 162] {
             if let Some(n) = f.key(k) {
                 let mut sub = Vec::new();
@@ -611,6 +611,26 @@ pub fn sync_hud(
             Some((f.key(key)?, art))
         })
         .collect();
+    // SPEC-0021 5b / SPEC-0023 section 24: Mote k's icon shows while the hero owns it. The disc's
+    // HUD tree gives the 32 x 32 icons (the sprites of the panel's icon group) no predicate, so
+    // each icon takes the Mote of the nearest selection cell (handler 15, argument 0 to 13) by
+    // canvas position, within 12 units (this build's link; user's report 117).
+    let mote_icon_of: HashMap<usize, u8> = mote_root.map_or_else(HashMap::new, |root| {
+        let mut sub = Vec::new();
+        subtree(f, root, &mut sub);
+        let cells: Vec<(i32, i32, u8)> = sub.iter().map(|&k| f.nodes[k]).filter(|d| d.kind == 5 && d.handler == 15 && d.arg < 14).map(|d| (d.x as i32, d.y as i32, d.arg)).collect();
+        sub.iter()
+            .filter(|&&k| {
+                let d = f.nodes[k];
+                d.kind == 1 && d.handler < 0 && d.width == 32 && d.height == 32 && f.sprite(k).is_some() && d.parent.and_then(|g| f.nodes[g].parent) == Some(root)
+            })
+            .filter_map(|&k| {
+                let d = f.nodes[k];
+                let (x, y) = (d.x as i32, d.y as i32);
+                cells.iter().map(|&(cx, cy, a)| ((cx - x).pow(2) + (cy - y).pow(2), a)).filter(|&(d2, _)| d2 <= 144).min().map(|(_, a)| (k, a))
+            })
+            .collect()
+    });
     let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
     for (sprite, mut node, mut image, mut vis) in &mut sprites {
         let n = sprite.0;
@@ -691,6 +711,9 @@ pub fn sync_hud(
         let h = f.nodes[n].height as i32;
         // An item icon element draws its item's art, or nothing.
         let art = icon_art.get(&n).copied().unwrap_or(Some(n));
+        if let Some(&k) = mote_icon_of.get(&n) {
+            ok &= inputs.mote_counts.get(k as usize).is_some_and(|&c| c > 0);
+        }
         if !ok || w <= 0 || h <= 0 || art.is_none() {
             *vis = Visibility::Hidden;
             continue;

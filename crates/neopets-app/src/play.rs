@@ -4131,6 +4131,14 @@ impl Play {
                         c.invulnerable = on;
                     }
                 }
+                Action::SlotCharacter { region, n, on } => {
+                    // The record's entity: region j = region - pack - 1 at ordinal n.
+                    let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+                    let j = region.checked_sub(pack + 1)?;
+                    let entity = world.entities.iter().position(|&(r, o)| r as u32 == j && o as usize == n)?;
+                    let a = if on { Action::ActivateEntity { entity } } else { Action::DeactivateEntity { entity } };
+                    return self.execute(a, pack);
+                }
                 Action::DeactivateEntity { entity } => {
                     // An entity whose region has not loaded yet is deactivated when it arrives
                     // (an Init's deactivations and streaming refusals run before the load).
@@ -11182,6 +11190,16 @@ impl Play {
     /// (ground step with the world swap search, root travel, constraint, gravity, contacts,
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
+        // NEOPETS_TRACE_LEVELS: the level-state bits whenever they change (diagnostic).
+        if std::env::var_os("NEOPETS_TRACE_LEVELS").is_some() {
+            static LAST: std::sync::Mutex<Option<Vec<u16>>> = std::sync::Mutex::new(None);
+            let now: Vec<u16> = self.state.level_flags.iter().copied().collect();
+            let mut last = LAST.lock().unwrap();
+            if last.as_ref() != Some(&now) {
+                println!("      level states on tick {}: {now:?} (flag 258 {})", self.ticks, self.state.flag(258));
+                *last = Some(now);
+            }
+        }
         self.recorder.push(self.ticks, input, self.world.pack, self.loco.position(), &self.state, self.hero_hp);
         {
             // The bug report's history row: the hero as the previous tick left him.
@@ -15584,7 +15602,9 @@ impl Play {
         let hero = self.loco.position();
         let hf = self.loco.facing;
         let Some(words) = self.gelert_words.clone() else { return };
-        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.gelert.is_some() && !c.held).map(|c| c.id).collect();
+        // A deactivated Gelert (DeactivateEntity, or 753's slot character before CharacterActivate)
+        // does not run (user's report 119: its hit-count event ended the meeting early).
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.gelert.is_some() && !c.held && !c.deactivated).map(|c| c.id).collect();
         if ids.is_empty() {
             return;
         }
@@ -15720,7 +15740,13 @@ impl Play {
                 let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
                 c.facing = neopets_sim::hero::steer(c.facing, to, rate);
             }
-            if let Some(p) = act.place {
+            if let Some(mut p) = act.place {
+                // SPEC-0013 4.7 / Open question 39, the default: the reappear point (written at
+                // the hero's height) drops to the ground height at that x and z, probed from 8
+                // above (user's report 118: on a slope he landed inside the ground).
+                if let Some(h) = world.ground_at(p[0], p[2], p[1] + 8.0) {
+                    p[1] = h;
+                }
                 c.position = p;
                 if let Some(wk) = c.walker.as_mut() {
                     wk.body.position = p;
