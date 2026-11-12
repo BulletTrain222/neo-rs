@@ -120,7 +120,7 @@ pub fn step(
     mut labels: Query<(&GalleryLabel, &mut Node, &mut Visibility), (Without<GalleryItem>, Without<GalleryPart>, Without<GalleryTitle>)>,
     mut title: Query<(&mut Text, &mut Visibility), (With<GalleryTitle>, Without<GalleryItem>, Without<GalleryLabel>, Without<GalleryPart>)>,
     mut parts: Query<&mut Visibility, (With<GalleryPart>, Without<GalleryItem>, Without<GalleryLabel>, Without<GalleryTitle>)>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(&Camera, &GlobalTransform), (With<Camera3d>, Without<crate::water_reflect::MirrorCam>)>,
     windows: Query<&Window>,
 ) {
     let open = dev.debug.gallery;

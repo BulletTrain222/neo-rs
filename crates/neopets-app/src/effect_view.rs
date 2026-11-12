@@ -107,7 +107,7 @@ pub struct Batches {
 pub fn sync_effects(
     mut commands: Commands,
     state: Option<Res<PlayState>>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<&GlobalTransform, (With<Camera3d>, Without<crate::water_reflect::MirrorCam>)>,
     mut batches: Query<(&EffectBatch, &mut Visibility)>,
     mut made: Local<Batches>,
     mut meshes: ResMut<Assets<Mesh>>,

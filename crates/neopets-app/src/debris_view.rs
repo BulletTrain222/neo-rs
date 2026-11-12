@@ -30,7 +30,7 @@ pub fn sync_debris(
     mut commands: Commands,
     state: Option<Res<PlayState>>,
     mut archive: Option<ResMut<crate::Archive>>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<&GlobalTransform, (With<Camera3d>, Without<crate::water_reflect::MirrorCam>)>,
     mut roots: Query<(Entity, &DebrisRoot, &mut Transform, &mut Visibility)>,
     mut batches: Query<(&DebrisBatch, &mut Visibility), Without<DebrisRoot>>,
     mut made: Local<Made>,

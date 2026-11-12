@@ -114,7 +114,7 @@ pub fn sync_book(
     mut images: ResMut<Assets<Image>>,
     mut parts: Query<(Entity, &mut Transform), (With<BookPart>, Without<BookCamera>)>,
     mut cameras: Query<(Entity, &mut Transform), With<BookCamera>>,
-    main: Query<(Option<&RenderTarget>, Option<&Msaa>), (With<Camera3d>, Without<BookCamera>)>,
+    main: Query<(Option<&RenderTarget>, Option<&Msaa>), (With<Camera3d>, Without<BookCamera>, Without<crate::water_reflect::MirrorCam>)>,
 ) {
     let open = menu.as_ref().filter(|m| m.flow.current == crate::menus::BOOK).and_then(|m| m.flow.book.as_ref().map(|b| (m, b)));
     let Some((m, b)) = open else {

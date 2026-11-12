@@ -192,7 +192,7 @@ fn ssao_quality() -> bevy::pbr::ScreenSpaceAmbientOcclusionQualityLevel {
     }
 }
 
-fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, state: Option<Res<crate::PlayState>>, cameras: Query<Entity, With<Camera3d>>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool, bool, bool)>>) {
+fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, state: Option<Res<crate::PlayState>>, cameras: Query<Entity, (With<Camera3d>, Without<crate::water_reflect::MirrorCam>)>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool, bool, bool)>>) {
     let indoors = state.as_ref().is_some_and(|s| s.play.indoors());
     let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows == 1, sun_on(&settings), indoors, settings.world_shadows);
     if *last == Some(key) {

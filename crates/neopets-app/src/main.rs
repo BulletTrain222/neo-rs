@@ -20,6 +20,8 @@ mod debris_view;
 mod effect_view;
 mod foliage_view;
 mod fast_lit;
+mod godrays;
+mod water_reflect;
 mod gpu_skin;
 mod ui_lazy;
 mod graphics;
@@ -1013,6 +1015,8 @@ fn main() {
         .add_plugins(graphics::GraphicsPlugin)
         .add_plugins(fast_lit::FastLitPlugin)
         .add_plugins(gpu_skin::GpuSkinPlugin)
+        .add_plugins(godrays::GodRaysPlugin)
+        .add_plugins(water_reflect::WaterReflectPlugin)
         .add_plugins(pass1::Pass1Plugin)
         .add_plugins(draw_order::DrawOrderPlugin)
         .add_plugins(shadow_view::ShadowPlugin)
@@ -3091,7 +3095,7 @@ fn sync_uv_flip(state: Option<Res<PlayState>>, parts: Query<(&UvFlip, &MeshMater
 
 /// A world part's UV scroll speeds per pass (SPEC-0003 UV mode 2).
 #[derive(Component, Clone, Copy)]
-struct UvScroll([f32; 2]);
+pub(crate) struct UvScroll([f32; 2]);
 
 /// Each frame: a scrolling part's UV offset is frac(s x N) per axis, N the 16-bit pass counter
 /// at 60 passes a second of real time: the scroll never reads game time, so it runs on during a
@@ -3224,7 +3228,7 @@ impl PartSig {
 fn sync_zones(
     state: Option<Res<PlayState>>,
     mut parts: Query<(Entity, Option<&ZoneGate>, Option<&PartSig>, Option<&DrawCull>, &mut Visibility), Or<(With<ZoneGate>, With<PartSig>, With<DrawCull>)>>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<&GlobalTransform, (With<Camera3d>, Without<crate::water_reflect::MirrorCam>)>,
     settings: Res<display::DisplaySettings>,
     mut toggles: Local<(std::collections::HashMap<Entity, (u32, String)>, u32)>,
     sigs: Res<SceneSigs>,
@@ -3599,7 +3603,7 @@ fn sync_items(
     archive: Option<ResMut<Archive>>,
     mut markers: Query<(Entity, &ItemMarker, &mut Transform, &mut Visibility, Option<&Children>), Without<ShowcaseMarker>>,
     mut showcases: Query<(Entity, &ShowcaseMarker, &mut Transform, &mut Visibility, Option<&ChildOf>), Without<ItemMarker>>,
-    cameras: Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform), (With<Camera3d>, Without<crate::water_reflect::MirrorCam>)>,
     windows: Query<&Window>,
     parts: Query<&MeshMaterial3d<StandardMaterial>, With<ItemPart>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -4294,7 +4298,7 @@ fn sync_characters(
     mut rigid: Local<std::collections::HashMap<u64, (Vec<(Handle<Mesh>, usize)>, bool)>>,
     mut kids: Local<std::collections::HashMap<u64, (Vec<Entity>, Option<(u64, bool)>)>>,
     seen: Query<&ViewVisibility>,
-    cameras: Query<&GlobalTransform, (With<Camera3d>, Without<gpu_skin::SkinJoint>)>,
+    cameras: Query<&GlobalTransform, (With<Camera3d>, Without<gpu_skin::SkinJoint>, Without<crate::water_reflect::MirrorCam>)>,
     (skin_assets, mut joint_query, mut gpu_joints): (Res<gpu_skin::SkinAssets>, Query<&mut GlobalTransform, With<gpu_skin::SkinJoint>>, Local<std::collections::HashMap<u64, Vec<Entity>>>),
 ) {
     let _span = crate::perf::span("sync_characters");

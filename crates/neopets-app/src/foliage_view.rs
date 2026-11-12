@@ -68,6 +68,11 @@ pub fn merge_enabled() -> bool {
 pub fn merged_copies(src: &Mesh, transforms: &[Transform]) -> Option<Mesh> {
     use bevy::mesh::{Indices, VertexAttributeValues as V};
     let n = src.count_vertices();
+    // An empty result (no plants, or a part with no vertices) is no mesh: Bevy's allocator skips
+    // a mesh of no vertices but still copies it, and logs "Use-after-free" each time.
+    if n == 0 || transforms.is_empty() {
+        return None;
+    }
     let mut out = Mesh::new(src.primitive_topology(), bevy::asset::RenderAssetUsages::default());
     for (attr, values) in src.attributes() {
         let merged = match values {
@@ -325,7 +330,7 @@ pub struct PatchPart {
 pub fn sync_bushes(
     state: Option<Res<crate::PlayState>>,
     settings: Res<crate::display::DisplaySettings>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<&GlobalTransform, (With<Camera3d>, Without<crate::water_reflect::MirrorCam>)>,
     mut parts: Query<(&PatchPart, Option<&BushPart>, Option<&FoliageLod>, &mut Transform, &mut Visibility), Without<Camera3d>>,
 ) {
     let _span = crate::perf::span("sync_bushes");

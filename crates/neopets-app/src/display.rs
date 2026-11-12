@@ -508,7 +508,7 @@ pub fn sync_scene(
     mut commands: Commands,
     settings: Res<DisplaySettings>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<Entity, With<Camera3d>>,
+    cameras: Query<Entity, (With<Camera3d>, Without<crate::water_reflect::MirrorCam>)>,
     mut views: Query<(&mut Node, &bevy::ui_render::prelude::MaterialNode<crate::graphics::SceneGrade>), With<SceneView>>,
     mut grades: ResMut<Assets<crate::graphics::SceneGrade>>,
     mut images: ResMut<Assets<Image>>,
