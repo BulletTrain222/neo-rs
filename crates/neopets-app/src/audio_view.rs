@@ -398,13 +398,19 @@ pub struct StreamVoice(usize, u32);
 
 /// Mirror the two stream channels: start a looping voice for a channel's stream, set its volume
 /// each frame, and stop it when the channel stops or changes stream.
+/// A music stream being decoded on its own thread, or its decoded sound.
+pub enum MusicLoad {
+    Decoding(std::sync::mpsc::Receiver<Result<neopets_data::audio::Pcm, String>>),
+    Ready(Option<Handle<Pcm>>),
+}
+
 pub fn sync_music(
     mut commands: Commands,
     state: Option<Res<PlayState>>,
     mut archive: Option<ResMut<crate::Archive>>,
     mut pcms: ResMut<Assets<Pcm>>,
     mut voices: Query<(Entity, &StreamVoice, Option<&mut AudioSink>)>,
-    mut cache: Local<HashMap<u32, Option<Handle<Pcm>>>>,
+    mut cache: Local<HashMap<u32, MusicLoad>>,
 ) {
     let _span = crate::perf::span("sync_music");
     let Some(state) = state else { return };
@@ -422,19 +428,43 @@ pub fn sync_music(
         if voices.iter().any(|(_, v, _)| v.0 == k && v.1 == r) {
             continue;
         }
-        let handle = cache.entry(r).or_insert_with(|| {
-            let crate::Archive { disc, index } = archive.as_deref_mut()?;
-            let bytes = index.read(disc, r).ok()?;
-            match neopets_data::audio::kpv(&bytes) {
-                Ok(p) => Some(pcms.add(Pcm::from(p))),
+        // Performance: a stream is read from the disc here but decoded on its own thread (a
+        // whole track took 15 to 19 ms of one frame, at a world's start and at every change
+        // of music); the voice starts on the first frame after the decode ends, a frame or
+        // two later.
+        let load = cache.entry(r).or_insert_with(|| {
+            let Some(crate::Archive { disc, index }) = archive.as_deref_mut() else { return MusicLoad::Ready(None) };
+            match index.read(disc, r) {
+                Ok(bytes) => {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(neopets_data::audio::kpv(&bytes));
+                    });
+                    MusicLoad::Decoding(rx)
+                }
                 Err(e) => {
                     error!("Stream {r}: {e}");
-                    None
+                    MusicLoad::Ready(None)
                 }
             }
         });
-        if let Some(h) = handle.clone() {
-            commands.spawn((AudioPlayer(h), PlaybackSettings::LOOP.with_volume(Volume::Linear(ch.volume as f32 / 1024.0)), StreamVoice(k, r)));
+        if let MusicLoad::Decoding(rx) = load {
+            let done = match rx.try_recv() {
+                Ok(Ok(p)) => Some(Some(pcms.add(Pcm::from(p)))),
+                Ok(Err(e)) => {
+                    error!("Stream {r}: {e}");
+                    Some(None)
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(None),
+            };
+            match done {
+                Some(h) => *load = MusicLoad::Ready(h),
+                None => continue,
+            }
+        }
+        if let MusicLoad::Ready(Some(h)) = load {
+            commands.spawn((AudioPlayer(h.clone()), PlaybackSettings::LOOP.with_volume(Volume::Linear(ch.volume as f32 / 1024.0)), StreamVoice(k, r)));
         }
     }
 }
