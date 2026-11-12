@@ -20,6 +20,7 @@ mod debris_view;
 mod effect_view;
 mod foliage_view;
 mod fast_lit;
+mod gpu_skin;
 mod graphics;
 mod pass1;
 mod shadow_view;
@@ -1006,6 +1007,7 @@ fn main() {
         .insert_resource(display::DisplaySettings::load())
         .add_plugins(graphics::GraphicsPlugin)
         .add_plugins(fast_lit::FastLitPlugin)
+        .add_plugins(gpu_skin::GpuSkinPlugin)
         .add_plugins(pass1::Pass1Plugin)
         .add_plugins(draw_order::DrawOrderPlugin)
         .add_plugins(shadow_view::ShadowPlugin)
@@ -4226,6 +4228,21 @@ fn sync_attachments(
 
 /// Spawn, place, skin and relight the region characters of drawn worlds; despawn the rest.
 #[allow(clippy::too_many_arguments)]
+/// A character root's transform: its position and facing (or the carry rows while carried),
+/// and a Cloud Beast stand-in's pose (bob, lean and scale; the disc has no clips for them).
+fn character_root_transform(p: &play::Play, c: &play::Character) -> Transform {
+    let mut want = Transform::from_translation(Vec3::from(c.position)).with_rotation(Quat::from_rotation_y(c.facing[0].atan2(c.facing[2])));
+    if let Some([x, y, z]) = c.carry_rows {
+        want.rotation = Quat::from_mat3(&Mat3::from_cols(Vec3::from(x), Vec3::from(y), Vec3::from(z)));
+    }
+    if let Some((bob, lean, s)) = p.cloud_pose(c) {
+        want.translation.y += bob;
+        want.rotation *= Quat::from_rotation_x(lean);
+        want.scale = Vec3::splat(s);
+    }
+    want
+}
+
 fn sync_characters(
     mut commands: Commands,
     state: Option<ResMut<PlayState>>,
@@ -4239,7 +4256,8 @@ fn sync_characters(
     mut rigid: Local<std::collections::HashMap<u64, (Vec<(Handle<Mesh>, usize)>, bool)>>,
     mut kids: Local<std::collections::HashMap<u64, (Vec<Entity>, Option<(u64, bool)>)>>,
     seen: Query<&ViewVisibility>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<&GlobalTransform, (With<Camera3d>, Without<gpu_skin::SkinJoint>)>,
+    (skin_assets, mut joint_query, mut gpu_joints): (Res<gpu_skin::SkinAssets>, Query<&mut GlobalTransform, With<gpu_skin::SkinJoint>>, Local<std::collections::HashMap<u64, Vec<Entity>>>),
 ) {
     let _span = crate::perf::span("sync_characters");
     let Some(state) = state else { return };
@@ -4252,6 +4270,7 @@ fn sync_characters(
         skinned.clear();
         rigid.clear();
         kids.clear();
+        gpu_joints.clear();
     }
     for (e, root, mut t, mut vis) in &mut roots {
         if rebuilt {
@@ -4264,17 +4283,7 @@ fn sync_characters(
                 skinned.remove(&root.0);
             }
             Some(c) => {
-                let mut want = Transform::from_translation(Vec3::from(c.position)).with_rotation(Quat::from_rotation_y(c.facing[0].atan2(c.facing[2])));
-                if let Some([x, y, z]) = c.carry_rows {
-                    want.rotation = Quat::from_mat3(&Mat3::from_cols(Vec3::from(x), Vec3::from(y), Vec3::from(z)));
-                }
-                // The Cloud Beast stand-ins move by pose, not by clips (the disc has none).
-                if let Some((bob, lean, s)) = p.cloud_pose(c) {
-                    want.translation.y += bob;
-                    want.rotation *= Quat::from_rotation_x(lean);
-                    want.scale = Vec3::splat(s);
-                }
-                set_if(&mut t, want);
+                set_if(&mut t, character_root_transform(p, c));
                 // SPEC-0046 Drawable test: the visibility predicate hides a waiting enemy with cue
                 // word 0 and an invisible kind in its default state or state 21 before clip 82.
                 // SPEC-0010 Vanishing: the Cloud Beast's bodies during the gust's travel.
@@ -4284,6 +4293,7 @@ fn sync_characters(
         }
     }
     skinned.retain(|id, _| live.contains(id));
+    gpu_joints.retain(|id, _| live.contains(id));
     rigid.retain(|id, _| live.contains(id));
     kids.retain(|id, _| live.contains(id));
     for c in &p.characters {
@@ -4331,22 +4341,50 @@ fn sync_characters(
                 .collect();
             let mut list = Vec::new();
             let mut spawned = Vec::new();
+            // GPU skinning (gpu_skin.rs): the skinned parts keep their rest vertices and draw from
+            // joint entities written each tick.
+            let bones = c.anim.skin_matrices().len();
+            let gpu = gpu_skin::enabled() && gpu_skin::fits(bones);
+            if gpu {
+                let skinned_parts = second.iter().map(|(i, m, _, _)| (*i, m)).chain(parts.iter().map(|(i, m, _)| (*i, m)));
+                for (i, mesh) in skinned_parts {
+                    let part = &c.model.parts[i];
+                    if !part.weights.is_empty() {
+                        if let Some(mut m) = meshes.get_mut(mesh) {
+                            gpu_skin::prepare_mesh(&mut m, part, bones);
+                        }
+                    }
+                }
+            }
+            let mut joints = Vec::new();
+            let skin = gpu.then(|| skin_assets.bindposes.clone());
             commands
                 .spawn((Transform::from_translation(Vec3::from(c.position)).with_rotation(rotation), Visibility::Visible, CharacterRoot(c.id)))
                 .with_children(|ch| {
+                    if gpu {
+                        joints = (0..bones + gpu_skin::DATA_JOINTS + 1).map(|_| ch.spawn((GlobalTransform::IDENTITY, gpu_skin::SkinJoint)).id()).collect();
+                    }
+                    let skin_of = |joints: &Vec<Entity>| skin.clone().map(|h| (bevy::mesh::skinning::SkinnedMesh { inverse_bindposes: h, joints: joints.clone() }, bevy::camera::visibility::NoFrustumCulling));
                     for (i, mesh, material, scroll) in second {
-                        if !c.model.parts[i].weights.is_empty() {
+                        let skinned_part = !c.model.parts[i].weights.is_empty();
+                        if skinned_part && !gpu {
                             list.push((mesh.clone(), i));
                         }
                         let mut e = ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
                         if let Some(s) = scroll {
                             e.insert(pass1::Pass1Scroll(s));
                         }
+                        if let Some(k) = skin_of(&joints).filter(|_| skinned_part) {
+                            e.insert(k);
+                        }
                         spawned.push(e.id());
                     }
                     for (i, mesh, material) in parts {
-                        if !c.model.parts[i].weights.is_empty() {
-                            list.push((mesh.clone(), i));
+                        let skinned_part = !c.model.parts[i].weights.is_empty();
+                        if skinned_part {
+                            if !gpu {
+                                list.push((mesh.clone(), i));
+                            }
                         } else if let (Some(col), Some(mut m)) = (tinted(&c.model.parts[i], None, None, Some(&c.slots)), meshes.get_mut(&mesh)) {
                             // A rigid part keeps its build colours: the slot colour once.
                             m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
@@ -4356,17 +4394,23 @@ fn sync_characters(
                                 rigid.entry(c.id).or_default().0.push((mesh.clone(), i));
                             }
                         }
-                        let id = match env.get(&i) {
-                            Some(m) => ch.spawn((Mesh3d(mesh), MeshMaterial3d(m.clone()), Transform::IDENTITY)).id(),
+                        let mut e = match env.get(&i) {
+                            Some(m) => ch.spawn((Mesh3d(mesh), MeshMaterial3d(m.clone()), Transform::IDENTITY)),
                             None => {
                                 // A ghost's parts blend at its level (R-0202).
                                 let material = if c.ghost.is_some() { blend_twin(&mut materials, &material) } else { material };
-                                ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY)).id()
+                                ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY))
                             }
                         };
-                        spawned.push(id);
+                        if let Some(k) = skin_of(&joints).filter(|_| skinned_part) {
+                            e.insert(k);
+                        }
+                        spawned.push(e.id());
                     }
                 });
+            if gpu {
+                gpu_joints.insert(c.id, joints);
+            }
             skinned.insert(c.id, list);
             kids.insert(c.id, (spawned, None));
         }
@@ -4404,6 +4448,30 @@ fn sync_characters(
         // NEOPETS_PERF_FREEZE: characters skinned once only (diagnostic, to measure uploads).
         static FREEZE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let freeze = *FREEZE.get_or_init(|| std::env::var_os("NEOPETS_PERF_FREEZE").is_some());
+        // GPU skinning: the joints are written on every tick (or flash change) of a drawn
+        // character, near or far, on screen or not; only the matrices go to the GPU.
+        if let Some(js) = gpu_joints.get(&c.id) {
+            if hidden || *stamp == Some(now) || (freeze && stamp.is_some()) {
+                continue;
+            }
+            *stamp = Some(now);
+            let lights = p.lights(Some(c.id), c.position);
+            let look = gpu_skin::Look {
+                light_rotation: rotation,
+                lights: &lights,
+                tint: p.status_tint(Some(c.id)).unwrap_or([1.0; 3]),
+                slots: if c.flash > 0 { &play::FLASH_COLOUR } else { &c.slots },
+                // SPEC-0029 Behavior 33 (R-0202): a ghost blends at its level / 128.
+                ghost: c.ghost.as_ref().map_or(1.0, |g| ((g.opacity * 128.0) as i32).clamp(0, 128) as f32 / 128.0),
+            };
+            let root = character_root_transform(p, c).compute_affine();
+            for (e, m) in js.iter().zip(gpu_skin::joint_matrices(&root, &c.anim.skin_matrices(), &look)) {
+                if let Ok(mut g) = joint_query.get_mut(*e) {
+                    set_if(&mut g, m);
+                }
+            }
+            continue;
+        }
         if (freeze && stamp.is_some()) || (!noskip && (hidden || (stamp.is_some() && (!on_screen || !due)))) {
             continue;
         }
@@ -6884,6 +6952,7 @@ fn play_frame(
     mut pass1_materials: ResMut<Assets<pass1::Pass1Material>>,
     mut images: ResMut<Assets<Image>>,
     mut hero_stamp: Local<Option<(u64, bool, usize, usize)>>,
+    (skin_assets, mut joint_query, mut hero_joints): (Res<gpu_skin::SkinAssets>, Query<&mut GlobalTransform, With<gpu_skin::SkinJoint>>, Local<Vec<Entity>>),
 ) {
     let _span = crate::perf::span("play_frame");
     let Some(mut state) = play else { return };
@@ -6912,26 +6981,55 @@ fn play_frame(
         // SPEC-0003 How a pass is drawn: two-pass parts' second layer, skinned with pass 0.
         let second = pass1_assets(&state.play.model, &mut meshes, &mut pass1_materials, &mut images);
         let mut skinned = Vec::new();
+        // GPU skinning (gpu_skin.rs), as for the world's characters.
+        let bones = state.play.hero.skin_matrices().len();
+        let gpu = gpu_skin::enabled() && gpu_skin::fits(bones);
+        if gpu {
+            for (i, mesh) in second.iter().map(|(i, m, _, _)| (*i, m)).chain(parts.iter().map(|(i, m, _)| (*i, m))) {
+                let part = &state.play.model.parts[i];
+                if !part.weights.is_empty() {
+                    if let Some(mut m) = meshes.get_mut(mesh) {
+                        gpu_skin::prepare_mesh(&mut m, part, bones);
+                    }
+                }
+            }
+        }
+        let skin = gpu.then(|| skin_assets.bindposes.clone());
+        let mut joints = Vec::new();
         commands
             .spawn((Transform::from_translation(Vec3::from(p)).with_rotation(rotation), Visibility::Visible, HeroRoot))
             .with_children(|c| {
+                if gpu {
+                    joints = (0..bones + gpu_skin::DATA_JOINTS + 1).map(|_| c.spawn((GlobalTransform::IDENTITY, gpu_skin::SkinJoint)).id()).collect();
+                }
+                let skin_of = |joints: &Vec<Entity>| skin.clone().map(|h| (bevy::mesh::skinning::SkinnedMesh { inverse_bindposes: h, joints: joints.clone() }, bevy::camera::visibility::NoFrustumCulling));
                 for (i, mesh, material, scroll) in second {
-                    if !state.play.model.parts[i].weights.is_empty() {
+                    let skinned_part = !state.play.model.parts[i].weights.is_empty();
+                    if skinned_part && !gpu {
                         skinned.push((mesh.clone(), i));
                     }
                     let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
                     if let Some(s) = scroll {
                         e.insert(pass1::Pass1Scroll(s));
                     }
+                    if let Some(k) = skin_of(&joints).filter(|_| skinned_part) {
+                        e.insert(k);
+                    }
                 }
                 for (i, mesh, material) in parts {
-                    if !state.play.model.parts[i].weights.is_empty() {
+                    let skinned_part = !state.play.model.parts[i].weights.is_empty();
+                    if skinned_part && !gpu {
                         skinned.push((mesh.clone(), i));
                     }
-                    c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                    let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                    if let Some(k) = skin_of(&joints).filter(|_| skinned_part) {
+                        e.insert(k);
+                    }
                 }
             });
         state.skinned = skinned;
+        *hero_joints = joints;
+        *hero_stamp = None;
         // SPEC-0027 Projection: 50.2 degrees vertical (S 512 on 480 lines), near 1.0. The far
         // plane is SPEC-0046's widest (10560) so the sky dome is kept.
         for mut projection in &mut projections {
@@ -6954,6 +7052,15 @@ fn play_frame(
     let matrices = if fresh { state.play.hero.skin_matrices() } else { Vec::new() };
     let tint = state.play.status_tint(None);
     let lights = state.play.lights(None, p);
+    if fresh && !hero_joints.is_empty() {
+        let look = gpu_skin::Look { light_rotation: rotation, lights: &lights, tint: tint.unwrap_or([1.0; 3]), slots: if state.play.hero_flash > 0 { &play::FLASH_COLOUR } else { &[[1.0; 3]; 15] }, ghost: 1.0 };
+        let root = Transform::from_translation(Vec3::from(p)).with_rotation(rotation).compute_affine();
+        for (e, m) in hero_joints.iter().zip(gpu_skin::joint_matrices(&root, &matrices, &look)) {
+            if let Ok(mut g) = joint_query.get_mut(*e) {
+                set_if(&mut g, m);
+            }
+        }
+    }
     for (handle, i) in state.skinned.iter().filter(|_| fresh) {
         let part = &state.play.model.parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
