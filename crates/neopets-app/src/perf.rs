@@ -249,6 +249,7 @@ pub fn perf_last(
     entities: Query<()>,
     meshes: Query<&ViewVisibility, With<Mesh3d>>,
     mats: Query<&MeshMaterial3d<StandardMaterial>>,
+    drawn: Query<(&ViewVisibility, &Mesh3d, &MeshMaterial3d<StandardMaterial>)>,
     images: Res<Assets<Image>>,
     materials: Res<Assets<StandardMaterial>>,
 ) {
@@ -274,6 +275,18 @@ pub fn perf_last(
         let n = log.frames as f32;
         let visible = meshes.iter().filter(|v| v.get()).count();
         let distinct: std::collections::HashSet<_> = mats.iter().map(|m| m.0.id()).collect();
+        // Visible meshes by alpha mode, and the distinct (mesh, material) pairs among them.
+        let mut modes: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut pairs = std::collections::HashSet::new();
+        for (v, mesh, m) in &drawn {
+            if !v.get() {
+                continue;
+            }
+            let mode = materials.get(&m.0).map_or("none".to_string(), |x| format!("{:?}", x.alpha_mode).split('(').next().unwrap_or("").to_string());
+            *modes.entry(mode).or_default() += 1;
+            pairs.insert((mesh.0.id(), m.0.id()));
+        }
+        info!("perf: visible by alpha mode {:?}, {} distinct mesh-material pairs", modes, pairs.len());
         info!("perf: {} standard-material meshes, {} distinct materials, {} material assets, {} images", mats.iter().count(), distinct.len(), materials.len(), images.len());
         let mut sorted: Vec<(&&str, &f32)> = log.spans.iter().collect();
         sorted.sort_by(|a, b| b.1.total_cmp(a.1));
@@ -339,17 +352,35 @@ pub fn add_render_timing(app: &mut App) {
         }
     }
     let Some(r) = app.get_sub_app_mut(RenderApp) else { return };
+    // Once: whether the standard material is drawn bindless on this device (many materials
+    // sharing one bind group) and which backend draws.
+    r.add_systems(Render, (|device: Res<bevy::render::renderer::RenderDevice>, info: Res<bevy::render::renderer::RenderAdapterInfo>, mut done: Local<bool>| {
+        if !*done {
+            *done = true;
+            info!("perf: backend {:?}, standard material bindless {}", info.backend, bevy::pbr::material_uses_bindless_resources::<StandardMaterial>(&device));
+            use bevy::render::render_resource::WgpuFeatures as F;
+            let f = device.features();
+            let l = device.limits();
+            info!("perf: binding arrays: texture {} buffer {} storage {} non-uniform {} partial {}; limits: storage buffers {} array samplers {} array textures {}", f.contains(F::TEXTURE_BINDING_ARRAY), f.contains(F::BUFFER_BINDING_ARRAY), f.contains(F::STORAGE_RESOURCE_BINDING_ARRAY), f.contains(F::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING), f.contains(F::PARTIALLY_BOUND_BINDING_ARRAY), l.max_storage_buffers_per_shader_stage, l.max_binding_array_sampler_elements_per_shader_stage, l.max_binding_array_elements_per_shader_stage);
+        }
+    }).before(S::ExtractCommands));
     r.add_systems(
         Render,
         (
             mark("render:extract commands").before(S::ExtractCommands),
-            mark("render:prepare meshes").after(S::ExtractCommands).before(S::PrepareMeshes),
+            mark("render:prepare assets").after(S::ExtractCommands).before(S::PrepareAssets),
+            mark("render:prepare meshes").after(S::PrepareAssets).before(S::PrepareMeshes),
             mark("render:create views").after(S::PrepareMeshes).before(S::CreateViews),
             mark("render:specialize").after(S::CreateViews).before(S::Specialize),
             mark("render:prepare views").after(S::Specialize).before(S::PrepareViews),
             mark("render:queue").after(S::PrepareViews).before(S::Queue),
             mark("render:phase sort").after(S::Queue).before(S::PhaseSort),
-            mark("render:prepare").after(S::PhaseSort).before(S::Prepare),
+            mark("render:prepare").after(S::PhaseSort).before(S::Prepare).before(S::PrepareResources),
+            mark("render:prep batch").after(S::PrepareResources).before(S::PrepareResourcesBatchPhases),
+            mark("render:prep write phases").after(S::PrepareResourcesBatchPhases).before(S::PrepareResourcesWritePhaseBuffers),
+            mark("render:prep collect").after(S::PrepareResourcesWritePhaseBuffers).before(S::PrepareResourcesCollectPhaseBuffers),
+            mark("render:prep flush").after(S::PrepareResourcesCollectPhaseBuffers).before(S::PrepareResourcesFlush),
+            mark("render:prep bind groups").after(S::PrepareResourcesFlush).before(S::PrepareBindGroups),
             mark("render:render").after(S::Prepare).before(S::Render),
             mark("render:cleanup").after(S::Render).before(S::Cleanup),
             mark("render:end").after(S::PostCleanup),

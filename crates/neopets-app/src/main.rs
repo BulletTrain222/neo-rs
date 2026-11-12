@@ -632,15 +632,20 @@ struct SimText;
 #[derive(Component)]
 struct BrowserText;
 
-/// The graphics API: DX12 on Windows unless WGPU_BACKEND names another. On a laptop whose
-/// display hangs off the integrated GPU, Vulkan's present copied every frame across at a cost
-/// that follows the window size (about 6.5 ms a frame at 1920 x 1080 on the user's RX 6700S);
-/// DX12 measured 1 to 3 ms a frame faster in the user's views with the same picture
-/// (performance pass of 2026-11-12).
+/// The graphics API on Windows, chosen at start from the saved settings unless WGPU_BACKEND
+/// names one (performance passes of 2026-11-12, on the user's laptop, whose display hangs off
+/// the integrated GPU while the RX 6700S renders):
+/// - World shadows off: DX12. Vulkan's present copied every frame across at a cost that follows
+///   the window size (about 6.5 ms a frame at 1920 x 1080); DX12 was 1 to 3 ms a frame faster.
+/// - World shadows on: Vulkan. wgpu's DX12 lacks buffer binding arrays, so Bevy cannot draw the
+///   standard material bindless there; each of the world's 300 to 400 materials then has its own
+///   batch and buffer writes in every shadow view, which cost 3 to 4 ms a frame more than Vulkan.
+/// A change of World shadows during play keeps the API until the next start.
 fn render_settings() -> bevy::render::settings::WgpuSettings {
     let mut s = bevy::render::settings::WgpuSettings::default();
     if cfg!(target_os = "windows") && std::env::var_os("WGPU_BACKEND").is_none() {
-        s.backends = Some(bevy::render::settings::Backends::DX12);
+        let world_shadows = display::DisplaySettings::load().world_shadows;
+        s.backends = Some(if world_shadows { bevy::render::settings::Backends::VULKAN } else { bevy::render::settings::Backends::DX12 });
     }
     s
 }
@@ -2445,11 +2450,18 @@ fn apply_model(
 
 /// NEOPETS_PERF: every 240 frames, the meshes by owner (scene, objects, foliage, dome,
 /// characters and the rest), counting a mesh by its nearest tagged ancestor.
-fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, parts: Query<&WorldPart>, chars: Query<(), Or<(With<CharacterRoot>, With<HeroRoot>)>>, mut frames: Local<u32>, mut events: MessageReader<AssetEvent<Mesh>>, assets: Res<Assets<Mesh>>, mut changed: Local<(usize, usize)>, users: Query<(Entity, &Mesh3d)>, mut by: Local<std::collections::HashMap<AssetId<Mesh>, usize>>, names: Query<&Name>, mut mat_events: MessageReader<AssetEvent<StandardMaterial>>, mut img_events: MessageReader<AssetEvent<Image>>, mut other: Local<(usize, usize)>) {
+fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, parts: Query<&WorldPart>, chars: Query<(), Or<(With<CharacterRoot>, With<HeroRoot>)>>, mut frames: Local<u32>, mut events: MessageReader<AssetEvent<Mesh>>, assets: Res<Assets<Mesh>>, mut changed: Local<(usize, usize)>, users: Query<(Entity, &Mesh3d)>, mut by: Local<std::collections::HashMap<AssetId<Mesh>, usize>>, names: Query<&Name>, mut mat_events: MessageReader<AssetEvent<StandardMaterial>>, mut img_events: MessageReader<AssetEvent<Image>>, mut other: Local<(usize, usize)>, mut added: Local<(usize, usize, usize)>) {
     *frames += 1;
     other.0 += mat_events.read().filter(|e| matches!(e, AssetEvent::Modified { .. })).count();
     other.1 += img_events.read().filter(|e| matches!(e, AssetEvent::Modified { .. })).count();
     for e in events.read() {
+        if let AssetEvent::Added { id } = e {
+            added.0 += 1;
+            added.1 += assets.get(*id).map_or(0, |m| m.count_vertices());
+        }
+        if let AssetEvent::Removed { .. } = e {
+            added.2 += 1;
+        }
         if let AssetEvent::Modified { id } = e {
             changed.0 += 1;
             changed.1 += assets.get(*id).map_or(0, |m| m.count_vertices());
@@ -2460,7 +2472,8 @@ fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, par
         return;
     }
     // The owners of the meshes changed in the last frame window, by kind.
-    info!("perf: meshes modified per frame {:.1}, vertices {:.0}; materials {:.1}, images {:.1}", changed.0 as f32 / 240.0, changed.1 as f32 / 240.0, other.0 as f32 / 240.0, other.1 as f32 / 240.0);
+    info!("perf: meshes modified per frame {:.1}, vertices {:.0}; added {:.1} ({:.0} vertices), removed {:.1}; materials {:.1}, images {:.1}", changed.0 as f32 / 240.0, changed.1 as f32 / 240.0, added.0 as f32 / 240.0, added.1 as f32 / 240.0, added.2 as f32 / 240.0, other.0 as f32 / 240.0, other.1 as f32 / 240.0);
+    *added = (0, 0, 0);
     *other = (0, 0);
     *changed = (0, 0);
     let mut owners: std::collections::BTreeMap<String, usize> = Default::default();

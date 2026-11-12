@@ -192,9 +192,9 @@ fn ssao_quality() -> bevy::pbr::ScreenSpaceAmbientOcclusionQualityLevel {
     }
 }
 
-fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, state: Option<Res<crate::PlayState>>, cameras: Query<Entity, With<Camera3d>>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool, bool)>>) {
+fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, state: Option<Res<crate::PlayState>>, cameras: Query<Entity, With<Camera3d>>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool, bool, bool)>>) {
     let indoors = state.as_ref().is_some_and(|s| s.play.indoors());
-    let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows == 1, sun_on(&settings), indoors);
+    let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows == 1, sun_on(&settings), indoors, settings.world_shadows);
     if *last == Some(key) {
         return;
     }
@@ -236,9 +236,12 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, state: O
         } else if sun_on(&settings) {
             c.remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
             c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings, indoors), affects_lightmapped_meshes: true });
-            // No depth prepass: measured at 2560 x 1600 it cost about 1 ms under MSAA and gained
-            // nothing under SMAA (NEOPETS_SUN_PREPASS: with one, for comparison).
-            if std::env::var_os("NEOPETS_SUN_PREPASS").is_some() {
+            // A depth prepass only with World shadows: then every surface is lit and shadowed, and
+            // drawing the depth first lets each pixel be shaded once (0.2 to 1.2 ms a frame faster at
+            // 1920 x 1080 on Vulkan, performance pass of 2026-11-12). With only the characters
+            // casting it cost more than it saved (about 1 ms under MSAA at 2560 x 1600, and 1 to 6 ms
+            // on DX12, where every extra draw is dear). NEOPETS_SUN_PREPASS: always, for comparison.
+            if settings.world_shadows || std::env::var_os("NEOPETS_SUN_PREPASS").is_some() {
                 c.insert(DepthPrepass);
             } else {
                 c.remove::<DepthPrepass>();
