@@ -584,7 +584,7 @@ const HELP: [&str; ROWS + 1] = [
     "Soft shade where walls meet floors and in corners.",
     "Full keeps trees, bushes and props in 3D at any distance; Original turns far trees into sprites, fades distant plants out and hides props past their draw distance, as the PS2 game.",
     "Original is the game's own faint, blocky hero shadow; Detailed casts every character's real shape from the area's main light.",
-    "Shadows cast by everything, trees and buildings too, from the area's main light. Not in the original game. On Windows it runs fastest after a restart.",
+    "Shadows cast by everything, trees and buildings too, from the area's main light. Not in the original game.",
     "How sharp the shadows from the area's main light are (World shadows and Detailed character shadows). Lower is faster.",
     "How far from the camera those shadows reach. Shorter is faster; shadows end at this distance.",
     "The most frames drawn each second; Uncapped draws as fast as it can. Exclusive full screen may tear. The game's speed does not change.",

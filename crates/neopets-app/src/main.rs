@@ -632,20 +632,21 @@ struct SimText;
 #[derive(Component)]
 struct BrowserText;
 
-/// The graphics API on Windows, chosen at start from the saved settings unless WGPU_BACKEND
-/// names one (performance passes of 2026-11-12, on the user's laptop, whose display hangs off
-/// the integrated GPU while the RX 6700S renders):
-/// - World shadows off: DX12. Vulkan's present copied every frame across at a cost that follows
-///   the window size (about 6.5 ms a frame at 1920 x 1080); DX12 was 1 to 3 ms a frame faster.
-/// - World shadows on: Vulkan. wgpu's DX12 lacks buffer binding arrays, so Bevy cannot draw the
-///   standard material bindless there; each of the world's 300 to 400 materials then has its own
-///   batch and buffer writes in every shadow view, which cost 3 to 4 ms a frame more than Vulkan.
-/// A change of World shadows during play keeps the API until the next start.
+/// The graphics API on Windows: Vulkan, with DX12 as the fallback, unless WGPU_BACKEND names one.
+/// Measured on the user's laptop (RX 6700S; performance passes of 2026-11-12, views 24, 25, 27
+/// and 29 at 1920 x 1080, vsync off):
+/// - With the display on the RX 6700S (Armoury Crate GPU mode Ultimate): Vulkan 4.6 to 5.9 ms a
+///   frame (World shadows 5.2 to 6.5), DX12 9.5 to 13.7 (World shadows 17.7 to 22.1).
+/// - With the display on the integrated GPU (Standard or Optimized), Vulkan's present copies
+///   every frame across (about 6.5 ms at 1920 x 1080), and DX12 was 1 to 3 ms faster there
+///   with World shadows off, slower with them on.
+/// On DX12 wgpu lacks buffer binding arrays, so Bevy cannot draw the standard material
+/// bindless: each of the world's 300 to 400 materials is its own batch with its own buffer
+/// writes in every view. Vulkan is the better choice everywhere but that one case.
 fn render_settings() -> bevy::render::settings::WgpuSettings {
     let mut s = bevy::render::settings::WgpuSettings::default();
     if cfg!(target_os = "windows") && std::env::var_os("WGPU_BACKEND").is_none() {
-        let world_shadows = display::DisplaySettings::load().world_shadows;
-        s.backends = Some(if world_shadows { bevy::render::settings::Backends::VULKAN } else { bevy::render::settings::Backends::DX12 });
+        s.backends = Some(bevy::render::settings::Backends::VULKAN | bevy::render::settings::Backends::DX12);
     }
     s
 }
