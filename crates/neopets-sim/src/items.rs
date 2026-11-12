@@ -536,13 +536,16 @@ pub fn item_roll(group: Option<&Group>, subs: &[Vec<(u16, i16)>], index: &mut dy
     let Some(table) = subs.get(sub.max(0) as usize) else { return Drop::Nothing };
     let u = index(100) as i32;
     let mut acc = 0;
-    table
-        .iter()
-        .find(|e| {
-            acc += e.1 as i32;
-            acc > u
-        })
-        .map_or(Drop::Nothing, |e| Drop::Item(e.0))
+    match table.iter().find(|e| {
+        acc += e.1 as i32;
+        acc > u
+    }) {
+        // A rolled id of 323 or more becomes Mote 161 or Mote 163, half each (corrected
+        // 2026-11-11; no sub-table entry on the disc has one; the draw's form is this build's).
+        Some(e) if e.0 > 322 => Drop::Item(if index(2) == 0 { 161 } else { 163 }),
+        Some(e) => Drop::Item(e.0),
+        None => Drop::Nothing,
+    }
 }
 
 /// The exact greedy coin split over the denominations (100, 25, 10, 5, 1), as coin ids.

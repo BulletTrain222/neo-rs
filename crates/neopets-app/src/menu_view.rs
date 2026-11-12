@@ -322,9 +322,10 @@ pub fn sync_menu(
                 cache.labels.get(&node).map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32 * scale, *w as f32 * scale, *h as f32 * scale, Color::WHITE))
             }
             Draw::Marker { node, x, y, angle, colour } => {
-                // SPEC-0051 section 7: each corner offset (x, y) of the 32 x 32 quad goes to the
-                // screen offset ((6/7)(C x - S y), S x + C y); drawn into a 48 x 48 image by the
-                // inverse map, nearest texel.
+                // SPEC-0051 section 7 (corrected 2026-11-11): each corner offset (x, y) of the
+                // 32 x 32 quad goes to the screen offset (k C x - S y, S x + C y), the factor k =
+                // 0.857142 on the C x term only; drawn into a 48 x 48 image by the inverse map,
+                // nearest texel.
                 const N: i32 = 48;
                 let src = f.sprite_image(mem, node, 32, 32);
                 let (c, s) = (angle.cos(), angle.sin());
@@ -333,8 +334,13 @@ pub fn sync_menu(
                     for oy in 0..N {
                         for ox in 0..N {
                             let (sx, sy) = (ox as f32 + 0.5 - N as f32 / 2.0, oy as f32 + 0.5 - N as f32 / 2.0);
-                            let u = sx * 7.0 / 6.0;
-                            let (lx, ly) = (c * u + s * sy, -s * u + c * sy);
+                            // Inverse of [[k C, -S], [S, C]].
+                            const K: f32 = 0.857142;
+                            let det = K * c * c + s * s;
+                            if det.abs() < 1e-6 {
+                                continue;
+                            }
+                            let (lx, ly) = ((c * sx + s * sy) / det, (-s * sx + K * c * sy) / det);
                             let (tx, ty) = ((lx + 16.0).floor() as i32, (ly + 16.0).floor() as i32);
                             if (0..32).contains(&tx) && (0..32).contains(&ty) {
                                 let i = ((ty * 32 + tx) * 4) as usize;

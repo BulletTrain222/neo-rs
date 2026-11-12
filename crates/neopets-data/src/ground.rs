@@ -430,6 +430,49 @@ impl Ground {
     }
 }
 
+impl Ground {
+    /// SPEC-0033 aim scan sightline (R-0273): the cells probed lie at growing offsets along the
+    /// segment (a counter starts at 0 and grows by 5.0 after each probe, the probe point moving
+    /// by the direction times the new counter: 0, 5, 15, 30, 50 ...), while the counter is below
+    /// the segment length; each probed cell's frame records (no type exclusion) are tested
+    /// against the whole segment. Not built: the class-3 volume test (radius above 4.0, tested
+    /// with radius + 2.0). Returns true when clear.
+    pub fn aim_sight_clear(&self, p0: [f32; 3], p1: [f32; 3]) -> bool {
+        let d = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let mut cells = Vec::new();
+        for o in sight_probe_offsets(len) {
+            let k = if len > 0.0 { o / len } else { 0.0 };
+            let (x, z) = (p0[0] + d[0] * k, p0[2] + d[2] * k);
+            let c = self.cell_at(x, z);
+            if cells.contains(&c) {
+                continue;
+            }
+            cells.push(c);
+            if self.frames_at(x, z).iter().any(|f| f.crossed_by(p0, p1)) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// The aim sightline's probe distances from the start (R-0273): 0, 5, 15, 30, 50, 75 ...
+/// while the step counter (0, 5, 10, 15 ...) is below `len`; a segment of 5 or less probes
+/// only its start.
+pub fn sight_probe_offsets(len: f32) -> Vec<f32> {
+    let (mut t, mut at, mut out) = (0.0f32, 0.0f32, Vec::new());
+    while t < len && out.len() < 4096 {
+        out.push(at);
+        t += 5.0;
+        at += t;
+    }
+    if out.is_empty() {
+        out.push(0.0);
+    }
+    out
+}
+
 /// Entry record 0 of the type-11 chunk: the world spawn position and facing (SPEC-0006).
 pub fn spawn(bytes: &[u8], top: &[Chunk]) -> Option<([f32; 3], [f32; 3])> {
     let p = &bytes[top.iter().find(|c| c.kind == OBJECT_HEADER)?.payload.clone()];
@@ -495,6 +538,14 @@ mod tests {
         // A record past the payload ends the list.
         p[0x6C + 8..0x6C + 12].copy_from_slice(&0x200u32.to_le_bytes());
         assert_eq!(super::aim_targets(&p, &top).len(), 1);
+    }
+
+    #[test]
+    fn sight_probe_points() {
+        // R-0273: 0, 5, 15, 30, 50, 75 while the counter is below the length.
+        assert_eq!(super::sight_probe_offsets(60.0), vec![0.0, 5.0, 15.0, 30.0, 50.0, 75.0, 105.0, 140.0, 180.0, 225.0, 275.0, 330.0]);
+        assert_eq!(super::sight_probe_offsets(5.0), vec![0.0]);
+        assert_eq!(super::sight_probe_offsets(12.0), vec![0.0, 5.0, 15.0]);
     }
 
     #[test]

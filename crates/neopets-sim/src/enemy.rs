@@ -267,8 +267,10 @@ pub struct View<'a> {
     pub contact: bool,
     /// The hero guards and faces this enemy (dot of the facings at most -0.5).
     pub hero_blocks: bool,
-    /// The hero is held by a grab (state 53) and his stun word is set (SPEC-0029 Behavior 23).
+    /// The hero is held by a grab (state 53).
     pub hero_held: bool,
+    /// The hero's touched flag is set (his motion record's contact flag; SPEC-0029 Behavior 23,
+    /// R-0278: the grab gate's test, not a stun status). The field keeps its old name.
     pub hero_stunned: bool,
     /// The hero's melee swing class while it swings (swing_class), None otherwise.
     pub hero_swing: Option<u8>,
@@ -2785,7 +2787,7 @@ impl Enemy {
     }
 
     /// SPEC-0029 Behavior 23 from the strike state of a flag 0x08 slot. Choose: within the melee
-    /// range, facing cosine above 0.5, stun word clear and the path clear, the hero is seized and
+    /// range, facing cosine above 0.5, touched flag clear (R-0278) and the path clear, the hero is seized and
     /// the follow-through clip C replaces B; otherwise recover through clip E with no contact.
     /// Strike: C plays until a frame with event bit 0x20 throws a held hero with
     /// normalize(15 facing + 8 up) x the throw speed and a take-hit of damage 0, and the rest of C
@@ -2801,7 +2803,7 @@ impl Enemy {
                     self.grab = 2;
                     self.through(kc, v, a);
                 } else {
-                    // The stun word or the path test fails: he is put in base state 1, not held.
+                    // The touched flag or the path test fails: he is put in base state 1, not held.
                     a.grab = Some(Grab::Refuse);
                     self.grab = 3;
                 }

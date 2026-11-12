@@ -181,7 +181,7 @@ pub enum Draw {
     /// The open book's flat page (SPEC-0035 6.1 rule 11): the 448 x 448 paper with the body, its
     /// top-left corner at (x, y) on the canvas.
     /// The map's hero marker (SPEC-0051 section 7): sprite node `node`'s whole 32 x 32 art as a
-    /// quad centred on (x, y), turned by `angle` and squashed to 6/7 of its width, tinted.
+    /// quad centred on (x, y), turned by `angle` with the 0.857142 factor on its C x term, tinted.
     Marker { node: usize, x: f32, y: f32, angle: f32, colour: [u8; 4] },
 }
 
@@ -1901,7 +1901,7 @@ pub fn map_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
     let (label_font, name_font) = (2usize, 0usize);
     let measure = |font: usize, t: &[u8]| fe.fonts.get(font).map_or(0, |f| f.measure(t, 0));
     // The marker first (section 7): node key 26, centred on its point, turned by the marker
-    // angle with the 6/7 squash, its colour bytes the pulse's.
+    // angle with the 0.857142 factor on the C x term, its colour bytes the pulse's.
     let v = &flow.map_view;
     if v.hero_area == area {
         if let (Some((x, y)), Some(node)) = (mappage::project(area, v.hero[0], v.hero[2]), fe.key(26)) {

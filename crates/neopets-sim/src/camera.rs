@@ -102,6 +102,10 @@ fn sub(a: Vec3, b: Vec3) -> Vec3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+fn dot(a: Vec3, b: Vec3) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
 /// Converter A (SPEC-0027 Pad-axis converters): centre 127.5, dead zone 40, range ±87.5.
 pub fn converter_a(byte: u8) -> f32 {
     let d = byte as f32 - 127.5;
@@ -143,6 +147,8 @@ pub struct Followed {
     /// A camera-locked hero state (Follow camera step 9), and the hero's last step length.
     pub locked: bool,
     pub step: f32,
+    /// The hero is in player state 0x12, pushing or pulling a block (the turn lean, R-0271).
+    pub pushing: bool,
 }
 
 impl Followed {
@@ -288,8 +294,10 @@ impl FollowCamera {
         self.blend = Some(Blend { pivot: self.focus, distance: (radius * radius + height * height).sqrt(), offset, elevation: (height / radius).asin(), fraction, latched: false });
     }
 
-    /// Mode 8's update: the contact pass (a push latches the camera in place), then distance, yaw and
-    /// elevation each blended by the fraction toward the hero's forward row plus the offset.
+    /// Mode 8's update: the contact pass (a hit latches the camera in place: SPEC-0027 Blocked
+    /// latch, R-0274, the pushes are discarded and the entry position is written back), then
+    /// distance, yaw and elevation each blended by the fraction toward the hero's forward row plus
+    /// the offset.
     pub fn blend_step(&mut self, facing: Vec3, push: impl Fn(&mut Vec3)) {
         let Some(mut b) = self.blend else { return };
         if b.latched {
@@ -298,6 +306,7 @@ impl FollowCamera {
         let before = self.eye;
         push(&mut self.eye);
         if self.eye != before {
+            self.eye = before;
             b.latched = true;
             self.blend = Some(b);
             return;
@@ -368,6 +377,12 @@ impl FollowCamera {
             let (l, side) = lean_terms(hero.position, self.target_point, forward, first);
             lean = l;
             self.side_target = side;
+        }
+        // SPEC-0027 state 0x12 turn lean (R-0271): only while the hero pushes or pulls a block and
+        // the drift base is zero.
+        if hero.pushing && base == 0.0 {
+            let (forward, first) = self.rows();
+            lean += push_lean(hero.facing, forward, first);
         }
         // The glide runs on every call, also in the hold, so a hold tick leaves the offset at
         // min(side target, 0.1) (SPEC-0027 Hold and lean terms).
@@ -597,6 +612,16 @@ pub struct Blend {
     latched: bool,
 }
 
+/// SPEC-0027 state 0x12 turn lean (R-0271): with u the hero's body forward vector as it is (not
+/// negated, not flattened), d = u . camera forward and s = u . camera first row, the lean is
+/// (1 - d) / 2 x 10.0, negated when s > 0.
+fn push_lean(u: Vec3, forward: Vec3, first: Vec3) -> f32 {
+    let d = dot(u, forward);
+    let s = dot(u, first);
+    let lean = (1.0 - d) / 2.0 * 10.0;
+    if s > 0.0 { -lean } else { lean }
+}
+
 /// SPEC-0027 Hold and lean terms: the side lean (1 - d) / 2 x 2.5, negated when the target lies on the first
 /// row's side, and the side target (|s| - 2.0, at most 10.0, while d is below 0.5). No target: both 0.
 fn lean_terms(hero: Vec3, target: Option<Vec3>, forward: Vec3, first: Vec3) -> (f32, f32) {
@@ -624,7 +649,7 @@ mod tests {
     }
 
     fn still(height: f32) -> Followed {
-        Followed { position: [0.0; 3], facing: [0.0, 0.0, 1.0], height, moving: false, ground_kind: None, locked: false, step: 0.0 }
+        Followed { position: [0.0; 3], facing: [0.0, 0.0, 1.0], height, moving: false, ground_kind: None, locked: false, step: 0.0, pushing: false }
     }
 
     fn camera_at(eye: Vec3, hero: &Followed) -> FollowCamera {
@@ -663,6 +688,16 @@ mod tests {
     }
 
     /// SPEC-0027's vectors: hero at the origin, camera forward +z, first row +x.
+    #[test]
+    fn push_lean_vectors() {
+        // R-0271 test vectors: camera forward (0, 0, 1), first row (1, 0, 0).
+        let (f, x) = ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        assert_eq!(push_lean([0.0, 0.0, 1.0], f, x), 0.0);
+        assert_eq!(push_lean([1.0, 0.0, 0.0], f, x), -5.0);
+        assert_eq!(push_lean([-1.0, 0.0, 0.0], f, x), 5.0);
+        assert_eq!(push_lean([0.0, 0.0, -1.0], f, x), 10.0);
+    }
+
     #[test]
     fn lean_vectors() {
         let (f, x) = ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
@@ -756,7 +791,7 @@ mod tests {
     fn pull_in_drops_to_focus_height_and_halves_under_high_ground() {
         // SPEC-0027 Placement: P (10, 0, 5), f (0.6, 0, 0.8), height H: the posed eye (4, ·, -3)
         // becomes (4, H, -3), or (7, H, 1) when the ground there is above H + 5.
-        let hero = Followed { locked: false, step: 0.0, position: [10.0, 0.0, 5.0], facing: [0.6, 0.0, 0.8], height: 3.5, moving: false, ground_kind: None };
+        let hero = Followed { locked: false, step: 0.0, pushing: false, position: [10.0, 0.0, 5.0], facing: [0.6, 0.0, 0.8], height: 3.5, moving: false, ground_kind: None };
         let mut c = FollowCamera::attach(&hero, none, |_| {});
         c.pull_in(&hero, [4.0, 2.5, -3.0], none, |_| {});
         assert!((c.eye[0] - 4.0).abs() < 1e-5 && c.eye[1] == 3.5 && (c.eye[2] + 3.0).abs() < 1e-5);

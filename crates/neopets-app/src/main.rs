@@ -3224,12 +3224,13 @@ struct ShotMarker(usize);
 #[derive(Component)]
 struct RopeStrand;
 
-/// The aim-view marker's stand-in (SPEC-0033 section 23; R-0280): the disc's marker model is not
-/// found, so this build draws its own, shaped after public footage at the user's request: a thin
-/// eight-pointed star outline (points at radius 1, notches at 0.78), in the plane facing the
-/// camera, turned by the spin angle about the forward row and scaled by M,
-/// unlit in the object's colour (its lanes doubled, a guess at the colour scale) with the fourth
-/// lane as opacity. Hidden with the developer menu's "Aim marker" switch.
+/// The aim-view marker (SPEC-0033 section 23; R-0280 resolved): registry model 312, the role 29
+/// child of resource 9's model container, a flat eight-pointed star outline with a white texture,
+/// drawn unlit with ordinary alpha blend and depth test, tinted by the object's colour vector as
+/// the draw colour scale (dark red (0.33, 0, 0, 1) while aiming). It stands 10 units ahead of the
+/// camera, faces it, turns by the spin angle about the forward row and is scaled by M. When the
+/// model cannot be read, this build's own star outline stands in. Hidden with the developer
+/// menu's "Aim marker" switch.
 #[derive(Component)]
 struct AimMarker;
 
@@ -3273,17 +3274,44 @@ fn sync_aim_marker(
     mut root: Query<(&mut Transform, &mut Visibility), With<AimMarker>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut material: Local<Option<Handle<StandardMaterial>>>,
+    mut images: ResMut<Assets<Image>>,
+    archive: Option<ResMut<Archive>>,
+    mut material: Local<Option<(Handle<StandardMaterial>, bool)>>,
 ) {
     let Some(state) = state else { return };
-    let Some(handle) = material.clone() else {
-        let m = materials.add(StandardMaterial { base_color: Color::srgba(0.66, 0.0, 0.0, 1.0), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, ..default() });
-        let star = meshes.add(aim_star_mesh(8, 1.0, 0.78, 0.07));
-        *material = Some(m.clone());
+    let Some((handle, disc_model)) = material.clone() else {
+        // Model 312: role 29 of resource 9's container (R-0280).
+        let model = archive.and_then(|mut a| {
+            let a = &mut *a;
+            let b = a.index.read(&mut a.disc, neopets_data::effect::RESOURCE).ok()?;
+            let c = neopets_data::resource::walk_chunks(&b, None).ok()?.chunks;
+            neopets_data::model::build_roles(&b, &c, None, Some(&[312 - 283])).ok().filter(|m| !m.parts.is_empty())
+        });
+        let base = StandardMaterial { base_color: Color::srgba(0.33, 0.0, 0.0, 1.0), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, ..default() };
+        let mut parts: Vec<(Handle<Mesh>, Handle<StandardMaterial>)> = Vec::new();
+        let from_disc = model.is_some();
+        if let Some(m) = model {
+            info!("aim marker: model 312 from resource 9 ({} parts)", m.parts.len());
+            let mat = materials.add(base.clone());
+            for (_, mesh, own) in part_assets(&m, &mut meshes, &mut materials, &mut images) {
+                // Keep the part's texture (opaque white), take the marker's tint and blend.
+                let tex = materials.get(&own).and_then(|o| o.base_color_texture.clone());
+                if let Some(mut mm) = materials.get_mut(&mat) {
+                    mm.base_color_texture = mm.base_color_texture.clone().or(tex);
+                }
+                parts.push((mesh, mat.clone()));
+            }
+        } else {
+            warn!("aim marker: model 312 not read; drawing the stand-in star");
+            parts.push((meshes.add(aim_star_mesh(8, 1.0, 0.78, 0.07)), materials.add(base)));
+        }
+        *material = Some((parts[0].1.clone(), from_disc));
         commands
             .spawn((AimMarker, Transform::default(), Visibility::Hidden))
             .with_children(|c| {
-                c.spawn((Mesh3d(star), MeshMaterial3d(m), Transform::default(), bevy::light::NotShadowCaster));
+                for (mesh, m) in parts {
+                    c.spawn((Mesh3d(mesh), MeshMaterial3d(m), Transform::default(), bevy::light::NotShadowCaster));
+                }
             });
         return;
     };
@@ -3295,7 +3323,9 @@ fn sync_aim_marker(
             set_if(&mut t, look.with_rotation(look.rotation * Quat::from_rotation_z(spin)).with_scale(Vec3::splat(scale)));
             set_if(&mut vis, Visibility::Visible);
             if let Some(mut m) = materials.get_mut(&handle) {
-                let c = Color::srgba((2.0 * rgba[0]).min(1.0), (2.0 * rgba[1]).min(1.0), (2.0 * rgba[2]).min(1.0), rgba[3].clamp(0.0, 1.0));
+                // The colour vector is the draw colour scale (R-0280); the stand-in doubles it.
+                let k = if disc_model { 1.0 } else { 2.0 };
+                let c = Color::srgba((k * rgba[0]).min(1.0), (k * rgba[1]).min(1.0), (k * rgba[2]).min(1.0), rgba[3].clamp(0.0, 1.0));
                 if m.base_color != c {
                     m.base_color = c;
                 }

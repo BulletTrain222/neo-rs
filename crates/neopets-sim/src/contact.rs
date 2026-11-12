@@ -120,6 +120,35 @@ pub fn resolve_spheres(p: &mut Vec3, spheres: &[(Vec3, f32)]) -> bool {
     any
 }
 
+/// SPEC-0040 Behavior 14A, pending contact tag 1 (R-0272), for a sphere centre between the
+/// mover's feet and the top of its body cylinder (`feet.y <= centre.y <= feet.y + height`): the
+/// hit is a horizontal distance L from the centre to the mover's axis strictly below
+/// `body_r + sphere_r`; the push is horizontal, out to exactly that distance, and the velocity's
+/// component into the normal is removed when the velocity moves into it. Returns whether it hit.
+/// Not built: a centre above the head or below the feet (SPEC-0018's oblique cases), and the
+/// mover exactly on the axis (no defined direction).
+pub fn sphere_push(feet: &mut Vec3, velocity: &mut Vec3, centre: Vec3, sphere_r: f32, body_r: f32, height: f32) -> bool {
+    if !(feet[1] <= centre[1] && centre[1] <= feet[1] + height) {
+        return false;
+    }
+    let (dx, dz) = (feet[0] - centre[0], feet[2] - centre[2]);
+    let l = (dx * dx + dz * dz).sqrt();
+    let reach = body_r + sphere_r;
+    if !(l < reach) || l <= 0.0 {
+        return false;
+    }
+    let n = [dx / l, 0.0, dz / l];
+    let depth = reach - l;
+    feet[0] += n[0] * depth;
+    feet[2] += n[2] * depth;
+    let vn = velocity[0] * n[0] + velocity[2] * n[2];
+    if vn < 0.0 {
+        velocity[0] -= vn * n[0];
+        velocity[2] -= vn * n[2];
+    }
+    true
+}
+
 /// Push a point out of every box it is inside, in order, and report whether any pushed.
 pub fn resolve(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> bool {
     resolve_floor(p, boxes, r).0
@@ -375,6 +404,22 @@ mod landing_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mouth_sphere_push() {
+        // R-0272: a 4.0 sphere at (0, 2, 0); hero feet at (3, 0, 0) moving toward it: pushed
+        // out to 5.175 along +x, the inward velocity removed.
+        let (mut p, mut v) = ([3.0, 0.0, 0.0], [-1.0, 0.0, 0.5]);
+        assert!(super::sphere_push(&mut p, &mut v, [0.0, 2.0, 0.0], 4.0, 1.175, 3.5));
+        assert!((p[0] - 5.175).abs() < 1e-5 && p[2] == 0.0);
+        assert_eq!(v, [0.0, 0.0, 0.5]);
+        // Above the head: no hit here.
+        let mut q = [3.0, -4.0, 0.0];
+        assert!(!super::sphere_push(&mut q, &mut v, [0.0, 2.0, 0.0], 4.0, 1.175, 3.5));
+        // At 5.175 exactly: no hit (strict).
+        let mut r = [5.175, 0.0, 0.0];
+        assert!(!super::sphere_push(&mut r, &mut v, [0.0, 2.0, 0.0], 4.0, 1.175, 3.5));
+    }
+
 
     #[test]
     fn sphere_contact() {

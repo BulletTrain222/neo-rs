@@ -259,8 +259,8 @@ pub fn segment_meets(s0: Vec3, s1: Vec3, c: &Cylinder) -> bool {
     segment_distance(s0, s1, c0, c1) <= c.radius
 }
 
-/// SPEC-0036 Combat reach test: the swept triangle A, B, C (weapon base, tip now, tip last
-/// tick) against the capsule (centre p, axis b, radius r, length h), with the plane slab, the
+/// SPEC-0036 Combat reach test: the swept triangle A, B, C (weapon base, the tip of the
+/// previous tick, the tip of this tick; R-0275) against the capsule (centre p, axis b, radius r, length h), with the plane slab, the
 /// shifted point quirk, the inside test, the edge gates and the edge cylinder test.
 pub fn swept(a: Vec3, b_tip: Vec3, c_tip: Vec3, cap: &Cylinder) -> bool {
     let (p, b, r, h) = (cap.center, cap.axis, cap.radius, cap.length);

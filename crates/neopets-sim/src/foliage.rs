@@ -373,10 +373,16 @@ pub fn jitter(family: Family, flag: bool, depth: f32, rows: usize) -> f32 {
     }
 }
 
-/// The ceiling the ground probe starts above the patch height: 8 for the bushes of models 198
-/// and 223 (SPEC-0018 Ceilings supplied by callers); None for the default column probe.
+/// The ceiling the ground probe starts above the patch height (SPEC-0060 Placement step 5,
+/// corrected 2026-11-11): the bushes of models 198 (key 5) and 223 (key 17) use the plain column
+/// probe with no start height (a ceiling of 1.0e8: the top-level set); the other bushes, the beds
+/// and the flowers start at y + 8; None for the default probe of the other families.
 pub fn probe_ceiling(kind: &Kind) -> Option<f32> {
-    matches!(kind.near, Some(198 | 223)).then_some(8.0)
+    match (kind.near, kind.family) {
+        (Some(198 | 223), _) => Some(1.0e8),
+        (_, Family::Bush | Family::Bed | Family::Flowers) => Some(8.0),
+        _ => None,
+    }
 }
 
 /// The far distance F of a patch (Behavior 3): the override D when A or D is nonzero, else
@@ -733,7 +739,9 @@ mod tests {
         assert!(!kind(12).unwrap().snap);
         assert_eq!(kind(33).unwrap().near, Some(262));
         assert_eq!((kind(15), kind(40)), (None, None));
-        assert_eq!(probe_ceiling(&kind(5).unwrap()), Some(8.0));
+        assert_eq!(probe_ceiling(&kind(5).unwrap()), Some(1.0e8));
+        assert_eq!(probe_ceiling(&kind(3).unwrap()), Some(8.0));
+        assert_eq!(probe_ceiling(&kind(0).unwrap()), None);
         assert_eq!(jitter(Family::Grass, false, 10.0, 2), 0.9);
         assert_eq!(jitter(Family::Bush, false, 10.0, 2), 0.0);
         assert!((jitter(Family::Bush, true, 10.0, 2) - 2.0).abs() < 1e-6);

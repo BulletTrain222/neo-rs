@@ -5159,7 +5159,7 @@ impl Play {
                         let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
                         (l < 110.0 && l > 0.0).then(|| ((forward[0] * d[0] + forward[1] * d[1] + forward[2] * d[2]) / l, c))
                     })
-                    .filter(|(_, c)| world.ground.as_ref().is_none_or(|g| g.segment_clear(low, c.position, true)))
+                    .filter(|(_, c)| world.ground.as_ref().is_none_or(|g| g.aim_sight_clear(low, c.position)))
                     .max_by(|a, b| a.0.total_cmp(&b.0));
                 match best {
                     Some((score, c)) if score > 0.998 => {
@@ -7972,7 +7972,7 @@ impl Play {
                 let swept = |h: &neopets_sim::combat::Cylinder| {
                     d2.is_some_and(|d2| {
                         let (b, cc) = (add(p0, scale(axis, l)), add(p0, scale(d2, l)));
-                        b != cc && neopets_sim::combat::swept(p0, b, cc, h)
+                        b != cc && neopets_sim::combat::swept(p0, cc, b, h)
                     })
                 };
                 if !(sp.strikeable() && head.is_some_and(|h| neopets_sim::combat::finite_overlap(&weapon, &h) || swept(&h))) {
@@ -7989,7 +7989,8 @@ impl Play {
                 neopets_sim::combat::finite_overlap(&weapon, &cap)
                     || d2.is_some_and(|d2| {
                         let (b, cc) = (add(p0, scale(axis, l)), add(p0, scale(d2, l)));
-                        b != cc && neopets_sim::combat::swept(p0, b, cc, &cap)
+                        // R-0275: the vertices in the order P0, the previous tip, this tip.
+                        b != cc && neopets_sim::combat::swept(p0, cc, b, &cap)
                     })
             });
             if !hit {
@@ -13562,7 +13563,9 @@ impl Play {
             Vec::new()
         };
         followable.sort_by_key(|f| (f.0 != EMBEDDED_SLOT, f.0));
-        let (hero_is_held, hero_is_stunned) = (self.loco.state == hero_states::HELD, self.statuses.active(neopets_sim::status::STUN));
+        // SPEC-0029 Behavior 23 (R-0278): the grab gate reads the hero's touched flag (the contact
+        // flag of his motion record), not a stun status.
+        let (hero_is_held, hero_is_stunned) = (self.loco.state == hero_states::HELD, self.touched);
         let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
             let Character { id, name, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, hp, .. } = c else { continue };
@@ -16702,6 +16705,14 @@ impl Play {
             let before = sp.state;
             let act = sp.tick(&v, &self.serpent_words, &mut self.rng);
             let after = sp.state;
+            // SPEC-0016 sub 7 (R-0272): every tick of the stun a contact sphere of radius 4.0 at
+            // the mouth joint blocks the hero's body (no damage), through the slide response.
+            if matches!(after, neopets_sim::serpent::State::Bite(neopets_sim::serpent::Bite::Stun { .. })) {
+                let body = &mut self.loco.body;
+                if contact::sphere_push(&mut body.position, &mut body.velocity, v.mouth, 4.0, contact::HERO_RADIUS, 3.5) {
+                    self.touched = true;
+                }
+            }
             // SPEC-0016 6A: in state 0 the neck look at the active hero (joints 6 and 17 of the
             // animated pose); on any other tick the six angles go back to 0.
             c.anim.set_neck(None);
@@ -17125,7 +17136,7 @@ impl Play {
                     continue;
                 }
                 let score = (forward[0] * d[0] + forward[1] * d[1] + forward[2] * d[2]) / l;
-                if score > best && self.world.ground.as_ref().is_none_or(|g| g.segment_clear(low, c.position, true)) {
+                if score > best && self.world.ground.as_ref().is_none_or(|g| g.aim_sight_clear(low, c.position)) {
                     best = score;
                     hit |= score > av::character_threshold(l);
                     if self.ticks % 30 == 0 && std::env::var_os("NEOPETS_TRACE_AIM").is_some() {
@@ -20642,7 +20653,7 @@ fn followed(loco: &Locomotion, world: &World) -> Followed {
     // SPEC-0027 follow step 5: the height is a quarter in hero state 21.
     let height = if loco.state == hero_states::PANEL { 0.25 * HERO_HEIGHT } else { HERO_HEIGHT };
     let step = loco.last_step_length();
-    Followed { position: shown, facing: loco.facing, height, moving: loco.moved(), ground_kind, locked: loco.camera_locked(), step }
+    Followed { position: shown, facing: loco.facing, height, moving: loco.moved(), ground_kind, locked: loco.camera_locked(), step, pushing: loco.state == hero_states::BLOCK }
 }
 
 /// The eye wall push (SPEC-0027 Walls): the cell's frame records other than type 6, then the
