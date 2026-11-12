@@ -607,7 +607,12 @@ impl Gelert {
     fn handle(&mut self, v: &View, w: &Words, rng: &mut Rng, d: f32, a: &mut Act, ended: &dyn Fn(u32) -> bool) {
         let toward_side = |left: bool| {
             let to = hdir(v.position, v.hero);
-            let side = if left { [-to[2], 0.0, to[0]] } else { [to[2], 0.0, -to[0]] };
+            // The side point for mode 5 (right) is along (-t.z, 0, t.x) and for mode 6 (left)
+            // along (t.z, 0, -t.x), t the direction to the hero, so the strafe steering (mode 5:
+            // up x d; mode 6: d x up; SPEC-0029 Behavior 2) faces the hero while the clip's root
+            // travel carries him sideways (they were swapped, so he turned his back: user's
+            // report 122).
+            let side = if left { [to[2], 0.0, -to[0]] } else { [-to[2], 0.0, to[0]] };
             [v.position[0] + 3.0 * side[0], v.position[1], v.position[2] + 3.0 * side[2]]
         };
         let first = !std::mem::replace(&mut self.started, true);

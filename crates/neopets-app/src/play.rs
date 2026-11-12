@@ -15625,7 +15625,11 @@ impl Play {
             return;
         }
         if std::env::var_os("NEOPETS_TRACE_GELERT").is_some() && self.ticks % 120 == 0 {
-            let all: Vec<String> = self.characters.iter().filter(|c| c.pack == pack && c.gelert.is_some()).map(|c| format!("[id {} entity {:?} slot {} inactive {} held {} {:?} anim {}]", c.id, c.entity, c.gelert_slot, c.inactive, c.held, c.gelert.as_ref().map(|g| g.state), c.anim.action())).collect();
+            let all: Vec<String> = self.characters.iter().filter(|c| c.pack == pack && c.gelert.is_some()).map(|c| format!("[id {} entity {:?} slot {} inactive {} held {} {:?} anim {} facing-to-hero {:.2} walker {:?}]", c.id, c.entity, c.gelert_slot, c.inactive, c.held, c.gelert.as_ref().map(|g| g.state), c.anim.action(), {
+                let d = [hero[0] - c.position[0], hero[2] - c.position[2]];
+                let l = d[0].hypot(d[1]).max(1e-6);
+                (c.facing[0] * d[0] + c.facing[2] * d[1]) / l
+            }, c.walker.as_ref().map(|w| w.mesh))).collect();
             println!("      gelerts on tick {}: {}", self.ticks, all.join(" "));
         }
         let hplace = placement(hero, hf);
