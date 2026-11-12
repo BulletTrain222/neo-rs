@@ -1,4 +1,5 @@
-//! Water reflections (an experiment of this build, not in the original game; user request).
+//! Water reflections (this build's option, the Display page's Water reflections; not in the
+//! original game).
 //! A planar mirror: a second 3D camera renders the scene from the main camera's position mirrored
 //! under the nearest flat water surface into a texture, with Bevy's oblique near plane clipping
 //! everything below the water (so the river bed does not block the view). Each flat water
@@ -6,7 +7,10 @@
 //! a twin drawn over it in its own render layer, which blends that texture in by a Fresnel term
 //! (stronger at grazing angles, as on real water), with a slight ripple. Bevy's screen-space
 //! reflections need its deferred renderer, which the game's forward materials do not use.
-//! Off unless NEOPETS_WATER_REFLECT is set: NEOPETS_WATER_REFLECT="strength" (default 1.2; 9 or more paints the twins magenta).
+//! NEOPETS_WATER_REFLECT="strength,divisor,every" turns it on whatever the setting, for tuning:
+//! the strength (default 1.2; 9 or more paints the twins magenta), the mirror's size as the
+//! scene's divided by `divisor` (default 2), and a new mirror picture every `every` frames
+//! (default 1).
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
@@ -18,14 +22,36 @@ use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 /// The render layer of the reflection twins: seen by the main camera, not by the mirror.
 pub const LAYER: usize = 6;
 
-/// The experiment's strength, if on.
-pub fn strength() -> Option<f32> {
-    static S: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+#[derive(Clone, Copy)]
+pub struct Tuning {
+    pub strength: f32,
+    pub divisor: u32,
+    pub every: u32,
+    /// How far the mirror sees, in world units: what lies farther is culled from it.
+    pub far: f32,
+}
+
+/// The tuning: NEOPETS_WATER_REFLECT's values, else the defaults; and whether that variable is set.
+pub fn tuning() -> (Tuning, bool) {
+    static S: std::sync::OnceLock<(Tuning, bool)> = std::sync::OnceLock::new();
     *S.get_or_init(|| {
-        let v = std::env::var("NEOPETS_WATER_REFLECT").ok()?;
-        Some(v.trim().parse().unwrap_or(1.2))
+        let v = std::env::var("NEOPETS_WATER_REFLECT").ok();
+        let n: Vec<f32> = v.as_deref().unwrap_or("").split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        let at = |i: usize, d: f32| n.get(i).copied().unwrap_or(d);
+        (Tuning { strength: at(0, 1.2), divisor: (at(1, 2.0) as u32).max(1), every: (at(2, 1.0) as u32).max(1), far: at(3, 0.0) }, v.is_some())
     })
 }
+
+fn on(display: &crate::display::DisplaySettings) -> bool {
+    display.water_reflections || tuning().1
+}
+
+/// How near the water's edge the camera must be for the mirror to draw, in world units.
+const NEAR: f32 = 150.0;
+
+/// A reflection twin.
+#[derive(Component)]
+struct Twin;
 
 /// The mirror camera.
 #[derive(Component)]
@@ -86,9 +112,6 @@ pub struct WaterReflectPlugin;
 
 impl Plugin for WaterReflectPlugin {
     fn build(&self, app: &mut App) {
-        if strength().is_none() {
-            return;
-        }
         let handle = app.world_mut().resource_mut::<Assets<Shader>>().add(Shader::from_wgsl(WGSL, "neopets/water_reflect.wgsl"));
         let _ = SHADER.set(handle);
         app.add_plugins(MaterialPlugin::<ReflectMaterial>::default())
@@ -105,10 +128,14 @@ fn find_water(
     mut mirror: ResMut<Mirror>,
     mut images: ResMut<Assets<Image>>,
     mut reflect: ResMut<Assets<ReflectMaterial>>,
+    display: Res<crate::display::DisplaySettings>,
     parts: Query<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>, &GlobalTransform, Option<&crate::draw_order::DrawRank>), (With<crate::UvScroll>, Without<Checked>)>,
     meshes: Res<Assets<Mesh>>,
     materials: Res<Assets<StandardMaterial>>,
 ) {
+    if !on(&display) {
+        return;
+    }
     for (e, mesh, material, at, rank) in &parts {
         let Some(m) = meshes.get(&mesh.0) else { continue };
         commands.entity(e).insert(Checked);
@@ -125,7 +152,7 @@ fn find_water(
             continue;
         }
         let image = mirror.image.get_or_insert_with(|| images.add(Image::new_target_texture(16, 16, TextureFormat::Rgba8UnormSrgb, None))).clone();
-        let mat = mirror.material.get_or_insert_with(|| reflect.add(ReflectMaterial { params: Vec4::new(strength().unwrap_or(0.7), 0.0, 0.0, 0.0), image })).clone();
+        let mat = mirror.material.get_or_insert_with(|| reflect.add(ReflectMaterial { params: Vec4::new(tuning().0.strength, 0.0, 0.0, 0.0), image })).clone();
         let centre = (lo + hi) / 2.0;
         // NEOPETS_TRACE_WATER: each water surface found (diagnostic).
         if std::env::var_os("NEOPETS_TRACE_WATER").is_some() {
@@ -134,7 +161,7 @@ fn find_water(
         commands.entity(e).insert(Surface { height: (lo.y + hi.y) / 2.0, centre: Vec2::new(centre.x, centre.z), radius: (Vec2::new(hi.x - lo.x, hi.z - lo.z) / 2.0).length() });
         // The twin draws straight after its water: the see-through parts keep the original's
         // order (draw_order.rs), whose even ranks leave the next odd one for a part's second pass.
-        let mut twin = commands.spawn((Mesh3d(mesh.0.clone()), MeshMaterial3d(mat), Transform::IDENTITY, RenderLayers::layer(LAYER), bevy::light::NotShadowCaster, ChildOf(e)));
+        let mut twin = commands.spawn((Mesh3d(mesh.0.clone()), MeshMaterial3d(mat), Transform::IDENTITY, RenderLayers::layer(LAYER), bevy::light::NotShadowCaster, ChildOf(e), Twin));
         if let Some(r) = rank {
             twin.insert(crate::draw_order::DrawRank { pack: r.pack, rank: r.rank + 1 });
         }
@@ -151,14 +178,31 @@ fn place_mirror(
     mains: Query<(Entity, &Camera, &Transform, &Projection, Option<&AmbientLight>, Option<&RenderLayers>), (With<Camera3d>, Without<MirrorCam>)>,
     mut mirrors: Query<(&mut Camera, &mut Transform, &mut Projection), With<MirrorCam>>,
     surfaces: Query<(&Surface, &ViewVisibility)>,
+    display: Res<crate::display::DisplaySettings>,
+    mut twins: Query<&mut Visibility, With<Twin>>,
+    mut frame: Local<u32>,
+    mut near_water: Local<bool>,
 ) {
+    let enabled = on(&display);
+    // The twins show only while the mirror draws (a stale picture would show otherwise).
+    let mut show_twins = |shown: bool| {
+        let tw = if shown { Visibility::Inherited } else { Visibility::Hidden };
+        for mut v in &mut twins {
+            if *v != tw {
+                *v = tw;
+            }
+        }
+    };
+    if !enabled {
+        show_twins(false);
+    }
     let Some((main, cam, at, projection, ambient, layers)) = mains.iter().find(|(_, c, ..)| c.order == 0) else { return };
     if layers.is_none() {
         commands.entity(main).insert(RenderLayers::from_layers(&[0, LAYER]));
     }
     let Some(image) = mirror.image.clone() else { return };
     // Half the scene's size, in its shape.
-    let size = cam.physical_target_size().map_or(UVec2::new(16, 16), |s| (s / 2).max(UVec2::splat(16)));
+    let size = cam.physical_target_size().map_or(UVec2::new(16, 16), |s| (s / tuning().0.divisor).max(UVec2::splat(16)));
     let resized = mirror.size != size;
     if resized {
         mirror.size = size;
@@ -195,21 +239,36 @@ fn place_mirror(
         commands.entity(camera).insert(a.clone());
     }
     let Ok((mut mc, mut mt, mut mp)) = mirrors.get_mut(camera) else { return };
+    // Off, or between the frames that draw a new mirror picture: the mirror does not render.
+    *frame = frame.wrapping_add(1);
+    if !enabled || *frame % tuning().0.every != 0 {
+        if mc.is_active {
+            mc.is_active = false;
+        }
+        return;
+    }
     // The nearest drawn surface below the camera.
     let eye = at.translation;
     let near = surfaces
         .iter()
         .filter(|(s, v)| v.get() && s.height < eye.y)
         .min_by(|(a, _), (b, _)| (Vec2::new(eye.x, eye.z).distance(a.centre) - a.radius).total_cmp(&(Vec2::new(eye.x, eye.z).distance(b.centre) - b.radius)));
-    let Some((s, _)) = near else {
+    // The mirror draws only within NEAR of the water's edge (off past NEAR + 20, so it does not
+    // flicker at the edge): its cost is a second view of the scene, about 1.1 ms a frame whatever
+    // its size, and water farther off is a sliver whose reflection cannot be told apart.
+    let gap = near.map(|(s, _)| Vec2::new(eye.x, eye.z).distance(s.centre) - s.radius);
+    *near_water = gap.is_some_and(|g| g < if *near_water { NEAR + 20.0 } else { NEAR });
+    let (Some((s, _)), true) = (near, *near_water) else {
         if mc.is_active {
             mc.is_active = false;
         }
+        show_twins(false);
         return;
     };
     if !mc.is_active {
         mc.is_active = true;
     }
+    show_twins(true);
     let h = s.height;
     // NEOPETS_TRACE_WATER: the mirror's surface and size about once a second (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_WATER").is_some() && (eye.x * 7.0 + eye.z).fract().abs() < 1.0 {
@@ -234,6 +293,9 @@ fn place_mirror(
         _ => PerspectiveProjection::default(),
     };
     p.near_clip_plane = plane;
+    if tuning().0.far > 0.0 {
+        p.far = tuning().0.far;
+    }
     *mt = t;
     *mp = Projection::Perspective(p);
 }
