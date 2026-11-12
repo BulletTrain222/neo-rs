@@ -1016,6 +1016,7 @@ fn main() {
         .add_plugins(draw_order::DrawOrderPlugin)
         .add_plugins(shadow_view::ShadowPlugin)
         .init_resource::<display::SceneTarget>()
+        .add_systems(Startup, no_gpu_clustering)
         .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, dev_spawn::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup, display::spawn_window))
         .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
         .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
@@ -6822,6 +6823,20 @@ fn setup_movies(mut commands: Commands, archive: Option<ResMut<Archive>>) {
     match movie_view::Movies::load(&mut archive.disc) {
         Ok(m) => commands.insert_resource(m),
         Err(e) => eprintln!("movies: {e}"),
+    }
+}
+
+/// Bevy's GPU light clustering off (its CPU path instead): with no point lights, spotlights,
+/// light probes or decals in the game (see the camera's ClusterConfig), the GPU path still set up
+/// buffers and ran its compute passes every frame, about 0.35 ms of setup and 0.18 ms of
+/// command recording on the render thread (performance pass of 2026-11-12). The CPU path has
+/// nothing to cluster. NEOPETS_GPU_CLUSTERING keeps the GPU path (diagnostic).
+fn no_gpu_clustering(settings: Option<ResMut<bevy::light::cluster::GlobalClusterSettings>>) {
+    if std::env::var_os("NEOPETS_GPU_CLUSTERING").is_some() {
+        return;
+    }
+    if let Some(mut s) = settings {
+        s.gpu_clustering = None;
     }
 }
 
