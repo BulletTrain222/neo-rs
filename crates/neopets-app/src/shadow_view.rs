@@ -244,19 +244,26 @@ fn cascades_for(distance: f32, most: usize) -> usize {
 /// changes (and once the sun exists).
 fn apply_quality(
     settings: Res<crate::display::DisplaySettings>,
+    state: Option<Res<crate::PlayState>>,
     mut map: ResMut<bevy::light::DirectionalLightShadowMap>,
     mut suns: Query<&mut bevy::light::CascadeShadowConfig, With<Sun>>,
     mut filters: Query<&mut bevy::light::ShadowFilteringMethod, With<Camera3d>>,
-    mut last: Local<Option<(usize, usize)>>,
+    mut last: Local<Option<(usize, usize, bool)>>,
 ) {
-    let key = (settings.shadow_quality, settings.shadow_distance);
+    let chars = characters_only(&settings, state.as_deref());
+    let key = (settings.shadow_quality, settings.shadow_distance, chars);
     if *last == Some(key) || suns.is_empty() {
         return;
     }
     *last = Some(key);
     let (size, most) = quality(key.0);
     let distance = crate::display::SHADOW_DISTANCES[key.1];
-    let (size, cascades, distance) = sun_override().map_or((size, cascades_for(distance, most), distance), |t| (t.0, t.1 as usize, t.2));
+    // Only the characters cast (Detailed character shadows without World shadows, or a roofed
+    // world): one cascade to at most CHARACTER_REACH holds every shadow worth seeing, where
+    // three cascades to the full distance cost about 1 ms a frame more at 1920 x 1080
+    // (performance pass of 2026-11-12).
+    let (cascades, distance) = if chars { (1, distance.min(CHARACTER_REACH)) } else { (cascades_for(distance, most), distance) };
+    let (size, cascades, distance) = sun_override().map_or((size, cascades, distance), |t| (t.0, t.1 as usize, t.2));
     if map.size != size as usize {
         map.size = size as usize;
     }
@@ -266,8 +273,10 @@ fn apply_quality(
     }
     // The soft filter at every level: the 2x2 filter below High drew stripes and blocks on steep
     // surfaces such as cliffs, whatever the bias (user's F8 views 8 and 9 in pack 934).
+    // With only the characters casting, no surface shadows itself, so the stripes cannot form
+    // and the cheaper hardware 2x2 filter is used.
     if std::env::var_os("NEOPETS_SHADOW_FILTER").is_none() {
-        let method = bevy::light::ShadowFilteringMethod::Gaussian;
+        let method = if chars { bevy::light::ShadowFilteringMethod::Hardware2x2 } else { bevy::light::ShadowFilteringMethod::Gaussian };
         for mut f in &mut filters {
             if *f != method {
                 *f = method;
@@ -335,6 +344,17 @@ pub fn mark_faint(
     }
 }
 
+/// How far the sun's one cascade reaches while only the characters cast.
+const CHARACTER_REACH: f32 = 100.0;
+
+/// Whether only the characters cast: World shadows off, or a roofed world. Pack 1184 and its
+/// neighbour are roofed by their canopy like an interior (user's report 16). Other worlds under
+/// a canopy are not listed: none has been reported or measured.
+fn characters_only(settings: &crate::display::DisplaySettings, state: Option<&crate::PlayState>) -> bool {
+    let indoors = state.is_some_and(|s| s.play.indoors() || matches!(s.play.world.pack, 1184 | 1225));
+    !settings.world_shadows || indoors
+}
+
 /// With Character shadows Detailed and World shadows off, only the characters (the hero, the
 /// world's characters, their items and attachments) cast: every other mesh is marked
 /// NotShadowCaster; with World shadows on the marks come off again. In an interior only the characters cast whatever the
@@ -352,10 +372,7 @@ pub fn sync_casters(
     faint: Query<(), With<FaintCaster>>,
 ) {
     let _span = crate::perf::span("sync_casters");
-    // Pack 1184 and its neighbour are roofed by their canopy in the same way (user's report 16). Other worlds under a
-    // canopy are not listed: none has been reported or measured.
-    let indoors = state.is_some_and(|s| s.play.indoors() || matches!(s.play.world.pack, 1184 | 1225));
-    let characters_only = !settings.world_shadows || indoors;
+    let characters_only = characters_only(&settings, state.as_deref());
     if *last == Some(characters_only) && added.is_empty() {
         return;
     }
