@@ -431,7 +431,10 @@ pub fn spawn_panel(mut commands: Commands) {
         .with_children(|ui| {
             ui.spawn((Text::default(), font(15.0), TextColor(Color::srgb(0.9, 0.95, 0.75)), DevText));
         });
-    // The menu window.
+}
+
+/// The menu window (ui_lazy.rs: made when the menu opens, removed a while after it closes).
+pub fn spawn_window(mut commands: Commands) {
     commands
         .spawn((
             Node {

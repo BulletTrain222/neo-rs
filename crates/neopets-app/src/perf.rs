@@ -249,7 +249,7 @@ pub fn perf_first(mut log: ResMut<PerfLog>) {
 /// NEOPETS_PERF: every 240 frames, the UI texts changed per frame and the first words of the
 /// ones that changed most (a changed text is laid out and measured again).
 #[allow(clippy::type_complexity)]
-pub fn perf_text(changed: Query<(Entity, &Text), Changed<Text>>, nodes: Query<(Entity, Option<&Name>, Has<ImageNode>, Option<&ChildOf>), Changed<Node>>, texts: Query<&Text>, children: Query<&Children>, mut tally: Local<(u32, usize, usize, std::collections::HashMap<Entity, (usize, String)>)>) {
+pub fn perf_text(changed: Query<(Entity, &Text), Changed<Text>>, nodes: Query<(Entity, Option<&Name>, Has<ImageNode>, Option<&ChildOf>), Changed<Node>>, texts: Query<&Text>, children: Query<&Children>, all_nodes: Query<(Entity, &Node, Option<&InheritedVisibility>)>, parents: Query<&ChildOf>, names: Query<&Name>, mut tally: Local<(u32, usize, usize, std::collections::HashMap<Entity, (usize, String)>)>) {
     tally.0 += 1;
     for (e, name, image, parent) in &nodes {
         tally.2 += 1;
@@ -269,6 +269,19 @@ pub fn perf_text(changed: Query<(Entity, &Text), Changed<Text>>, nodes: Query<(E
     if tally.0 % 240 != 0 {
         return;
     }
+    // The UI nodes by root (its name or first text), and how many are displayed.
+    let mut roots: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    for (e, node, shown) in &all_nodes {
+        let mut r = e;
+        while let Ok(p) = parents.get(r) {
+            r = p.parent();
+        }
+        let label = names.get(r).map(|n| n.to_string()).ok().or_else(|| children.get(r).ok().and_then(|c| c.iter().find_map(|k| texts.get(k).ok())).map(|t| t.0.chars().take(24).collect())).unwrap_or_else(|| format!("{r:?}"));
+        let entry = roots.entry(label.replace('\n', " ")).or_default();
+        entry.0 += 1;
+        entry.1 += usize::from(node.display != Display::None && shown.is_some_and(|v| v.get()));
+    }
+    info!("perf: {} UI nodes; by root (nodes, shown): {:?}", all_nodes.iter().count(), roots);
     let mut top: Vec<(usize, String)> = tally.3.values().cloned().collect();
     top.sort_by(|a, b| b.0.cmp(&a.0));
     let list: Vec<String> = top.iter().take(6).map(|(n, s)| format!("{n}x {s:?}")).collect();

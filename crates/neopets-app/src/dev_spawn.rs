@@ -92,7 +92,7 @@ pub fn scan(disc: &mut Disc, index: &ArchiveIndex, mut found: impl FnMut(Vec<Spa
 
 #[derive(Resource, Default)]
 pub struct SpawnPicker {
-    open: bool,
+    pub open: bool,
     entries: Vec<SpawnEntry>,
     found: Option<Mutex<Receiver<Vec<SpawnEntry>>>>,
     scanned: bool,

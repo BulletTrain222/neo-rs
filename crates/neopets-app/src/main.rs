@@ -21,6 +21,7 @@ mod effect_view;
 mod foliage_view;
 mod fast_lit;
 mod gpu_skin;
+mod ui_lazy;
 mod graphics;
 mod pass1;
 mod shadow_view;
@@ -1017,7 +1018,9 @@ fn main() {
         .add_plugins(shadow_view::ShadowPlugin)
         .init_resource::<display::SceneTarget>()
         .add_systems(Startup, no_gpu_clustering)
-        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, dev_spawn::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup, display::spawn_window))
+        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, display::setup))
+        // The developer and settings windows are made while open (ui_lazy.rs).
+        .add_systems(First, ui_lazy::sync_windows)
         .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
         .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
         .add_systems(
