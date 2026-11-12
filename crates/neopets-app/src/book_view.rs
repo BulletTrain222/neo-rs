@@ -35,6 +35,8 @@ fn spawn_camera(commands: &mut Commands, target: Option<RenderTarget>, msaa: Msa
         Projection::Perspective(PerspectiveProjection { near: 0.02, far: 100.0, ..default() }),
         RenderLayers::layer(BOOK_LAYER),
         msaa,
+        // One light cluster, as on the main camera (no local lights).
+        bevy::light::cluster::ClusterConfig::Single,
         BookCamera,
     ));
     if let Some(t) = target {

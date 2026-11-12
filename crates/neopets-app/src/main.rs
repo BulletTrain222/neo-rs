@@ -1192,6 +1192,13 @@ fn setup_viewer(
         }),
         orbit.transform(),
         orbit,
+        // One light cluster instead of Bevy's grid: the game has no point lights, spotlights,
+        // light probes or decals (the sun and the ambient light are global, and the disc's light
+        // blocks are applied in gpu_skin.rs and on the CPU), so the per-frame grid was empty work
+        // (performance pass of 2026-11-12). ClusterConfig::None would skip it entirely, but Bevy
+        // 0.19's GPU clustering then makes a texture of width 0 and the renderer stops. A point
+        // light or spotlight added later still lights correctly, only less efficiently.
+        bevy::light::cluster::ClusterConfig::Single,
         // NEOPETS_SHADOW_FILTER=0/1/2: hardware 2x2, Gaussian, temporal (diagnostic).
         match std::env::var("NEOPETS_SHADOW_FILTER").ok().as_deref() {
             Some("0") => bevy::light::ShadowFilteringMethod::Hardware2x2,
