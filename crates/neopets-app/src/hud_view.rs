@@ -306,26 +306,71 @@ struct Inputs {
     mote_counts: [i32; 14],
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn sync_hud(
+/// Which player a HUD piece belongs to (0: player 1's HUD; 1: player 2's, local co-op).
+#[derive(Component)]
+pub struct HudOf<const V: u8>;
+
+type HudQ<'w, 's, D, F, const V: u8> = Query<'w, 's, D, (F, With<HudOf<V>>)>;
+
+/// The in-play HUD of one player (VIEW 0: player 1, the whole HUD; VIEW 1: player 2 in local
+/// co-op, its bars group only: the portrait and the health and magic bars from its own `Hud`
+/// record, at the top left of the bottom half). For VIEW 1, player 2's hero, `Hud` and hero
+/// index are swapped in for the pass and back after it.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn sync_hud<const VIEW: u8>(
     mut commands: Commands,
-    state: Option<ResMut<PlayState>>,
+    mut state: Option<ResMut<PlayState>>,
+    art: Option<ResMut<HudArt>>,
+    images: ResMut<Assets<Image>>,
+    windows: Query<&Window>,
+    mut canvas: HudQ<(Entity, &mut Node, &mut GlobalZIndex), With<HudCanvas>, VIEW>,
+    menu: Option<Res<crate::menu_view::Menu>>,
+    sprites: HudQ<(&HudSprite, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudText>), VIEW>,
+    texts: HudQ<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudText>, Without<HudCanvas>, Without<HudSprite>, Without<HudCaption>), VIEW>,
+    captions: HudQ<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>), VIEW>,
+    values: HudQ<(&HudValue, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>), VIEW>,
+    caption_image: Local<Option<(Vec<u8>, Handle<Image>, u32, u32, i32)>>,
+    value_images: Local<HashMap<(usize, String), (Handle<Image>, u32, u32, i32)>>,
+    settings: Res<crate::display::DisplaySettings>,
+    prices: HudQ<(&HudPrice, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>, Without<HudValue>), VIEW>,
+) {
+    let _span = crate::perf::span("sync_hud");
+    if VIEW == 1 {
+        let Some(st) = state.as_deref_mut().filter(|s| !s.play.others.is_empty()) else {
+            for (e, ..) in &mut canvas {
+                commands.entity(e).despawn();
+            }
+            return;
+        };
+        st.play.swap_coop_hud(true);
+    }
+    hud_pass::<VIEW>(commands, state.as_deref_mut(), art, images, windows, canvas, menu, sprites, texts, captions, values, caption_image, value_images, settings, prices);
+    if VIEW == 1 {
+        if let Some(st) = state.as_deref_mut() {
+            st.play.swap_coop_hud(false);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn hud_pass<const VIEW: u8>(
+    mut commands: Commands,
+    state: Option<&mut PlayState>,
     art: Option<ResMut<HudArt>>,
     mut images: ResMut<Assets<Image>>,
     windows: Query<&Window>,
-    mut canvas: Query<(Entity, &mut Node, &mut GlobalZIndex), With<HudCanvas>>,
+    mut canvas: HudQ<(Entity, &mut Node, &mut GlobalZIndex), With<HudCanvas>, VIEW>,
     menu: Option<Res<crate::menu_view::Menu>>,
-    mut sprites: Query<(&HudSprite, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudText>)>,
-    mut texts: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudText>, Without<HudCanvas>, Without<HudSprite>, Without<HudCaption>)>,
-    mut captions: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>)>,
-    mut values: Query<(&HudValue, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>)>,
+    mut sprites: HudQ<(&HudSprite, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudText>), VIEW>,
+    mut texts: HudQ<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudText>, Without<HudCanvas>, Without<HudSprite>, Without<HudCaption>), VIEW>,
+    mut captions: HudQ<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>), VIEW>,
+    mut values: HudQ<(&HudValue, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>), VIEW>,
     mut caption_image: Local<Option<(Vec<u8>, Handle<Image>, u32, u32, i32)>>,
     mut value_images: Local<HashMap<(usize, String), (Handle<Image>, u32, u32, i32)>>,
     settings: Res<crate::display::DisplaySettings>,
-    mut prices: Query<(&HudPrice, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>, Without<HudValue>)>,
+    mut prices: HudQ<(&HudPrice, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>, Without<HudValue>), VIEW>,
 ) {
-    let _span = crate::perf::span("sync_hud");
-    let (Some(mut state), Some(mut art)) = (state, art) else { return };
+    let (Some(state), Some(mut art)) = (state, art) else { return };
     let HudArt { f, mem, images: cache, name: name_image, .. } = &mut *art;
     let f: &Frontend = f;
     // NEOPETS_TRACE_HUDNODES=1: once, the equipment Mote icon nodes (keys 164, 166, 162) and the
@@ -380,12 +425,17 @@ pub fn sync_hud(
             }
         }
     }
-    let state = state.into_inner();
     let Some(window) = windows.iter().next() else { return };
     let mut fill_points = [None; 2];
     let p = &state.play;
-    let s = (window.width() / 512.0).min(window.height() / 448.0);
-    let (ox, oy) = ((window.width() - 512.0 * s) / 2.0, (window.height() - 448.0 * s) / 2.0);
+    // In split screen (local co-op) each player's HUD fits its own half of the window: player
+    // 1's the top half, player 2's the bottom half.
+    let split = !p.others.is_empty();
+    let area = if split { window.height() / 2.0 } else { window.height() };
+    let s = (window.width() / 512.0).min(area / 448.0);
+    let (ox, oy) = ((window.width() - 512.0 * s) / 2.0, (area - 448.0 * s) / 2.0);
+    // Player 2's canvas root is moved down by the top half; its pieces are placed in it as player 1's.
+    let root_dy = if VIEW == 1 { area } else { 0.0 };
     let Some(bars) = f.key(BARS) else { return };
     let monster = f.key(MONSTER);
     // The button-prompt group: the parent of the HUD page's node gated by predicate slot 25.
@@ -451,19 +501,23 @@ pub fn sync_hud(
     nodes.extend(panel_nodes.iter().copied());
     let Ok((root, mut root_node, mut root_z)) = canvas.single_mut() else {
         let root = commands
-            .spawn((Node { position_type: PositionType::Absolute, ..default() }, HudCanvas, GlobalZIndex(10)))
+            .spawn((Node { position_type: PositionType::Absolute, ..default() }, HudCanvas, GlobalZIndex(10), HudOf::<VIEW>))
             .id();
         for &n in nodes.iter().filter(|&&n| f.sprite(n).is_some()) {
-            let child = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudSprite(n))).id();
+            let child = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudSprite(n), HudOf::<VIEW>)).id();
             commands.entity(root).add_child(child);
         }
-        let text = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudText)).id();
+        // Player 2's HUD is its bars group only: no texts, captions, prices or values.
+        if VIEW == 1 {
+            return;
+        }
+        let text = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudText, HudOf::<VIEW>)).id();
         commands.entity(root).add_child(text);
-        let caption = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudCaption)).id();
+        let caption = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudCaption, HudOf::<VIEW>)).id();
         commands.entity(root).add_child(caption);
         // Lines 0 and 1 are the price caption; 2 is the countdown timer text (element 0xD8).
         for line in 0..3 {
-            let price = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudPrice(line))).id();
+            let price = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudPrice(line), HudOf::<VIEW>)).id();
             commands.entity(root).add_child(price);
         }
         // The Mote panel's label (node 393 under group 392, variable 11) is a value text too.
@@ -472,14 +526,14 @@ pub fn sync_hud(
             subtree(f, 392, &mut mote_texts);
         }
         for &n in panel_nodes.iter().chain(mote_texts.iter().filter(|&&n| f.nodes[n].kind == 6 && f.values.get(&f.nodes[n].data).is_some_and(|v| v.variable == 11))).filter(|&&n| matches!(f.nodes[n].kind, 2 | 6)) {
-            let child = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudValue(n))).id();
+            let child = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudValue(n), HudOf::<VIEW>)).id();
             commands.entity(root).add_child(child);
         }
         return;
     };
     let _ = root;
     // Written only on change: a changed node makes Bevy lay out the whole UI again.
-    let root_place = (Val::Px(ox), Val::Px(oy), Val::Px(512.0 * s), Val::Px(448.0 * s));
+    let root_place = (Val::Px(ox), Val::Px(oy + root_dy), Val::Px(512.0 * s), Val::Px(448.0 * s));
     if (root_node.left, root_node.top, root_node.width, root_node.height) != root_place {
         (root_node.left, root_node.top, root_node.width, root_node.height) = root_place;
     }
@@ -512,9 +566,9 @@ pub fn sync_hud(
         mp_max: p.player.hero_mp_max,
         health_dividers: hud.health.dividers,
         pool_dividers: hud.pool.dividers,
-        monster: mb.t != 0 && !p.quick.open,
-        square: p.square_caption().is_some(),
-        quick_open: p.quick.open,
+        monster: VIEW == 0 && mb.t != 0 && !p.quick.open,
+        square: VIEW == 0 && p.square_caption().is_some(),
+        quick_open: VIEW == 0 && p.quick.open,
         selection: p.quick.selection,
         counts: p.quick.entries.map(|id| count(id)),
         marker: p.quick.effective(&|id| count(id) > 0),
@@ -526,14 +580,14 @@ pub fn sync_hud(
         pet: p.pet_kind(),
         hero: p.hero_index,
         swing: hud.swing.active && p.swap_mode == 2,
-        mote_open: p.mote_panel.open,
+        mote_open: VIEW == 0 && p.mote_panel.open,
         mote_selection: p.mote_panel.selection,
         mote_counts: std::array::from_fn(|k| count(160 + k as i32)),
         available: hud.swing.available,
         dead: p.state.hero.dead,
         words: std::array::from_fn(|w| p.equipment.motes[p.hero_index.min(1)][w].map_or(-1, i32::from)).map(count),
-        hint: hint_ok,
-        journal: hint_ok && hud.journal,
+        hint: VIEW == 0 && hint_ok,
+        journal: VIEW == 0 && hint_ok && hud.journal,
     };
     let key = |k: u32| f.key(k).unwrap_or(usize::MAX);
     let node_x = |k: u32| f.key(k).map_or(0, |n| f.nodes[n].x as i32);
@@ -633,6 +687,10 @@ pub fn sync_hud(
             .collect()
     });
     let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
+    // NEOPETS_TRACE_HUDVIEW: per view, about once a second, the sprites and how many are shown (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_HUDVIEW").is_some() && p.ticks % 60 == 0 {
+        println!("HUDVIEW {VIEW} tick {}: {} sprites, {} shown, c {} g0 {} hero {}", p.ticks, sprites.iter().count(), sprites.iter().filter(|(_, _, _, v)| **v != Visibility::Hidden).count(), hud.c, hud.g0, p.hero_index);
+    }
     for (sprite, mut node, mut image, mut vis) in &mut sprites {
         let n = sprite.0;
         // Visible when every node from the sprite up to the bars group passes its condition.

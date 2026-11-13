@@ -1372,6 +1372,9 @@ struct HeroSight {
 
 #[derive(Clone)]
 pub struct Player {
+    /// This player's HUD record (co-op, not player 1, whose record is `Play::hud`): its bars
+    /// group's timers and bar layouts from its own health and magic (SPEC-0023).
+    pub hud: neopets_sim::hud::Hud,
     /// Down (co-op, not player 1): the ticks since this player went down, and the ticks player 1
     /// has stood close by reviving it.
     pub down: Option<u32>,
@@ -2415,6 +2418,7 @@ impl Play {
         }
         let mut play = Self {
             player: Player {
+                hud: Default::default(),
                 down: None,
                 revive: 0,
                 area_cool: 0,
@@ -19077,6 +19081,8 @@ impl Play {
             return false;
         }
         let mut p = self.player.clone();
+        p.hud = self.hud.clone();
+        p.hud.rearm_all();
         p.who = self.hero_index;
         if let Some(r) = self.parked.as_ref() {
             p.who = 1 - self.hero_index.min(1);
@@ -19103,6 +19109,22 @@ impl Play {
         let y = self.world.ground_at(x, z, at[1] + 2.5).unwrap_or(at[1]);
         p.loco.teleport([x, y, z], f);
         p.loco.body.velocity = [0.0; 3];
+    }
+
+    /// Swaps player 2's hero, HUD record and hero index in for its HUD's pass (hud_view.rs)
+    /// (`entering`), and back again after it, in the reverse order.
+    pub fn swap_coop_hud(&mut self, entering: bool) {
+        if self.others.is_empty() {
+            return;
+        }
+        if entering {
+            self.swap_player(0);
+        }
+        std::mem::swap(&mut self.hud, &mut self.player.hud);
+        std::mem::swap(&mut self.hero_index, &mut self.player.who);
+        if !entering {
+            self.swap_player(0);
+        }
     }
 
     /// Player 2 leaves (local co-op).
@@ -19227,6 +19249,18 @@ impl Play {
             self.hero_contacts(false);
             self.player.root_step = self.player.hero.tick();
             self.player.items_drawn = self.hero_items();
+            // SPEC-0023: player 2's HUD record steps as player 1's (not under a dialogue box).
+            if !self.dialogue_open {
+                let v = neopets_sim::hud::Values {
+                    hp: self.player.hero_hp,
+                    hp_max: self.player.hero_max,
+                    mp: self.player.hero_mp,
+                    mp_max: self.player.hero_mp_max,
+                    poisoned: self.player.statuses.active(neopets_sim::status::POISON),
+                };
+                let w = self.hud_words.clone();
+                self.player.hud.tick(v, false, &w);
+            }
             (self.hero_index, self.weapon, self.shield) = saved;
             self.coop_running = false;
             self.swap_player(i);
