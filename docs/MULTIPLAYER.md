@@ -179,8 +179,9 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 - [x] **Event channel:** numbered events, resent until acknowledged (sounds and effects so far;
       music, messages, shake, fades and rumble to come).
 - [x] Shots: each state carries the host's live shots.
-- [ ] Send flags and items only when they change (acknowledged), to keep states small.
-- [ ] State size check: keep each state below about 1,200 bytes, or split it, for the internet.
+- [x] Send flags and items only when they change (acknowledged), to keep states small.
+- [x] Events capped at about 900 bytes a state. States measured at 863 to 1,046 bytes early on.
+- [ ] Characters only when changed, for busy towns over the internet.
 - [x] In-game notices: "Player 2 joined", "Player 2 left", "Lost the host", "The host paused the game".
 - [x] Quit on the pause page ends the session; the host's quit sends the joiner to the title
       screen with a message. Pings keep a paused session alive.

@@ -1795,7 +1795,7 @@ fn step_sim(
                 c.2 = c.2.wrapping_add(input.square as u8);
                 let counts = netr.counts;
                 let generation = netr.loaded;
-                let ack = netr.applied;
+                let ack = (netr.applied, netr.story_held.as_ref().map_or(0, |h| h.0));
                 netr.outgoing = Some(net::Input::from_hero(&input, &pad, generation, counts, ack));
                 let sounds = play.play.sound.requests.len();
                 let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());
@@ -1831,7 +1831,7 @@ fn step_sim(
                 }
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                     let p = &play.play;
-                    println!("NETFX joiner tick {}: {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0));
+                    println!("NETFX joiner tick {}: {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints);
                 }
             } else {
                 let sounds = play.play.sound.requests.len();
@@ -1885,7 +1885,7 @@ fn step_sim(
                     netr.send_state(&s);
                     if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                         let p = &play.play;
-                        println!("NETFX host tick {}: {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0));
+                        println!("NETFX host tick {}: {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints);
                     }
                 }
             }

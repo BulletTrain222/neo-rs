@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 5;
+const PROTOCOL: u16 = 6;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -189,6 +189,10 @@ pub struct State {
     pub events: Vec<(u32, Event)>,
     /// The host's live shots by pool slot.
     pub shots: Vec<(u8, neopets_sim::projectile::Shot)>,
+    /// The story revision (flags, items and Neopoints, counted up at each change) and whether
+    /// this state carries them (only until the joiner acknowledges the revision).
+    pub story: u32,
+    pub has_story: bool,
     /// What the host's screen and music show that the joiner shows too.
     pub show: Show,
 }
@@ -589,16 +593,20 @@ impl State {
             w.i32(c.hp);
             w.u8(c.dead as u8);
         }
-        w.u32(self.flags.len() as u32);
-        for &f in &self.flags {
-            w.u16(f);
+        w.u32(self.story);
+        w.u8(self.has_story as u8);
+        if self.has_story {
+            w.u32(self.flags.len() as u32);
+            for &f in &self.flags {
+                w.u16(f);
+            }
+            w.u32(self.items.len() as u32);
+            for &(id, n) in &self.items {
+                w.u16(id);
+                w.u32(n);
+            }
+            w.i32(self.neopoints);
         }
-        w.u32(self.items.len() as u32);
-        for &(id, n) in &self.items {
-            w.u16(id);
-            w.u32(n);
-        }
-        w.i32(self.neopoints);
         match &self.talk {
             Some(t) => {
                 w.u8(1);
@@ -649,11 +657,16 @@ impl State {
         for _ in 0..n {
             characters.push(CharState { pack: r.u32()?, slot: r.u8()?, ordinal: r.u32()?, position: r.v3()?, facing: r.v3()?, clip: r.u32()?, hp: r.i32()?, dead: r.u8()? != 0 });
         }
-        let n = r.u32()? as usize;
-        let flags = (0..n.min(65536)).map(|_| r.u16()).collect::<Option<Vec<_>>>()?;
-        let n = r.u32()? as usize;
-        let items = (0..n.min(65536)).map(|_| Some((r.u16()?, r.u32()?))).collect::<Option<Vec<_>>>()?;
-        let neopoints = r.i32()?;
+        let story = r.u32()?;
+        let has_story = r.u8()? != 0;
+        let (mut flags, mut items, mut neopoints) = (Vec::new(), Vec::new(), 0);
+        if has_story {
+            let n = r.u32()? as usize;
+            flags = (0..n.min(65536)).map(|_| r.u16()).collect::<Option<Vec<_>>>()?;
+            let n = r.u32()? as usize;
+            items = (0..n.min(65536)).map(|_| Some((r.u16()?, r.u32()?))).collect::<Option<Vec<_>>>()?;
+            neopoints = r.i32()?;
+        }
         let talk = match r.u8()? {
             1 => Some(Talk {
                 open: r.u8()? != 0,
@@ -683,7 +696,7 @@ impl State {
             shots.push(read_shot(r)?);
         }
         let show = Show::read(r)?;
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show })
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story })
     }
 }
 
@@ -692,8 +705,10 @@ impl State {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Input {
     pub generation: u32,
-    /// The last host event played here, in order (the event channel's acknowledgement).
+    /// The last host event played here, in order (the event channel's acknowledgement), and the
+    /// story revision held here.
     pub ack: u32,
+    pub story: u32,
     pub side: f32,
     pub forward: f32,
     pub held: u16,
@@ -713,11 +728,12 @@ const CIRCLE: u16 = 64;
 const L2: u16 = 128;
 
 impl Input {
-    pub fn from_hero(i: &HeroInput, pad: &CameraPad, generation: u32, counts: (u8, u8, u8), ack: u32) -> Self {
+    pub fn from_hero(i: &HeroInput, pad: &CameraPad, generation: u32, counts: (u8, u8, u8), ack: (u32, u32)) -> Self {
         let bit = |b: bool, v: u16| if b { v } else { 0 };
         Self {
             generation,
-            ack,
+            ack: ack.0,
+            story: ack.1,
             side: i.side,
             forward: i.forward,
             held: bit(i.run, RUN) | bit(i.square_held, SQUARE_HELD) | bit(i.cross_held, CROSS_HELD) | bit(i.guard, GUARD) | bit(i.attack_held, ATTACK_HELD) | bit(i.r2_held, R2) | bit(i.circle_held, CIRCLE) | bit(i.l2, L2),
@@ -753,6 +769,7 @@ impl Input {
         let mut w = Writer::new(INPUT);
         w.u32(self.generation);
         w.u32(self.ack);
+        w.u32(self.story);
         w.f32(self.side);
         w.f32(self.forward);
         w.u16(self.held);
@@ -765,7 +782,7 @@ impl Input {
     }
 
     fn decode(r: &mut Reader) -> Option<Self> {
-        Some(Self { generation: r.u32()?, ack: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()? })
+        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()? })
     }
 }
 
@@ -823,6 +840,13 @@ pub struct Net {
     /// last went out.
     pub notice: Option<String>,
     pub ended: bool,
+    /// Host: the story revision, the story it stands for, and the revision the joiner holds.
+    /// Joiner: the latest story received (revision, flags, items, Neopoints), put into each
+    /// state that comes without one.
+    story_rev: u32,
+    story_last: Option<(Vec<u16>, Vec<(u16, u32)>, i32)>,
+    story_acked: u32,
+    pub story_held: Option<(u32, Vec<u16>, Vec<(u16, u32)>, i32)>,
     pub peer_paused: bool,
     /// The other side's page: 0 in play, 1 a menu (paused), 2 game over.
     pub peer_page: u8,
@@ -866,11 +890,33 @@ impl Net {
                 self.events.pop_front();
             }
             let mut s = s.clone();
-            s.events = self.events.iter().take(96).cloned().collect();
-            if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && s.tick % 300 == 0 {
-                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting", s.tick, self.next_event, self.acked, self.events.len());
+            let story = (s.flags.clone(), s.items.clone(), s.neopoints);
+            if self.story_last.as_ref() != Some(&story) {
+                self.story_rev += 1;
+                self.story_last = Some(story);
+            }
+            s.story = self.story_rev;
+            s.has_story = self.story_acked < self.story_rev;
+            if !s.has_story {
+                (s.flags, s.items) = (Vec::new(), Vec::new());
+            }
+            // The events not yet acknowledged, oldest first, up to 96 and about 900 bytes (the
+            // rest go with the next states).
+            let mut size = 0;
+            s.events = Vec::new();
+            for e in self.events.iter().take(96) {
+                let mut w = Writer(Vec::new());
+                e.1.write(&mut w);
+                size += w.0.len() + 4;
+                if size > 900 && !s.events.is_empty() {
+                    break;
+                }
+                s.events.push(e.clone());
             }
             let bytes = s.encode();
+            if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && s.tick % 300 == 0 {
+                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting; state {} bytes ({} characters, {} flags, {} items, {} events)", s.tick, self.next_event, self.acked, self.events.len(), bytes.len(), s.characters.len(), s.flags.len(), s.items.len(), s.events.len());
+            }
             self.send(&bytes);
         }
     }
@@ -1060,6 +1106,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                         net.welcome = None;
                     }
                     net.acked = net.acked.max(i.ack);
+                    net.story_acked = net.story_acked.max(i.story);
                     net.remote = Some(i);
                 }
             }
@@ -1128,6 +1175,14 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                             net.applied = n;
                             net.incoming.push(e);
                         }
+                    }
+                    // The story comes only when it changed: keep it, and give it to states without.
+                    if s.has_story {
+                        if net.story_held.as_ref().is_none_or(|h| s.story >= h.0) {
+                            net.story_held = Some((s.story, s.flags.clone(), s.items.clone(), s.neopoints));
+                        }
+                    } else if let Some((_, f, i, n)) = net.story_held.as_ref() {
+                        (s.flags, s.items, s.neopoints) = (f.clone(), i.clone(), *n);
                     }
                     // A newer world (a later welcome) restarts the host's ticks.
                     if net.state.as_ref().is_none_or(|old| (s.generation, s.tick) >= (old.generation, old.tick)) {
@@ -1256,6 +1311,8 @@ impl crate::play::Play {
             cut: self.cut.filter(|c| c.state != 0 && c.last.is_some()).map(|_| self.view()),
             events: Vec::new(),
             shots: self.shots.slots.iter().enumerate().filter_map(|(i, s)| Some((i as u8, (*s)?))).collect(),
+            story: 0,
+            has_story: true,
             show: Show {
                 music: self.music.channels.map(|c| (c.stream, c.volume)),
                 bank: (self.bank_music.playing, self.bank_music.volume, self.bank_music.started),
@@ -1419,6 +1476,11 @@ mod tests {
             tick: 7,
             generation: 2,
             pack: 1,
+            story: 3,
+            has_story: true,
+            flags: vec![1, 500],
+            items: vec![(57, 2)],
+            neopoints: 40,
             events: vec![
                 (5, Event::Sound(Request::Play { id: 3, block: 9, cue: -1, volume: 1000, pan: Some(-20) })),
                 (6, Event::Sound(Request::Set { id: 3, volume: 10, pan: None })),
@@ -1451,7 +1513,7 @@ mod tests {
 
     #[test]
     fn input_round_trips_with_ack() {
-        let i = Input { generation: 4, ack: 99, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5 };
+        let i = Input { generation: 4, ack: 99, story: 6, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5 };
         let bytes = i.encode();
         let (kind, mut r) = Reader::open(&bytes).expect("header");
         assert_eq!(kind, INPUT);
