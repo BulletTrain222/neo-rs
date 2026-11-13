@@ -376,11 +376,13 @@ pub fn mark_faint(
 /// How far the sun's one cascade reaches while only the characters cast.
 const CHARACTER_REACH: f32 = 100.0;
 
-/// Whether only the characters cast: World shadows off, or a roofed world. Pack 1184 and its
+/// Whether only the characters cast: World shadows off, or a roofed world. The night swamp 722 is
+/// treated the same way by the user's choice: its canopy's shadows left it too dark (user report
+/// 141). Pack 1184 and its
 /// neighbour are roofed by their canopy like an interior (user's report 16). Other worlds under
 /// a canopy are not listed: none has been reported or measured.
 fn characters_only(settings: &crate::display::DisplaySettings, state: Option<&crate::PlayState>) -> bool {
-    let indoors = state.is_some_and(|s| s.play.indoors() || matches!(s.play.world.pack, 1184 | 1225));
+    let indoors = state.is_some_and(|s| s.play.indoors() || matches!(s.play.world.pack, 1184 | 1225 | 722));
     !settings.world_shadows || indoors
 }
 
