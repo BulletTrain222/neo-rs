@@ -24,12 +24,16 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 28;
+pub const ROWS: usize = 31;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
 /// The rows on the Multiplayer page (local co-op, docs/MULTIPLAYER.md; this build's feature).
-pub const MULTI_ROWS: [usize; 3] = [25, 26, 27];
+pub const MULTI_ROWS: [usize; 6] = [25, 26, 27, HOST_ROW, ADDRESS_ROW, JOIN_ROW];
+/// The Multiplayer page's online rows (net.rs): host, the join address, join.
+pub const HOST_ROW: usize = 28;
+pub const ADDRESS_ROW: usize = 29;
+pub const JOIN_ROW: usize = 30;
 /// Split screen layouts.
 pub const SPLITS: [&str; 2] = ["Top and bottom", "Side by side"];
 
@@ -330,6 +334,10 @@ impl DisplaySettings {
             ("Knocked out".into(), if self.coop_revive { "Revive".into() } else { "Game over".into() }),
             ("Split screen".into(), SPLITS[self.coop_split].into()),
             ("Player 2".into(), if self.coop_partner { "Partner".into() } else { "Second Tor".into() }),
+            // The online rows' values come from the session (show_window).
+            ("Host a game".into(), String::new()),
+            ("Join address".into(), String::new()),
+            ("Join a game".into(), String::new()),
         ]
     }
 
@@ -483,6 +491,8 @@ pub fn take_requests(
     menu: Option<ResMut<crate::menu_view::Menu>>,
     mut settings: ResMut<DisplaySettings>,
     monitors: Query<&bevy::window::Monitor, With<bevy::window::PrimaryMonitor>>,
+    mut net: ResMut<crate::net::Net>,
+    address: Res<crate::net::JoinAddress>,
 ) {
     let _span = crate::perf::span("take_requests");
     let Some(mut menu) = menu else { return };
@@ -491,7 +501,17 @@ pub fn take_requests(
     }
     let sizes = sizes(&monitors);
     for (row, delta) in std::mem::take(&mut menu.flow.display_requests) {
-        settings.change(row, delta, &sizes);
+        // The online rows act on the session (net.rs): host, join, or leave the one running.
+        let leave = net.role != crate::net::Role::Off;
+        match row {
+            HOST_ROW => net.request = Some(if leave && net.role == crate::net::Role::Host { crate::net::Request::Leave } else { crate::net::Request::Host }),
+            JOIN_ROW => {
+                net.request = Some(if leave && net.role == crate::net::Role::Join { crate::net::Request::Leave } else { crate::net::Request::Join(address.0.clone()) });
+                let _ = std::fs::write("private/join.txt", &address.0);
+            }
+            ADDRESS_ROW => {}
+            _ => settings.change(row, delta, &sizes),
+        }
     }
     settings.save();
 }
@@ -653,6 +673,9 @@ const HELP: [&str; ROWS + 1] = [
     "Revive: a fallen player gets up when the other stands beside them. Game over: any fall ends the game.",
     "How two players share the screen: one above the other, or side by side.",
     "Start on a second controller joins in play, Select leaves. Partner: Roberta when the story has her waiting.",
+    "Play with a friend on your home network. Start a game first, then host; your friend joins with the address shown.",
+    "The host's address (shown on their Host row). Type it with the number keys; Backspace deletes.",
+    "Join the host's game. Each player needs their own copy of the game disc.",
     "Back to Options.",
 ];
 
@@ -759,6 +782,7 @@ pub fn show_window(
     mut values: Query<(&DispValue, &mut Text), (Without<DispLabel>, Without<DispHelp>, Without<DispTitle>)>,
     mut help: Query<&mut Text, (With<DispHelp>, Without<DispLabel>, Without<DispValue>, Without<DispTitle>)>,
     mut titles: Query<&mut Text, (With<DispTitle>, Without<DispHelp>, Without<DispLabel>, Without<DispValue>)>,
+    (net, address): (Res<crate::net::Net>, Res<crate::net::JoinAddress>),
 ) {
     let _span = crate::perf::span("show_window");
     let flow = menu.as_ref().map(|m| &m.flow);
@@ -771,7 +795,20 @@ pub fn show_window(
     }
     let Some(flow) = flow.filter(|_| open) else { return };
     let focus = flow.display_focus.min(ROWS);
-    let shown = settings.rows();
+    let mut shown = settings.rows();
+    {
+        use crate::net::Role;
+        shown[HOST_ROW].1 = match net.role {
+            Role::Host => "Hosting (Cross stops)".into(),
+            _ => "Press to host".into(),
+        };
+        shown[ADDRESS_ROW].1 = format!("{}{}", address.0, if focus == ADDRESS_ROW { "_" } else { "" });
+        shown[JOIN_ROW].1 = match net.role {
+            Role::Join if net.following() => "Joined (Cross leaves)".into(),
+            Role::Join => "Joining...".into(),
+            _ => "Press to join".into(),
+        };
+    }
     let page = page_rows(flow.display_page);
     for (i, r, mut bg, mut node) in &mut rows {
         bg.0 = if r.0 == focus { ROW_CURSOR } else if *i == Interaction::Hovered { ROW_HOVER } else { ROW };
@@ -802,9 +839,11 @@ pub fn show_window(
             t.0 = s;
         }
     }
+    // On the Multiplayer page the session's status follows the help line.
+    let line = if flow.display_page == 2 && !net.status.is_empty() { format!("{}\n{}", HELP[focus], net.status) } else { HELP[focus].to_string() };
     for mut t in &mut help {
-        if t.0 != HELP[focus] {
-            t.0 = HELP[focus].to_string();
+        if t.0 != line {
+            t.0 = line.clone();
         }
     }
 }
@@ -818,7 +857,7 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(1), [17, 18, 19, 20]);
-        assert_eq!(page_rows(2), [25, 26, 27]);
+        assert_eq!(page_rows(2), [25, 26, 27, 28, 29, 30]);
         assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));

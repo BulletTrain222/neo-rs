@@ -1046,7 +1046,7 @@ pub struct Character {
     colour: [u8; 3],
     /// The record's ordinal in its region and its monster type (SPEC-0038 state 9's lookup;
     /// SPEC-0029 run-time variant re-pick).
-    ordinal: usize,
+    pub(crate) ordinal: usize,
     monster_type: u16,
     /// The 15 colour slots (SPEC-0040 Behavior 26): (red, green, blue) / 255 of the record's
     /// colour words; a part draws with the slot of its material group.
@@ -1496,6 +1496,11 @@ pub struct Play {
     pub coop_partner: bool,
     /// Another player fell with revive off: game over on the next co-op step.
     coop_lost: bool,
+    /// Online co-op (net.rs): this side is a joiner following the host's game (its camera and
+    /// HUD are player 2's, it takes no hits of its own); `coop_remote`: this side hosts and
+    /// player 2 is on the other computer (no split screen here).
+    pub net_follow: bool,
+    pub coop_remote: bool,
     /// The world the co-op step last saw (a change puts the other players beside player 1).
     coop_pack: u32,
     /// SPEC-0028 section 11: the atmosphere zone selection and this frame's output (the blend
@@ -2490,6 +2495,8 @@ impl Play {
             coop_revive: true,
             coop_partner: true,
             coop_lost: false,
+            net_follow: false,
+            coop_remote: false,
             coop_pack: 0,
             atmos_sel: Default::default(),
             atmos_out: Default::default(),
@@ -4797,6 +4804,12 @@ impl Play {
                 }
                 None => (p.eye, p.rows[2], p.rows[1], p.focal),
             },
+            // A joiner (net.rs) looks through player 2's follow camera.
+            None if self.net_follow && !self.others.is_empty() => {
+                let c = &self.others[0].camera;
+                let (f, e) = (c.focus, c.eye);
+                (e, [f[0] - e[0], f[1] - e[1], f[2] - e[2]], [0.0, 1.0, 0.0], neopets_sim::camera::FOCAL)
+            }
             None => {
                 let f = self.player.camera.focus;
                 let e = self.showcase.as_ref().map_or([self.player.camera.eye[0], self.player.camera.eye[1], self.player.camera.eye[2]], |s| s.eye);
@@ -14658,7 +14671,8 @@ impl Play {
     /// discards hits; a dead hero takes none; Tor's charge sub-states 1 and 10 are busy), the
     /// deduct and the default death, and the knockback. Returns whether the hero died.
     fn hero_hit(&mut self, damage: f32, knockback: f32, blocked: bool, attacker_facing: [f32; 3], what: String) -> bool {
-        if self.dialogue_open || self.player.loco.state == hero_states::DEAD || self.cheats.god {
+        // A joiner (net.rs) takes no hits of its own: the host's health comes with each state.
+        if self.dialogue_open || self.player.loco.state == hero_states::DEAD || self.cheats.god || self.net_follow {
             return false;
         }
         let damage = damage.max(0.0).trunc() as i32;
@@ -14725,6 +14739,9 @@ impl Play {
     /// not yet dead consults the current area's death callback, whose task actions start and
     /// whose flag 1 skips the default death.
     fn death_hook(&mut self) {
+        if self.net_follow {
+            return;
+        }
         if self.player.loco.state != hero_states::DEAD {
             if let Some((skip, actions)) = level::on_hero_death(self.world.pack, self.hero_index, &mut self.state) {
                 self.last_fx = format!("death callback of {} on tick {} (skip {skip})", self.world.pack, self.ticks);

@@ -335,8 +335,11 @@ pub fn sync_hud<const VIEW: u8>(
     prices: HudQ<(&HudPrice, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>, Without<HudValue>), VIEW>,
 ) {
     let _span = crate::perf::span("sync_hud");
+    // Online (net.rs): one HUD per computer. The joiner's view 0 shows player 2 (its own hero).
+    let online = state.as_deref().is_some_and(|s| s.play.net_follow || s.play.coop_remote);
+    let swap0 = VIEW == 0 && state.as_deref().is_some_and(|s| s.play.net_follow && !s.play.others.is_empty());
     if VIEW == 1 {
-        let Some(st) = state.as_deref_mut().filter(|s| !s.play.others.is_empty()) else {
+        let Some(st) = state.as_deref_mut().filter(|s| !s.play.others.is_empty() && !online) else {
             for (e, ..) in &mut canvas {
                 commands.entity(e).despawn();
             }
@@ -344,8 +347,18 @@ pub fn sync_hud<const VIEW: u8>(
         };
         st.play.swap_coop_hud(true);
     }
+    if swap0 {
+        if let Some(st) = state.as_deref_mut() {
+            st.play.swap_coop_hud(true);
+        }
+    }
     hud_pass::<VIEW>(commands, state.as_deref_mut(), art, images, windows, canvas, menu, sprites, texts, captions, values, caption_image, value_images, settings, prices);
     if VIEW == 1 {
+        if let Some(st) = state.as_deref_mut() {
+            st.play.swap_coop_hud(false);
+        }
+    }
+    if swap0 {
         if let Some(st) = state.as_deref_mut() {
             st.play.swap_coop_hud(false);
         }
@@ -430,7 +443,7 @@ fn hud_pass<const VIEW: u8>(
     let p = &state.play;
     // In split screen (local co-op) each player's HUD fits its own half of the window: player
     // 1's the top half, player 2's the bottom half.
-    let split = !p.others.is_empty();
+    let split = !p.others.is_empty() && !p.net_follow && !p.coop_remote;
     let side = split && settings.coop_split == 1;
     let (area_w, area) = match (split, side) {
         (true, true) => (window.width() / 2.0, window.height()),

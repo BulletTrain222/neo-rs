@@ -1,6 +1,6 @@
 # Multiplayer plan (this build's feature; not in the original game)
 
-Status: planned, nothing built. Written 2026-11-13 from the user's decisions.
+Status (2026-11-13): steps 1 to 3 built (local co-op, split screen, co-op rules, the Multiplayer page); step 4 started: host and join on the home network (net.rs). Written from the user's decisions; docs/STATUS.md records each increment.
 
 The original game is single-player. Every co-op rule here is this build's own choice. It is
 recorded in docs/STATUS.md as such when built, and single-player play stays as it is today.

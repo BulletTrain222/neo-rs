@@ -1,6 +1,7 @@
 mod archive_view;
 mod bindings;
 mod coop;
+mod net;
 mod button_style;
 mod controls_page;
 mod character;
@@ -1013,6 +1014,8 @@ fn main() {
         .init_resource::<bindings::PadMute>()
         .init_resource::<bindings::PadExclude>()
         .init_resource::<coop::Coop>()
+        .init_resource::<net::Net>()
+        .init_resource::<net::JoinAddress>()
         .init_resource::<bindings::MouseLook>()
         .init_resource::<controls_page::ControlsPage>()
         .init_resource::<perf::PerfOverlay>()
@@ -1037,7 +1040,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, coop::read_coop, step_sim, stream_worlds).chain(),
+                (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, coop::read_coop, net::type_address, net::net_step, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot, sync_haze, sync_atmos_overlay),
                 (show_sim, show_browser),
                 (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, coop::draw_others, coop::split_cameras, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_aim_marker, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, (hud_view::sync_hud::<0>, hud_view::sync_hud::<1>).chain(), hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
@@ -1344,7 +1347,7 @@ fn step_sim(
     mut commands: Commands,
     mut dev: ResMut<dev_menu::DevMenu>,
     mut movies: Option<ResMut<movie_view::Movies>>,
-    (exclude, mut coop, menu_pads): (Res<bindings::PadExclude>, ResMut<coop::Coop>, Query<&Gamepad>),
+    (exclude, mut coop, menu_pads, mut netr): (Res<bindings::PadExclude>, ResMut<coop::Coop>, Query<&Gamepad>, ResMut<net::Net>),
 ) {
     let _span = crate::perf::span("step_sim");
     let mut elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
@@ -1561,6 +1564,11 @@ fn step_sim(
             }
         }
         let mut pending: Option<neopets_sim::save::Slot> = None;
+        // Online (net.rs): the host's game, sent at joining and at each of its world changes.
+        let net_load = netr.load.take();
+        if net_load.is_some() {
+            pending = net_load.clone();
+        }
         // NEOPETS_LOAD_SLOT=k (diagnostic): load slot k (1 to 4) of the save file once, on the
         // first play frame, as the Load page would.
         static SLOT_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1750,11 +1758,45 @@ fn step_sim(
                 }
             }
             debug_tools::window_replay(&mut play.play, &mut input);
-            play.play.tick(&input, pad);
-            // Local co-op (coop.rs): player 2's tick after player 1's.
-            if !play.play.others.is_empty() {
-                let p2 = coop.take();
-                play.play.coop_step(&[p2]);
+            if netr.following() && play.play.net_follow {
+                // Online, joining (net.rs): this side's controller goes to the host as player 2's;
+                // this side's game runs without it and is then put where the host's is.
+                // NEOPETS_NET_WALK (diagnostic): this side walks ahead, jumping every 1.5 seconds.
+                if std::env::var_os("NEOPETS_NET_WALK").is_some() {
+                    input.forward = 1.0;
+                    input.jump = play.play.ticks % 90 == 45;
+                }
+                let c = &mut netr.counts;
+                c.0 = c.0.wrapping_add(input.jump as u8);
+                c.1 = c.1.wrapping_add(input.attack as u8);
+                c.2 = c.2.wrapping_add(input.square as u8);
+                let counts = netr.counts;
+                let generation = netr.loaded;
+                netr.outgoing = Some(net::Input::from_hero(&input, &pad, generation, counts));
+                play.play.tick(&neopets_sim::hero::HeroInput::default(), neopets_sim::camera::CameraPad::default());
+                if let Some(s) = netr.state.clone() {
+                    play.play.apply_net_state(&s);
+                }
+            } else {
+                play.play.tick(&input, pad);
+                // Local co-op (coop.rs): player 2's tick after player 1's; online, player 2's input
+                // comes from the joiner (net.rs).
+                play.play.coop_remote = netr.role == net::Role::Host && netr.peer.is_some();
+                if !play.play.others.is_empty() {
+                    let p2 = coop.take();
+                    play.play.coop_step(&[p2]);
+                }
+                // Online, hosting: the state after this tick, and a new welcome after a world change.
+                if play.play.coop_remote {
+                    if play.play.world.pack != netr.welcome_pack {
+                        let mut slot = neopets_sim::save::Slot::empty();
+                        play.play.write_slot(&mut slot, b"NETPLAY");
+                        let pack = play.play.world.pack;
+                        netr.rewelcome(&slot, pack);
+                    }
+                    let s = play.play.net_state(netr.generation);
+                    netr.send_state(&s);
+                }
             }
             // A save point's Square press opens the save screen (a direct set of record 18).
             if std::mem::take(&mut play.play.save_open) {
@@ -1912,6 +1954,14 @@ fn step_sim(
             match load_game(archive, &play.play, &slot) {
                 Ok(new) => {
                     play.play = new;
+                    // Online (net.rs): the joiner follows the host's game from here, in play.
+                    if net_load.is_some() {
+                        play.play.net_follow = true;
+                        if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                            m.flow.set(&a.f, menus::PLAY);
+                            m.flow.title_seen = true;
+                        }
+                    }
                     if let Some(m) = menu.as_deref_mut() {
                         m.flow.options = play.play.options;
                     }

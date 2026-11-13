@@ -25,12 +25,17 @@ pub struct Coop {
     pub cam: CameraPad,
     pub jump: bool,
     pub attack: bool,
+    /// Online (net.rs): player 2's input from the joiner's controller, in place of a local pad.
+    pub remote: Option<(HeroInput, CameraPad)>,
     started: bool,
 }
 
 impl Coop {
     /// Player 2's input for one tick (the jump and attack presses are taken).
     pub fn take(&mut self) -> (HeroInput, CameraPad) {
+        if let Some(r) = self.remote.take() {
+            return r;
+        }
         let mut i = self.input;
         i.jump = std::mem::take(&mut self.jump);
         i.attack = std::mem::take(&mut self.attack);
@@ -258,7 +263,8 @@ pub fn split_cameras(
     mut pic: Local<Picture>,
     settings: Res<crate::display::DisplaySettings>,
 ) {
-    let other = play.as_ref().and_then(|p| p.play.others.first());
+    // Online (net.rs) each computer shows one player full screen: no split.
+    let other = play.as_ref().filter(|p| !p.play.net_follow && !p.play.coop_remote).and_then(|p| p.play.others.first());
     // The Multiplayer page's layout: one above the other, or side by side.
     let side = settings.coop_split == 1;
     let (w, h) = target.size;
