@@ -86,7 +86,8 @@ impl Plugin for GraphicsPlugin {
 pub struct GradeUniform {
     /// Saturation, contrast, warmth, vibrance.
     pub a: Vec4,
-    /// Vignette, the render scale (source texels per window pixel), -, grade on (above 0.5).
+    /// Vignette, the render scale (source texels per window pixel), the world's brightness lift
+    /// (0 or 1: none), grade on (above 0.5).
     pub b: Vec4,
 }
 
@@ -158,7 +159,14 @@ fn scene_at(uv: vec2<f32>) -> vec4<f32> {
 
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
-    let s = scene_at(in.uv);
+    var s = scene_at(in.uv);
+    // The world's brightness lift (`world_lift`): a soft curve in display space that raises the
+    // dark and middle tones and keeps white white.
+    let lift = grade.b.z;
+    if lift > 1.001 {
+        let d = to_srgb(s.rgb);
+        s = vec4<f32>(to_linear(d * lift / (vec3<f32>(1.0) + (lift - 1.0) * d)), s.a);
+    }
     if grade.b.w < 0.5 {
         return vec4<f32>(s.rgb, 1.0);
     }
@@ -386,18 +394,35 @@ fn apply_textures(settings: Res<DisplaySettings>, mut images: ResMut<Assets<Imag
 }
 
 /// The colour grade from the settings.
-fn apply_grade(settings: Res<DisplaySettings>, mut grades: ResMut<Assets<SceneGrade>>, mut last: Local<Option<(usize, usize)>>) {
-    if *last == Some((settings.colour, settings.scale)) && !grades.is_changed() {
+/// A world's brightness lift, by the user's choice: the night swamp 722 was too dark to play
+/// under its story haze (user reports 140 and 141; this build's presentation, not in any spec).
+/// NEOPETS_WORLD_LIFT="pack:lift" adds or overrides one (diagnostic; lift 1 is none).
+fn world_lift(pack: u32) -> f32 {
+    if let Some((p, l)) = std::env::var("NEOPETS_WORLD_LIFT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.trim().parse::<u32>().ok()?, b.trim().parse::<f32>().ok()?)))) {
+        if p == pack {
+            return l;
+        }
+    }
+    match pack {
+        722 => 1.8,
+        _ => 1.0,
+    }
+}
+
+fn apply_grade(settings: Res<DisplaySettings>, state: Option<Res<crate::PlayState>>, mut grades: ResMut<Assets<SceneGrade>>, mut last: Local<Option<(usize, usize, u32)>>) {
+    let pack = state.as_ref().map_or(0, |s| s.play.world.pack);
+    if *last == Some((settings.colour, settings.scale, pack)) && !grades.is_changed() {
         return;
     }
-    let want = grade_uniform(settings.colour, crate::display::SCALES[settings.scale] as f32 / 100.0);
+    let mut want = grade_uniform(settings.colour, crate::display::SCALES[settings.scale] as f32 / 100.0);
+    want.b.z = world_lift(pack);
     let ids: Vec<_> = grades.iter().filter(|(_, g)| g.grade.a != want.a || g.grade.b != want.b).map(|(id, _)| id).collect();
     for id in ids {
         if let Some(mut g) = grades.get_mut(id) {
             g.grade = want;
         }
     }
-    *last = Some((settings.colour, settings.scale));
+    *last = Some((settings.colour, settings.scale, pack));
 }
 
 #[cfg(test)]
