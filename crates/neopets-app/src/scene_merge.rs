@@ -87,47 +87,37 @@ fn lies_flat(p: &neopets_data::model::MeshPart) -> bool {
     all > 0.0 && up / all > 0.8
 }
 
-/// Whether solid ground lies just under a flat part: every point of a grid over its triangles
-/// (about one per unit, so a thin gap in the ground is found) has a triangle of another part, neither scrolling nor itself `skip`ped, from 1.5 units below to 0.5
-/// above. A soft strip over such ground (a path's
-/// torn grass edge) needs no depth of its own, the ground under it hides what lies below; one
-/// over open space (the 758 street, water 42 units under it) does (user reports 115 and 124).
-fn ground_under(m: &neopets_data::model::ModelData, tris: &TriGrid, i: usize, skip: &dyn Fn(usize) -> bool, above: f32) -> bool {
+/// For each triangle of a part, whether solid ground lies just under it: its centre, then every
+/// point of a grid of about one per unit over it, has a triangle of another part (not scrolling,
+/// not a `skip`ped triangle) from 1.5 below it to `above` above it.
+fn ground_under(m: &neopets_data::model::ModelData, tris: &TriGrid, i: usize, skip: &dyn Fn(usize, usize) -> bool, above: f32) -> Vec<bool> {
     let p = &m.parts[i];
-    if p.indices.len() < 3 {
-        return false;
-    }
-    // The triangles' centres first: most parts fail there, before the finer grid is made.
-    let centres = p.indices.chunks_exact(3).map(|t| t.iter().map(|&v| Vec3::from(p.positions[v as usize])).sum::<Vec3>() / 3.0);
-    centres.into_iter().all(|pt| tris.under(m, i, skip, above, pt)) && grid(p).into_iter().all(|pt| tris.under(m, i, skip, above, pt))
+    p.indices
+        .chunks_exact(3)
+        .map(|t| {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|v| Vec3::from(p.positions[v as usize]));
+            tris.under(m, i, skip, above, (a + b + c) / 3.0) && tri_grid(a, b, c).all(|pt| tris.under(m, i, skip, above, pt))
+        })
+        .collect()
 }
 
-/// About one point per unit over a part's triangles.
-fn grid(p: &neopets_data::model::MeshPart) -> Vec<Vec3> {
-    let mut centres = Vec::new();
-    for t in p.indices.chunks_exact(3) {
-        let [a, b, c] = [t[0], t[1], t[2]].map(|v| Vec3::from(p.positions[v as usize]));
-        let n = (a.distance(b).max(b.distance(c)).max(c.distance(a)).ceil() as usize).clamp(1, 16);
-        for i in 0..n {
-            for j in 0..n - i {
-                let (u, w) = ((i as f32 + 1.0 / 3.0) / n as f32, (j as f32 + 1.0 / 3.0) / n as f32);
-                centres.push(a + (b - a) * u + (c - a) * w);
-            }
-        }
-    }
-    centres
+/// About one point per two units over a triangle (at most 36).
+fn tri_grid(a: Vec3, b: Vec3, c: Vec3) -> impl Iterator<Item = Vec3> {
+    let n = ((a.distance(b).max(b.distance(c)).max(c.distance(a)) / 2.0).ceil() as usize).clamp(1, 8);
+    (0..n).flat_map(move |i| (0..n - i).map(move |j| a + (b - a) * ((i as f32 + 1.0 / 3.0) / n as f32) + (c - a) * ((j as f32 + 1.0 / 3.0) / n as f32)))
 }
 
 /// A scene's flat-ish triangles (not scrolling) by 4-unit cell across, for `ground_under`; the
-/// few wider than 64 units (backdrops) are kept in one list, checked for every point.
-struct TriGrid(HashMap<(i32, i32), Vec<(u32, u32)>>, Vec<(u32, u32)>);
+/// few wider than 64 units (backdrops) by 128-unit cell.
+struct TriGrid(HashMap<(i32, i32), Vec<(u32, u32)>>, HashMap<(i32, i32), Vec<(u32, u32)>>);
 
 impl TriGrid {
     const CELL: f32 = 4.0;
+    const WIDE: f32 = 128.0;
 
     fn new(m: &neopets_data::model::ModelData) -> Self {
         let mut map: HashMap<(i32, i32), Vec<(u32, u32)>> = HashMap::new();
-        let mut wide = Vec::new();
+        let mut wide: HashMap<(i32, i32), Vec<(u32, u32)>> = HashMap::new();
         for (j, q) in m.parts.iter().enumerate() {
             if q.scroll.is_some() {
                 continue;
@@ -140,7 +130,11 @@ impl TriGrid {
                 }
                 let (lo, hi) = (a.min(b).min(c), a.max(b).max(c));
                 if hi.x - lo.x > 64.0 || hi.z - lo.z > 64.0 {
-                    wide.push((j as u32, t as u32));
+                    for x in (lo.x / Self::WIDE).floor() as i32..=(hi.x / Self::WIDE).floor() as i32 {
+                        for z in (lo.z / Self::WIDE).floor() as i32..=(hi.z / Self::WIDE).floor() as i32 {
+                            wide.entry((x, z)).or_default().push((j as u32, t as u32));
+                        }
+                    }
                     continue;
                 }
                 let (lo, hi) = (lo / Self::CELL, hi / Self::CELL);
@@ -156,11 +150,12 @@ impl TriGrid {
 
     /// Whether a triangle of another part than `i` (not `skip`ped) lies from 1.5 below the point
     /// to `above` above it.
-    fn under(&self, m: &neopets_data::model::ModelData, i: usize, skip: &dyn Fn(usize) -> bool, above: f32, pt: Vec3) -> bool {
+    fn under(&self, m: &neopets_data::model::ModelData, i: usize, skip: &dyn Fn(usize, usize) -> bool, above: f32, pt: Vec3) -> bool {
         let key = ((pt.x / Self::CELL).floor() as i32, (pt.z / Self::CELL).floor() as i32);
-        self.0.get(&key).into_iter().flatten().chain(&self.1).any(|&(j, t)| {
+        let wide = ((pt.x / Self::WIDE).floor() as i32, (pt.z / Self::WIDE).floor() as i32);
+        self.0.get(&key).into_iter().flatten().chain(self.1.get(&wide).into_iter().flatten()).any(|&(j, t)| {
                 let j = j as usize;
-                if j == i || skip(j) {
+                if j == i || skip(j, t as usize) {
                     return false;
                 }
                 let q = &m.parts[j];
@@ -336,18 +331,21 @@ pub fn spawn(
     // NEOPETS_NO_MERGE: every part keeps its own entity, as before (diagnostic).
     let no_merge = std::env::var_os("NEOPETS_NO_MERGE").is_some();
     let mut env_textures: HashMap<usize, Handle<Image>> = HashMap::new();
-    let mut groups: HashMap<(AssetId<StandardMaterial>, Option<u8>, i32, i32, (bool, bool)), (Handle<StandardMaterial>, Vec<usize>)> = HashMap::new();
+    // Each group's parts, whole or (Some) only some of their triangles.
+    #[allow(clippy::type_complexity)]
+    let mut groups: HashMap<(AssetId<StandardMaterial>, Option<u8>, i32, i32, (bool, bool)), (Handle<StandardMaterial>, Vec<(usize, Option<Vec<u32>>)>)> = HashMap::new();
     // Parts that are not ground for `ground_under`: soft or fading ones (their blended draws write
     // no depth).
     let soft_or_fading: Vec<bool> = m.parts.iter().map(|q| q.texture.is_some_and(|t| b.soft[t]) || crate::vertex_fades(q)).collect();
     let not_ground = |j: usize| soft_or_fading[j];
     // NEOPETS_NO_OVERLAY: flat parts over other ground stay in the depth prepass (diagnostic).
     let no_overlay = std::env::var_os("NEOPETS_NO_OVERLAY");
-    let mut overlaid = vec![false; m.parts.len()];
+    // Each part's triangles already drawn outside the prepass (empty: none).
+    let mut overlaid: Vec<Vec<bool>> = vec![Vec::new(); m.parts.len()];
     let built_at = std::time::Instant::now();
     let tris = TriGrid::new(m);
     if std::env::var_os("NEOPETS_TRACE_LAYER").is_some() {
-        println!("TRIGRID {pack} {:.1} ms, {} cells, {} entries, {} wide", built_at.elapsed().as_secs_f64() * 1000.0, tris.0.len(), tris.0.values().map(Vec::len).sum::<usize>(), tris.1.len());
+        println!("TRIGRID {pack} {:.1} ms, {} cells, {} entries, {} wide", built_at.elapsed().as_secs_f64() * 1000.0, tris.0.len(), tris.0.values().map(Vec::len).sum::<usize>(), tris.1.values().map(Vec::len).sum::<usize>());
     }
     let mut count = 0;
     let ranks = crate::draw_order::ranks(m);
@@ -432,19 +430,26 @@ pub fn spawn(
             // outside the depth prepass, so ambient occlusion sees the ground under it and draws
             // no crease along its edge (user report 124: the 909 path 215 lies 0.07 over the grass
             // 211, and the soft strip over that edge showed the crease as a line).
+            // Done by triangle: a path can run past the ground under it (the 691 path 59 of user
+            // report 127), and only its triangles with ground under them leave the prepass. Ground
+            // level with it counts (within 0.02), but not a triangle already drawn this way, so two
+            // level triangles cannot both leave the prepass with nothing in it under them.
             let started = std::time::Instant::now();
-            // Ground level with it counts (within 0.02), but not a part already drawn this way, so
-            // two level parts cannot both leave the prepass with nothing in it under them.
-            let overlay = no_overlay.is_none() && lies_flat(p) && ground_under(m, &tris, i, &|j| not_ground(j) || overlaid[j], 0.02);
-            overlaid[i] = overlay;
-            if std::env::var_os("NEOPETS_TRACE_LAYER").is_some() && started.elapsed().as_secs_f64() > 0.005 {
-                println!("SLOW {pack} part {i} overlay {overlay} {:.1} ms, {} triangles", started.elapsed().as_secs_f64() * 1000.0, p.indices.len() / 3);
+            let over = if no_overlay.is_none() && lies_flat(p) { ground_under(m, &tris, i, &|j, t| not_ground(j) || overlaid[j].get(t).copied().unwrap_or(false), 0.02) } else { Vec::new() };
+            let count_over = over.iter().filter(|&&o| o).count();
+            overlaid[i] = over.clone();
+            if std::env::var_os("NEOPETS_TRACE_LAYER").is_some() && (count_over > 0 || started.elapsed().as_secs_f64() > 0.005) {
+                println!("OVERLAY {pack} part {i} tex {:?} {count_over} of {} triangles, {:.2} ms", p.texture, p.indices.len() / 3, started.elapsed().as_secs_f64() * 1000.0);
             }
-            if overlay && std::env::var_os("NEOPETS_TRACE_LAYER").is_some() {
-                println!("OVERLAY {pack} part {i} tex {:?} {:.2} ms", p.texture, started.elapsed().as_secs_f64() * 1000.0);
+            let key = |overlay: bool| (material.id(), p.zone, (c[0] / CELL).floor() as i32, (c[1] / CELL).floor() as i32, (is_ground(p), overlay));
+            if count_over == 0 || count_over == over.len() {
+                groups.entry(key(count_over > 0)).or_insert_with(|| (material.clone(), Vec::new())).1.push((i, None));
+            } else {
+                for side in [true, false] {
+                    let indices: Vec<u32> = p.indices.chunks_exact(3).zip(&over).filter(|(_, o)| **o == side).flat_map(|(t, _)| t.iter().copied()).collect();
+                    groups.entry(key(side)).or_insert_with(|| (material.clone(), Vec::new())).1.push((i, Some(indices)));
+                }
             }
-            let key = (material.id(), p.zone, (c[0] / CELL).floor() as i32, (c[1] / CELL).floor() as i32, (is_ground(p), overlay));
-            groups.entry(key).or_insert_with(|| (material, Vec::new())).1.push(i);
             continue;
         }
         // SPEC-0003 TEST: a pixel at or above 120 of 128 writes depth, a softer one only blends. A fading part's triangles
@@ -455,14 +460,17 @@ pub fn spawn(
         // through its texture keeps the cut core of SPEC-0003: without it the 758 street wrote no
         // depth and the water drawn after it showed through (user report 115).
         // NEOPETS_SOFT_LAYER brings back the layer for those too (diagnostic).
-        // A flat part soft through its texture is a layer too when solid ground lies just under it
-        // (`ground_under`): the path edge strips of 909 and 696 drew ambient occlusion's line
-        // along every path with their cut core (user reports 124 and 125).
-        let started = std::time::Instant::now();
-        let layer = lies_flat(p) && (fades || (soft && (std::env::var_os("NEOPETS_SOFT_LAYER").is_some() || ground_under(m, &tris, i, &not_ground, 0.5))));
-        // NEOPETS_TRACE_LAYER: each flat part drawn as a layer, and the time taken (diagnostic).
-        if layer && std::env::var_os("NEOPETS_TRACE_LAYER").is_some() {
-            println!("LAYER {pack} part {i} tex {:?} fades {fades} soft {soft} {:.2} ms", p.texture, started.elapsed().as_secs_f64() * 1000.0);
+        let layer = lies_flat(p) && (fades || (soft && std::env::var_os("NEOPETS_SOFT_LAYER").is_some()));
+        // A flat part soft only through its texture keeps its cut core (it hides what lies under it:
+        // the 758 water, report 115; the hairline gaps between the 934 grass and path, report 128),
+        // drawn outside the depth prepass so that ambient occlusion draws no crease along it (user
+        // reports 124 and 125). NEOPETS_CORE_PREPASS: such cores in the prepass, as before
+        // (diagnostic).
+        let core_out = soft && !layer && lies_flat(p) && std::env::var_os("NEOPETS_CORE_PREPASS").is_none();
+        // NEOPETS_TRACE_LAYER: each flat part drawn as a layer or with its core outside the
+        // prepass (diagnostic).
+        if (layer || core_out) && std::env::var_os("NEOPETS_TRACE_LAYER").is_some() {
+            println!("LAYER {pack} part {i} tex {:?} fades {fades} soft {soft} core outside {core_out}", p.texture);
         }
         let split = (fades && !layer && !scrolling && env.is_none()).then(|| split_fading(p)).filter(|(solid, _)| !solid.is_empty());
         let mesh = match &split {
@@ -533,6 +541,7 @@ pub fn spawn(
                 let own = materials.add(StandardMaterial { base_color_texture: Some(images.add(model_texture(&m.textures[p.texture.unwrap_or(0)]))), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, ..default() });
                 commands.spawn((Mesh3d(mesh), MeshMaterial3d(own), Transform::IDENTITY, part))
             }
+            None if core_out => commands.spawn((Mesh3d(mesh), MeshMaterial3d(overlays.of(&material, materials, ext_materials)), Transform::IDENTITY, part)),
             None => commands.spawn((Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::IDENTITY, part)),
         };
         count += 1;
@@ -557,7 +566,14 @@ pub fn spawn(
         }
     }
     for ((_, zone, _, _, (flat, overlay)), (material, list)) in groups {
-        let parts: Vec<&neopets_data::model::MeshPart> = list.iter().map(|&i| &m.parts[i]).collect();
+        let pieces: Vec<std::borrow::Cow<neopets_data::model::MeshPart>> = list
+            .into_iter()
+            .map(|(i, indices)| match indices {
+                Some(indices) => std::borrow::Cow::Owned(neopets_data::model::MeshPart { indices, ..m.parts[i].clone() }),
+                None => std::borrow::Cow::Borrowed(&m.parts[i]),
+            })
+            .collect();
+        let parts: Vec<&neopets_data::model::MeshPart> = pieces.iter().map(|c| c.as_ref()).collect();
         let mesh = Mesh3d(meshes.add(merged_mesh(&parts)));
         let mut e = if overlay {
             let ext = overlays.of(&material, materials, ext_materials);
