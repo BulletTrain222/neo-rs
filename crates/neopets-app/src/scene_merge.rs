@@ -33,6 +33,71 @@ fn lies_flat(p: &neopets_data::model::MeshPart) -> bool {
     all > 0.0 && up / all > 0.8
 }
 
+/// Whether solid ground lies just under a flat part: every point of a grid over its triangles
+/// (about one per unit, so a thin gap in the ground is found) has a triangle of another part, neither scrolling nor itself `skip`ped, from 1.5 units below to 0.5
+/// above. A soft strip over such ground (a path's
+/// torn grass edge) needs no depth of its own, the ground under it hides what lies below; one
+/// over open space (the 758 street, water 42 units under it) does (user reports 115 and 124).
+fn ground_under(m: &neopets_data::model::ModelData, i: usize, skip: &dyn Fn(usize) -> bool) -> bool {
+    let p = &m.parts[i];
+    let tris = p.indices.len() / 3;
+    if tris == 0 {
+        return false;
+    }
+    let mut centres = Vec::new();
+    for t in p.indices.chunks_exact(3) {
+        let [a, b, c] = [t[0], t[1], t[2]].map(|v| Vec3::from(p.positions[v as usize]));
+        let n = (a.distance(b).max(b.distance(c)).max(c.distance(a)).ceil() as usize).clamp(1, 16);
+        for i in 0..n {
+            for j in 0..n - i {
+                let (u, w) = ((i as f32 + 1.0 / 3.0) / n as f32, (j as f32 + 1.0 / 3.0) / n as f32);
+                centres.push(a + (b - a) * u + (c - a) * w);
+            }
+        }
+    }
+    let lo = centres.iter().fold(Vec3::MAX, |a, &c| a.min(c)) - Vec3::new(0.0, 1.5, 0.0);
+    let hi = centres.iter().fold(Vec3::MIN, |a, &c| a.max(c)) + Vec3::new(0.0, 0.5, 0.0);
+    let mut found = vec![false; centres.len()];
+    // The points by one-unit cell, so each triangle visits only the points under its extent.
+    let cell = |x: f32, z: f32| (x.floor() as i32, z.floor() as i32);
+    let mut cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (k, pt) in centres.iter().enumerate() {
+        cells.entry(cell(pt.x, pt.z)).or_default().push(k);
+    }
+    for (j, q) in m.parts.iter().enumerate() {
+        if j == i || q.scroll.is_some() || skip(j) || q.positions.is_empty() {
+            continue;
+        }
+        let qlo = q.positions.iter().fold(Vec3::MAX, |a, &v| a.min(Vec3::from(v)));
+        let qhi = q.positions.iter().fold(Vec3::MIN, |a, &v| a.max(Vec3::from(v)));
+        if qhi.x < lo.x || qlo.x > hi.x || qhi.z < lo.z || qlo.z > hi.z || qhi.y < lo.y || qlo.y > hi.y {
+            continue;
+        }
+        for t in q.indices.chunks_exact(3) {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|k| Vec3::from(q.positions[k as usize]));
+            let d = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+            if d.abs() < 1e-9 {
+                continue;
+            }
+            let (x0, z0) = cell(a.x.min(b.x).min(c.x).max(lo.x), a.z.min(b.z).min(c.z).max(lo.z));
+            let (x1, z1) = cell(a.x.max(b.x).max(c.x).min(hi.x), a.z.max(b.z).max(c.z).min(hi.z));
+            for k in (x0..=x1).flat_map(|x| (z0..=z1).map(move |z| (x, z))).filter_map(|key| cells.get(&key)).flatten().copied() {
+                let pt = centres[k];
+                if found[k] {
+                    continue;
+                }
+                let u = ((pt.x - a.x) * (c.z - a.z) - (c.x - a.x) * (pt.z - a.z)) / d;
+                let w = ((b.x - a.x) * (pt.z - a.z) - (pt.x - a.x) * (b.z - a.z)) / d;
+                if u >= 0.0 && w >= 0.0 && u + w <= 1.0 {
+                    let y = a.y + u * (b.y - a.y) + w * (c.y - a.y);
+                    found[k] = (pt.y - 1.5..=pt.y + 0.5).contains(&y);
+                }
+            }
+        }
+    }
+    found.iter().all(|&f| f)
+}
+
 /// A part's triangles split into those solid at all three corners (vertex alpha at or above 120 of 128) and the others.
 fn split_fading(p: &neopets_data::model::MeshPart) -> (Vec<u32>, Vec<u32>) {
     let (mut solid, mut faded) = (Vec::new(), Vec::new());
@@ -282,7 +347,15 @@ pub fn spawn(
         // through its texture keeps the cut core of SPEC-0003: without it the 758 street wrote no
         // depth and the water drawn after it showed through (user report 115).
         // NEOPETS_SOFT_LAYER brings back the layer for those too (diagnostic).
-        let layer = (fades || (soft && std::env::var_os("NEOPETS_SOFT_LAYER").is_some())) && lies_flat(p);
+        // A flat part soft through its texture is a layer too when solid ground lies just under it
+        // (`ground_under`): the path edge strips of 909 and 696 drew ambient occlusion's line
+        // along every path with their cut core (user reports 124 and 125).
+        let started = std::time::Instant::now();
+        let layer = lies_flat(p) && (fades || (soft && (std::env::var_os("NEOPETS_SOFT_LAYER").is_some() || ground_under(m, i, &|j| m.parts[j].texture.is_some_and(|t| b.soft[t]) || crate::vertex_fades(&m.parts[j])))));
+        // NEOPETS_TRACE_LAYER: each flat part drawn as a layer, and the time taken (diagnostic).
+        if layer && std::env::var_os("NEOPETS_TRACE_LAYER").is_some() {
+            println!("LAYER {pack} part {i} tex {:?} fades {fades} soft {soft} {:.2} ms", p.texture, started.elapsed().as_secs_f64() * 1000.0);
+        }
         let split = (fades && !layer && !scrolling && env.is_none()).then(|| split_fading(p)).filter(|(solid, _)| !solid.is_empty());
         let mesh = match &split {
             Some((solid, faded)) => {
