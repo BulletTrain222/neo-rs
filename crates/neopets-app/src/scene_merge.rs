@@ -391,6 +391,24 @@ pub fn spawn(
             println!("COVER {pack} ({:.1}, {:.1}): {}", pt.0, pt.1, hits.join("; "));
         }
     }
+    // NEOPETS_TRACE_GAP="pack:i": the parts with a vertex nearest that part's vertices, and how
+    // near (diagnostic, for pieces that look set apart).
+    if let Some((pk, pi)) = std::env::var("NEOPETS_TRACE_GAP").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.trim().parse::<u32>().ok()?, b.trim().parse::<usize>().ok()?)))) {
+        if let (true, Some(p)) = (pk == pack, m.parts.get(pi)) {
+            let mut near: Vec<(f32, usize)> = m
+                .parts
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != pi)
+                .map(|(j, q)| (p.positions.iter().flat_map(|a| q.positions.iter().map(move |b| Vec3::from(*a).distance(Vec3::from(*b)))).fold(f32::MAX, f32::min), j))
+                .collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let list: Vec<String> = near.iter().take(8).map(|(d, j)| format!("{j} (tex {:?}) {d:.2}", m.parts[*j].texture)).collect();
+            println!("GAP {pack}:{pi} nearest: {}", list.join(", "));
+            let pts: Vec<String> = p.positions.iter().take(12).map(|v| format!("({:.1},{:.1},{:.1})", v[0], v[1], v[2])).collect();
+            println!("GAP {pack}:{pi} vertices: {}", pts.join(" "));
+        }
+    }
     // NEOPETS_TRACE_PART="pack:i": one part's material facts (diagnostic).
     if let Some((pk, pi)) = std::env::var("NEOPETS_TRACE_PART").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.trim().parse::<u32>().ok()?, b.trim().parse::<usize>().ok()?)))) {
         if pk == pack {

@@ -15,6 +15,7 @@ mod ui_fit;
 mod display;
 mod draw_order;
 mod perf;
+mod prepass_normals;
 mod scene_merge;
 mod debris_view;
 mod effect_view;
@@ -1018,6 +1019,7 @@ fn main() {
         .add_plugins(godrays::GodRaysPlugin)
         .add_plugins(water_reflect::WaterReflectPlugin)
         .add_plugins(scene_merge::OverlayPlugin)
+        .add_plugins(prepass_normals::PrepassNormalsPlugin)
         .add_plugins(pass1::Pass1Plugin)
         .add_plugins(draw_order::DrawOrderPlugin)
         .add_plugins(shadow_view::ShadowPlugin)
