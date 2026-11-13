@@ -1775,6 +1775,7 @@ fn step_sim(
                 let ack = netr.applied;
                 netr.outgoing = Some(net::Input::from_hero(&input, &pad, generation, counts, ack));
                 let sounds = play.play.sound.requests.len();
+                let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());
                 play.play.effects.share.mute = true;
                 play.play.effects.share.log = None;
                 play.play.tick(&neopets_sim::hero::HeroInput::default(), neopets_sim::camera::CameraPad::default());
@@ -1783,11 +1784,9 @@ fn step_sim(
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                     println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds);
                 }
-                if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
-                    let p = &play.play;
-                    println!("NETFX joiner tick {}: {} particles, {} spawners, {} objects, {} shots", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count());
-                }
                 play.play.sound.requests.truncate(sounds);
+                play.play.stinger_requests.truncate(clips.0);
+                play.play.emote_requests.truncate(clips.1);
                 let table = play.play.effect_table.clone();
                 for e in std::mem::take(&mut netr.incoming) {
                     match e {
@@ -1796,14 +1795,21 @@ fn step_sim(
                             let p = &mut play.play;
                             p.effects.apply(&table, &op, &mut p.net_fx, &mut p.rng);
                         }
+                        net::Event::Stinger(k) => play.play.stinger_requests.push(k),
+                        net::Event::Emote(b, s, l) => play.play.emote_requests.push((b, s, l)),
                     }
                 }
                 // Only a state of the world loaded here (one from before a world change waits).
                 if let Some(s) = netr.state.clone().filter(|s| s.generation == netr.loaded) {
                     play.play.apply_net_state(&s);
                 }
+                if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
+                    let p = &play.play;
+                    println!("NETFX joiner tick {}: {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0));
+                }
             } else {
                 let sounds = play.play.sound.requests.len();
+                let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());
                 // Online, hosting: the gameplay effects are logged for the joiner (net.rs).
                 let hosting = netr.role == net::Role::Host && netr.peer.is_some();
                 play.play.effects.share.mute = false;
@@ -1838,11 +1844,17 @@ fn step_sim(
                     for op in play.play.effects.share.log.as_mut().map(std::mem::take).unwrap_or_default() {
                         netr.push_event(net::Event::Fx(op));
                     }
+                    for k in play.play.stinger_requests[clips.0.min(play.play.stinger_requests.len())..].to_vec() {
+                        netr.push_event(net::Event::Stinger(k));
+                    }
+                    for (b, s, l) in play.play.emote_requests[clips.1.min(play.play.emote_requests.len())..].to_vec() {
+                        netr.push_event(net::Event::Emote(b, s, l));
+                    }
                     let s = play.play.net_state(netr.generation);
                     netr.send_state(&s);
                     if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                         let p = &play.play;
-                        println!("NETFX host tick {}: {} particles, {} spawners, {} objects, {} shots", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count());
+                        println!("NETFX host tick {}: {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0));
                     }
                 }
             }

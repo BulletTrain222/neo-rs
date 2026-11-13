@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 3;
+const PROTOCOL: u16 = 4;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -186,6 +186,101 @@ pub struct State {
     pub events: Vec<(u32, Event)>,
     /// The host's live shots by pool slot.
     pub shots: Vec<(u8, neopets_sim::projectile::Shot)>,
+    /// What the host's screen and music show that the joiner shows too.
+    pub show: Show,
+}
+
+/// The host's music, fade, letterbox, monster bar, message and camera shake after a tick.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Show {
+    /// The two stream channels (stream, volume).
+    pub music: [(Option<u32>, i32); 2],
+    /// The bank music (playing, volume, started this tick) and the intensity's register 2 and G.
+    pub bank: (Option<u32>, i32, bool),
+    pub intensity: (u8, u8),
+    /// The fade (colour, alpha, target, step) and the letterbox (progress, target, step, done, held).
+    pub fade: ([u8; 3], f32, f32, f32),
+    pub bars: (f32, f32, f32, bool, bool),
+    /// The monster bar (time left, target, name, name width, frame and fill widths).
+    pub monster: Option<(i32, u64, Vec<u8>, i32, i32, i32)>,
+    /// The level message line and how many ticks it has shown.
+    pub message: Option<(u16, u32)>,
+    /// The camera shake (side, up, aim).
+    pub shake: Option<(f32, f32, Option<f32>)>,
+}
+
+impl Show {
+    fn write(&self, w: &mut Writer) {
+        for (stream, volume) in self.music {
+            w.u32(stream.unwrap_or(u32::MAX));
+            w.i32(volume);
+        }
+        w.u32(self.bank.0.unwrap_or(u32::MAX));
+        w.i32(self.bank.1);
+        w.u8(self.bank.2 as u8);
+        w.u8(self.intensity.0);
+        w.u8(self.intensity.1);
+        w.0.extend_from_slice(&self.fade.0);
+        w.f32(self.fade.1);
+        w.f32(self.fade.2);
+        w.f32(self.fade.3);
+        w.f32(self.bars.0);
+        w.f32(self.bars.1);
+        w.f32(self.bars.2);
+        w.u8(self.bars.3 as u8 | (self.bars.4 as u8) << 1);
+        match &self.monster {
+            Some((t, target, name, nw, frame, fill)) => {
+                w.u8(1);
+                w.i32(*t);
+                w.u64(*target);
+                w.bytes(name);
+                w.i32(*nw);
+                w.i32(*frame);
+                w.i32(*fill);
+            }
+            None => w.u8(0),
+        }
+        match self.message {
+            Some((line, age)) => {
+                w.u8(1);
+                w.u16(line);
+                w.u32(age);
+            }
+            None => w.u8(0),
+        }
+        match self.shake {
+            Some((side, up, aim)) => {
+                w.u8(1);
+                w.f32(side);
+                w.f32(up);
+                write_opt_f32(w, aim);
+            }
+            None => w.u8(0),
+        }
+    }
+
+    fn read(r: &mut Reader) -> Option<Self> {
+        let stream = |v: u32| (v != u32::MAX).then_some(v);
+        let music = [(stream(r.u32()?), r.i32()?), (stream(r.u32()?), r.i32()?)];
+        let bank = (stream(r.u32()?), r.i32()?, r.u8()? != 0);
+        let intensity = (r.u8()?, r.u8()?);
+        let fade = ([r.u8()?, r.u8()?, r.u8()?], r.f32()?, r.f32()?, r.f32()?);
+        let (a, b, c, bits) = (r.f32()?, r.f32()?, r.f32()?, r.u8()?);
+        let bars = (a, b, c, bits & 1 != 0, bits & 2 != 0);
+        let monster = match r.u8()? {
+            1 => Some((r.i32()?, r.u64()?, r.bytes()?.to_vec(), r.i32()?, r.i32()?, r.i32()?)),
+            _ => None,
+        };
+        let message = match r.u8()? {
+            1 => Some((r.u16()?, r.u32()?)),
+            _ => None,
+        };
+        let shake = match r.u8()? {
+            1 => Some((r.f32()?, r.f32()?, read_opt_f32(r)?)),
+            _ => None,
+        };
+        Some(Self { music, bank, intensity, fade, bars, monster, message, shake })
+    }
 }
 
 /// Something that happened on the host for the joiner to play once: numbered, resent with each
@@ -196,6 +291,9 @@ pub enum Event {
     Sound(neopets_sim::sound::Request),
     /// An operation on the host's gameplay effects (its handles; effect.rs `Share`).
     Fx(neopets_sim::effect::Op),
+    /// A stinger clip, and an emote clip (bank, start, length).
+    Stinger(i32),
+    Emote(u32, u32, u32),
 }
 
 fn write_frame(w: &mut Writer, f: &[[f32; 3]; 3]) {
@@ -401,6 +499,16 @@ impl Event {
                 w.u32(*id as u32);
             }
             Event::Fx(op) => write_op(w, op),
+            Event::Stinger(k) => {
+                w.u8(20);
+                w.i32(*k);
+            }
+            Event::Emote(bank, start, len) => {
+                w.u8(21);
+                w.u32(*bank);
+                w.u32(*start);
+                w.u32(*len);
+            }
         }
     }
 
@@ -411,6 +519,8 @@ impl Event {
             2 => Event::Sound(Request::Set { id: r.u32()? as usize, volume: r.i32()?, pan: read_pan(r)? }),
             3 => Event::Sound(Request::Stop { id: r.u32()? as usize }),
             k @ 10..=16 => Event::Fx(read_op(k, r)?),
+            20 => Event::Stinger(r.i32()?),
+            21 => Event::Emote(r.u32()?, r.u32()?, r.u32()?),
             _ => return None,
         })
     }
@@ -514,6 +624,7 @@ impl State {
         for (i, sh) in &self.shots {
             write_shot(&mut w, *i, sh);
         }
+        self.show.write(&mut w);
         w.0
     }
 
@@ -561,7 +672,8 @@ impl State {
         for _ in 0..count {
             shots.push(read_shot(r)?);
         }
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots })
+        let show = Show::read(r)?;
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show })
     }
 }
 
@@ -1076,6 +1188,19 @@ impl crate::play::Play {
             cut: self.cut.filter(|c| c.state != 0 && c.last.is_some()).map(|_| self.view()),
             events: Vec::new(),
             shots: self.shots.slots.iter().enumerate().filter_map(|(i, s)| Some((i as u8, (*s)?))).collect(),
+            show: Show {
+                music: self.music.channels.map(|c| (c.stream, c.volume)),
+                bank: (self.bank_music.playing, self.bank_music.volume, self.bank_music.started),
+                intensity: (self.intensity.register2, self.intensity.excite),
+                fade: (self.fade.colour, self.fade.alpha, self.fade.target, self.fade.step),
+                bars: (self.bars.progress, self.bars.target, self.bars.step, self.bars.done, self.bars.held),
+                monster: self.monster_bar.target.map(|t| {
+                    let m = &self.monster_bar;
+                    (m.t, t, m.name.as_bytes().to_vec(), m.name_width, m.frame, m.fill)
+                }),
+                message: self.message.map(|(line, at)| (line, self.ticks.saturating_sub(at).min(u32::MAX as u64) as u32)),
+                shake: self.shake_now.map(|o| (o.side, o.up, o.aim)),
+            },
         }
     }
 
@@ -1139,6 +1264,32 @@ impl crate::play::Play {
             }
         }
         self.net_cut = s.cut;
+        // The host's music, fade, letterbox, monster bar, message and shake.
+        {
+            let sh = &s.show;
+            for (c, &(stream, volume)) in self.music.channels.iter_mut().zip(sh.music.iter()) {
+                c.stream = stream;
+                c.volume = volume;
+            }
+            (self.bank_music.playing, self.bank_music.volume, self.bank_music.started) = sh.bank;
+            (self.intensity.register2, self.intensity.excite) = sh.intensity;
+            self.fade = neopets_sim::scene::Fade { colour: sh.fade.0, alpha: sh.fade.1, target: sh.fade.2, step: sh.fade.3 };
+            self.bars = neopets_sim::scene::Bars { progress: sh.bars.0, target: sh.bars.1, step: sh.bars.2, done: sh.bars.3, held: sh.bars.4 };
+            match &sh.monster {
+                Some((t, target, name, nw, frame, fill)) => {
+                    let m = &mut self.monster_bar;
+                    m.t = *t;
+                    m.target = Some(*target);
+                    m.name = String::from_utf8_lossy(name).into_owned();
+                    m.name_width = *nw;
+                    m.frame = *frame;
+                    m.fill = *fill;
+                }
+                None => self.monster_bar.target = None,
+            }
+            self.message = sh.message.map(|(line, age)| (line, self.ticks.saturating_sub(age as u64)));
+            self.shake_now = sh.shake.map(|(side, up, aim)| neopets_sim::shake::Offset { side, up, aim });
+        }
         // The host's shots in place of this side's.
         self.shots.slots = Default::default();
         for (i, sh) in &s.shots {
@@ -1212,6 +1363,16 @@ mod tests {
                 neopets_sim::projectile::Setup { kind: 2, visual: 23, element: 1, owner: Some(77), start: [0.0; 3], velocity: [0.0, 0.0, 1.0], lifetime: 9, damage: 3.0, radius: 1.0, spin: 0.0, area_radius: 0.0, area_duration: 0, key: -1, ignore_world: false, status: (-1, 0, 0), effects: [-1; 6], trail: -1 },
                 [1.0; 3], [0.0, 0.0, 1.0], 5, false, true,
             ))],
+            show: Show {
+                music: [(Some(5), 1024), (None, 0)],
+                bank: (Some(12), 300, true),
+                intensity: (4, 9),
+                fade: ([1, 2, 3], 64.0, 128.0, 4.0),
+                bars: (0.5, 1.0, 0.1, false, true),
+                monster: Some((600, 42, b"Name".to_vec(), 30, 80, 50)),
+                message: Some((7, 90)),
+                shake: Some((0.1, -0.2, None)),
+            },
             ..Default::default()
         };
         let bytes = s.encode();

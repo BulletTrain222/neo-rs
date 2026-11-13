@@ -129,15 +129,15 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Health and magic pickups | Go to whoever touches them | [x] | [x] host decides |
 | Chests, switches, push blocks, levers | Either player; one state | [ ] player 2 | [ ] joiner sees their state |
 | Enemies, bosses, their health | One set; each targets the nearest standing player | [x] | [x] place, clip, health |
-| Enemy health bar (monster bar) | Shown to both | [x] | [ ] |
+| Enemy health bar (monster bar) | Shown to both | [x] | [x] |
 | Shots (projectiles) | One pool; hit either player | [x] | [?] joiner draws the host's (not yet seen in play) |
 | Effects, sparks | One set | [x] | [x] the host's effect log |
 | Debris, weapon trails | One set | [x] | [?] from the joiner's own copy (clips and breaks match) |
-| Music and stingers | One selection | [x] | [ ] joiner plays the host's |
+| Music and stingers | One selection | [x] | [x] the host's channels, bank and clips |
 | Sound effects | One set of events | [x] | [x] the host's requests |
-| Fades, letterbox bars | Shared | [x] | [?] bars come with the camera; [ ] fades |
-| Screen shake | Default: both views shake | [x] | [ ] |
-| Messages ("Got X", notices) | Shown to both | [x] | [ ] |
+| Fades, letterbox bars | Shared | [x] | [x] |
+| Screen shake | Default: both views shake | [x] | [x] (twice in a host cutscene) |
+| Messages ("Got X", notices) | Shown to both | [x] | [x] the level message line |
 | Petpet | Follows player 1 | [x] | [ ] joiner draws it |
 | Saving | The host's save only; default: the joiner keeps none, and sees "Saved" | [x] | [ ] notice |
 | Game over and Continue | Only when both are down (or one, with revive off); player 1 chooses | [x] | [ ] joiner follows the reload |
