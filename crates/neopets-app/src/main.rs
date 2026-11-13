@@ -6653,14 +6653,35 @@ fn play_trace(
         if std::env::var_os("NEOPETS_COOP").is_some() {
             if play.ticks == 1 {
                 println!("COOP player 2 joined: {}", play.add_player());
+                // NEOPETS_COOP_P1HP=n: player 1 starts with that much health (diagnostic).
+                if let Some(h) = std::env::var("NEOPETS_COOP_P1HP").ok().and_then(|v| v.parse::<i32>().ok()) {
+                    play.player.hero_hp = h;
+                }
                 // NEOPETS_COOP_HP=n: player 2 starts with that much health (diagnostic).
                 if let (Some(h), Some(o)) = (std::env::var("NEOPETS_COOP_HP").ok().and_then(|v| v.parse::<i32>().ok()), play.others.first_mut()) {
                     o.hero_hp = h;
+                    // 0: player 2 starts down.
+                    if h <= 0 {
+                        o.down = Some(0);
+                        o.loco.state = neopets_sim::hero::DEAD;
+                    }
                 }
             }
             // NEOPETS_COOP_ATTACK: player 2 stands and attacks every 40 ticks instead (with
             // NEOPETS_TRACE_GOD player 1 is not hit).
-            let p2 = if std::env::var_os("NEOPETS_COOP_ATTACK").is_some() {
+            // NEOPETS_COOP_DROP=tick: the developer coin drop 6 units ahead of player 2 on that tick.
+            if std::env::var("NEOPETS_COOP_DROP").ok().and_then(|v| v.parse::<u64>().ok()) == Some(play.ticks) && !play.others.is_empty() {
+                play.swap_player(0);
+                let n = play.dev_drop(160, 6.0);
+                play.swap_player(0);
+                println!("COOP drop ahead of player 2 on tick {}: {n} world items, NP {}", play.ticks, play.state.neopoints);
+            }
+            // NEOPETS_COOP_STILL: player 2 stands still.
+            // NEOPETS_COOP_WALKFROM=n: player 2 stands until tick n, then walks.
+            let wait = std::env::var("NEOPETS_COOP_WALKFROM").ok().and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| play.ticks < n);
+            let p2 = if wait || std::env::var_os("NEOPETS_COOP_STILL").is_some() {
+                neopets_sim::hero::HeroInput::default()
+            } else if std::env::var_os("NEOPETS_COOP_ATTACK").is_some() {
                 // NEOPETS_COOP_TURN=n: first n ticks pushing the stick back (turning player 2 round).
                 let turn = std::env::var("NEOPETS_COOP_TURN").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
                 if play.ticks <= turn {
@@ -6676,7 +6697,7 @@ fn play_trace(
                 if let Some(o) = play.others.first() {
                     let q = o.loco.position();
                     let a = play.player.loco.position();
-                    println!("COOP {} p2 ({:.1}, {:.1}, {:.1}) state {} clip {} hp {} down {:?} | p1 ({:.1}, {:.1}, {:.1}) hp {} | p2 eye ({:.1}, {:.1}, {:.1})", play.ticks, q[0], q[1], q[2], o.loco.state, o.hero.clip_state().action, o.hero_hp, o.down, a[0], a[1], a[2], play.player.hero_hp, o.camera.eye[0], o.camera.eye[1], o.camera.eye[2]);
+                    println!("COOP {} p2 ({:.1}, {:.1}, {:.1}) state {} clip {} hp {} down {:?} | p1 ({:.1}, {:.1}, {:.1}) hp {} down {:?} state {} | p2 eye ({:.1}, {:.1}, {:.1})", play.ticks, q[0], q[1], q[2], o.loco.state, o.hero.clip_state().action, o.hero_hp, o.down, a[0], a[1], a[2], play.player.hero_hp, play.player.down, play.player.loco.state, o.camera.eye[0], o.camera.eye[1], o.camera.eye[2]);
                     let near: Vec<String> = play.characters.iter().filter(|c| c.enemy.is_some() && (c.position[0] - q[0]).hypot(c.position[2] - q[2]) < 15.0).map(|c| format!("{} hp {} at {:.1}", c.name, c.hp, (c.position[0] - q[0]).hypot(c.position[2] - q[2]))).collect();
                     println!("COOP {} enemies near p2: {}", play.ticks, near.join(", "));
                     println!("COOP {} p2 hud c {} g0 {} health {:?} | p1 hud c {} g0 {} health {:?}", play.ticks, o.hud.c, o.hud.g0, o.hud.health, play.hud.c, play.hud.g0, play.hud.health);

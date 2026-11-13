@@ -11447,6 +11447,10 @@ impl Play {
         // confirm flag on a Square press edge.
         // An open dialogue box takes Square to close it, and holds the hero in place.
         let mut input = *input;
+        // Local co-op: player 1 down takes no input (revived in `coop_step`).
+        if self.player.down.is_some() {
+            input = HeroInput::default();
+        }
         if self.dialogue_open {
             // SPEC-0022: the box takes Cross (held, faster reveal) and Square (skip, Next,
             // Finish); the hero stays in place meanwhile.
@@ -11765,7 +11769,7 @@ impl Play {
             let f = self.player.loco.facing;
             self.hero_hit(neopets_sim::death::HURT_DAMAGE, 0.0, false, f, "a hurting surface".into());
         }
-        if self.player.loco.state == hero_states::DEAD {
+        if self.player.loco.state == hero_states::DEAD && self.player.down.is_none() {
             // SPEC-0053 3.8 d: with the death clip at 0.95, a switch to the partner (both flags
             // and the extra flag set) is requested every tick; a running or accepted switch
             // keeps the game going, a refusal or a dead partner leads to game over.
@@ -14566,9 +14570,23 @@ impl Play {
             // The slot resets since the last tick (an expired drop's slot reused).
             self.reset_gives(pack);
         }
+        self.pickup_step();
+    }
+
+    /// SPEC-0021 Auto-collect for the running player: the nearest collectable item at its pickup
+    /// point is taken into the party's shared purse and items (each player in turn in co-op).
+    fn pickup_step(&mut self) {
+        if self.player.down.is_some() {
+            return;
+        }
         let p = self.pickup_point();
         let pack = self.world.pack;
         let base = self.items.get(146).map_or(1.5, |i| i.pickup_base);
+        // NEOPETS_TRACE_COOPPICK: another player's pickup point and the nearest world item (diagnostic).
+        if self.coop_running && std::env::var_os("NEOPETS_TRACE_COOPPICK").is_some() && self.ticks % 10 == 0 {
+            let near = self.pools.get(&pack).and_then(|pool| pool.slots.iter().flatten().map(|it| ((it.position[0] - p[0]).hypot(it.position[2] - p[2]), it.position[1] - p[1], it.ready())).min_by(|a, b| a.0.total_cmp(&b.0)));
+            println!("COOPPICK tick {} point ({:.1}, {:.1}, {:.1}) nearest {:?}", self.ticks, p[0], p[1], p[2], near);
+        }
         let Some(i) = self.pools.get(&pack).and_then(|pool| pool.collectable(p, base, contact::HERO_RADIUS, &|id| self.design.item_important(id))) else { return };
         let Some(it) = self.pools.get(&pack).and_then(|pool| pool.slots[i]) else { return };
         let coin = neopets_sim::items::is_coin(it.id);
@@ -14664,10 +14682,12 @@ impl Play {
         self.sound.play(neopets_sim::sound::VOICE, if big { 1 } else { 0 }, neopets_sim::sound::Play::default());
         // Local co-op: another player at 0 HP goes down (its death clip; revived in `coop_step`),
         // with no game over.
-        if self.player.hero_hp <= 0 && self.coop_running {
+        let partner_up = !self.coop_running && self.others.iter().any(|o| o.down.is_none());
+        if self.player.hero_hp <= 0 && (self.coop_running || partner_up) {
             self.player.hero_hp = 0;
             if self.player.down.is_none() {
                 self.player.down = Some(0);
+                self.player.revive = 0;
                 self.player.attack = None;
                 self.player.r_attack = None;
                 self.player.loco.state = hero_states::DEAD;
@@ -19139,6 +19159,25 @@ impl Play {
     /// contacts and its animation. Pickups, doors, triggers, talking and the item panels are
     /// player 1's alone.
     pub fn coop_step(&mut self, inputs: &[(HeroInput, CameraPad)]) {
+        // Player 1 down: another player standing within 3 units for 2 seconds revives it at
+        // half health; else it gets up after 10 seconds. With every player down, the game is over
+        // (the single-player death: its clip, the death camera and the game-over page).
+        if let Some(t) = self.player.down {
+            let a = self.player.loco.position();
+            let near = self.others.iter().any(|o| o.down.is_none() && (o.loco.position()[0] - a[0]).hypot(o.loco.position()[2] - a[2]) < 3.0);
+            self.player.revive = if near { self.player.revive + 1 } else { 0 };
+            self.player.down = Some(t + 1);
+            if self.others.iter().all(|o| o.down.is_some()) {
+                self.player.down = None;
+                self.player.revive = 0;
+                self.default_death();
+            } else if self.player.revive >= 120 || t + 1 >= 600 {
+                self.player.down = None;
+                self.player.revive = 0;
+                self.player.hero_hp = (self.player.hero_max / 2).max(1);
+                self.player.loco.state = hero_states::STANCE;
+            }
+        }
         let pack = self.world.pack;
         let moved_world = std::mem::replace(&mut self.coop_pack, pack) != pack;
         for i in 0..self.others.len() {
@@ -19249,6 +19288,7 @@ impl Play {
             self.hero_contacts(false);
             self.player.root_step = self.player.hero.tick();
             self.player.items_drawn = self.hero_items();
+            self.pickup_step();
             // SPEC-0023: player 2's HUD record steps as player 1's (not under a dialogue box).
             if !self.dialogue_open {
                 let v = neopets_sim::hud::Values {
