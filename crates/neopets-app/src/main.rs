@@ -4042,7 +4042,11 @@ fn sync_atmos_overlay(mut commands: Commands, state: Option<Res<PlayState>>, mut
     // purple); 0.6 a matches the gamma-space result for mid-tones (encoded 50 to 100) over
     // (160, 84, 171): a = 0.125 gives about 0.075.
     let spec_w = out.map_or(0.0, |o| 0.6 * o.b[3].clamp(0.0, 128.0) / 128.0);
-    let wl = if gate > 0.0 { 1.0 - (1.0 - (w * gate).clamp(0.0, 1.0)).powf(1.4) } else { spec_w };
+    // The gated haze is then scaled to 0.7 by the user's choice (user report 140: the night
+    // swamp 722 went nearly black under it; "lighter everywhere"), about 0.43 at full gate.
+    // NEOPETS_HAZE_SCALE overrides the scale (diagnostic).
+    let scale = std::env::var("NEOPETS_HAZE_SCALE").ok().and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.7);
+    let wl = if gate > 0.0 { scale * (1.0 - (1.0 - (w * gate).clamp(0.0, 1.0)).powf(1.4)) } else { spec_w };
     let colour = out.map(|o| Color::srgba(o.b[0].clamp(0.0, 255.0) / 255.0, o.b[1].clamp(0.0, 255.0) / 255.0, o.b[2].clamp(0.0, 255.0) / 255.0, wl));
     match overlays.iter_mut().next() {
         Some((mut bg, mut vis)) => {
