@@ -464,15 +464,182 @@ pub struct Effects {
     pub spawners: Vec<Option<Spawner>>,
     pub particles: Vec<Option<Particle>>,
     pub objects: Vec<Option<EffectObject>>,
+    /// Online play (this build's feature, not the original's): the host's operation log and the
+    /// joiner's mute. See `Share`.
+    pub share: Share,
 }
+
+/// Online play: how effects reach the second computer. The host logs every operation on its
+/// gameplay effects (`log`); the joiner's own game is muted (its gameplay effects come from the
+/// host's log through `apply`). Effects made inside `local` (the world's placed effects, which
+/// each side runs the same way from its own world) are neither logged nor muted, nor is any
+/// later operation on their handles.
+#[derive(Clone, Debug, Default)]
+pub struct Share {
+    pub log: Option<Vec<Op>>,
+    pub mute: bool,
+    pub local: bool,
+    local_handles: std::collections::HashSet<usize>,
+}
+
+/// One effect operation, as the host made it (handles are the host's).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Op {
+    Add { handle: usize, def: Option<usize>, position: V3, frame: Frame, state: u8, cull: Option<f32>, scale: Option<f32> },
+    OneShot { id: i32, position: V3, frame: Frame },
+    Update { handle: usize, listener: Option<(V3, V3)> },
+    Stop { handle: usize },
+    Release { handle: usize },
+    Target { handle: usize, at: V3 },
+    Position { handle: usize, at: V3 },
+}
+
+/// The handle a muted add returns: no object has it, so later operations on it do nothing.
+pub const NO_HANDLE: usize = usize::MAX;
 
 impl Effects {
     pub fn new() -> Self {
-        Self { spawners: vec![None; SPAWNERS], particles: vec![None; PARTICLES], objects: Vec::new() }
+        Self { spawners: vec![None; SPAWNERS], particles: vec![None; PARTICLES], objects: Vec::new(), share: Share::default() }
+    }
+
+    /// Whether an operation on `handle` is this side's own (not logged, not muted).
+    fn own(&self, handle: usize) -> bool {
+        self.share.local || self.share.local_handles.contains(&handle)
+    }
+
+    fn log(&mut self, op: Op) {
+        if let Some(l) = self.share.log.as_mut() {
+            l.push(op);
+        }
+    }
+
+    /// Add an effect object; returns its handle (`NO_HANDLE` on a muted joiner).
+    pub fn add_object(&mut self, o: EffectObject) -> usize {
+        if self.share.local {
+            let h = self.add_object_raw(o);
+            self.share.local_handles.insert(h);
+            return h;
+        }
+        if self.share.mute {
+            return NO_HANDLE;
+        }
+        let op = (o.def, o.position, o.frame, o.state, o.cull, o.scale);
+        let h = self.add_object_raw(o);
+        self.share.local_handles.remove(&h);
+        self.log(Op::Add { handle: h, def: op.0, position: op.1, frame: op.2, state: op.3, cull: op.4, scale: op.5 });
+        h
+    }
+
+    /// The one-shot start of 3.16 (see `one_shot_raw`).
+    pub fn one_shot(&mut self, table: &EffectTable, id: i32, position: V3, frame: Frame, r: &mut impl Uniform) -> bool {
+        if !self.share.local {
+            if self.share.mute {
+                return false;
+            }
+            self.log(Op::OneShot { id, position, frame });
+        }
+        self.one_shot_raw(table, id, position, frame, r)
+    }
+
+    /// The object update of 3.16 (see `update_raw`).
+    pub fn update(&mut self, table: &EffectTable, handle: usize, listener: Option<(V3, V3)>, r: &mut impl Uniform) {
+        if !self.own(handle) {
+            if self.share.mute {
+                return;
+            }
+            self.log(Op::Update { handle, listener });
+        }
+        self.update_raw(table, handle, listener, r)
+    }
+
+    /// Stop an object (see `stop_raw`).
+    pub fn stop(&mut self, table: &EffectTable, handle: usize) {
+        if !self.own(handle) {
+            if self.share.mute {
+                return;
+            }
+            self.log(Op::Stop { handle });
+        }
+        self.stop_raw(table, handle)
+    }
+
+    /// Release an object (see `release_raw`).
+    pub fn release(&mut self, handle: usize) {
+        if !self.own(handle) {
+            if self.share.mute {
+                return;
+            }
+            self.log(Op::Release { handle });
+        }
+        self.share.local_handles.remove(&handle);
+        self.release_raw(handle)
+    }
+
+    /// Set an object's spawners' target point (see `set_target_raw`).
+    pub fn set_target(&mut self, handle: usize, t: V3) {
+        if !self.own(handle) {
+            if self.share.mute {
+                return;
+            }
+            self.log(Op::Target { handle, at: t });
+        }
+        self.set_target_raw(handle, t)
+    }
+
+    /// Set an object's position (see `set_position_raw`).
+    pub fn set_position(&mut self, handle: usize, p: V3) {
+        if !self.own(handle) {
+            if self.share.mute {
+                return;
+            }
+            self.log(Op::Position { handle, at: p });
+        }
+        self.set_position_raw(handle, p)
+    }
+
+    /// The joiner: one of the host's operations, its handles mapped to this side's through `map`
+    /// (an add records its new handle; a release forgets it).
+    pub fn apply(&mut self, table: &EffectTable, op: &Op, map: &mut std::collections::HashMap<usize, usize>, r: &mut impl Uniform) {
+        match *op {
+            Op::Add { handle, def, position, frame, state, cull, scale } => {
+                let o = EffectObject { def, position, frame, state, slots: [None; 5], cull, scale };
+                let h = self.add_object_raw(o);
+                self.share.local_handles.remove(&h);
+                map.insert(handle, h);
+            }
+            Op::OneShot { id, position, frame } => {
+                self.one_shot_raw(table, id, position, frame, r);
+            }
+            Op::Update { handle, listener } => {
+                if let Some(&h) = map.get(&handle) {
+                    self.update_raw(table, h, listener, r);
+                }
+            }
+            Op::Stop { handle } => {
+                if let Some(&h) = map.get(&handle) {
+                    self.stop_raw(table, h);
+                }
+            }
+            Op::Release { handle } => {
+                if let Some(h) = map.remove(&handle) {
+                    self.release_raw(h);
+                }
+            }
+            Op::Target { handle, at } => {
+                if let Some(&h) = map.get(&handle) {
+                    self.set_target_raw(h, at);
+                }
+            }
+            Op::Position { handle, at } => {
+                if let Some(&h) = map.get(&handle) {
+                    self.set_position_raw(h, at);
+                }
+            }
+        }
     }
 
     /// Add an effect object; returns its handle.
-    pub fn add_object(&mut self, o: EffectObject) -> usize {
+    fn add_object_raw(&mut self, o: EffectObject) -> usize {
         match self.objects.iter().position(|s| s.is_none()) {
             Some(i) => {
                 self.objects[i] = Some(o);
@@ -487,7 +654,7 @@ impl Effects {
 
     /// The one-shot start of 3.16 (set up, place, start, detach with mode 2): the object's
     /// emitters start once with no listener and the object is released; its spawners run on.
-    pub fn one_shot(&mut self, table: &EffectTable, id: i32, position: V3, frame: Frame, r: &mut impl Uniform) -> bool {
+    fn one_shot_raw(&mut self, table: &EffectTable, id: i32, position: V3, frame: Frame, r: &mut impl Uniform) -> bool {
         let mut o = EffectObject::new(table, id, position, frame);
         if o.def.is_none() {
             return false;
@@ -502,7 +669,7 @@ impl Effects {
     }
 
     /// The object update of 3.16 with an optional listener (position, forward).
-    pub fn update(&mut self, table: &EffectTable, handle: usize, listener: Option<(V3, V3)>, r: &mut impl Uniform) {
+    fn update_raw(&mut self, table: &EffectTable, handle: usize, listener: Option<(V3, V3)>, r: &mut impl Uniform) {
         let Some(mut o) = self.objects.get_mut(handle).and_then(|o| o.take()) else { return };
         if let Some(d) = o.def.map(|d| &table.definitions[d]) {
             if !d.nodes.is_empty() {
@@ -533,7 +700,7 @@ impl Effects {
     }
 
     /// Stop an object: drain every live spawner and clear the slots (3.16 Stop).
-    pub fn stop(&mut self, table: &EffectTable, handle: usize) {
+    fn stop_raw(&mut self, table: &EffectTable, handle: usize) {
         if let Some(mut o) = self.objects.get_mut(handle).and_then(|o| o.take()) {
             self.stop_object(table, &mut o);
             self.objects[handle] = Some(o);
@@ -541,7 +708,7 @@ impl Effects {
     }
 
     /// Release an object (its spawners run on detached).
-    pub fn release(&mut self, handle: usize) {
+    fn release_raw(&mut self, handle: usize) {
         if let Some(Some(o)) = self.objects.get_mut(handle).map(|o| o.take()) {
             for s in o.slots.iter().flatten() {
                 if let Some(sp) = self.spawners[*s].as_mut() {
@@ -561,7 +728,7 @@ impl Effects {
 
     /// Set an object's spawners' target point (the attack-effect driver's write, 3.17; read by
     /// birth modes 2 and 3).
-    pub fn set_target(&mut self, handle: usize, t: V3) {
+    fn set_target_raw(&mut self, handle: usize, t: V3) {
         let Some(Some(o)) = self.objects.get(handle) else { return };
         for s in o.slots.iter().flatten() {
             if let Some(sp) = self.spawners[*s].as_mut() {
@@ -571,7 +738,7 @@ impl Effects {
     }
 
     /// Set an object's position: copied to every live spawner (3.16).
-    pub fn set_position(&mut self, handle: usize, p: V3) {
+    fn set_position_raw(&mut self, handle: usize, p: V3) {
         let Some(Some(o)) = self.objects.get_mut(handle) else { return };
         o.position = p;
         for s in o.slots.iter().flatten() {
@@ -1107,6 +1274,40 @@ mod tests {
             }
         }
         assert_eq!(bursts, vec![1, 8, 14, 20]);
+    }
+
+    /// Online play (this build's feature): a host's logged operations replayed on a muted joiner
+    /// give the same objects and spawners; the joiner's own gameplay calls do nothing; placed
+    /// (local) effects are neither logged nor muted.
+    #[test]
+    fn shared_log_replays_on_a_muted_joiner() {
+        let t = table(record_a(0.1, 1, 0.05, false), [1.0; 4]);
+        let mut host = Effects::new();
+        host.share.log = Some(Vec::new());
+        host.share.local = true;
+        let placed = host.add_object(EffectObject::new(&t, 500, [0.0; 3], IDENTITY));
+        host.share.local = false;
+        host.set_position(placed, [1.0, 0.0, 0.0]);
+        let h = host.add_object(EffectObject::new(&t, 500, [2.0, 0.0, 0.0], IDENTITY));
+        host.update(&t, h, None, &mut Midpoint);
+        host.set_position(h, [3.0, 0.0, 0.0]);
+        host.one_shot(&t, 500, [4.0; 3], IDENTITY, &mut Midpoint);
+        let log = host.share.log.take().unwrap();
+        assert_eq!(log.len(), 4, "the placed object's add and move are not logged");
+
+        let mut joiner = Effects::new();
+        joiner.share.mute = true;
+        assert_eq!(joiner.add_object(EffectObject::new(&t, 500, [9.0; 3], IDENTITY)), NO_HANDLE);
+        assert!(!joiner.one_shot(&t, 500, [9.0; 3], IDENTITY, &mut Midpoint));
+        let mut map = std::collections::HashMap::new();
+        for op in &log {
+            joiner.apply(&t, op, &mut map, &mut Midpoint);
+        }
+        let mine = map[&h];
+        assert_eq!(joiner.objects[mine].as_ref().unwrap().position, [3.0, 0.0, 0.0]);
+        assert_eq!(joiner.spawners.iter().flatten().count(), host.spawners.iter().flatten().count());
+        joiner.apply(&t, &Op::Release { handle: h }, &mut map, &mut Midpoint);
+        assert!(joiner.objects[mine].is_none() && map.is_empty());
     }
 
     /// Test vector 8: life 0.5 s, row 0 x = 0.8; with truncating adds the accumulator after 15

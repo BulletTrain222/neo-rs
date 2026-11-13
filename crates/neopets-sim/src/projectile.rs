@@ -217,6 +217,14 @@ pub fn fire_mote(start: Vec3, target: Vec3, speed: f32) -> Setup {
     }
 }
 
+impl Shot {
+    /// Online play (this build's feature): a shot as the host's pool holds it, for the joiner
+    /// to draw (its pulse and area counters start at zero; the joiner does not run it).
+    pub fn remote(s: Setup, position: Vec3, velocity: Vec3, life: i32, area: bool, at_owner: bool) -> Self {
+        Self { s, position, velocity, life, area, at_owner, pulse: 0, area_left: 0 }
+    }
+}
+
 impl Pool {
     /// A live shot among the first ten slots with hit selector 0 (reflected; SPEC-0044 1056).
     pub fn deflected(&self) -> bool {

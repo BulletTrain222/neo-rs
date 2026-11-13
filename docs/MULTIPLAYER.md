@@ -130,10 +130,11 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Chests, switches, push blocks, levers | Either player; one state | [ ] player 2 | [ ] joiner sees their state |
 | Enemies, bosses, their health | One set; each targets the nearest standing player | [x] | [x] place, clip, health |
 | Enemy health bar (monster bar) | Shown to both | [x] | [ ] |
-| Shots (projectiles) | One pool; hit either player | [x] | [ ] joiner draws the host's |
-| Effects, debris, trails, sparks | One set | [x] | [ ] joiner draws the host's |
+| Shots (projectiles) | One pool; hit either player | [x] | [?] joiner draws the host's (not yet seen in play) |
+| Effects, sparks | One set | [x] | [x] the host's effect log |
+| Debris, weapon trails | One set | [x] | [?] from the joiner's own copy (clips and breaks match) |
 | Music and stingers | One selection | [x] | [ ] joiner plays the host's |
-| Sound effects | One set of events | [x] | [ ] joiner plays the host's |
+| Sound effects | One set of events | [x] | [x] the host's requests |
 | Fades, letterbox bars | Shared | [x] | [?] bars come with the camera; [ ] fades |
 | Screen shake | Default: both views shake | [x] | [ ] |
 | Messages ("Got X", notices) | Shown to both | [x] | [ ] |
@@ -164,18 +165,20 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Rumble | Own controller only | [ ] player 2 | [ ] joiner's pad |
 | Controls and bindings | Per computer; on one PC, player 2 uses the second pad | [x] | [x] |
 | Display, audio volume, graphics | Per computer | [x] | [x] |
-| Sound listener | One PC: player 1. Online: each computer hears from its own player | [x] | [ ] |
+| Sound listener | One PC: player 1. Online: each computer hears from its own player | [x] | [ ] joiner hears from the host's camera for now |
 | Pickup and damage flashes | Own | [x] | [x] |
 
 ### C. Online plumbing
 - [x] Host, join by address, refusal for a different build or disc, timeout, Bye.
 - [x] Joining from the title screen.
 - [x] A world change sends a new welcome; old-world states wait.
-- [ ] **Joiner as a puppet:** the joiner's tick runs loading, animation, effects and sound
-      playback, but no enemy decisions, triggers, scripts, doors, pickups, deaths or saves.
-- [ ] **Event channel:** numbered events (sound, effect, message, music, shake, fade, rumble)
-      that the host resends until the joiner acknowledges them in its input.
-- [ ] Shots: positions and kinds in each state.
+- [x] **Joiner as a puppet, first part:** no hits, deaths, doors or input of its own; its sounds
+      and gameplay effects are muted (the host's play instead).
+- [ ] Joiner puppet, rest: world items (pickups taken by player 2 still show), switches,
+      chests and blocks moved by player 2, enemy decisions that make effects outside the log.
+- [x] **Event channel:** numbered events, resent until acknowledged (sounds and effects so far;
+      music, messages, shake, fades and rumble to come).
+- [x] Shots: each state carries the host's live shots.
 - [ ] Send flags and items only when they change (acknowledged), to keep states small.
 - [ ] State size check: keep each state below about 1,200 bytes, or split it, for the internet.
 - [ ] In-game notices: "Player 2 joined", "Player 2 left", "Lost the host".

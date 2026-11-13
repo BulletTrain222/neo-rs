@@ -190,7 +190,14 @@ pub fn sync_effects(
         commands.spawn((AudioPlayer(h), PlaybackSettings::LOOP));
     }
     let p = &mut state.play;
-    let wanted: Vec<u32> = p.sound.slots.iter().flatten().copied().collect();
+    let mut wanted: Vec<u32> = p.sound.slots.iter().flatten().copied().collect();
+    for r in &p.sound.requests {
+        if let neopets_sim::sound::Request::Play { block, .. } = r {
+            if !wanted.contains(block) {
+                wanted.push(*block);
+            }
+        }
+    }
     for b in wanted {
         if !link.blocks.contains_key(&b) {
             let def = archive.as_deref_mut().and_then(|a| {

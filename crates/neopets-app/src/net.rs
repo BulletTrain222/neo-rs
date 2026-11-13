@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 2;
+const PROTOCOL: u16 = 3;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -182,6 +182,238 @@ pub struct State {
     pub talk: Option<Talk>,
     /// A scripted camera running on the host: its view (eye, forward, up, focal).
     pub cut: Option<([f32; 3], [f32; 3], [f32; 3], f32)>,
+    /// The host's events the joiner has not acknowledged yet, numbered (net.rs event channel).
+    pub events: Vec<(u32, Event)>,
+    /// The host's live shots by pool slot.
+    pub shots: Vec<(u8, neopets_sim::projectile::Shot)>,
+}
+
+/// Something that happened on the host for the joiner to play once: numbered, resent with each
+/// state until the joiner's input acknowledges it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Event {
+    /// A sound request (start, change or stop of an instance), as the host's sound manager made it.
+    Sound(neopets_sim::sound::Request),
+    /// An operation on the host's gameplay effects (its handles; effect.rs `Share`).
+    Fx(neopets_sim::effect::Op),
+}
+
+fn write_frame(w: &mut Writer, f: &[[f32; 3]; 3]) {
+    for row in f {
+        w.v3(*row);
+    }
+}
+
+fn read_frame(r: &mut Reader) -> Option<[[f32; 3]; 3]> {
+    Some([r.v3()?, r.v3()?, r.v3()?])
+}
+
+fn write_opt_f32(w: &mut Writer, v: Option<f32>) {
+    match v {
+        Some(x) => {
+            w.u8(1);
+            w.f32(x);
+        }
+        None => w.u8(0),
+    }
+}
+
+fn read_opt_f32(r: &mut Reader) -> Option<Option<f32>> {
+    Some(match r.u8()? {
+        1 => Some(r.f32()?),
+        _ => None,
+    })
+}
+
+fn write_op(w: &mut Writer, op: &neopets_sim::effect::Op) {
+    use neopets_sim::effect::Op;
+    match op {
+        Op::Add { handle, def, position, frame, state, cull, scale } => {
+            w.u8(10);
+            w.u32(*handle as u32);
+            w.u32(def.map_or(u32::MAX, |d| d as u32));
+            w.v3(*position);
+            write_frame(w, frame);
+            w.u8(*state);
+            write_opt_f32(w, *cull);
+            write_opt_f32(w, *scale);
+        }
+        Op::OneShot { id, position, frame } => {
+            w.u8(11);
+            w.i32(*id);
+            w.v3(*position);
+            write_frame(w, frame);
+        }
+        Op::Update { handle, listener } => {
+            w.u8(12);
+            w.u32(*handle as u32);
+            match listener {
+                Some((a, b)) => {
+                    w.u8(1);
+                    w.v3(*a);
+                    w.v3(*b);
+                }
+                None => w.u8(0),
+            }
+        }
+        Op::Stop { handle } => {
+            w.u8(13);
+            w.u32(*handle as u32);
+        }
+        Op::Release { handle } => {
+            w.u8(14);
+            w.u32(*handle as u32);
+        }
+        Op::Target { handle, at } => {
+            w.u8(15);
+            w.u32(*handle as u32);
+            w.v3(*at);
+        }
+        Op::Position { handle, at } => {
+            w.u8(16);
+            w.u32(*handle as u32);
+            w.v3(*at);
+        }
+    }
+}
+
+fn read_op(kind: u8, r: &mut Reader) -> Option<neopets_sim::effect::Op> {
+    use neopets_sim::effect::Op;
+    Some(match kind {
+        10 => Op::Add {
+            handle: r.u32()? as usize,
+            def: Some(r.u32()?).filter(|&d| d != u32::MAX).map(|d| d as usize),
+            position: r.v3()?,
+            frame: read_frame(r)?,
+            state: r.u8()?,
+            cull: read_opt_f32(r)?,
+            scale: read_opt_f32(r)?,
+        },
+        11 => Op::OneShot { id: r.i32()?, position: r.v3()?, frame: read_frame(r)? },
+        12 => Op::Update {
+            handle: r.u32()? as usize,
+            listener: match r.u8()? {
+                1 => Some((r.v3()?, r.v3()?)),
+                _ => None,
+            },
+        },
+        13 => Op::Stop { handle: r.u32()? as usize },
+        14 => Op::Release { handle: r.u32()? as usize },
+        15 => Op::Target { handle: r.u32()? as usize, at: r.v3()? },
+        16 => Op::Position { handle: r.u32()? as usize, at: r.v3()? },
+        _ => return None,
+    })
+}
+
+/// A shot of the host's pool, for the joiner to draw.
+fn write_shot(w: &mut Writer, i: u8, sh: &neopets_sim::projectile::Shot) {
+    let s = &sh.s;
+    w.u8(i);
+    w.i32(s.kind);
+    w.i32(s.visual);
+    w.i32(s.element);
+    w.u64(s.owner.map_or(u64::MAX, |o| o));
+    w.v3(s.start);
+    w.v3(s.velocity);
+    w.i32(s.lifetime);
+    w.f32(s.damage);
+    w.f32(s.radius);
+    w.f32(s.spin);
+    w.f32(s.area_radius);
+    w.i32(s.area_duration);
+    w.i32(s.key);
+    w.u8(s.ignore_world as u8);
+    w.i32(s.status.0);
+    w.i32(s.status.1);
+    w.i32(s.status.2);
+    for e in s.effects {
+        w.i32(e);
+    }
+    w.i32(s.trail);
+    w.v3(sh.position);
+    w.v3(sh.velocity);
+    w.i32(sh.life);
+    w.u8(sh.area as u8 | (sh.at_owner as u8) << 1);
+}
+
+fn read_shot(r: &mut Reader) -> Option<(u8, neopets_sim::projectile::Shot)> {
+    let i = r.u8()?;
+    let s = neopets_sim::projectile::Setup {
+        kind: r.i32()?,
+        visual: r.i32()?,
+        element: r.i32()?,
+        owner: Some(r.u64()?).filter(|&o| o != u64::MAX),
+        start: r.v3()?,
+        velocity: r.v3()?,
+        lifetime: r.i32()?,
+        damage: r.f32()?,
+        radius: r.f32()?,
+        spin: r.f32()?,
+        area_radius: r.f32()?,
+        area_duration: r.i32()?,
+        key: r.i32()?,
+        ignore_world: r.u8()? != 0,
+        status: (r.i32()?, r.i32()?, r.i32()?),
+        effects: [r.i32()?, r.i32()?, r.i32()?, r.i32()?, r.i32()?, r.i32()?],
+        trail: r.i32()?,
+    };
+    let (position, velocity, life, bits) = (r.v3()?, r.v3()?, r.i32()?, r.u8()?);
+    Some((i, neopets_sim::projectile::Shot::remote(s, position, velocity, life, bits & 1 != 0, bits & 2 != 0)))
+}
+
+fn write_pan(w: &mut Writer, pan: Option<i32>) {
+    match pan {
+        Some(p) => {
+            w.u8(1);
+            w.i32(p);
+        }
+        None => w.u8(0),
+    }
+}
+
+fn read_pan(r: &mut Reader) -> Option<Option<i32>> {
+    Some(match r.u8()? {
+        1 => Some(r.i32()?),
+        _ => None,
+    })
+}
+
+impl Event {
+    fn write(&self, w: &mut Writer) {
+        use neopets_sim::sound::Request;
+        match self {
+            Event::Sound(Request::Play { id, block, cue, volume, pan }) => {
+                w.u8(1);
+                w.u32(*id as u32);
+                w.u32(*block);
+                w.i32(*cue);
+                w.i32(*volume);
+                write_pan(w, *pan);
+            }
+            Event::Sound(Request::Set { id, volume, pan }) => {
+                w.u8(2);
+                w.u32(*id as u32);
+                w.i32(*volume);
+                write_pan(w, *pan);
+            }
+            Event::Sound(Request::Stop { id }) => {
+                w.u8(3);
+                w.u32(*id as u32);
+            }
+            Event::Fx(op) => write_op(w, op),
+        }
+    }
+
+    fn read(r: &mut Reader) -> Option<Self> {
+        use neopets_sim::sound::Request;
+        Some(match r.u8()? {
+            1 => Event::Sound(Request::Play { id: r.u32()? as usize, block: r.u32()?, cue: r.i32()?, volume: r.i32()?, pan: read_pan(r)? }),
+            2 => Event::Sound(Request::Set { id: r.u32()? as usize, volume: r.i32()?, pan: read_pan(r)? }),
+            3 => Event::Sound(Request::Stop { id: r.u32()? as usize }),
+            k @ 10..=16 => Event::Fx(read_op(k, r)?),
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -273,6 +505,15 @@ impl State {
             }
             None => w.u8(0),
         }
+        w.u16(self.events.len() as u16);
+        for (n, e) in &self.events {
+            w.u32(*n);
+            e.write(&mut w);
+        }
+        w.u8(self.shots.len() as u8);
+        for (i, sh) in &self.shots {
+            write_shot(&mut w, *i, sh);
+        }
         w.0
     }
 
@@ -310,7 +551,17 @@ impl State {
             1 => Some((r.v3()?, r.v3()?, r.v3()?, r.f32()?)),
             _ => None,
         };
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut })
+        let count = r.u16()? as usize;
+        let mut events = Vec::with_capacity(count.min(256));
+        for _ in 0..count {
+            events.push((r.u32()?, Event::read(r)?));
+        }
+        let count = r.u8()? as usize;
+        let mut shots = Vec::with_capacity(count.min(16));
+        for _ in 0..count {
+            shots.push(read_shot(r)?);
+        }
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots })
     }
 }
 
@@ -319,6 +570,8 @@ impl State {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Input {
     pub generation: u32,
+    /// The last host event played here, in order (the event channel's acknowledgement).
+    pub ack: u32,
     pub side: f32,
     pub forward: f32,
     pub held: u16,
@@ -338,10 +591,11 @@ const CIRCLE: u16 = 64;
 const L2: u16 = 128;
 
 impl Input {
-    pub fn from_hero(i: &HeroInput, pad: &CameraPad, generation: u32, counts: (u8, u8, u8)) -> Self {
+    pub fn from_hero(i: &HeroInput, pad: &CameraPad, generation: u32, counts: (u8, u8, u8), ack: u32) -> Self {
         let bit = |b: bool, v: u16| if b { v } else { 0 };
         Self {
             generation,
+            ack,
             side: i.side,
             forward: i.forward,
             held: bit(i.run, RUN) | bit(i.square_held, SQUARE_HELD) | bit(i.cross_held, CROSS_HELD) | bit(i.guard, GUARD) | bit(i.attack_held, ATTACK_HELD) | bit(i.r2_held, R2) | bit(i.circle_held, CIRCLE) | bit(i.l2, L2),
@@ -376,6 +630,7 @@ impl Input {
     fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new(INPUT);
         w.u32(self.generation);
+        w.u32(self.ack);
         w.f32(self.side);
         w.f32(self.forward);
         w.u16(self.held);
@@ -388,7 +643,7 @@ impl Input {
     }
 
     fn decode(r: &mut Reader) -> Option<Self> {
-        Some(Self { generation: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()? })
+        Some(Self { generation: r.u32()?, ack: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()? })
     }
 }
 
@@ -431,6 +686,14 @@ pub struct Net {
     pub loaded: u32,
     pub counts: (u8, u8, u8),
     pub outgoing: Option<Input>,
+    /// Host: events waiting for the joiner's acknowledgement, the next event's number and the
+    /// last number acknowledged. Joiner: the last event played, and the events received but not
+    /// yet played (step_sim plays them on the next tick).
+    events: std::collections::VecDeque<(u32, Event)>,
+    next_event: u32,
+    acked: u32,
+    pub applied: u32,
+    pub incoming: Vec<Event>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -460,11 +723,35 @@ impl Net {
         *self = Self { disc: self.disc, status: status.to_string(), ..Default::default() };
     }
 
-    /// Host: the state after a tick, sent to the joiner.
+    /// Host: the state after a tick, sent to the joiner with the events not yet acknowledged
+    /// (at most 96, oldest first).
     pub fn send_state(&mut self, s: &State) {
         if self.role == Role::Host && self.peer.is_some() {
+            let acked = self.acked;
+            while self.events.front().is_some_and(|e| e.0 <= acked) {
+                self.events.pop_front();
+            }
+            let mut s = s.clone();
+            s.events = self.events.iter().take(96).cloned().collect();
+            if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && s.tick % 300 == 0 {
+                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting", s.tick, self.next_event, self.acked, self.events.len());
+            }
             let bytes = s.encode();
             self.send(&bytes);
+        }
+    }
+
+    /// Host: an event for the joiner (kept while a joiner is in; at most 4,000 waiting, the
+    /// oldest dropped).
+    pub fn push_event(&mut self, e: Event) {
+        if self.role != Role::Host || self.peer.is_none() {
+            return;
+        }
+        self.next_event += 1;
+        let n = self.next_event;
+        self.events.push_back((n, e));
+        if self.events.len() > 4000 {
+            self.events.pop_front();
         }
     }
 
@@ -635,6 +922,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     if i.generation == net.generation {
                         net.welcome = None;
                     }
+                    net.acked = net.acked.max(i.ack);
                     net.remote = Some(i);
                 }
             }
@@ -672,7 +960,14 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             }
             (Role::Join, STATE) if net.target == Some(from) => {
                 net.last_heard = Some(now);
-                if let Some(s) = State::decode(&mut r) {
+                if let Some(mut s) = State::decode(&mut r) {
+                    // The host's events in order, each once (a gap waits for the resend).
+                    for (n, e) in std::mem::take(&mut s.events) {
+                        if n == net.applied + 1 {
+                            net.applied = n;
+                            net.incoming.push(e);
+                        }
+                    }
                     // A newer world (a later welcome) restarts the host's ticks.
                     if net.state.as_ref().is_none_or(|old| (s.generation, s.tick) >= (old.generation, old.tick)) {
                         net.state = Some(s);
@@ -779,6 +1074,8 @@ impl crate::play::Play {
                 labels: self.box_labels.clone(),
             }),
             cut: self.cut.filter(|c| c.state != 0 && c.last.is_some()).map(|_| self.view()),
+            events: Vec::new(),
+            shots: self.shots.slots.iter().enumerate().filter_map(|(i, s)| Some((i as u8, (*s)?))).collect(),
         }
     }
 
@@ -842,6 +1139,13 @@ impl crate::play::Play {
             }
         }
         self.net_cut = s.cut;
+        // The host's shots in place of this side's.
+        self.shots.slots = Default::default();
+        for (i, sh) in &s.shots {
+            if let Some(slot) = self.shots.slots.get_mut(*i as usize) {
+                *slot = Some(*sh);
+            }
+        }
         self.state.flags = s.flags.iter().copied().collect();
         self.state.items = s.items.iter().copied().collect();
         self.state.neopoints = s.neopoints;
@@ -882,5 +1186,46 @@ pub fn type_address(menu: Option<Res<crate::menu_view::Menu>>, keys: Res<ButtonI
     }
     if keys.just_pressed(KeyCode::Backspace) {
         address.0.pop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use neopets_sim::sound::Request;
+
+    #[test]
+    fn state_with_events_round_trips() {
+        let s = State {
+            tick: 7,
+            generation: 2,
+            pack: 1,
+            events: vec![
+                (5, Event::Sound(Request::Play { id: 3, block: 9, cue: -1, volume: 1000, pan: Some(-20) })),
+                (6, Event::Sound(Request::Set { id: 3, volume: 10, pan: None })),
+                (7, Event::Sound(Request::Stop { id: 3 })),
+                (8, Event::Fx(neopets_sim::effect::Op::Add { handle: 4, def: Some(2), position: [1.0, 2.0, 3.0], frame: neopets_sim::effect::IDENTITY, state: 1, cull: None, scale: Some(0.5) })),
+                (9, Event::Fx(neopets_sim::effect::Op::Update { handle: 4, listener: Some(([0.0; 3], [0.0, 0.0, 1.0])) })),
+                (10, Event::Fx(neopets_sim::effect::Op::Release { handle: 4 })),
+            ],
+            shots: vec![(3, neopets_sim::projectile::Shot::remote(
+                neopets_sim::projectile::Setup { kind: 2, visual: 23, element: 1, owner: Some(77), start: [0.0; 3], velocity: [0.0, 0.0, 1.0], lifetime: 9, damage: 3.0, radius: 1.0, spin: 0.0, area_radius: 0.0, area_duration: 0, key: -1, ignore_world: false, status: (-1, 0, 0), effects: [-1; 6], trail: -1 },
+                [1.0; 3], [0.0, 0.0, 1.0], 5, false, true,
+            ))],
+            ..Default::default()
+        };
+        let bytes = s.encode();
+        let (kind, mut r) = Reader::open(&bytes).expect("header");
+        assert_eq!(kind, STATE);
+        assert_eq!(State::decode(&mut r), Some(s));
+    }
+
+    #[test]
+    fn input_round_trips_with_ack() {
+        let i = Input { generation: 4, ack: 99, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5 };
+        let bytes = i.encode();
+        let (kind, mut r) = Reader::open(&bytes).expect("header");
+        assert_eq!(kind, INPUT);
+        assert_eq!(Input::decode(&mut r), Some(i));
     }
 }

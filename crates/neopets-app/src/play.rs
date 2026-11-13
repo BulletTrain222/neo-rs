@@ -1503,6 +1503,8 @@ pub struct Play {
     pub coop_remote: bool,
     /// A joiner: the host's scripted camera view while one runs.
     pub net_cut: Option<([f32; 3], [f32; 3], [f32; 3], f32)>,
+    /// A joiner: the host's effect handles to this side's (net.rs events).
+    pub net_fx: HashMap<usize, usize>,
     /// The world the co-op step last saw (a change puts the other players beside player 1).
     coop_pack: u32,
     /// SPEC-0028 section 11: the atmosphere zone selection and this frame's output (the blend
@@ -2500,6 +2502,7 @@ impl Play {
             net_follow: false,
             coop_remote: false,
             net_cut: None,
+            net_fx: HashMap::new(),
             coop_pack: 0,
             atmos_sel: Default::default(),
             atmos_out: Default::default(),
@@ -11853,7 +11856,11 @@ impl Play {
         self.talk_prompt = false;
         self.book_prompt = false;
         if !self.dialogue_open && !self.buy_step() && !self.talk_step() && !self.catch_step() && !self.block_step() {
-            self.door_step();
+            // A joiner (net.rs) takes no doors of its own: the host's world changes arrive as
+            // welcomes.
+            if !self.net_follow {
+                self.door_step();
+            }
             // SPEC-0022 the idle list's Feed petpet (after the door prompt; a caption set
             // earlier in the pass stops it).
             if self.door_prompt.is_none() && !self.save_prompt {
@@ -19413,6 +19420,15 @@ impl Play {
     /// call runs one update, with the camera as the listener when `camera` is set. An index
     /// outside the table does nothing.
     fn start_placed(&mut self, pack: u32, slot: usize, camera: bool) {
+        // Online play (net.rs): the world's placed effects are each computer's own (neither
+        // sent to the joiner nor muted there).
+        let was = std::mem::replace(&mut self.effects.share.local, true);
+        let r = self.start_placed_own(pack, slot, camera);
+        self.effects.share.local = was;
+        r
+    }
+
+    fn start_placed_own(&mut self, pack: u32, slot: usize, camera: bool) {
         let table = self.effect_table.clone();
         // NEOPETS_SKIP_FX="a,b": these placed records are never started (diagnostic).
         if std::env::var("NEOPETS_SKIP_FX").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<usize>().ok() == Some(slot))) {
@@ -19430,6 +19446,15 @@ impl Play {
     /// definition, with the record's own cull kept when positive or -1. None for an index
     /// outside the table.
     fn placed_object(&mut self, pack: u32, slot: usize) -> Option<usize> {
+        // Online play (net.rs): the world's placed effects are each computer's own (neither
+        // sent to the joiner nor muted there).
+        let was = std::mem::replace(&mut self.effects.share.local, true);
+        let r = self.placed_object_own(pack, slot);
+        self.effects.share.local = was;
+        r
+    }
+
+    fn placed_object_own(&mut self, pack: u32, slot: usize) -> Option<usize> {
         if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
             return Some(h);
         }
@@ -19470,6 +19495,15 @@ impl Play {
     /// low byte) and that world's id; it is updated with the camera as the listener when the
     /// query passes and stopped when it fails.
     fn placed_zone_step(&mut self) {
+        // Online play (net.rs): the world's placed effects are each computer's own (neither
+        // sent to the joiner nor muted there).
+        let was = std::mem::replace(&mut self.effects.share.local, true);
+        let r = self.placed_zone_step_own();
+        self.effects.share.local = was;
+        r
+    }
+
+    fn placed_zone_step_own(&mut self) {
         let table = self.effect_table.clone();
         let (eye, focus) = (self.player.camera.eye, self.player.camera.focus);
         let listener = (eye, unit([focus[0] - eye[0], focus[1] - eye[1], focus[2] - eye[2]]));
@@ -19513,6 +19547,15 @@ impl Play {
     /// World reset of the placed effects (SPEC-0034 section 6): a world no longer resident
     /// drains and releases its started records.
     fn placed_release_step(&mut self) {
+        // Online play (net.rs): the world's placed effects are each computer's own (neither
+        // sent to the joiner nor muted there).
+        let was = std::mem::replace(&mut self.effects.share.local, true);
+        let r = self.placed_release_step_own();
+        self.effects.share.local = was;
+        r
+    }
+
+    fn placed_release_step_own(&mut self) {
         let table = self.effect_table.clone();
         let resident: Vec<u32> = [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).collect();
         self.placed_on.retain(|(p, _)| resident.contains(p));
@@ -19535,6 +19578,15 @@ impl Play {
     /// 404) is stopped, moved to a newly chosen save point and started again, updated every tick
     /// with the camera as the listener, and stopped when its world is left (region reset).
     fn save_glow_step(&mut self, moved_to: Option<usize>) {
+        // Online play (net.rs): the world's placed effects are each computer's own (neither
+        // sent to the joiner nor muted there).
+        let was = std::mem::replace(&mut self.effects.share.local, true);
+        let r = self.save_glow_step_own(moved_to);
+        self.effects.share.local = was;
+        r
+    }
+
+    fn save_glow_step_own(&mut self, moved_to: Option<usize>) {
         let table = self.effect_table.clone();
         let pack = self.world.pack;
         if let Some((p, objects)) = self.save_glow {

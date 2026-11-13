@@ -1772,13 +1772,46 @@ fn step_sim(
                 c.2 = c.2.wrapping_add(input.square as u8);
                 let counts = netr.counts;
                 let generation = netr.loaded;
-                netr.outgoing = Some(net::Input::from_hero(&input, &pad, generation, counts));
+                let ack = netr.applied;
+                netr.outgoing = Some(net::Input::from_hero(&input, &pad, generation, counts, ack));
+                let sounds = play.play.sound.requests.len();
+                play.play.effects.share.mute = true;
+                play.play.effects.share.log = None;
                 play.play.tick(&neopets_sim::hero::HeroInput::default(), neopets_sim::camera::CameraPad::default());
+                // The joiner hears the host's sounds, not its own game's (net.rs events).
+                // NEOPETS_TRACE_NETEV: the events played so far, every 300 ticks (diagnostic).
+                if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
+                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds);
+                }
+                if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
+                    let p = &play.play;
+                    println!("NETFX joiner tick {}: {} particles, {} spawners, {} objects, {} shots", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count());
+                }
+                play.play.sound.requests.truncate(sounds);
+                let table = play.play.effect_table.clone();
+                for e in std::mem::take(&mut netr.incoming) {
+                    match e {
+                        net::Event::Sound(r) => play.play.sound.requests.push(r),
+                        net::Event::Fx(op) => {
+                            let p = &mut play.play;
+                            p.effects.apply(&table, &op, &mut p.net_fx, &mut p.rng);
+                        }
+                    }
+                }
                 // Only a state of the world loaded here (one from before a world change waits).
                 if let Some(s) = netr.state.clone().filter(|s| s.generation == netr.loaded) {
                     play.play.apply_net_state(&s);
                 }
             } else {
+                let sounds = play.play.sound.requests.len();
+                // Online, hosting: the gameplay effects are logged for the joiner (net.rs).
+                let hosting = netr.role == net::Role::Host && netr.peer.is_some();
+                play.play.effects.share.mute = false;
+                if hosting {
+                    play.play.effects.share.log.get_or_insert_with(Vec::new);
+                } else {
+                    play.play.effects.share.log = None;
+                }
                 play.play.tick(&input, pad);
                 // Local co-op (coop.rs): player 2's tick after player 1's; online, player 2's input
                 // comes from the joiner (net.rs).
@@ -1799,8 +1832,18 @@ fn step_sim(
                         let pack = play.play.world.pack;
                         netr.rewelcome(&slot, pack);
                     }
+                    for r in play.play.sound.requests[sounds.min(play.play.sound.requests.len())..].to_vec() {
+                        netr.push_event(net::Event::Sound(r));
+                    }
+                    for op in play.play.effects.share.log.as_mut().map(std::mem::take).unwrap_or_default() {
+                        netr.push_event(net::Event::Fx(op));
+                    }
                     let s = play.play.net_state(netr.generation);
                     netr.send_state(&s);
+                    if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
+                        let p = &play.play;
+                        println!("NETFX host tick {}: {} particles, {} spawners, {} objects, {} shots", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count());
+                    }
                 }
             }
             // A save point's Square press opens the save screen (a direct set of record 18).
