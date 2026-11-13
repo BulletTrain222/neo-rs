@@ -1774,7 +1774,8 @@ fn step_sim(
                 let generation = netr.loaded;
                 netr.outgoing = Some(net::Input::from_hero(&input, &pad, generation, counts));
                 play.play.tick(&neopets_sim::hero::HeroInput::default(), neopets_sim::camera::CameraPad::default());
-                if let Some(s) = netr.state.clone() {
+                // Only a state of the world loaded here (one from before a world change waits).
+                if let Some(s) = netr.state.clone().filter(|s| s.generation == netr.loaded) {
                     play.play.apply_net_state(&s);
                 }
             } else {
@@ -1782,6 +1783,10 @@ fn step_sim(
                 // Local co-op (coop.rs): player 2's tick after player 1's; online, player 2's input
                 // comes from the joiner (net.rs).
                 play.play.coop_remote = netr.role == net::Role::Host && netr.peer.is_some();
+                // A game started afresh while hosting (a developer warp) brings player 2 back.
+                if play.play.coop_remote && play.play.others.is_empty() {
+                    play.play.add_player();
+                }
                 if !play.play.others.is_empty() {
                     let p2 = coop.take();
                     play.play.coop_step(&[p2]);

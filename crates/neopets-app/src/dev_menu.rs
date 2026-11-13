@@ -551,7 +551,7 @@ pub fn dev_mouse(sliders: Query<(&Interaction, &bevy::ui::RelativeCursorPosition
 }
 
 /// The menu's keys and actions, before the game reads its input.
-pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bindings: Res<crate::bindings::Bindings>, page: Res<crate::controls_page::ControlsPage>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, mut frames: Local<u32>) {
+pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bindings: Res<crate::bindings::Bindings>, page: Res<crate::controls_page::ControlsPage>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, (mut frames, mut warped): (Local<u32>, Local<bool>)) {
     let _span = crate::perf::span("dev_input");
     let Some(mut play) = play else { return };
     if dev.picking || dev.debug.note_open {
@@ -576,11 +576,21 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
     // the performance overlay, warp to world pack N and/or set speed step K (0 paused, 3 normal) once play has run a few frames
     // (diagnostic, for screenshots); with "free" the camera also backs up and rises.
     *frames += 1;
+    // "warpat=T": the warp once play has reached tick T instead (for example after an online join).
+    if *frames > 30 && !*warped {
+        let v = std::env::var("NEOPETS_DEV").unwrap_or_default();
+        if v.split(',').find_map(|t| t.trim().strip_prefix("warpat=")?.parse::<u64>().ok()).is_some_and(|t| play.play.ticks >= t) {
+            dev.warp = v.split(',').find_map(|t| t.trim().strip_prefix("warp=")?.parse().ok());
+            *warped = true;
+        }
+    }
     if *frames == 30 {
         let v = std::env::var("NEOPETS_DEV").unwrap_or_default();
         dev.open |= v.contains("menu");
         perf.on |= v.contains("perf");
-        dev.warp = v.split(',').find_map(|t| t.trim().strip_prefix("warp=")?.parse().ok());
+        if !v.contains("warpat=") {
+            dev.warp = v.split(',').find_map(|t| t.trim().strip_prefix("warp=")?.parse().ok());
+        }
         // "roberta": select Roberta (the developer menu's hero switch).
         if v.split(',').any(|t| t.trim() == "roberta") && play.play.hero_index == 0 {
             play.play.trace_select_hero(1);

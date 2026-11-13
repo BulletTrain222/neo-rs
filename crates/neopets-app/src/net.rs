@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 1;
+const PROTOCOL: u16 = 2;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -177,6 +177,24 @@ pub struct State {
     pub flags: Vec<u16>,
     pub items: Vec<(u16, u32)>,
     pub neopoints: i32,
+    /// The talk box: open, its text and page, the reveal, choice mode, the speaker's name and
+    /// colour and the box labels (the joiner shows the host's, not its own).
+    pub talk: Option<Talk>,
+    /// A scripted camera running on the host: its view (eye, forward, up, focal).
+    pub cut: Option<([f32; 3], [f32; 3], [f32; 3], f32)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Talk {
+    pub open: bool,
+    pub text: Vec<u8>,
+    pub start: u32,
+    pub end: u32,
+    pub p: f32,
+    pub choice: bool,
+    pub speaker: Vec<u8>,
+    pub colour: [u8; 3],
+    pub labels: (Vec<u8>, Vec<u8>),
 }
 
 fn write_hero(w: &mut Writer, h: &HeroState) {
@@ -229,6 +247,32 @@ impl State {
             w.u32(n);
         }
         w.i32(self.neopoints);
+        match &self.talk {
+            Some(t) => {
+                w.u8(1);
+                w.u8(t.open as u8);
+                w.bytes(&t.text);
+                w.u32(t.start);
+                w.u32(t.end);
+                w.f32(t.p);
+                w.u8(t.choice as u8);
+                w.bytes(&t.speaker);
+                w.0.extend_from_slice(&t.colour);
+                w.bytes(&t.labels.0);
+                w.bytes(&t.labels.1);
+            }
+            None => w.u8(0),
+        }
+        match self.cut {
+            Some((e, f, u, focal)) => {
+                w.u8(1);
+                w.v3(e);
+                w.v3(f);
+                w.v3(u);
+                w.f32(focal);
+            }
+            None => w.u8(0),
+        }
         w.0
     }
 
@@ -247,7 +291,26 @@ impl State {
         let flags = (0..n.min(65536)).map(|_| r.u16()).collect::<Option<Vec<_>>>()?;
         let n = r.u32()? as usize;
         let items = (0..n.min(65536)).map(|_| Some((r.u16()?, r.u32()?))).collect::<Option<Vec<_>>>()?;
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints: r.i32()? })
+        let neopoints = r.i32()?;
+        let talk = match r.u8()? {
+            1 => Some(Talk {
+                open: r.u8()? != 0,
+                text: r.bytes()?.to_vec(),
+                start: r.u32()?,
+                end: r.u32()?,
+                p: r.f32()?,
+                choice: r.u8()? != 0,
+                speaker: r.bytes()?.to_vec(),
+                colour: [r.u8()?, r.u8()?, r.u8()?],
+                labels: (r.bytes()?.to_vec(), r.bytes()?.to_vec()),
+            }),
+            _ => None,
+        };
+        let cut = match r.u8()? {
+            1 => Some((r.v3()?, r.v3()?, r.v3()?, r.f32()?)),
+            _ => None,
+        };
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut })
     }
 }
 
@@ -348,6 +411,8 @@ pub struct Net {
     /// Asked for by the Multiplayer page: host, join this address, or leave.
     pub request: Option<Request>,
     last_heard: Option<Instant>,
+    /// When the last hello or welcome went out (each is resent until answered; the states and
+    /// inputs sent every tick do not count).
     last_sent: Option<Instant>,
     /// The disc's identity (a hash of the verified boot program), worked out once.
     disc: Option<u64>,
@@ -384,7 +449,6 @@ impl Net {
     fn send(&mut self, bytes: &[u8]) {
         if let (Some(s), Some(p)) = (self.socket.as_ref(), self.peer.or(self.target)) {
             let _ = s.send_to(bytes, p);
-            self.last_sent = Some(Instant::now());
         }
     }
 
@@ -420,6 +484,8 @@ impl Net {
         self.welcome_pack = pack;
         self.generation += 1;
         self.welcome = Some(welcome(self.generation, slot));
+        self.last_sent = None;
+        info!("net: world {pack}, welcome {}", self.generation);
     }
 }
 
@@ -452,9 +518,11 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             net.disc = Some(h.finish());
         }
     }
-    // NEOPETS_NET_HOST=1 / NEOPETS_NET_JOIN=address (diagnostic): host or join once play has run
-    // a second.
-    if net.role == Role::Off && net.request.is_none() && play.as_ref().is_some_and(|p| p.play.ticks > 60) {
+    // NEOPETS_NET_HOST=1 / NEOPETS_NET_JOIN=address (diagnostic): host once play has run a
+    // second; join then too, or five seconds after start (from the title screen).
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let started = START.get_or_init(Instant::now).elapsed() > Duration::from_secs(5) && std::env::var_os("NEOPETS_NET_HOST").is_none();
+    if net.role == Role::Off && net.request.is_none() && (started || play.as_ref().is_some_and(|p| p.play.ticks > 60)) {
         static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if !ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
             if std::env::var_os("NEOPETS_NET_HOST").is_some() {
@@ -593,6 +661,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 if generation != net.loaded && bytes.len() == neopets_sim::save::SLOT_SIZE {
                     net.load = Some(neopets_sim::save::Slot(bytes.to_vec()));
                     net.loaded = generation;
+                    net.state = None;
                     net.status = format!("Joined {from}.");
                     info!("net: welcome {generation} from {from}");
                 }
@@ -604,7 +673,8 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             (Role::Join, STATE) if net.target == Some(from) => {
                 net.last_heard = Some(now);
                 if let Some(s) = State::decode(&mut r) {
-                    if net.state.as_ref().is_none_or(|old| s.tick >= old.tick) {
+                    // A newer world (a later welcome) restarts the host's ticks.
+                    if net.state.as_ref().is_none_or(|old| (s.generation, s.tick) >= (old.generation, old.tick)) {
                         net.state = Some(s);
                     }
                 }
@@ -620,9 +690,11 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         w.u64(net.disc.unwrap_or(0));
         let bytes = w.0;
         net.send(&bytes);
+        net.last_sent = Some(now);
     }
     if let Some(w) = net.welcome.clone().filter(|_| due && net.role == Role::Host) {
         net.send(&w);
+        net.last_sent = Some(now);
     }
     if net.role == Role::Join {
         if let Some(i) = net.outgoing.take() {
@@ -695,6 +767,18 @@ impl crate::play::Play {
             flags: self.state.flags.iter().copied().collect(),
             items,
             neopoints: self.state.neopoints,
+            talk: (self.dialogue_open || self.textbox.open).then(|| Talk {
+                open: self.textbox.open,
+                text: self.textbox.text.clone(),
+                start: self.textbox.start as u32,
+                end: self.textbox.end as u32,
+                p: self.textbox.p,
+                choice: self.textbox.choice,
+                speaker: self.speaker.0.clone(),
+                colour: self.speaker.1,
+                labels: self.box_labels.clone(),
+            }),
+            cut: self.cut.filter(|c| c.state != 0 && c.last.is_some()).map(|_| self.view()),
         }
     }
 
@@ -739,6 +823,25 @@ impl crate::play::Play {
                 }
             }
         }
+        // The host's talk box in place of this side's own, and its scripted camera.
+        match &s.talk {
+            Some(t) => {
+                self.dialogue_open = true;
+                self.textbox.open = t.open;
+                self.textbox.text = t.text.clone();
+                self.textbox.start = t.start as usize;
+                self.textbox.end = t.end as usize;
+                self.textbox.p = t.p;
+                self.textbox.choice = t.choice;
+                self.speaker = (t.speaker.clone(), t.colour);
+                self.box_labels = t.labels.clone();
+            }
+            None => {
+                self.dialogue_open = false;
+                self.textbox.open = false;
+            }
+        }
+        self.net_cut = s.cut;
         self.state.flags = s.flags.iter().copied().collect();
         self.state.items = s.items.iter().copied().collect();
         self.state.neopoints = s.neopoints;

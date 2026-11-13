@@ -1501,6 +1501,8 @@ pub struct Play {
     /// player 2 is on the other computer (no split screen here).
     pub net_follow: bool,
     pub coop_remote: bool,
+    /// A joiner: the host's scripted camera view while one runs.
+    pub net_cut: Option<([f32; 3], [f32; 3], [f32; 3], f32)>,
     /// The world the co-op step last saw (a change puts the other players beside player 1).
     coop_pack: u32,
     /// SPEC-0028 section 11: the atmosphere zone selection and this frame's output (the blend
@@ -2497,6 +2499,7 @@ impl Play {
             coop_lost: false,
             net_follow: false,
             coop_remote: false,
+            net_cut: None,
             coop_pack: 0,
             atmos_sel: Default::default(),
             atmos_out: Default::default(),
@@ -4794,7 +4797,8 @@ impl Play {
     }
 
     pub fn view(&self) -> ([f32; 3], [f32; 3], [f32; 3], f32) {
-        let (eye, forward, up, focal) = match self.cut.filter(|c| c.state != 0).and_then(|c| c.last) {
+        // A joiner (net.rs) shows the host's cameras, not its own game's scripted ones.
+        let (eye, forward, up, focal) = match self.cut.filter(|c| c.state != 0 && !self.net_follow).and_then(|c| c.last) {
             Some(p) => match self.cut_target.and_then(|(pack, t)| self.target_anchor(pack, t)) {
                 // The hero's anchor is taken at half its height and an object's at its origin
                 // (the anchors are not given).
@@ -4804,7 +4808,9 @@ impl Play {
                 }
                 None => (p.eye, p.rows[2], p.rows[1], p.focal),
             },
-            // A joiner (net.rs) looks through player 2's follow camera.
+            // A joiner (net.rs) sees the host's scripted camera while one runs, else looks
+            // through player 2's follow camera.
+            None if self.net_follow && self.net_cut.is_some() => self.net_cut.unwrap_or_default(),
             None if self.net_follow && !self.others.is_empty() => {
                 let c = &self.others[0].camera;
                 let (f, e) = (c.focus, c.eye);
