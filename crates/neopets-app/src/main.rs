@@ -2945,7 +2945,7 @@ fn sync_worlds(
                                 println!("env pass 0 part {i}: middle ({:.0}, {:.0}, {:.0}), {} vertices", c[0], c[1], c[2], q.len());
                             }
                             let image = env_textures.entry(t).or_insert_with(|| images.add(model_texture(&m.textures[t]))).clone();
-                            commands.spawn((Mesh3d(mesh), MeshMaterial3d(pass1_materials.add(pass1::env_base(image))), Transform::IDENTITY, *part))
+                            commands.spawn((Mesh3d(mesh), MeshMaterial3d(pass1_materials.add(pass1::env_base_for(image, m.parts[i].alpha))), Transform::IDENTITY, *part))
                         }
                         None => commands.spawn((Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::IDENTITY, *part)),
                     };
@@ -4392,7 +4392,7 @@ fn sync_characters(
                     let t = q.texture?;
                     let tex = c.model.textures.get(t)?;
                     let image = env_textures.entry(t).or_insert_with(|| images.add(model_texture(tex))).clone();
-                    Some((i, pass1_materials.add(pass1::env_base(image))))
+                    Some((i, pass1_materials.add(pass1::env_base_for(image, q.alpha))))
                 })
                 .collect();
             let mut list = Vec::new();

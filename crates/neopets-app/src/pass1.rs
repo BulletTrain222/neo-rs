@@ -87,6 +87,19 @@ pub fn env_base(texture: Handle<Image>) -> Pass1Material {
     Pass1Material { params: Pass1Params { mode: Vec4::new(1.0, 3.0, 1.0, 0.0), offset: Vec4::ZERO }, texture, blend: false, mask: true }
 }
 
+/// The material of an environment-mapped pass 0 by its ALPHA register: an additive one (0x48,
+/// 0x58, 0x68 with FIX; SPEC-0003 ALPHA) adds over what is below, as a pass 1 does, instead of
+/// the opaque `env_base`. 1023's moat part 1335 (ALPHA 0x58, dark vertex colours) drew as a
+/// dark grey sheet over the blue water (user reports 137 and 138). NEOPETS_ENV_BASE_OPAQUE
+/// keeps every one opaque (diagnostic).
+pub fn env_base_for(texture: Handle<Image>, alpha: Option<u64>) -> Pass1Material {
+    let (kind, fix) = blend_of(alpha);
+    if alpha.is_none() || kind >= 2 || std::env::var_os("NEOPETS_ENV_BASE_OPAQUE").is_some() {
+        return env_base(texture);
+    }
+    Pass1Material { params: Pass1Params { mode: Vec4::new(1.0, kind as f32, fix, 0.0), offset: Vec4::ZERO }, texture, blend: false, mask: false }
+}
+
 /// The blend kind and FIX scale of an ALPHA register value (fields A, B, C, D in bits 0 to 7,
 /// FIX in bits 32 to 39): (kind, fix) with kind 0 add by source alpha, 1 add by FIX, 2 blend.
 pub fn blend_of(alpha: Option<u64>) -> (u32, f32) {

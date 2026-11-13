@@ -553,7 +553,7 @@ pub fn spawn(
             // (pass1.rs), its texture shared per model texture.
             Some(t) => {
                 let image = env_textures.entry(t).or_insert_with(|| images.add(model_texture(&m.textures[t]))).clone();
-                commands.spawn((Mesh3d(mesh), MeshMaterial3d(pass1_materials.add(pass1::env_base(image))), Transform::IDENTITY, part))
+                commands.spawn((Mesh3d(mesh), MeshMaterial3d(pass1_materials.add(pass1::env_base_for(image, p.alpha))), Transform::IDENTITY, part))
             }
             None if scrolling => {
                 let own = materials.add(StandardMaterial { base_color_texture: Some(images.add(model_texture(&m.textures[p.texture.unwrap_or(0)]))), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, ..default() });

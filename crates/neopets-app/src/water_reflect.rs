@@ -62,11 +62,23 @@ pub struct MirrorCam;
 struct Checked;
 
 /// A flat water surface: its height and its extent across (centre x, z and radius).
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone)]
 struct Surface {
     height: f32,
     centre: Vec2,
     radius: f32,
+    /// Its vertices in world space: a long water part can climb along its length (1023's moat
+    /// part 1457 runs 600 units and rises from 22.7 to 25.0), so the mirror takes the height of
+    /// the vertex nearest the camera (user reports 137 and 138: the mirror 2 units under the
+    /// water there saw the ground's underside, and the water drew black).
+    points: Vec<Vec3>,
+}
+
+impl Surface {
+    /// The water's height near a point across.
+    fn height_near(&self, at: Vec2) -> f32 {
+        self.points.iter().min_by(|a, b| Vec2::new(a.x, a.z).distance_squared(at).total_cmp(&Vec2::new(b.x, b.z).distance_squared(at))).map_or(self.height, |p| p.y)
+    }
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -174,7 +186,7 @@ fn find_water(
         // lift the mirror off the water.
         let mut heights: Vec<f32> = world.iter().map(|q| q.y).collect();
         heights.sort_by(f32::total_cmp);
-        commands.entity(e).insert(Surface { height: heights[heights.len() / 2], centre: Vec2::new(centre.x, centre.z), radius: (Vec2::new(hi.x - lo.x, hi.z - lo.z) / 2.0).length() });
+        commands.entity(e).insert(Surface { height: heights[heights.len() / 2], centre: Vec2::new(centre.x, centre.z), radius: (Vec2::new(hi.x - lo.x, hi.z - lo.z) / 2.0).length(), points: world.clone() });
         // The twin draws straight after its water: the see-through parts keep the original's
         // order (draw_order.rs), whose even ranks leave the next odd one for a part's second pass.
         let mut twin = commands.spawn((Mesh3d(mesh.0.clone()), MeshMaterial3d(mat), Transform::IDENTITY, RenderLayers::layer(LAYER), bevy::light::NotShadowCaster, ChildOf(e), Twin));
@@ -285,7 +297,7 @@ fn place_mirror(
         mc.is_active = true;
     }
     show_twins(true);
-    let h = s.height;
+    let h = if std::env::var_os("NEOPETS_WATER_ONE_HEIGHT").is_some() { s.height } else { s.height_near(Vec2::new(eye.x, eye.z)) };
     // NEOPETS_TRACE_WATER: the mirror's surface and size about once a second (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_WATER").is_some() && (eye.x * 7.0 + eye.z).fract().abs() < 1.0 {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

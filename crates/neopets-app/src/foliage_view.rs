@@ -193,7 +193,7 @@ pub fn spawn<C: Component + Copy>(
                                 let t = q.texture?;
                                 let tex = model.textures.get(t)?;
                                 let image = textures.entry(t).or_insert_with(|| images.add(crate::model_texture(tex))).clone();
-                                Some((i, pass1_materials.add(crate::pass1::env_base(image))))
+                                Some((i, pass1_materials.add(crate::pass1::env_base_for(image, q.alpha))))
                             })
                             .collect();
                         if std::env::var_os("NEOPETS_TRACE_PASS1").is_some() && (!second.is_empty() || !env.is_empty()) {
