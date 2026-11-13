@@ -1570,7 +1570,8 @@ fn step_sim(
             dev.toast = Some((n, 300));
         }
         if netr.following() && netr.peer_paused && dev.toast.as_ref().is_none_or(|t| t.1 < 20) {
-            dev.toast = Some(("The host paused the game.".into(), 20));
+            let line = if netr.peer_page == 2 { "Game over. The host chooses what happens next." } else { "The host paused the game." };
+            dev.toast = Some((line.into(), 20));
         }
         let net_ended = std::mem::take(&mut netr.ended);
         // Online (net.rs): the host's game, sent at joining and at each of its world changes.
@@ -1798,6 +1799,7 @@ fn step_sim(
                 netr.outgoing = Some(net::Input::from_hero(&input, &pad, generation, counts, ack));
                 let sounds = play.play.sound.requests.len();
                 let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());
+                let movies = play.play.state.movie_queue.len();
                 play.play.effects.share.mute = true;
                 play.play.effects.share.log = None;
                 play.play.tick(&neopets_sim::hero::HeroInput::default(), neopets_sim::camera::CameraPad::default());
@@ -1809,6 +1811,7 @@ fn step_sim(
                 play.play.sound.requests.truncate(sounds);
                 play.play.stinger_requests.truncate(clips.0);
                 play.play.emote_requests.truncate(clips.1);
+                play.play.state.movie_queue.truncate(movies);
                 let table = play.play.effect_table.clone();
                 for e in std::mem::take(&mut netr.incoming) {
                     match e {
@@ -1819,6 +1822,7 @@ fn step_sim(
                         }
                         net::Event::Stinger(k) => play.play.stinger_requests.push(k),
                         net::Event::Emote(b, s, l) => play.play.emote_requests.push((b, s, l)),
+                        net::Event::Movie(m) => play.play.state.movie_queue.push(m),
                     }
                 }
                 // Only a state of the world loaded here (one from before a world change waits).
@@ -1832,6 +1836,7 @@ fn step_sim(
             } else {
                 let sounds = play.play.sound.requests.len();
                 let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());
+                let movies = play.play.state.movie_queue.len();
                 // Online, hosting: the gameplay effects are logged for the joiner (net.rs).
                 let hosting = netr.role == net::Role::Host && netr.peer.is_some();
                 play.play.effects.share.mute = false;
@@ -1854,11 +1859,12 @@ fn step_sim(
                 }
                 // Online, hosting: the state after this tick, and a new welcome after a world change.
                 if play.play.coop_remote {
-                    if play.play.world.pack != netr.welcome_pack {
+                    // A world change, or a new game or load here (Continue after a game over).
+                    if play.play.world.pack != netr.welcome_pack || play.play.generation != netr.welcome_game {
                         let mut slot = neopets_sim::save::Slot::empty();
                         play.play.write_slot(&mut slot, b"NETPLAY");
-                        let pack = play.play.world.pack;
-                        netr.rewelcome(&slot, pack);
+                        let (pack, game) = (play.play.world.pack, play.play.generation);
+                        netr.rewelcome(&slot, pack, game);
                     }
                     for r in play.play.sound.requests[sounds.min(play.play.sound.requests.len())..].to_vec() {
                         netr.push_event(net::Event::Sound(r));
@@ -1871,6 +1877,9 @@ fn step_sim(
                     }
                     for (b, s, l) in play.play.emote_requests[clips.1.min(play.play.emote_requests.len())..].to_vec() {
                         netr.push_event(net::Event::Emote(b, s, l));
+                    }
+                    for m in play.play.state.movie_queue[movies.min(play.play.state.movie_queue.len())..].to_vec() {
+                        netr.push_event(net::Event::Movie(m));
                     }
                     let s = play.play.net_state(netr.generation);
                     netr.send_state(&s);

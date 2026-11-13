@@ -123,7 +123,7 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Talk boxes | Player 1 opens and answers; both see the box | [x] | [x] shown on the joiner |
 | Talk box advance | Default: either player can press Cross to go on (not choose) | [ ] | [ ] |
 | Cutscenes (scripted camera, bars, fades) | Both watch; player 2 holds still | [x] | [x] camera and bars; [ ] fades |
-| Movies (FMV) | Both watch; default: player 1 skips for both | [x] | [ ] joiner plays the host's movie |
+| Movies (FMV) | Both watch; one PC: player 1 skips; online each side skips its own | [x] | [?] the host's movies are events (not seen in play) |
 | Shops | Player 1 drives; shared purse | [x] | [ ] joiner sees the shop page |
 | Neopoints, items, keys, quest items | One shared bag | [x] | [x] sent each state |
 | Health and magic pickups | Go to whoever touches them | [x] | [x] host decides |
@@ -140,7 +140,7 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Messages ("Got X", notices) | Shown to both | [x] | [x] the level message line |
 | Petpet | Follows player 1 | [x] | [ ] joiner draws it |
 | Saving | The host's save only; default: the joiner keeps none, and sees "Saved" | [x] | [ ] notice |
-| Game over and Continue | Only when both are down (or one, with revive off); player 1 chooses | [x] | [ ] joiner follows the reload |
+| Game over and Continue | Only when both are down (or one, with revive off); player 1 chooses | [x] | [?] joiner told "Game over", follows the reload (restart tested by warp) |
 | Pause, item screen, map | Default: either player opens it; on one PC the game pauses for both; online the host's pause pauses both, the joiner's pauses only the joiner (player 2 lets go) | [ ] player 2 | [x] pause; [ ] item screen and map for player 2 |
 | Game options (text speed, difficulty) | The host's | [x] | [x] |
 | Time, atmosphere, lighting | From the world | [x] | [x] |

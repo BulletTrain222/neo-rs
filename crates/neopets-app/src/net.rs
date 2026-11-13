@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 4;
+const PROTOCOL: u16 = 5;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -297,6 +297,8 @@ pub enum Event {
     /// A stinger clip, and an emote clip (bank, start, length).
     Stinger(i32),
     Emote(u32, u32, u32),
+    /// A movie the host's scripts queued.
+    Movie(u16),
 }
 
 fn write_frame(w: &mut Writer, f: &[[f32; 3]; 3]) {
@@ -506,6 +508,10 @@ impl Event {
                 w.u8(20);
                 w.i32(*k);
             }
+            Event::Movie(m) => {
+                w.u8(22);
+                w.u16(*m);
+            }
             Event::Emote(bank, start, len) => {
                 w.u8(21);
                 w.u32(*bank);
@@ -524,6 +530,7 @@ impl Event {
             k @ 10..=16 => Event::Fx(read_op(k, r)?),
             20 => Event::Stinger(r.i32()?),
             21 => Event::Emote(r.u32()?, r.u32()?, r.u32()?),
+            22 => Event::Movie(r.u16()?),
             _ => return None,
         })
     }
@@ -791,6 +798,8 @@ pub struct Net {
     pub remote: Option<Input>,
     seen: Input,
     pub welcome_pack: u32,
+    /// The host's game (`Play::generation`, new at each load or new game) at the last welcome.
+    pub welcome_game: u32,
     pub generation: u32,
     welcome: Option<Vec<u8>>,
     /// Joiner: the host's address, the slot to load, the latest state, the generation loaded,
@@ -815,6 +824,8 @@ pub struct Net {
     pub notice: Option<String>,
     pub ended: bool,
     pub peer_paused: bool,
+    /// The other side's page: 0 in play, 1 a menu (paused), 2 game over.
+    pub peer_page: u8,
     last_any: Option<Instant>,
 }
 
@@ -887,11 +898,12 @@ impl Net {
     }
 
     /// Host: a new welcome (the joiner reloads) when the host's world changed.
-    pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32) {
-        if self.role != Role::Host || self.peer.is_none() || pack == self.welcome_pack {
+    pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32, game: u32) {
+        if self.role != Role::Host || self.peer.is_none() || (pack == self.welcome_pack && game == self.welcome_game) {
             return;
         }
         self.welcome_pack = pack;
+        self.welcome_game = game;
         self.generation += 1;
         self.welcome = Some(welcome(self.generation, slot));
         self.last_sent = None;
@@ -1032,6 +1044,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     coop.pad = None;
                     net.generation += 1;
                     net.welcome_pack = p.play.world.pack;
+                    net.welcome_game = p.play.generation;
                     let mut slot = neopets_sim::save::Slot::empty();
                     p.play.write_slot(&mut slot, b"NETPLAY");
                     net.welcome = Some(welcome(net.generation, &slot));
@@ -1075,8 +1088,10 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             }
             (_, PING) if net.peer == Some(from) || net.target == Some(from) => {
                 net.last_heard = Some(now);
-                let paused = r.u8().unwrap_or(0) != 0;
+                let page = r.u8().unwrap_or(0);
+                let paused = page != 0;
                 net.peer_paused = paused;
+                net.peer_page = page;
                 // The joiner paused: player 2 lets go of the controls (the presses counted so
                 // far stay counted).
                 if paused && net.role == Role::Host {
@@ -1146,9 +1161,13 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     let quiet = net.last_any.is_none_or(|t| now.duration_since(t) > Duration::from_millis(200));
     let linked = (net.role == Role::Host && net.peer.is_some()) || (net.role == Role::Join && net.loaded > 0);
     if quiet && linked {
-        let paused = menu.as_ref().is_some_and(|m| m.flow.current != crate::menus::PLAY);
+        let page = match menu.as_ref().map(|m| m.flow.current) {
+            Some(crate::menus::PLAY) | None => 0,
+            Some(crate::menus::GAME_OVER) => 2,
+            Some(_) => 1,
+        };
         let mut w = Writer::new(PING);
-        w.u8(paused as u8);
+        w.u8(page);
         let bytes = w.0;
         net.send(&bytes);
     }
