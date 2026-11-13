@@ -38,6 +38,9 @@ const REFUSE: u8 = 3;
 const INPUT: u8 = 4;
 const STATE: u8 = 5;
 const BYE: u8 = 6;
+/// Sent when nothing else has gone out for 200 ms (a paused game sends no states or inputs), with
+/// whether this side is paused.
+const PING: u8 = 7;
 
 /// This build's identity, checked at joining: the crate version and the build's own number.
 fn build_id() -> String {
@@ -806,6 +809,13 @@ pub struct Net {
     acked: u32,
     pub applied: u32,
     pub incoming: Vec<Event>,
+    /// A line for the player (joined, left, lost), shown once in play; whether a joiner's game
+    /// ended (it goes back to the title screen); whether the other side is paused; when anything
+    /// last went out.
+    pub notice: Option<String>,
+    pub ended: bool,
+    pub peer_paused: bool,
+    last_any: Option<Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -824,6 +834,7 @@ impl Net {
     fn send(&mut self, bytes: &[u8]) {
         if let (Some(s), Some(p)) = (self.socket.as_ref(), self.peer.or(self.target)) {
             let _ = s.send_to(bytes, p);
+            self.last_any = Some(Instant::now());
         }
     }
 
@@ -832,7 +843,7 @@ impl Net {
             let w = Writer::new(BYE);
             self.send(&w.0);
         }
-        *self = Self { disc: self.disc, status: status.to_string(), ..Default::default() };
+        *self = Self { disc: self.disc, status: status.to_string(), notice: self.notice.take(), ended: self.ended, ..Default::default() };
     }
 
     /// Host: the state after a tick, sent to the joiner with the events not yet acknowledged
@@ -905,7 +916,7 @@ pub fn local_address() -> Option<std::net::IpAddr> {
 
 /// Each frame: requests from the Multiplayer page, the socket's messages, joining, timeouts.
 #[allow(clippy::too_many_arguments)]
-pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut archive: Option<ResMut<crate::Archive>>, mut coop: ResMut<crate::coop::Coop>) {
+pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut archive: Option<ResMut<crate::Archive>>, mut coop: ResMut<crate::coop::Coop>, menu: Option<Res<crate::menu_view::Menu>>) {
     if net.disc.is_none() {
         if let Some(a) = archive.as_deref_mut() {
             use std::hash::{Hash, Hasher};
@@ -1025,6 +1036,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     p.play.write_slot(&mut slot, b"NETPLAY");
                     net.welcome = Some(welcome(net.generation, &slot));
                     net.status = format!("{from} joined.");
+                    net.notice = Some("Player 2 joined.".into());
                     info!("net: {from} joined");
                 }
             }
@@ -1050,8 +1062,27 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.remote = None;
                     net.welcome = None;
                     net.status = "Your friend left. Still hosting.".into();
+                    net.notice = Some("Player 2 left.".into());
+                    info!("net: the joiner left");
                 } else {
+                    if net.loaded > 0 {
+                        net.ended = true;
+                        net.notice = Some("The host ended the game.".into());
+                    }
+                    info!("net: the host left");
                     net.stop("The host ended the game.");
+                }
+            }
+            (_, PING) if net.peer == Some(from) || net.target == Some(from) => {
+                net.last_heard = Some(now);
+                let paused = r.u8().unwrap_or(0) != 0;
+                net.peer_paused = paused;
+                // The joiner paused: player 2 lets go of the controls (the presses counted so
+                // far stay counted).
+                if paused && net.role == Role::Host {
+                    if let Some(i) = net.remote.as_mut() {
+                        (i.side, i.forward, i.held, i.right) = (0.0, 0.0, 0, [128, 128]);
+                    }
                 }
             }
             (Role::Join, WELCOME) if net.target == Some(from) => {
@@ -1063,6 +1094,9 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.loaded = generation;
                     net.state = None;
                     net.status = format!("Joined {from}.");
+                    if generation == 1 {
+                        net.notice = Some("Joined the host's game.".into());
+                    }
                     info!("net: welcome {generation} from {from}");
                 }
             }
@@ -1108,6 +1142,16 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             net.send_input(i);
         }
     }
+    // Nothing sent for 200 ms (a paused game): a ping, with whether this side is paused.
+    let quiet = net.last_any.is_none_or(|t| now.duration_since(t) > Duration::from_millis(200));
+    let linked = (net.role == Role::Host && net.peer.is_some()) || (net.role == Role::Join && net.loaded > 0);
+    if quiet && linked {
+        let paused = menu.as_ref().is_some_and(|m| m.flow.current != crate::menus::PLAY);
+        let mut w = Writer::new(PING);
+        w.u8(paused as u8);
+        let bytes = w.0;
+        net.send(&bytes);
+    }
     // The host's player 2 input from the joiner's controller (its presses since the last frame).
     if net.role == Role::Host {
         coop.remote = net.remote.map(|i| {
@@ -1130,9 +1174,14 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             net.welcome = None;
             net.last_heard = None;
             net.status = "Lost your friend. Still hosting.".into();
+            net.notice = Some("Lost player 2.".into());
             info!("net: the joiner timed out");
         } else {
             info!("net: the host timed out");
+            if net.loaded > 0 {
+                net.ended = true;
+                net.notice = Some("Lost the host.".into());
+            }
             net.stop("Lost the host.");
         }
     } else if net.role == Role::Join && net.loaded == 0 && net.last_heard.is_none() {

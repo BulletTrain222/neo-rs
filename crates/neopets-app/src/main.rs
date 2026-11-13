@@ -1564,6 +1564,15 @@ fn step_sim(
             }
         }
         let mut pending: Option<neopets_sim::save::Slot> = None;
+        // Online (net.rs): a joined, left or lost line for the player; the host paused; a
+        // joiner whose host left goes back to the title screen.
+        if let Some(n) = netr.notice.take() {
+            dev.toast = Some((n, 300));
+        }
+        if netr.following() && netr.peer_paused && dev.toast.as_ref().is_none_or(|t| t.1 < 20) {
+            dev.toast = Some(("The host paused the game.".into(), 20));
+        }
+        let net_ended = std::mem::take(&mut netr.ended);
         // Online (net.rs): the host's game, sent at joining and at each of its world changes.
         let net_load = netr.load.take();
         if net_load.is_some() {
@@ -1582,6 +1591,12 @@ fn step_sim(
         }
         // Quit's world teardown, run after this frame's ticks.
         let mut quit = false;
+        if net_ended {
+            quit = true;
+            if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                m.flow.set(&a.f, menus::CARD);
+            }
+        }
         for _ in 0..ticks {
             if pending.is_some() || quit {
                 break;
@@ -1632,7 +1647,14 @@ fn step_sim(
                             play.play.books.saved = -1;
                         }
                     }
-                    Some(menus::Command::Quit) => quit = true,
+                    Some(menus::Command::Quit) => {
+                        quit = true;
+                        // Online (net.rs): quitting ends the session (the host's joiner goes back
+                        // to the title screen; a joiner leaves the host's game).
+                        if netr.role != net::Role::Off {
+                            netr.request = Some(net::Request::Leave);
+                        }
+                    }
                     Some(c) => play.play.item_command(&c),
                     None => {}
                 }
@@ -1876,6 +1898,9 @@ fn step_sim(
             // The game-over exit with nothing pending: the teardown and record 0.
             if std::mem::take(&mut play.play.teardown_wanted) {
                 quit = true;
+                if netr.role != net::Role::Off {
+                    netr.request = Some(net::Request::Leave);
+                }
                 if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                     m.flow.set(&a.f, menus::CARD);
                 }
@@ -1917,6 +1942,9 @@ fn step_sim(
             // the first game, then play again at once (the front end's pages are skipped).
             if play.play.generation == 0 && std::env::var("NEOPETS_TRACE_QUIT").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
                 quit = true;
+                if netr.role != net::Role::Off {
+                    netr.request = Some(net::Request::Leave);
+                }
                 if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                     m.flow.set(&a.f, menus::PLAY);
                 }

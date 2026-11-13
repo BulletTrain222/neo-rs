@@ -141,7 +141,7 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Petpet | Follows player 1 | [x] | [ ] joiner draws it |
 | Saving | The host's save only; default: the joiner keeps none, and sees "Saved" | [x] | [ ] notice |
 | Game over and Continue | Only when both are down (or one, with revive off); player 1 chooses | [x] | [ ] joiner follows the reload |
-| Pause, item screen, map | Default: either player opens it and the game pauses for both | [ ] player 2 | [ ] |
+| Pause, item screen, map | Default: either player opens it; on one PC the game pauses for both; online the host's pause pauses both, the joiner's pauses only the joiner (player 2 lets go) | [ ] player 2 | [x] pause; [ ] item screen and map for player 2 |
 | Game options (text speed, difficulty) | The host's | [x] | [x] |
 | Time, atmosphere, lighting | From the world | [x] | [x] |
 
@@ -181,9 +181,10 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 - [x] Shots: each state carries the host's live shots.
 - [ ] Send flags and items only when they change (acknowledged), to keep states small.
 - [ ] State size check: keep each state below about 1,200 bytes, or split it, for the internet.
-- [ ] In-game notices: "Player 2 joined", "Player 2 left", "Lost the host".
-- [ ] Pause menu: "Leave game" for the joiner, "Stop hosting" for the host. The host going to
-      the title screen sends Bye, and the joiner returns to the title with a message.
+- [x] In-game notices: "Player 2 joined", "Player 2 left", "Lost the host", "The host paused the game".
+- [x] Quit on the pause page ends the session; the host's quit sends the joiner to the title
+      screen with a message. Pings keep a paused session alive.
+- [ ] Pause-page rows "Leave game" and "Stop hosting" (today: Options, Multiplayer page).
 - [ ] Smoothing on the joiner if movement looks jumpy.
 - [ ] Test on two real computers on one home network (needs the user).
 - [ ] Internet play: port forwarding instructions on the Multiplayer page, optional UPnP (later).
