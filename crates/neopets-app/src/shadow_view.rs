@@ -194,7 +194,12 @@ pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, se
     }
     // Indoors there is no sun (user's reports 7, 17 and 19).
     let on = (settings.world_shadows || settings.char_shadows == 2) && state.as_ref().is_some_and(|s| !s.play.indoors());
-    let dir = state.as_ref().map_or([0.35, -1.0, 0.25], |s| s.play.sun_direction());
+    // NEOPETS_SUN_DIR="x,y,z": the sun's direction instead of the world's (diagnostic).
+    let forced = std::env::var("NEOPETS_SUN_DIR").ok().and_then(|v| {
+        let n: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        (n.len() == 3).then(|| [n[0], n[1], n[2]])
+    });
+    let dir = forced.unwrap_or_else(|| state.as_ref().map_or([0.35, -1.0, 0.25], |s| s.play.sun_direction()));
     let d = Vec3::from(dir).normalize_or(Vec3::NEG_Y);
     for (mut t, mut vis) in &mut suns {
         let want = if on { Visibility::Visible } else { Visibility::Hidden };

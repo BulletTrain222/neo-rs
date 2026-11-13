@@ -4021,7 +4021,11 @@ fn sync_atmos_overlay(mut commands: Commands, state: Option<Res<PlayState>>, mut
     // 0, such as the 1335 palace's (160, 84, 171) at 16: user report 108, the purple was
     // missing) takes the spec's weight alpha / 128. It had been left out by the user's choice
     // for Meridell's warm (255, 214, 128) at 10, when its weight was far stronger.
-    let byte = out.map_or(0.0, |o| o.b[3].round().clamp(0.0, 255.0));
+    // Meridell's warm ungated zone (255, 214, 128) stays undrawn by the user's choice: they found
+    // it wrong as an 8 percent wash and again at the spec's weight (user report 134, "really bad
+    // golden haze"). Other ungated zones (the 1335 palace's purple, report 108) are drawn.
+    let warm = out.is_some_and(|o| o.blend <= 0.0 && o.b[0].round() == 255.0 && o.b[1].round() == 214.0 && o.b[2].round() == 128.0);
+    let byte = if warm { 0.0 } else { out.map_or(0.0, |o| o.b[3].round().clamp(0.0, 255.0)) };
     // The weight is 1 - Ad with Ad the frame alpha an opaque draw leaves, 0x80, normalized over
     // 255: about 0.5 (the source alpha byte is only the gate). NEOPETS_ATMOS_WEIGHT overrides it
     // (diagnostic). The alpha-byte / 128 weight (0.22) left the land with no haze (user's report 72).

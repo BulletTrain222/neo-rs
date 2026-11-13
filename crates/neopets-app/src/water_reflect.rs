@@ -139,16 +139,28 @@ fn find_water(
     for (e, mesh, material, at, rank) in &parts {
         let Some(m) = meshes.get(&mesh.0) else { continue };
         commands.entity(e).insert(Checked);
+        let trace = std::env::var_os("NEOPETS_TRACE_WATER").is_some();
         if !materials.get(&material.0).is_some_and(|x| matches!(x.alpha_mode, AlphaMode::Blend)) {
+            if trace {
+                println!("water skip: not blended ({:?})", materials.get(&material.0).map(|x| x.alpha_mode));
+            }
             continue;
         }
         let (Some(bevy::mesh::VertexAttributeValues::Float32x3(p)), Some(bevy::mesh::VertexAttributeValues::Float32x3(n))) = (m.attribute(Mesh::ATTRIBUTE_POSITION), m.attribute(Mesh::ATTRIBUTE_NORMAL)) else { continue };
         if p.is_empty() || n.iter().map(|v| v[1]).sum::<f32>() / (n.len() as f32) < 0.9 {
+            if trace {
+                println!("water skip: normals not up ({} vertices)", p.len());
+            }
             continue;
         }
         let world: Vec<Vec3> = p.iter().map(|q| at.transform_point(Vec3::from(*q))).collect();
         let (lo, hi) = world.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(a, b), q| (a.min(*q), b.max(*q)));
-        if hi.y - lo.y > 2.0 {
+        // Up to 3 units: some water parts climb the bank a little at one side (1023's moat at
+        // (157, 442) and (36, 467) reach from 22.7 to 25.0, user reports 135 and 136).
+        if hi.y - lo.y > 3.0 {
+            if trace {
+                println!("water skip: not flat ({:.1} to {:.1} at ({:.0}, {:.0}))", lo.y, hi.y, (lo.x + hi.x) / 2.0, (lo.z + hi.z) / 2.0);
+            }
             continue;
         }
         let image = mirror.image.get_or_insert_with(|| images.add(Image::new_target_texture(16, 16, TextureFormat::Rgba8UnormSrgb, None))).clone();
@@ -158,7 +170,11 @@ fn find_water(
         if std::env::var_os("NEOPETS_TRACE_WATER").is_some() {
             println!("water surface at ({:.0}, {:.1}, {:.0}), {:.0} x {:.0}", centre.x, centre.y, centre.z, hi.x - lo.x, hi.z - lo.z);
         }
-        commands.entity(e).insert(Surface { height: (lo.y + hi.y) / 2.0, centre: Vec2::new(centre.x, centre.z), radius: (Vec2::new(hi.x - lo.x, hi.z - lo.z) / 2.0).length() });
+        // The water's height is the median of its vertices' heights, so a lip up the bank does not
+        // lift the mirror off the water.
+        let mut heights: Vec<f32> = world.iter().map(|q| q.y).collect();
+        heights.sort_by(f32::total_cmp);
+        commands.entity(e).insert(Surface { height: heights[heights.len() / 2], centre: Vec2::new(centre.x, centre.z), radius: (Vec2::new(hi.x - lo.x, hi.z - lo.z) / 2.0).length() });
         // The twin draws straight after its water: the see-through parts keep the original's
         // order (draw_order.rs), whose even ranks leave the next odd one for a part's second pass.
         let mut twin = commands.spawn((Mesh3d(mesh.0.clone()), MeshMaterial3d(mat), Transform::IDENTITY, RenderLayers::layer(LAYER), bevy::light::NotShadowCaster, ChildOf(e), Twin));
