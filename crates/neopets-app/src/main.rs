@@ -6801,6 +6801,10 @@ fn play_trace(
             if play.ticks == 1 {
                 // NEOPETS_COOP_NOREVIVE: the Multiplayer page's "Game over" (diagnostic).
                 play.coop_revive = std::env::var_os("NEOPETS_COOP_NOREVIVE").is_none();
+                // NEOPETS_COOP_TOR: player 2 is a second Tor (the Multiplayer page's choice).
+                if std::env::var_os("NEOPETS_COOP_TOR").is_some() {
+                    play.coop_partner = false;
+                }
                 println!("COOP player 2 joined: {}", play.add_player());
                 // NEOPETS_COOP_P1HP=n: player 1 starts with that much health (diagnostic).
                 if let Some(h) = std::env::var("NEOPETS_COOP_P1HP").ok().and_then(|v| v.parse::<i32>().ok()) {
@@ -6830,6 +6834,9 @@ fn play_trace(
             let wait = std::env::var("NEOPETS_COOP_WALKFROM").ok().and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| play.ticks < n);
             let p2 = if wait || std::env::var_os("NEOPETS_COOP_STILL").is_some() {
                 neopets_sim::hero::HeroInput::default()
+            } else if std::env::var_os("NEOPETS_COOP_GUARD").is_some() {
+                // NEOPETS_COOP_GUARD: player 2 holds the guard button.
+                neopets_sim::hero::HeroInput { guard: true, ..Default::default() }
             } else if std::env::var_os("NEOPETS_COOP_ATTACK").is_some() {
                 // NEOPETS_COOP_TURN=n: first n ticks pushing the stick back (turning player 2 round).
                 let turn = std::env::var("NEOPETS_COOP_TURN").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);

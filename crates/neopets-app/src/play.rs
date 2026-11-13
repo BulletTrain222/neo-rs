@@ -1475,6 +1475,8 @@ pub struct Player {
     /// The hero's guard timer (+0x1574; SPEC-0036 Guard timer and per-attacker block): set to
     /// 40 by the idle threat sense, down 1 a tick; above 0 the hero guards.
     pub guard_timer: u32,
+    /// The shield is raised (on the arm) rather than stowed (each player's own; co-op).
+    pub shield_raised: bool,
     pub blade_last: Option<[f32; 3]>,
     /// The party's weapon-drawn and shield-raised flags (SPEC-0040 Behavior 29), shared by both
     /// heroes.
@@ -1603,7 +1605,6 @@ pub struct Play {
     /// The monster table and the colour presets (the Minion Wizard's re-pick; SPEC-0029, SPEC-0040).
     monster_table: Option<neopets_data::monster::MonsterTable>,
     colour_presets: Vec<[[f32; 3]; 15]>,
-    pub shield_raised: bool,
     pub weapon: Option<u16>,
     /// The equipped shield (item id; Tor's shields are type 5, SPEC-0036).
     pub shield: Option<u16>,
@@ -2447,6 +2448,7 @@ impl Play {
                 power_fx: None,
                 gesture: Default::default(),
                 guard_timer: 0,
+                shield_raised: false,
                 blade_last: None,
                 weapon_drawn: false,
                 recoil_material: 6,
@@ -2603,7 +2605,6 @@ impl Play {
             box_bars: false,
             monster_table,
             colour_presets,
-            shield_raised: false,
             weapon: None,
             shield: None,
             items,
@@ -7323,7 +7324,7 @@ impl Play {
     /// SPEC-0040 Behavior 29: set or clear both flags.
     fn draw_items(&mut self, on: bool) {
         self.set_weapon_drawn(on);
-        self.shield_raised = on;
+        self.player.shield_raised = on;
     }
 
     /// The weapon-drawn flag; a change plays the weapon slot's unsheathe (cue 0) or sheathe
@@ -7438,7 +7439,7 @@ impl Play {
         if let (Some(id), 0) = (self.shield, self.hero_index) {
             let s = id as i32 - 106;
             if (0..=4).contains(&s) {
-                let frame = if self.shield_raised {
+                let frame = if self.player.shield_raised {
                     self.hero_attach(5).map(|w| (w, HeroItemScale::None))
                 } else {
                     self.hero_attach(8).map(|w| (neopets_data::anim::Affine { cols: [neg(w.cols[0]), w.cols[2], w.cols[1]], t: w.t }, HeroItemScale::Shield))
@@ -14694,7 +14695,7 @@ impl Play {
         if !self.player.weapon_drawn && what != "poison" {
             let tor_armed = self.equipment.entries[0][0].is_some();
             self.set_weapon_drawn(tor_armed);
-            self.shield_raised = self.shield.is_some();
+            self.player.shield_raised = self.shield.is_some();
         }
         // A hit on a living hero ends an active stun.
         self.player.statuses.clear(neopets_sim::status::STUN);
@@ -19305,10 +19306,20 @@ impl Play {
             if who == 1 {
                 self.roberta_step(&input);
             }
+            // The guard button, the weapon and shield drawn with it (SPEC-0040 Behavior 29), as
+            // player 1's tick does.
+            self.player.l1_held = input.guard;
+            self.items_flags_step();
             let force = self.attack_step(&input, repeat);
             self.hero_swing();
             self.blade_recoil();
             self.shots_step();
+            // Player 2's statuses (poison, stun, the health and magic trickle) and the guard
+            // timer's threat sense, as player 1's.
+            self.status_step();
+            self.guard_step();
+            self.player.loco.shield = self.shield.is_some();
+            self.player.loco.p1 = self.player.weapon_drawn;
             self.player.loco.roberta = who == 1;
             self.player.loco.air_ok = who == 0 && self.equipment.entries[2][who] != Some(126);
             let stick_off = input.forward != 0.0 || input.side != 0.0;

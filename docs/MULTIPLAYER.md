@@ -119,7 +119,7 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | World and loaded neighbour | Both always in the same world | [x] | [x] world change sends a new welcome |
 | Story flags and quests | One set | [x] | [x] sent each state |
 | Story triggers | Fired by player 1 only (keeps story order) | [x] | [ ] joiner's own triggers must not fire |
-| Doors and world exits | Either player; both go; player 2 placed beside | [ ] player 2's doors | [ ] |
+| Doors and world exits | Either player; both go; player 2 placed beside | [x] player 1's; [ ] player 2's (prompt and confirm are one per game) | [x] player 1's |
 | Talk boxes | Player 1 opens and answers; both see the box | [x] | [x] shown on the joiner |
 | Talk box advance | Default: either player can press Cross to go on (not choose) | [ ] | [ ] |
 | Cutscenes (scripted camera, bars, fades) | Both watch; player 2 holds still | [x] | [x] camera and bars; [ ] fades |
@@ -150,13 +150,13 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 |---|---|---|---|
 | Hero | Player 2: Roberta when the story has her, else a second Tor (Multiplayer page) | [x] | [x] |
 | Place, movement, jumping, collisions | Own | [x] | [x] |
-| Health, magic, poison and other statuses | Own | [x] | [x] |
+| Health, magic, poison and other statuses | Own; each trickles back | [x] | [x] |
 | Down and revive | Own (revive or game over, Multiplayer page) | [x] | [x] |
 | Weapon, shield, armour | Own hero's equipment row (a second Tor uses Tor's) | [x] | [x] |
 | Attacks, combos | Own | [x] | [x] |
-| Guard and reflect (shield) | Own | [ ] player 2 | [ ] |
-| Power attacks, spells, magic items | Own magic bar | [ ] player 2 | [ ] |
-| Quick items (D-pad) | Own panel over the shared bag; the item goes to the user | [ ] player 2 | [ ] |
+| Guard and reflect (shield) | Own | [x] guard (reflect unchecked) | [x] (the host runs player 2) |
+| Power attacks, spells, magic items | Own magic bar | [ ] player 2 needs its own Mote panel | [ ] |
+| Quick items (D-pad) | Own panel over the shared bag; the item goes to the user | [ ] player 2 needs its own panel and the second pad's D-pad | [ ] |
 | Ledges, climbing, ladders, swimming, rope gun | Own | [?] player 2 | [?] |
 | Lock-on and target | Own | [?] | [?] |
 | Camera and its controls | Own follow camera; invert and speed per computer | [x] | [x] |
