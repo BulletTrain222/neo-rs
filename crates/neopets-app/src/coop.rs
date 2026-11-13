@@ -344,3 +344,56 @@ pub fn split_cameras(
         }
     }
 }
+
+/// Player 2's bars: health (red) and magic (blue) at the top left of the bottom half, as
+/// fractions of the maximums (this build's simple bars, not the original HUD's art).
+#[derive(Component)]
+pub struct P2Bars;
+#[derive(Component)]
+pub struct P2Fill(bool);
+
+pub fn p2_hud(
+    mut commands: Commands,
+    play: Option<Res<PlayState>>,
+    scene_views: Query<&Node, (With<crate::display::SceneView>, Without<P2Bars>, Without<P2Fill>)>,
+    mut boxes: Query<(Entity, &mut Node), (With<P2Bars>, Without<P2Fill>)>,
+    mut fills: Query<(&P2Fill, &mut Node), Without<P2Bars>>,
+) {
+    let other = play.as_ref().and_then(|p| p.play.others.first());
+    let (Some(o), Some(scene)) = (other, scene_views.iter().next()) else {
+        for (e, _) in &boxes {
+            commands.entity(e).despawn();
+        }
+        return;
+    };
+    let (Val::Px(top), Val::Px(height), Val::Px(left)) = (scene.top, scene.height, scene.left) else { return };
+    let at = (Val::Px(left + 16.0), Val::Px(top + height / 2.0 + 12.0));
+    match boxes.single_mut() {
+        Ok((_, mut n)) => {
+            if (n.left, n.top) != at {
+                (n.left, n.top) = at;
+            }
+        }
+        Err(_) => {
+            let bar = |c: &mut ChildSpawnerCommands, mp: bool| {
+                c.spawn((Node { width: Val::Px(220.0), height: Val::Px(12.0), margin: UiRect::bottom(Val::Px(4.0)), ..default() }, BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)))).with_children(|b| {
+                    let colour = if mp { Color::srgb(0.25, 0.5, 0.95) } else { Color::srgb(0.85, 0.15, 0.15) };
+                    b.spawn((Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, BackgroundColor(colour), P2Fill(mp)));
+                });
+            };
+            commands
+                .spawn((Node { position_type: PositionType::Absolute, left: at.0, top: at.1, flex_direction: FlexDirection::Column, ..default() }, GlobalZIndex(10), P2Bars))
+                .with_children(|c| {
+                    bar(c, false);
+                    bar(c, true);
+                });
+        }
+    }
+    for (f, mut n) in &mut fills {
+        let (v, m) = if f.0 { (o.hero_mp, o.hero_mp_max) } else { (o.hero_hp, o.hero_max) };
+        let want = Val::Percent(100.0 * (v.max(0) as f32 / m.max(1) as f32).min(1.0));
+        if n.width != want {
+            n.width = want;
+        }
+    }
+}

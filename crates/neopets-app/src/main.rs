@@ -1040,7 +1040,7 @@ fn main() {
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, coop::read_coop, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot, sync_haze, sync_atmos_overlay),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, coop::draw_others, coop::split_cameras, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_aim_marker, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, coop::draw_others, coop::split_cameras, coop::p2_hud, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_aim_marker, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -6638,13 +6638,27 @@ fn play_trace(
             if play.ticks == 1 {
                 println!("COOP player 2 joined: {}", play.add_player());
             }
-            let p2 = neopets_sim::hero::HeroInput { forward: 1.0, jump: play.ticks % 90 == 45, ..Default::default() };
+            // NEOPETS_COOP_ATTACK: player 2 stands and attacks every 40 ticks instead (with
+            // NEOPETS_TRACE_GOD player 1 is not hit).
+            let p2 = if std::env::var_os("NEOPETS_COOP_ATTACK").is_some() {
+                // NEOPETS_COOP_TURN=n: first n ticks pushing the stick back (turning player 2 round).
+                let turn = std::env::var("NEOPETS_COOP_TURN").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+                if play.ticks <= turn {
+                    neopets_sim::hero::HeroInput { forward: -1.0, ..Default::default() }
+                } else {
+                    neopets_sim::hero::HeroInput { attack: play.ticks % 40 == 20, attack_held: play.ticks % 40 >= 20 && play.ticks % 40 < 26, ..Default::default() }
+                }
+            } else {
+                neopets_sim::hero::HeroInput { forward: 1.0, jump: play.ticks % 90 == 45, ..Default::default() }
+            };
             play.coop_step(&[(p2, neopets_sim::camera::CameraPad::default())]);
             if play.ticks % 30 == 0 {
                 if let Some(o) = play.others.first() {
                     let q = o.loco.position();
                     let a = play.player.loco.position();
-                    println!("COOP {} p2 ({:.1}, {:.1}, {:.1}) state {} clip {} | p1 ({:.1}, {:.1}, {:.1}) | p2 eye ({:.1}, {:.1}, {:.1})", play.ticks, q[0], q[1], q[2], o.loco.state, o.hero.clip_state().action, a[0], a[1], a[2], o.camera.eye[0], o.camera.eye[1], o.camera.eye[2]);
+                    println!("COOP {} p2 ({:.1}, {:.1}, {:.1}) state {} clip {} hp {} | p1 ({:.1}, {:.1}, {:.1}) hp {} | p2 eye ({:.1}, {:.1}, {:.1})", play.ticks, q[0], q[1], q[2], o.loco.state, o.hero.clip_state().action, o.hero_hp, a[0], a[1], a[2], play.player.hero_hp, o.camera.eye[0], o.camera.eye[1], o.camera.eye[2]);
+                    let near: Vec<String> = play.characters.iter().filter(|c| c.enemy.is_some() && (c.position[0] - q[0]).hypot(c.position[2] - q[2]) < 15.0).map(|c| format!("{} hp {} at {:.1}", c.name, c.hp, (c.position[0] - q[0]).hypot(c.position[2] - q[2]))).collect();
+                    println!("COOP {} enemies near p2: {}", play.ticks, near.join(", "));
                 }
             }
         }

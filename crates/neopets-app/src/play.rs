@@ -1351,6 +1351,25 @@ enum Wait {
 /// run; the other players wait in `Play::others` and are swapped in for their turn. The
 /// script-driven and world-wide state (held, scripted walks, dialogue, the rope manager) stays
 /// in `Play`.
+/// What the enemies read of one player's hero in a tick (docs/MULTIPLAYER.md: each enemy aims
+/// at the nearest player): its position and facing, its hurt capsules, the notice bands, whether
+/// it can be attacked, its swing class and recovery, its live shots' paths, its guard, and the
+/// grab gate's held and touched flags.
+#[derive(Clone)]
+struct HeroSight {
+    hero: [f32; 3],
+    facing: [f32; 3],
+    caps: Vec<Cylinder>,
+    bands: (f32, f32),
+    attackable: bool,
+    swing: Option<u8>,
+    recover: bool,
+    shot_paths: Vec<([f32; 3], [f32; 3])>,
+    guarding: bool,
+    held: bool,
+    stunned: bool,
+}
+
 #[derive(Clone)]
 pub struct Player {
     /// Which hero this player is (0 Tor, 1 Roberta). Player 1 follows `Play::hero_index`; this is
@@ -1427,12 +1446,38 @@ pub struct Player {
     pub l1_held: bool,
     pub hero_trail: Option<usize>,
     pub carried: Option<u64>,
+    /// Tor's attack step (SPEC-0036), while state 13 runs.
+    pub attack: Option<neopets_sim::attack::TorAttack>,
+    /// This tick's held-attack repeat (SPEC-0022 chooser step 3).
+    pub attack_repeat: bool,
+    pub hit_list: Vec<u64>,
+    /// Bumped with each clear of the hit list: one melee swing (the thorn hazards' strike gate).
+    pub swing_serial: u32,
+    pub last_axis: Option<[f32; 3]>,
+    /// The leap and lunge point, and Roberta's landing direction (SPEC-0036).
+    pub leap_point: [f32; 3],
+    /// Tor's plain weapon effect in sub-state 10.
+    pub power_fx: Option<usize>,
+    /// The stick gesture machine and its words (SPEC-0033 Behavior 52).
+    pub gesture: neopets_sim::gesture::Gesture,
+    /// The hero's guard timer (+0x1574; SPEC-0036 Guard timer and per-attacker block): set to
+    /// 40 by the idle threat sense, down 1 a tick; above 0 the hero guards.
+    pub guard_timer: u32,
+    pub blade_last: Option<[f32; 3]>,
+    /// The party's weapon-drawn and shield-raised flags (SPEC-0040 Behavior 29), shared by both
+    /// heroes.
+    pub weapon_drawn: bool,
+    /// The hero's recoil material word (SPEC-0028 Blade recoil; 6 at start) and the blade's
+    /// previous direction (the triangle's secondary direction D).
+    pub recoil_material: u8,
 }
 
 pub struct Play {
     /// The player being run, and the other players (docs/MULTIPLAYER.md).
     pub player: Player,
     pub others: Vec<Player>,
+    /// Another player is swapped in (co-op), not player 1.
+    coop_running: bool,
     /// SPEC-0028 section 11: the atmosphere zone selection and this frame's output (the blend
     /// factor b is the sky dome's role-10 opacity).
     atmos_sel: neopets_sim::atmosphere::Selector,
@@ -1507,8 +1552,6 @@ pub struct Play {
     pub price_lines: [(i32, u32); 2],
     buy_template: Vec<u8>,
     pub exorbitant: Vec<u8>,
-    /// Tor's attack step (SPEC-0036), while state 13 runs.
-    pub attack: Option<neopets_sim::attack::TorAttack>,
     /// An attack press waiting for the next tick.
     pub attack_latch: bool,
     pub rope: neopets_sim::rope::Rope,
@@ -1525,12 +1568,6 @@ pub struct Play {
     pub cloak_worn: bool,
     /// The outfit model resource each hero is drawn with now (504 to 519; SPEC-0021 Outfit items).
     pub outfits: [u32; 2],
-    /// The party's weapon-drawn and shield-raised flags (SPEC-0040 Behavior 29), shared by both
-    /// heroes.
-    pub weapon_drawn: bool,
-    /// The hero's guard timer (+0x1574; SPEC-0036 Guard timer and per-attacker block): set to
-    /// 40 by the idle threat sense, down 1 a tick; above 0 the hero guards.
-    pub guard_timer: u32,
     /// The box host's last state and whether the bars up are its own (SPEC-0035 state 23).
     box_was_up: bool,
     box_bars: bool,
@@ -1550,8 +1587,6 @@ pub struct Play {
     pub last_mote: String,
     /// The last status applied to an enemy, for the status line.
     pub last_status: String,
-    /// The stick gesture machine and its words (SPEC-0033 Behavior 52).
-    gesture: neopets_sim::gesture::Gesture,
     gesture_words: neopets_sim::gesture::Words,
     /// The Miamouse catch switch, meshes and count, and the carried Miamouse (character id).
     pub catch: neopets_sim::miamouse::Catch,
@@ -1695,11 +1730,7 @@ pub struct Play {
     mote_objects: Vec<neopets_sim::charm::Object>,
     /// A family handler's Mote kind during a Mote object's breakable walk.
     break_family: Option<i32>,
-    /// The leap and lunge point, and Roberta's landing direction (SPEC-0036).
-    leap_point: [f32; 3],
     landing_dir: [f32; 3],
-    /// Tor's plain weapon effect in sub-state 10.
-    power_fx: Option<usize>,
     /// The live Fog cloud's point, in its pack, with the pulse countdown and its stored scale.
     fog_after: Option<(u32, [f32; 3], u32, f32)>,
     /// The Supernova's bolts in flight.
@@ -1709,9 +1740,6 @@ pub struct Play {
     charm_words: neopets_sim::charm::Words,
     /// The Lava orbit's angle, 0 at the first activation and continuing across spawns.
     orbit_angle: f32,
-    hit_list: Vec<u64>,
-    /// Bumped with each clear of the hit list: one melee swing (the thorn hazards' strike gate).
-    swing_serial: u32,
     /// SPEC-0060 Cut: last tick's weapon point 2.5 along the blade's frame axis.
     reed_point: Option<[f32; 3]>,
     /// The flying boomerang's drawn frame state by character: the eased reference axis, the
@@ -1748,11 +1776,6 @@ pub struct Play {
     thorns: neopets_sim::thorn::Pool,
     thorn_radius: f32,
     thorn_shots: [Option<[f32; 3]>; neopets_sim::projectile::SLOTS],
-    last_axis: Option<[f32; 3]>,
-    /// The hero's recoil material word (SPEC-0028 Blade recoil; 6 at start) and the blade's
-    /// previous direction (the triangle's secondary direction D).
-    recoil_material: u8,
-    blade_last: Option<[f32; 3]>,
     /// The last hit, for the status line.
     pub last_hit: String,
     bands: (Vec<f32>, Vec<f32>),
@@ -1939,8 +1962,6 @@ pub struct Play {
     /// the window to pass to the first controller's large motor.
     rumble: neopets_sim::rumble::Rumble,
     rumble_presets: Vec<neopets_sim::rumble::Preset>,
-    /// This tick's held-attack repeat (SPEC-0022 chooser step 3).
-    attack_repeat: bool,
     /// The parked hero's quick-item marker (-1 none).
     other_marker: i32,
     /// The pending exterior replacement was requested with movies queued.
@@ -2383,6 +2404,18 @@ impl Play {
         }
         let mut play = Self {
             player: Player {
+                attack: None,
+                attack_repeat: false,
+                hit_list: Vec::new(),
+                swing_serial: 0,
+                last_axis: None,
+                leap_point: [0.0; 3],
+                power_fx: None,
+                gesture: Default::default(),
+                guard_timer: 0,
+                blade_last: None,
+                weapon_drawn: false,
+                recoil_material: 6,
                 who: 0,
                 root_step: [0.0; 3],
                 loco,
@@ -2428,6 +2461,7 @@ impl Play {
                 carried: None,
             },
             others: Vec::new(),
+            coop_running: false,
             atmos_sel: Default::default(),
             atmos_out: Default::default(),
             boot,
@@ -2517,15 +2551,12 @@ impl Play {
             overrides: HashMap::new(),
             foliage: HashMap::new(),
             stage_foliage: None,
-            attack: None,
             attack_latch: false,
             // The user's choice (not the spec's 0.2): the marker stays twice its resting size
             // while it is on a target.
             rope: Default::default(),
             rope_pack: 0,
             rope_aim: None,
-            weapon_drawn: false,
-            guard_timer: 0,
             box_was_up: false,
             box_bars: false,
             monster_table,
@@ -2561,9 +2592,7 @@ impl Play {
             haste_safe: None,
             dev_item: None,
             avoid: Default::default(),
-            leap_point: [0.0; 3],
             landing_dir: [0.0, 0.0, 1.0],
-            power_fx: None,
             fog_after: None,
             bolts: Vec::new(),
             orbit_angle_r: 0.0,
@@ -2588,7 +2617,6 @@ impl Play {
             catch: Default::default(),
             recorder: Default::default(),
             breakable_hits: Vec::new(),
-            gesture: Default::default(),
             gesture_words,
             pending_off: Default::default(),
             slot_off: Default::default(),
@@ -2634,8 +2662,6 @@ impl Play {
             quiet_slots: std::collections::HashSet::new(),
             knight_words,
             gelert_words,
-            hit_list: Vec::new(),
-            swing_serial: 0,
             reed_point: None,
             thrown_frame: Default::default(),
             head_look: Default::default(),
@@ -2654,9 +2680,6 @@ impl Play {
             thorns: Default::default(),
             thorn_radius,
             thorn_shots: [None; neopets_sim::projectile::SLOTS],
-            last_axis: None,
-            recoil_material: 6,
-            blade_last: None,
             last_hit: String::new(),
             bands,
             last_hurt: String::new(),
@@ -2703,7 +2726,6 @@ impl Play {
             menu_open: false,
             rumble: Default::default(),
             rumble_presets: Vec::new(),
-            attack_repeat: false,
             other_marker: -1,
             replace_after_movie: false,
             mote_glow_rgb: [[0; 3]; 14],
@@ -4395,7 +4417,7 @@ impl Play {
                     }
                 }
                 Action::LongFall => {
-                    self.attack = None;
+                    self.player.attack = None;
                     self.player.loco.long_fall_start();
                 }
                 Action::InitMortog { target, centre, edge, hold } => {
@@ -5014,8 +5036,8 @@ impl Play {
             let d = sub_v(c.position, hero_at);
             (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
         });
-        if self.player.r_attack.is_none() && (input.attack || self.attack_repeat) && (1..=6).contains(&self.player.loco.state) {
-            self.player.r_attack = Some(if self.gesture.mode == 0 && locked.is_some_and(|d| d < 5.0) { RobertaAttack::start_at(5) } else { RobertaAttack::start_with(self.gesture.mode) });
+        if self.player.r_attack.is_none() && (input.attack || self.player.attack_repeat) && (1..=6).contains(&self.player.loco.state) {
+            self.player.r_attack = Some(if self.player.gesture.mode == 0 && locked.is_some_and(|d| d < 5.0) { RobertaAttack::start_at(5) } else { RobertaAttack::start_with(self.player.gesture.mode) });
             self.draw_items(true);
         }
         // The air attack: in states 7 to 11, not phases 6, 7 or 9, used once a jump, with no Tattered Cloak
@@ -5029,8 +5051,8 @@ impl Play {
             && self.equipment.entries[0][1].is_some()
         {
             self.player.loco.use_air();
-            self.hit_list.clear();
-            self.swing_serial = self.swing_serial.wrapping_add(1);
+            self.player.hit_list.clear();
+            self.player.swing_serial = self.player.swing_serial.wrapping_add(1);
             self.player.r_attack = Some(RobertaAttack::start_at(if locked.is_some_and(|d| d < 8.0) { 12 } else { 11 }));
             self.draw_items(true);
         }
@@ -5042,14 +5064,14 @@ impl Play {
         if a.sub == 8 {
             let p = self.player.loco.position();
             if a.f == 0 {
-                self.leap_point = p;
+                self.player.leap_point = p;
                 self.sound.play(neopets_sim::sound::WEAPON, 17, neopets_sim::sound::Play { emitter: Some(p), ..Default::default() });
             }
             if self.player.touched && a.f > 0 {
-                self.player.loco.body.position = self.leap_point;
+                self.player.loco.body.position = self.player.leap_point;
                 a.end_leap();
             } else {
-                self.leap_point = p;
+                self.player.leap_point = p;
             }
         }
         // The landing turns back the way she leapt, at rate 0.25.
@@ -5090,8 +5112,8 @@ impl Play {
         }
         if a.cleared {
             a.cleared = false;
-            self.hit_list.clear();
-            self.swing_serial = self.swing_serial.wrapping_add(1);
+            self.player.hit_list.clear();
+            self.player.swing_serial = self.player.swing_serial.wrapping_add(1);
         }
         // Sub-state 14 (ids 162, 169 and 171) pays at release.
         if before != 14 && a.sub == 14 {
@@ -5484,7 +5506,7 @@ impl Play {
                 let mote_id = self.equipment.motes[h][2];
                 let am = mote_id.and_then(|id| self.items.get(id)).map(|it| neopets_sim::mote::AttackMote { f: it.stats[5] as f32, g: it.stats[6] as f32, kind: neopets_sim::mote::element(mote_id) });
                 let d = match h {
-                    0 => match self.attack.as_ref().map(|a| a.sub) {
+                    0 => match self.player.attack.as_ref().map(|a| a.sub) {
                         Some(4 | 12) => 2.0,
                         Some(5 | 6) => 0.75,
                         _ => 1.0,
@@ -5869,7 +5891,7 @@ impl Play {
         self.player.targets.clear();
         self.draw_items(false);
         self.player.statuses.clear_all();
-        self.attack = None;
+        self.player.attack = None;
         self.hero_colour = self.design.hero_colour(self.hero_index).unwrap_or([128; 3]);
         self.weapon = self.equipment.entries[0][self.hero_index];
         self.shield = self.equipment.entries[1][self.hero_index];
@@ -6685,7 +6707,7 @@ impl Play {
                 self.leave_ledge(hero_states::STANCE);
                 self.player.ladder = Some(neopets_sim::ladder::Ladder::new(k));
                 self.player.loco.enter_state(hero_states::LADDER, 93);
-                if self.weapon_drawn {
+                if self.player.weapon_drawn {
                     self.set_weapon_drawn(false);
                 }
                 return true;
@@ -6837,7 +6859,7 @@ impl Play {
         if step.refuse {
             self.drop_refuse = 120;
         }
-        if step.sheathe && self.weapon_drawn {
+        if step.sheathe && self.player.weapon_drawn {
             self.set_weapon_drawn(false);
             self.drop_refuse = 0;
         }
@@ -7261,8 +7283,8 @@ impl Play {
     /// 0x10 on its current frame) within 10 horizontally in front; in front is a dot above 0.5
     /// of the unit horizontal direction to the threat with the facing.
     fn guard_step(&mut self) {
-        self.guard_timer = self.guard_timer.saturating_sub(1);
-        if self.player.loco.state != hero_states::STANCE || !self.weapon_drawn || self.shield.is_none() {
+        self.player.guard_timer = self.player.guard_timer.saturating_sub(1);
+        if self.player.loco.state != hero_states::STANCE || !self.player.weapon_drawn || self.shield.is_none() {
             return;
         }
         let (p, f) = (self.player.loco.position(), self.player.loco.facing);
@@ -7279,21 +7301,21 @@ impl Play {
             })
         };
         if shot || attacker() {
-            self.guard_timer = 40;
+            self.player.guard_timer = 40;
         }
     }
 
     /// SPEC-0036 Guard predicate: the hero is in state 20, or Roberta is in attack sub-state 6
     /// or 7 (the spin), or the guard timer is above 0.
     pub fn hero_guarding(&self) -> bool {
-        self.player.loco.state == hero_states::GUARD || (self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 6 | 7))) || self.guard_timer > 0
+        self.player.loco.state == hero_states::GUARD || (self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 6 | 7))) || self.player.guard_timer > 0
     }
 
     fn set_weapon_drawn(&mut self, on: bool) {
-        if self.weapon_drawn != on && self.weapon.is_some() {
+        if self.player.weapon_drawn != on && self.weapon.is_some() {
             self.sound.play(neopets_sim::sound::WEAPON, if on { 0 } else { 1 }, neopets_sim::sound::Play::default());
         }
-        self.weapon_drawn = on;
+        self.player.weapon_drawn = on;
     }
 
     /// SPEC-0040 Behavior 29 per tick: the L1 guard with a shield sets both flags; states 25 and
@@ -7375,10 +7397,10 @@ impl Play {
                 }
             }
         }
-        if let Some(id) = self.weapon.filter(|_| self.hero_index == 0 || self.weapon_drawn) {
+        if let Some(id) = self.weapon.filter(|_| self.hero_index == 0 || self.player.weapon_drawn) {
             let w = if id <= 110 { id as i32 - 98 } else { id as i32 - 103 };
             if (0..=15).contains(&w) {
-                let frame = if self.weapon_drawn {
+                let frame = if self.player.weapon_drawn {
                     self.hero_attach(0).map(|a| (a, HeroItemScale::None))
                 } else {
                     self.hero_attach(6).map(|a| (neopets_data::anim::Affine { cols: [a.cols[1], a.cols[2], a.cols[0]], t: a.t }, HeroItemScale::Weapon))
@@ -7933,7 +7955,7 @@ impl Play {
     fn blade_recoil(&mut self) {
         let window = self.player.hero.frame_bits() & 1 != 0;
         if self.hero_index != 0 || !window {
-            self.blade_last = None;
+            self.player.blade_last = None;
             return;
         }
         let p = self.player.loco.position();
@@ -7943,7 +7965,7 @@ impl Play {
         let Some(bw) = frames.get(bone) else { return };
         let w = place.mul(bw).mul(&attach_rotation(offset, angles));
         let (q, u) = (w.t, unit(w.cols[2]));
-        let d = self.blade_last.replace(u).unwrap_or(u);
+        let d = self.player.blade_last.replace(u).unwrap_or(u);
         if self.player.candidates.records.first().is_some_and(|r| r.in_range) {
             return;
         }
@@ -7964,10 +7986,10 @@ impl Play {
         }
         let hit = self.world.solids.iter().find(|v| v.solid(mask) && v.blade_hits(p, neopets_sim::contact::HERO_RADIUS, tri)).copied();
         if let Some(v) = hit {
-            if let Some(a) = self.attack.as_mut() {
+            if let Some(a) = self.player.attack.as_mut() {
                 a.recoil();
-                self.recoil_material = neopets_sim::trigger::recoil_material(v.surface);
-                self.last_fx = format!("blade recoil off a kind-{} solid (mode {}, material {}) on tick {}", v.kind, v.surface, self.recoil_material, self.ticks);
+                self.player.recoil_material = neopets_sim::trigger::recoil_material(v.surface);
+                self.last_fx = format!("blade recoil off a kind-{} solid (mode {}, material {}) on tick {}", v.kind, v.surface, self.player.recoil_material, self.ticks);
             }
         }
     }
@@ -7983,8 +8005,8 @@ impl Play {
         // Roberta's melee window, in any sub-state but the leap (SPEC-0036 Roberta's arm table).
         let roberta = self.hero_index == 1;
         let r_sub = self.player.r_attack.as_ref().filter(|a| roberta && a.sub != 8).map(|a| a.sub);
-        let (Some(sub), true) = (r_sub.or(self.attack.as_ref().map(|a| a.sub)).or((air != 0).then_some(air)), self.player.hero.frame_bits() & 1 != 0) else {
-            self.last_axis = None;
+        let (Some(sub), true) = (r_sub.or(self.player.attack.as_ref().map(|a| a.sub)).or((air != 0).then_some(air)), self.player.hero.frame_bits() & 1 != 0) else {
+            self.player.last_axis = None;
             return;
         };
         let p = self.player.loco.position();
@@ -7997,7 +8019,7 @@ impl Play {
         let l = self.weapon_reach() + 2.0;
         let p0 = add(anchor, scale(axis, 0.25));
         let weapon = neopets_sim::combat::Cylinder { center: add(p0, scale(axis, 0.5 * l)), axis, radius: 1.0, length: l };
-        let d2 = self.last_axis.replace(axis);
+        let d2 = self.player.last_axis.replace(axis);
         let pack = self.world.pack;
         let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|i| i.is_weapon()).map_or(0, |i| i.stats[0]);
         let g = self.player.statuses.damage_scale();
@@ -8016,7 +8038,7 @@ impl Play {
         let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
         let mut hits = Vec::new();
         for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && (!c.unhittable() || c.class20.is_some())) {
-            if self.hit_list.contains(&c.id) {
+            if self.player.hit_list.contains(&c.id) {
                 continue;
             }
             let d = sub_v(c.position, p);
@@ -8066,7 +8088,7 @@ impl Play {
             // contact test) starts its reaction; it takes no damage (user's report 34: it did
             // nothing when hit).
             if c.class20.is_some() {
-                self.hit_list.push(c.id);
+                self.player.hit_list.push(c.id);
                 self.class20_hits.push(c.id);
                 continue;
             }
@@ -8097,7 +8119,7 @@ impl Play {
                 }
                 if k.guarding() && !power_hit {
                     if c.facing[0] * hf[0] + c.facing[1] * hf[1] + c.facing[2] * hf[2] < 0.0 {
-                        self.hit_list.push(c.id);
+                        self.player.hit_list.push(c.id);
                         landed += 1;
                         knight_block = true;
                         k.blocked = true;
@@ -8111,7 +8133,7 @@ impl Play {
             // reaction); any other swing, a power step included, does nothing. Never damage.
             if c.slot == CLOUD_SLOT {
                 if !power_hit && c.facing[0] * hf[0] + c.facing[1] * hf[1] + c.facing[2] * hf[2] < 0.0 {
-                    self.hit_list.push(c.id);
+                    self.player.hit_list.push(c.id);
                     landed += 1;
                     knight_block = true;
                 }
@@ -8124,7 +8146,7 @@ impl Play {
             };
             if let Some(guarding) = guards {
                 if guarding && !power_hit {
-                    self.hit_list.push(c.id);
+                    self.player.hit_list.push(c.id);
                     landed += 1;
                     knight_block = true;
                 }
@@ -8134,7 +8156,7 @@ impl Play {
             }
             if let Some(e) = c.enemy.as_mut().filter(|e| e.blocking && !power_hit) {
                 if c.facing[0] * hf[0] + c.facing[1] * hf[1] + c.facing[2] * hf[2] < e.p.defence.angle {
-                    self.hit_list.push(c.id);
+                    self.player.hit_list.push(c.id);
                     e.block_hit = true;
                     landed += 1;
                     // A blocked swing on any guarding target plays the impact cue and asks Tor's
@@ -8143,7 +8165,7 @@ impl Play {
                 }
                 continue;
             }
-            self.hit_list.push(c.id);
+            self.player.hit_list.push(c.id);
             // SPEC-0036 Damage: x = P A B C D E (P, B, C, E are 1 without a Mote or petpet), y = x
             // − defence, truncated; D by sub-state.
             let d_factor = match sub {
@@ -8184,7 +8206,7 @@ impl Play {
         if knight_block {
             self.sound.play(neopets_sim::sound::WEAPON, 34, neopets_sim::sound::Play { emitter: Some(hero_at), ..Default::default() });
             if self.hero_index == 0 {
-                if let Some(a) = self.attack.as_mut().filter(|a| matches!(a.sub, 2 | 3 | 4 | 6 | 11 | 12)) {
+                if let Some(a) = self.player.attack.as_mut().filter(|a| matches!(a.sub, 2 | 3 | 4 | 6 | 11 | 12)) {
                     a.recoil();
                 }
             }
@@ -8673,14 +8695,14 @@ impl Play {
     /// needs a weapon, the Mote held with charge above 0 and MP at least the release cost; a
     /// failure returns F to 0 (the HUD timers of the failure are not driven).
     fn power_ready_step(&mut self) {
-        if !self.attack.as_ref().is_some_and(|a| a.sub == 1 && a.f >= 50) {
+        if !self.player.attack.as_ref().is_some_and(|a| a.sub == 1 && a.f >= 50) {
             return;
         }
         let Some(id) = self.equipment.motes[0][2] else { return };
         let held = self.state.items.get(&id).copied().unwrap_or(0) > 0;
         let ready = self.mote_objects.is_empty() && self.weapon.is_some() && held && self.player.hero_mp >= self.magic.tor_power(Some(id)).0;
         if !ready {
-            if let Some(a) = self.attack.as_mut() {
+            if let Some(a) = self.player.attack.as_mut() {
                 a.f = 0;
             }
             self.last_mote = format!("power attack not ready (Mote {id}, mp {}) on tick {}", self.player.hero_mp, self.ticks);
@@ -8716,7 +8738,7 @@ impl Play {
                 let frame = [[f[2], 0.0, -f[0]], [0.0, 1.0, 0.0], f];
                 let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, def, at, frame));
                 self.effects.update(&table, h, None, &mut self.rng);
-                self.power_fx = Some(h);
+                self.player.power_fx = Some(h);
             }
         }
         self.pay_mp(cost);
@@ -11286,7 +11308,7 @@ impl Play {
                 self.player.ledge.as_ref().map_or(String::new(), |l| format!("{:?}", l.state)),
                 self.player.hero_hp,
                 self.player.hero_mp,
-                self.attack.is_some() as u8,
+                self.player.attack.is_some() as u8,
                 self.dialogue_open as u8,
             );
             self.recorder.note(row);
@@ -11557,7 +11579,7 @@ impl Play {
         // SPEC-0033 Behavior 1A: the chain's attack part and the jump do nothing for a busy hero; during stun a press is lost.
         // SPEC-0022 chooser step 3: with the weapon out, a held attack button with no press edge
         // and no Square press enters the attack state again (holding the button repeats it).
-        let mut repeat = input.attack_held && !input.attack && !input.square && self.weapon_drawn;
+        let mut repeat = input.attack_held && !input.attack && !input.square && self.player.weapon_drawn;
         if out.consumed || was_open || self.player.statuses.active(neopets_sim::status::STUN) {
             input.jump = false;
             input.attack = false;
@@ -11585,13 +11607,13 @@ impl Play {
             input = HeroInput { side: input.side, forward: input.forward, ..HeroInput::default() };
             repeat = false;
         }
-        self.attack_repeat = repeat;
+        self.player.attack_repeat = repeat;
         // SPEC-0033 Behavior 52: the stick gesture machine (reset while busy or in a box), in
         // the dead-zoned stick units (87.5 at a full push).
         if self.hero_busy() || self.dialogue_open {
-            self.gesture.reset();
+            self.player.gesture.reset();
         } else {
-            self.gesture.tick(input.forward * 87.5, input.side * 87.5, &self.gesture_words);
+            self.player.gesture.tick(input.forward * 87.5, input.side * 87.5, &self.gesture_words);
         }
         if self.hero_index == 1 {
             self.roberta_step(&input);
@@ -11600,91 +11622,8 @@ impl Play {
         self.attack_fx_step();
         self.shot_fx_step();
         self.items_flags_step();
-        if self.hero_index == 0 && self.attack.is_none() && (input.attack || repeat) && (1..=6).contains(&self.player.loco.state) {
-            self.attack = Some(neopets_sim::attack::TorAttack::start_with(self.gesture.mode));
-            self.draw_items(true);
-        }
-        let mut force = false;
-        // SPEC-0036 Tor's flick lunge: the point is kept while the touched flag is clear; on contact he is held
-        // on it and the lunge goes on.
-        if self.attack.as_ref().is_some_and(|a| a.sub == 9) {
-            if self.player.touched {
-                self.player.loco.body.position = self.leap_point;
-            } else {
-                self.leap_point = self.player.loco.position();
-            }
-        }
-        if let Some(a) = self.attack.as_mut() {
-            let c = self.player.hero.clip_state();
-            a.mote = self.equipment.motes[0][2];
-            a.endless_spin = self.cheats.spin;
-            // SPEC-0036 Tor arm-table point: in the flick lunge a contact puts him back at the last position without one.
-            if a.sub == 9 {
-                if self.player.touched && a.f > 0 {
-                    self.player.loco.body.position = self.leap_point;
-                } else {
-                    self.leap_point = self.player.loco.position();
-                }
-            }
-            match a.tick(input.attack_held, input.attack, neopets_sim::attack::Clip { action: c.action, progress: c.progress }) {
-                Some(r) => {
-                    self.player.loco.set_attack(Some(r.action));
-                    force = r.restart;
-                }
-                None => {
-                    self.attack = None;
-                    self.player.loco.set_attack(None);
-                }
-            }
-        }
-        self.power_ready_step();
-        if let Some(h) = self.power_fx {
-            if self.attack.as_ref().is_some_and(|a| a.sub == 10) {
-                let f = self.player.loco.facing;
-                let (p, w) = (self.player.loco.position(), self.weapon_reach());
-                self.effects.set_position(h, [p[0] + f[0] * w, p[1], p[2] + f[2] * w]);
-            } else {
-                let table = self.effect_table.clone();
-                self.effects.stop(&table, h);
-                self.effects.release(h);
-                self.power_fx = None;
-            }
-        }
-        if let Some(sub) = self.attack.as_ref().filter(|a| a.cleared).map(|a| a.sub) {
-            if sub == 10 {
-                self.power_release();
-            }
-            self.hit_list.clear();
-            self.swing_serial = self.swing_serial.wrapping_add(1);
-            if let Some(a) = self.attack.as_mut() {
-                a.cleared = false;
-            }
-            // SPEC-0036 Attack router, Tor: into 2 and from 2 into 3, weapon 3 and voice 5; into
-            // 4, weapon 4 and voice 6; entering 6 and each repeat, weapon 9 and voice 4; into 10,
-            // voice 6, then voice 8.
-            use neopets_sim::sound::{Play as Cue, VOICE, WEAPON};
-            let plays: &[(usize, i32)] = match sub {
-                2 | 3 => &[(WEAPON, 3), (VOICE, 5)],
-                4 => &[(WEAPON, 4), (VOICE, 6)],
-                6 => &[(WEAPON, 9), (VOICE, 4)],
-                7 | 8 => &[(WEAPON, 7)],
-                9 => &[(WEAPON, 8)],
-                10 => &[(VOICE, 6), (VOICE, 8)],
-                _ => &[],
-            };
-            for &(slot, cue) in plays {
-                self.sound.play(slot, cue, Cue::default());
-            }
-            // SPEC-0036 Tor's sub-state 13 (the recoil): while the current action is not 26, the
-            // recoil voice cue by the recoil material (SPEC-0028 Blade recoil; 13 for the
-            // element mismatch's material 4, SPEC-0048 Element recoil) and the rumble request.
-            if sub == 13 && self.player.hero.clip_state().action != 26 {
-                self.sound.play(VOICE, neopets_sim::trigger::recoil_cue(self.recoil_material).into(), Cue::default());
-                let (p, t, m) = self.landing_rumble;
-                self.rumble.request(&self.rumble_presets, p, t, m);
-            }
-        }
-        let hits = self.hit_list.len();
+        let force = self.attack_step(&input, repeat);
+        let hits = self.player.hit_list.len();
         self.hero_swing();
         self.blade_recoil();
         self.trail_step();
@@ -11696,8 +11635,8 @@ impl Play {
         // one of the four special creature kinds (the record's kind at +0xAC) plays that
         // creature's "impact special" cue on its block at its position (nothing when the block is
         // not held); any other victim, and every Roberta hit, weapon cue 14 (no material impact).
-        if self.hit_list.len() > hits {
-            let power = self.attack.as_ref().is_some_and(|a| a.sub == 10);
+        if self.player.hit_list.len() > hits {
+            let power = self.player.attack.as_ref().is_some_and(|a| a.sub == 10);
             let special = |kind: i32| match kind {
                 240 => Some((365, 34)),
                 480 => Some((391, 1)),
@@ -11706,7 +11645,7 @@ impl Play {
                 _ => None,
             };
             let specials: Vec<(u32, i32, [f32; 3])> = if self.hero_index == 0 {
-                self.hit_list[hits..].iter().filter_map(|id| self.characters.iter().find(|c| c.id == *id)).filter_map(|c| special(c.pet_type).map(|(b, q)| (b, q, c.position))).collect()
+                self.player.hit_list[hits..].iter().filter_map(|id| self.characters.iter().find(|c| c.id == *id)).filter_map(|c| special(c.pet_type).map(|(b, q)| (b, q, c.position))).collect()
             } else {
                 Vec::new()
             };
@@ -11726,7 +11665,7 @@ impl Play {
         self.status_step();
         self.starlight_step();
         self.guard_step();
-        self.player.loco.p1 = self.weapon_drawn;
+        self.player.loco.p1 = self.player.weapon_drawn;
         self.player.loco.roberta = self.hero_index == 1;
         self.player.loco.air_ok = self.hero_index == 0 && self.equipment.entries[2][self.hero_index] != Some(126);
         // SPEC-0036 the stick step: Tor's 7 and 8 in the attack window; his power step 10 only with
@@ -11736,8 +11675,8 @@ impl Play {
         self.player.loco.stick_step = {
             use neopets_sim::hero::StickStep::*;
             let action = self.player.hero.clip_state().action;
-            let mote = self.attack.as_ref().and_then(|a| a.mote);
-            match (self.attack.as_ref().map(|a| a.sub), self.player.r_attack.as_ref().map(|a| a.sub)) {
+            let mote = self.player.attack.as_ref().and_then(|a| a.mote);
+            match (self.player.attack.as_ref().map(|a| a.sub), self.player.r_attack.as_ref().map(|a| a.sub)) {
                 (Some(7 | 8), _) if self.player.hero.frame_bits() & 1 != 0 => Clear,
                 (Some(10), _) if mote == Some(0xA2) && stick_off => Clear,
                 (_, Some(6)) if action != neopets_sim::roberta::SPIN_CW_END => Horizontal,
@@ -11759,8 +11698,8 @@ impl Play {
         }
         // An air attack's start: the hit list cleared and the weapon drawn.
         if air_before == 0 && self.player.loco.air_sub != 0 {
-            self.hit_list.clear();
-            self.swing_serial = self.swing_serial.wrapping_add(1);
+            self.player.hit_list.clear();
+            self.player.swing_serial = self.player.swing_serial.wrapping_add(1);
             self.set_weapon_drawn(true);
         }
         self.held_step();
@@ -11769,7 +11708,7 @@ impl Play {
         // While a conversation runs the emote consumer owns the hero's main id.
         if !self.dialogue_open {
             // While the guard timer runs the idle hero holds the shield up (animation 63).
-            let id = if self.player.loco.state == hero_states::STANCE && self.guard_timer > 0 { 63 } else { self.player.loco.action() };
+            let id = if self.player.loco.state == hero_states::STANCE && self.player.guard_timer > 0 { 63 } else { self.player.loco.action() };
             self.player.hero.request(id, force);
         }
         self.player.loco.haste = self.cheats.haste_factor();
@@ -11883,7 +11822,7 @@ impl Play {
             // "Save Game" caption shown this pass stops it too (SPEC-0025 Save points, order
             // against the hero's Square handling).
             if self.square_now && !self.book_prompt && self.door_prompt.is_none() && self.prompt_shown.is_none() && !self.save_prompt {
-                if self.weapon_drawn {
+                if self.player.weapon_drawn {
                     self.draw_items(false);
                 } else {
                     self.player.loco.sneak();
@@ -11897,7 +11836,7 @@ impl Play {
             let live_dead = self.player.loco.state == hero_states::DEAD;
             self.state.hero.dead = if self.hero_index == 0 { [live_dead, parked_dead] } else { [parked_dead, live_dead] };
             self.state.hero.swapping = self.swap.is_some();
-            let window = self.attack.is_some() && self.player.hero.frame_bits() & 1 != 0;
+            let window = self.player.attack.is_some() && self.player.hero.frame_bits() & 1 != 0;
             self.state.hero.strike = window && !self.window_was;
             self.window_was = window;
             if self.state.carry.is_empty() {
@@ -11922,7 +11861,7 @@ impl Play {
             }
             let pack = self.world.pack;
             self.state.entity_hp = self.characters.iter().filter(|c| c.pack == pack).filter_map(|c| Some((c.entity?, c.hp.max(0)))).collect();
-            self.state.hero.sub = self.attack.as_ref().map_or(0, |a| a.sub);
+            self.state.hero.sub = self.player.attack.as_ref().map_or(0, |a| a.sub);
             self.state.hero.occupied = self.hero_busy() || self.held;
             self.state.hero.attack_mote = self.equipment.motes[0][2];
             self.state.hero.hp = self.player.hero_hp;
@@ -12797,7 +12736,7 @@ impl Play {
             hero_radius: contact::HERO_RADIUS,
             hero_height: HERO_HEIGHT,
             variant: self.hero_index.min(1) as u8,
-            in_attack: self.hero_index == 0 && self.attack.as_ref().is_some_and(|a| (2..=12).contains(&a.sub)),
+            in_attack: self.hero_index == 0 && self.player.attack.as_ref().is_some_and(|a| (2..=12).contains(&a.sub)),
             guard: self.hero_guarding(),
             fog: self.equipment.motes[self.hero_index.min(1)][1] == Some(166),
             shots: &shots,
@@ -13194,7 +13133,60 @@ impl Play {
         }
     }
 
+    /// The running player's `HeroSight` (as `enemies_step` reads player 1's).
+    fn hero_sight(&self) -> HeroSight {
+        let hero = self.player.loco.position();
+        let facing = self.player.loco.facing;
+        let hplace = placement(hero, facing);
+        let hframes = self.player.hero.bone_frames();
+        let caps = self
+            .player
+            .hero
+            .bones()
+            .hurt
+            .iter()
+            .zip(&hframes)
+            .filter(|(h, _)| h.1 > 0.0)
+            .map(|(&(base, length, radius), f)| {
+                let w = hplace.mul(f);
+                Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
+            })
+            .collect();
+        let swing_sub = match self.hero_index {
+            0 => self.player.attack.as_ref().map(|a| a.sub),
+            _ => self.player.r_attack.as_ref().map(|a| a.sub),
+        };
+        let roberta_leap = self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 8 | 13));
+        HeroSight {
+            hero,
+            facing,
+            caps,
+            bands: enemy::band_factors(self.player.loco.state, &self.bands.0, &self.bands.1),
+            attackable: !matches!(self.player.loco.state, 16 | 17 | 25 | 33 | 36 | 48 | 50..=55 | 57 | 59 | 60) && !roberta_leap && !self.held && !self.dialogue_open,
+            swing: swing_sub.and_then(|s| enemy::swing_class(self.hero_index, s)),
+            recover: self.player.hero.frame_bits() & 0x800 != 0,
+            shot_paths: self.player.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect(),
+            guarding: self.hero_guarding(),
+            held: self.player.loco.state == hero_states::HELD,
+            stunned: self.player.touched,
+        }
+    }
+
     fn enemies_step(&mut self) {
+        // Local co-op (docs/MULTIPLAYER.md): what the enemies read of each player; each enemy
+        // aims at the nearest player (with player 1 alone, the values below, as before).
+        let mut sights = Vec::new();
+        if !self.others.is_empty() {
+            sights.push(self.hero_sight());
+            for i in 0..self.others.len() {
+                self.swap_player(i);
+                let saved = self.hero_index;
+                self.hero_index = self.player.who.min(1);
+                sights.push(self.hero_sight());
+                self.hero_index = saved;
+                self.swap_player(i);
+            }
+        }
         let hero = self.player.loco.position();
         let hero_facing = self.player.loco.facing;
         let hplace = placement(hero, hero_facing);
@@ -13215,7 +13207,7 @@ impl Play {
         // SPEC-0038 Behavior 44 defences: the hero's swing class (attack sub-state +0xF90 by
         // hero) and the live hero shots as (position, velocity per tick).
         let swing_sub = match self.hero_index {
-            0 => self.attack.as_ref().map(|a| a.sub),
+            0 => self.player.attack.as_ref().map(|a| a.sub),
             _ => self.player.r_attack.as_ref().map(|a| a.sub),
         };
         let hero_swing = swing_sub.and_then(|s| enemy::swing_class(self.hero_index, s));
@@ -13329,6 +13321,16 @@ impl Play {
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
             let Character { id, name, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, hp, .. } = c else { continue };
             let p = wk.position();
+            // Local co-op: the nearest player's sight in place of player 1's.
+            let target = (0..sights.len()).min_by(|&a, &b| {
+                let d = |k: usize| (sights[k].hero[0] - p[0]).powi(2) + (sights[k].hero[2] - p[2]).powi(2);
+                d(a).total_cmp(&d(b))
+            });
+            let (hero, hero_facing, caps, bands, attackable, hero_swing, hero_recover, shot_paths, guarding, hero_is_held, hero_is_stunned) = match target.map(|k| &sights[k]) {
+                Some(t) => (t.hero, t.facing, &t.caps, t.bands, t.attackable, t.swing, t.recover, &t.shot_paths, t.guarding, t.held, t.stunned),
+                None => (hero, hero_facing, &caps, bands, attackable, hero_swing, hero_recover, &shot_paths, guarding, hero_is_held, hero_is_stunned),
+            };
+            let target = target.unwrap_or(0);
             if e.dead {
                 let clip = anim.clip_state();
                 let has = |id: u32| anim.has(id);
@@ -13585,7 +13587,7 @@ impl Play {
             }
             if let Some(s) = act.strike {
                 let m = e.p.slots[s.slot].missile;
-                strikes.push((*id, s, wk.facing, (m.status, m.status_chance, m.status_range), e.strike_scale(), e.status(11)));
+                strikes.push((*id, s, wk.facing, (m.status, m.status_chance, m.status_range), e.strike_scale(), e.status(11), target));
             }
             // SPEC-0038 Behavior 35: the rise sets health to its maximum.
             if act.heal {
@@ -13792,7 +13794,18 @@ impl Play {
         }
         self.shot_effects_step();
         let grabs_after_strikes = grabs;
-        for (at, s, f, status, g, poison_attack) in strikes {
+        for (at, s, f, status, g, poison_attack, target) in strikes {
+            // Local co-op: a strike on another player is taken by that player, swapped in with its
+            // hero, weapon and shield.
+            let other = target.checked_sub(1).filter(|&k| k < self.others.len());
+            let mut saved = (self.hero_index, self.weapon, self.shield);
+            if let Some(k) = other {
+                self.swap_player(k);
+                saved = (self.hero_index, self.weapon, self.shield);
+                let who = self.player.who.min(1);
+                (self.hero_index, self.weapon, self.shield) = (who, self.equipment.entries[0][who], self.equipment.entries[1][who]);
+                self.coop_running = true;
+            }
             // SPEC-0036 Enemy attack damage to a hero: the shield block, the armour Mote and the
             // body item, by the attack's damage alignment (no petpet).
             let element = self.characters.iter().find(|c| c.id == at).and_then(|c| c.enemy.as_ref()).map_or(0, |e| e.p.slots[s.slot].alignment);
@@ -13849,6 +13862,11 @@ impl Play {
                     self.hero_status(status.0, ticks / 60);
                 }
             }
+            if let Some(k) = other {
+                (self.hero_index, self.weapon, self.shield) = saved;
+                self.coop_running = false;
+                self.swap_player(k);
+            }
             if died {
                 // A hit that leaves the hero at 0 HP: the attacker's victory pose (state 10).
                 if let Some(c) = self.characters.iter_mut().find(|c| c.id == at) {
@@ -13867,7 +13885,7 @@ impl Play {
         for g in grabs_after_strikes {
             match g {
                 enemy::Grab::Seize if !matches!(self.player.loco.state, hero_states::DEAD | hero_states::HELD) => {
-                    self.attack = None;
+                    self.player.attack = None;
                     self.player.ledge = None;
                     self.player.hold = None;
                     self.player.held_at = Some(self.player.loco.position());
@@ -13956,10 +13974,10 @@ impl Play {
         use neopets_sim::status as st;
         let state = self.player.loco.state;
         let moving = (2..=6).contains(&state) || state == 32;
-        let attacking = self.attack.as_ref().is_some_and(|a| (2..=12).contains(&a.sub));
+        let attacking = self.player.attack.as_ref().is_some_and(|a| (2..=12).contains(&a.sub));
         let t = self.player.statuses.tick(self.player.hero_hp, moving, attacking);
         if t.stunned && state != hero_states::DEAD {
-            self.attack = None;
+            self.player.attack = None;
             self.player.loco.set_end_state(hero_states::STANCE);
         }
         self.player.loco.status_scale = t.scale;
@@ -14540,20 +14558,20 @@ impl Play {
         let damage = damage.max(0.0).trunc() as i32;
         // SPEC-0040 Behavior 29 item 2: a hit (not a poison tick, attacker -2) with the weapon
         // sheathed draws Tor's weapon when he has one and raises the hero's shield.
-        if !self.weapon_drawn && what != "poison" {
+        if !self.player.weapon_drawn && what != "poison" {
             let tor_armed = self.equipment.entries[0][0].is_some();
             self.set_weapon_drawn(tor_armed);
             self.shield_raised = self.shield.is_some();
         }
         // A hit on a living hero ends an active stun.
         self.player.statuses.clear(neopets_sim::status::STUN);
-        let busy = self.attack.as_ref().is_some_and(|a| matches!(a.sub, 1 | 10));
+        let busy = self.player.attack.as_ref().is_some_and(|a| matches!(a.sub, 1 | 10));
         if !busy && blocked {
             // The shield slot's "block small".
             self.sound.play(neopets_sim::sound::SHIELD, 0, neopets_sim::sound::Play::default());
             self.player.loco.block();
         } else if !busy {
-            self.attack = None;
+            self.player.attack = None;
             // The 32/192 flinch reads Tor's weapon entry for both heroes (SPEC-0036 state 17).
             self.player.loco.hurt(self.equipment.entries[0][0].is_some());
         }
@@ -14565,6 +14583,12 @@ impl Play {
         self.cue(170);
         let big = self.rng.next_u32() % 2 == 0;
         self.sound.play(neopets_sim::sound::VOICE, if big { 1 } else { 0 }, neopets_sim::sound::Play::default());
+        // Local co-op: another player is not taken down yet (docs/MULTIPLAYER.md step 3: down and
+        // revive); it keeps 1 HP.
+        if self.player.hero_hp <= 0 && self.coop_running {
+            self.player.hero_hp = 1;
+            return false;
+        }
         if self.player.hero_hp <= 0 {
             self.player.hero_hp = 0;
             self.death_hook();
@@ -14572,7 +14596,7 @@ impl Play {
         }
         if damage > 0 && knockback > 0.0 {
             let d = unit([9.0 * attacker_facing[0], 9.0 * attacker_facing[1] + 12.0, 9.0 * attacker_facing[2]]);
-            self.attack = None;
+            self.player.attack = None;
             self.knock_hero(scale(d, knockback));
         }
         false
@@ -14752,7 +14776,7 @@ impl Play {
             }
             if let Some(s) = act.knockback {
                 let k = unit([9.0 * d[0], 12.0, 9.0 * d[2]]);
-                self.attack = None;
+                self.player.attack = None;
                 self.knock_hero(scale(k, self.gnarfas_words.push * s));
             }
         }
@@ -14795,7 +14819,7 @@ impl Play {
             })
             .collect();
         let (st, guarding_now) = (self.player.loco.state, self.hero_guarding());
-        let attacking = self.attack.is_some() || self.player.r_attack.is_some();
+        let attacking = self.player.attack.is_some() || self.player.r_attack.is_some();
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
             let level_flags = self.state.level_flags.clone();
@@ -14942,7 +14966,7 @@ impl Play {
                 self.hero_hit(damage as f32, 0.0, blocked, d, "the Ixi Chief".into());
             }
             if let Some(p) = act.push {
-                self.attack = None;
+                self.player.attack = None;
                 self.knock_hero(p);
             }
         }
@@ -14963,7 +14987,7 @@ impl Play {
             let world = &self.world;
             let ground = |x: f32, z: f32| world.ground_at(x, z, 1.0e6).unwrap_or(0.0);
             let st = self.player.loco.state;
-            let attacking = self.attack.is_some();
+            let attacking = self.player.attack.is_some();
             let c = &mut self.characters[i];
             let fwd = unit([c.facing[0], 0.0, c.facing[2]]);
             let anchor = add(c.position, [0.0, 2.0, 0.0]);
@@ -15132,7 +15156,7 @@ impl Play {
         // SPEC-0012 G9, the strike-active predicate: Tor in the attack state with sub-state 11 or
         // 12 or in jump state 7 in air phase 8 or 9; Roberta in the attack state with 5 or 12.
         let striking = match self.hero_index {
-            0 => (attacking && self.attack.as_ref().is_some_and(|a| matches!(a.sub, 11 | 12))) || (self.player.loco.state == 7 && matches!(self.player.loco.phase, 8 | 9)),
+            0 => (attacking && self.player.attack.as_ref().is_some_and(|a| matches!(a.sub, 11 | 12))) || (self.player.loco.state == 7 && matches!(self.player.loco.phase, 8 | 9)),
             _ => attacking && self.player.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 5 | 12)),
         };
         for id in ids {
@@ -15372,7 +15396,7 @@ impl Play {
             })
             .collect();
         let shots: Vec<([f32; 3], [f32; 3], f32)> = self.player.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0), s.radius)).collect();
-        let attacking = self.attack.is_some();
+        let attacking = self.player.attack.is_some();
         let guarding = self.hero_guarding();
         let hero_anim = self.player.hero.clip_state().action;
         let ratio = self.player.hero_hp as f32 / self.player.hero_max.max(1) as f32;
@@ -15895,7 +15919,7 @@ impl Play {
             (p0, add(p0, scale(c.axis, 2.5)))
         });
         let reaches = move |p: [f32; 3]| blade.is_some_and(|(a, b)| neopets_sim::combat::segment_distance(a, b, p, p) <= 1.0);
-        let swing = blade.map(|_| (self.swing_serial, &reaches as &dyn Fn([f32; 3]) -> bool));
+        let swing = blade.map(|_| (self.player.swing_serial, &reaches as &dyn Fn([f32; 3]) -> bool));
         let events = self.thorns.tick(&touches, swing, self.sister_words.thorn_max_hits);
         for ev in events {
             match ev {
@@ -16160,7 +16184,7 @@ impl Play {
                 self.hero_hit(damage as f32, 0.0, false, d, "the Undead Draik".into());
                 if let Some((u, speed)) = throw {
                     // R-0066: the throw is speed x unit((0, 12, 0) + 9 u).
-                    self.attack = None;
+                    self.player.attack = None;
                     self.knock_hero(scale(unit([9.0 * u[0], 12.0, 9.0 * u[2]]), speed));
                 }
             }
@@ -16181,8 +16205,8 @@ impl Play {
         let swing = self.weapon_segment();
         let guarding = self.hero_guarding();
         let kind = neopets_sim::darkest::attack_kind(self.equipment.motes[self.hero_index.min(1)][1]);
-        let attacking = if self.hero_index == 0 { self.attack.is_some() } else { self.player.r_attack.is_some() };
-        let form2 = if self.hero_index == 0 { self.attack.as_ref().is_some_and(|a| matches!(a.sub, 4 | 7 | 8 | 12)) } else { self.player.r_attack.as_ref().is_some_and(|a| a.sub == 4) };
+        let attacking = if self.hero_index == 0 { self.player.attack.is_some() } else { self.player.r_attack.is_some() };
+        let form2 = if self.hero_index == 0 { self.player.attack.as_ref().is_some_and(|a| matches!(a.sub, 4 | 7 | 8 | 12)) } else { self.player.r_attack.as_ref().is_some_and(|a| a.sub == 4) };
         let shots: Vec<([f32; 3], f32)> = self.player.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
@@ -16204,7 +16228,7 @@ impl Play {
             }
             // NEOPETS_TRACE_FAERIE: the stun-time measurements (diagnostic).
             if std::env::var_os("NEOPETS_TRACE_FAERIE").is_some() && c.faerie.as_ref().is_some_and(|f| f.code == 5) && attacking {
-                let sub = if self.hero_index == 0 { self.attack.as_ref().map(|a| a.sub) } else { self.player.r_attack.as_ref().map(|a| a.sub) };
+                let sub = if self.hero_index == 0 { self.player.attack.as_ref().map(|a| a.sub) } else { self.player.r_attack.as_ref().map(|a| a.sub) };
                 println!("      faerie stun: attacking sub {sub:?} form2 {form2} swing {} reaches {reaches} on tick {}", swing.is_some(), self.ticks);
             }
             let clip = c.anim.clip_state();
@@ -16313,7 +16337,7 @@ impl Play {
                 self.hero_hit(damage as f32, 0.0, false, d, "the Darkest Faerie's orb".into());
             }
             if let Some(p) = act.push {
-                self.attack = None;
+                self.player.attack = None;
                 let at = add(self.player.loco.position(), p.offset);
                 self.player.loco.body.position = at;
                 self.knock_hero(p.velocity);
@@ -16563,8 +16587,8 @@ impl Play {
         // The "knocked out" voice cue, at the hero, do-not-restart.
         let p = self.player.loco.position();
         self.sound.play(neopets_sim::sound::VOICE, 2, neopets_sim::sound::Play { emitter: Some(p), do_not_restart: true, ..Default::default() });
-        self.attack = None;
-        self.hit_list.clear();
+        self.player.attack = None;
+        self.player.hit_list.clear();
         self.player.statuses.clear_all();
         self.player.loco.die();
     }
@@ -16954,7 +16978,7 @@ impl Play {
             }
         }
         let has = self.state.has_item(rp::ITEM);
-        let attack_sub = if self.hero_index == 0 { self.attack.as_ref().map(|a| a.sub) } else { self.player.r_attack.as_ref().map(|a| a.sub) };
+        let attack_sub = if self.hero_index == 0 { self.player.attack.as_ref().map(|a| a.sub) } else { self.player.r_attack.as_ref().map(|a| a.sub) };
         let scan = self.player.aim.step(self.player.loco.state, attack_sub, self.player.rope_y, input.r2_held, input.circle_held);
         if self.player.loco.state != rp::STATE {
             self.player.rope_hero = None;
@@ -17055,7 +17079,7 @@ impl Play {
     /// 1; SPEC-0036), from the weapon attach point along its axis over the weapon reach.
     fn weapon_segment(&self) -> Option<neopets_sim::combat::Cylinder> {
         let roberta = self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| a.sub != 8);
-        if (self.attack.is_none() && self.player.loco.air_sub == 0 && !roberta) || self.player.hero.frame_bits() & 1 == 0 {
+        if (self.player.attack.is_none() && self.player.loco.air_sub == 0 && !roberta) || self.player.hero.frame_bits() & 1 == 0 {
             return None;
         }
         let place = placement(self.player.loco.position(), self.player.loco.facing);
@@ -17148,7 +17172,7 @@ impl Play {
         let m = self.equipment.motes[h.min(1)][2].map(|id| id as i32);
         let idx = m.and_then(|id| usize::try_from(id - 160).ok()).filter(|&k| k < 14);
         let (sub, f) = match h {
-            0 => self.attack.as_ref().map_or((0, 0), |a| (a.sub, a.f)),
+            0 => self.player.attack.as_ref().map_or((0, 0), |a| (a.sub, a.f)),
             _ => self.player.r_attack.as_ref().map_or((0, 0), |a| (a.sub, a.f)),
         };
         let charged = f > if h == 0 { 50 } else { 80 };
@@ -17159,7 +17183,7 @@ impl Play {
         let toward = |p: [f32; 3]| add(p, scale(unit(sub_v(eye, p)), 0.2));
         // The base point and axis of the held weapon: attach point 0 (SPEC-0036 Attack-id spawn dispatch). A sheathed
         // sword has no line or tip light: the user's report of the game; the driver's words leave it open (R-0227).
-        let drawn = self.weapon_drawn;
+        let drawn = self.player.weapon_drawn;
         let (base, z0) = self.weapon_line().unwrap_or((pos, z0));
         let n = toward(add(base, scale(z0, 0.48)));
         let t = toward(add(base, scale(z0, self.weapon_reach())));
@@ -17966,9 +17990,9 @@ impl Play {
             self.seal_open(gi);
         }
         if recoil && self.hero_index == 0 {
-            if let Some(a) = self.attack.as_mut() {
+            if let Some(a) = self.player.attack.as_mut() {
                 a.recoil();
-                self.recoil_material = 4;
+                self.player.recoil_material = 4;
             }
         }
         for gi in chained {
@@ -18537,6 +18561,98 @@ impl Play {
         (t != [1.0; 3]).then_some(t)
     }
 
+    /// The running player's Tor attack (SPEC-0036 Attack router): its start from the attack press
+    /// (or the repeat), its sub-state step and the clip it asks for, the flick lunge's point, the
+    /// power effect and each new swing's hit list, sounds and recoil cue. Returns whether the
+    /// clip restarts. Each player runs it in turn (docs/MULTIPLAYER.md).
+    fn attack_step(&mut self, input: &HeroInput, repeat: bool) -> bool {
+        let mut force = false;
+        if self.hero_index == 0 && self.player.attack.is_none() && (input.attack || repeat) && (1..=6).contains(&self.player.loco.state) {
+            self.player.attack = Some(neopets_sim::attack::TorAttack::start_with(self.player.gesture.mode));
+            self.draw_items(true);
+        }
+        // SPEC-0036 Tor's flick lunge: the point is kept while the touched flag is clear; on contact he is held
+        // on it and the lunge goes on.
+        if self.player.attack.as_ref().is_some_and(|a| a.sub == 9) {
+            if self.player.touched {
+                self.player.loco.body.position = self.player.leap_point;
+            } else {
+                self.player.leap_point = self.player.loco.position();
+            }
+        }
+        if let Some(a) = self.player.attack.as_mut() {
+            let c = self.player.hero.clip_state();
+            a.mote = self.equipment.motes[0][2];
+            a.endless_spin = self.cheats.spin;
+            // SPEC-0036 Tor arm-table point: in the flick lunge a contact puts him back at the last position without one.
+            if a.sub == 9 {
+                if self.player.touched && a.f > 0 {
+                    self.player.loco.body.position = self.player.leap_point;
+                } else {
+                    self.player.leap_point = self.player.loco.position();
+                }
+            }
+            match a.tick(input.attack_held, input.attack, neopets_sim::attack::Clip { action: c.action, progress: c.progress }) {
+                Some(r) => {
+                    self.player.loco.set_attack(Some(r.action));
+                    force = r.restart;
+                }
+                None => {
+                    self.player.attack = None;
+                    self.player.loco.set_attack(None);
+                }
+            }
+        }
+        self.power_ready_step();
+        if let Some(h) = self.player.power_fx {
+            if self.player.attack.as_ref().is_some_and(|a| a.sub == 10) {
+                let f = self.player.loco.facing;
+                let (p, w) = (self.player.loco.position(), self.weapon_reach());
+                self.effects.set_position(h, [p[0] + f[0] * w, p[1], p[2] + f[2] * w]);
+            } else {
+                let table = self.effect_table.clone();
+                self.effects.stop(&table, h);
+                self.effects.release(h);
+                self.player.power_fx = None;
+            }
+        }
+        if let Some(sub) = self.player.attack.as_ref().filter(|a| a.cleared).map(|a| a.sub) {
+            if sub == 10 {
+                self.power_release();
+            }
+            self.player.hit_list.clear();
+            self.player.swing_serial = self.player.swing_serial.wrapping_add(1);
+            if let Some(a) = self.player.attack.as_mut() {
+                a.cleared = false;
+            }
+            // SPEC-0036 Attack router, Tor: into 2 and from 2 into 3, weapon 3 and voice 5; into
+            // 4, weapon 4 and voice 6; entering 6 and each repeat, weapon 9 and voice 4; into 10,
+            // voice 6, then voice 8.
+            use neopets_sim::sound::{Play as Cue, VOICE, WEAPON};
+            let plays: &[(usize, i32)] = match sub {
+                2 | 3 => &[(WEAPON, 3), (VOICE, 5)],
+                4 => &[(WEAPON, 4), (VOICE, 6)],
+                6 => &[(WEAPON, 9), (VOICE, 4)],
+                7 | 8 => &[(WEAPON, 7)],
+                9 => &[(WEAPON, 8)],
+                10 => &[(VOICE, 6), (VOICE, 8)],
+                _ => &[],
+            };
+            for &(slot, cue) in plays {
+                self.sound.play(slot, cue, Cue::default());
+            }
+            // SPEC-0036 Tor's sub-state 13 (the recoil): while the current action is not 26, the
+            // recoil voice cue by the recoil material (SPEC-0028 Blade recoil; 13 for the
+            // element mismatch's material 4, SPEC-0048 Element recoil) and the rumble request.
+            if sub == 13 && self.player.hero.clip_state().action != 26 {
+                self.sound.play(VOICE, neopets_sim::trigger::recoil_cue(self.player.recoil_material).into(), Cue::default());
+                let (p, t, m) = self.landing_rumble;
+                self.rumble.request(&self.rumble_presets, p, t, m);
+            }
+        }
+        force
+    }
+
     /// The running player's motion record tick and its contacts (walls, boxes, blocks, spheres,
     /// cylinders, breakables and character bodies; SPEC-0018 and SPEC-0040 Behavior 11), run by
     /// each player in turn (docs/MULTIPLAYER.md). Returns whether the ground was found in the
@@ -18906,27 +19022,83 @@ impl Play {
         self.others.clear();
     }
 
-    /// Local co-op (docs/MULTIPLAYER.md step 2a): each other player's tick, after player 1's:
-    /// its follow camera, its movement from its own input (relative to its own camera), the
-    /// motion record's contacts and its animation. Attacks, hits, triggers, pickups and doors are
-    /// player 1's alone for now (step 2b and 3).
+    /// Local co-op (docs/MULTIPLAYER.md step 2): each other player's tick, after player 1's, with
+    /// that player swapped in and the playing hero, weapon and shield set to its own: its follow
+    /// camera; its attacks (Tor's sword combo, or Roberta's attacks and shots) and the swing's
+    /// hits; its movement from its own input relative to its own camera; the motion record's
+    /// contacts and its animation. Pickups, doors, triggers, talking and the item panels are
+    /// player 1's alone.
     pub fn coop_step(&mut self, inputs: &[(HeroInput, CameraPad)]) {
         for i in 0..self.others.len() {
-            let (input, pad) = inputs.get(i).copied().unwrap_or_default();
+            let (mut input, pad) = inputs.get(i).copied().unwrap_or_default();
             self.swap_player(i);
+            let saved = (self.hero_index, self.weapon, self.shield);
+            self.coop_running = true;
+            let who = self.player.who.min(1);
+            self.hero_index = who;
+            self.weapon = self.equipment.entries[0][who];
+            self.shield = self.equipment.entries[1][who];
             self.camera_step(pad);
             let (forward, left) = self.player.camera.rows();
-            let who = self.player.who;
+            // The attack press, its repeat while held with the weapon out (SPEC-0022 chooser
+            // step 3), none without a weapon or while stunned, dead, hurt or falling.
+            let mut repeat = input.attack_held && !input.attack && !input.square && self.player.weapon_drawn;
+            if self.player.statuses.active(neopets_sim::status::STUN) {
+                input.jump = false;
+                input.attack = false;
+                repeat = false;
+            }
+            if self.weapon.is_none() {
+                input.attack = false;
+                repeat = false;
+            }
+            if matches!(self.player.loco.state, hero_states::DEAD | hero_states::HURT | hero_states::LONG_FALL) {
+                input = HeroInput { side: input.side, forward: input.forward, ..HeroInput::default() };
+                repeat = false;
+            }
+            self.player.attack_repeat = repeat;
+            if self.hero_busy() {
+                self.player.gesture.reset();
+            } else {
+                self.player.gesture.tick(input.forward * 87.5, input.side * 87.5, &self.gesture_words);
+            }
+            if who == 1 {
+                self.roberta_step(&input);
+            }
+            let force = self.attack_step(&input, repeat);
+            self.hero_swing();
+            self.blade_recoil();
+            self.shots_step();
             self.player.loco.roberta = who == 1;
-            self.player.loco.air_ok = who == 0;
-            self.player.loco.stick_step = neopets_sim::hero::StickStep::Off;
+            self.player.loco.air_ok = who == 0 && self.equipment.entries[2][who] != Some(126);
+            let stick_off = input.forward != 0.0 || input.side != 0.0;
+            self.player.loco.stick_step = {
+                use neopets_sim::hero::StickStep::*;
+                let action = self.player.hero.clip_state().action;
+                let mote = self.player.attack.as_ref().and_then(|a| a.mote);
+                match (self.player.attack.as_ref().map(|a| a.sub), self.player.r_attack.as_ref().map(|a| a.sub)) {
+                    (Some(7 | 8), _) if self.player.hero.frame_bits() & 1 != 0 => Clear,
+                    (Some(10), _) if mote == Some(0xA2) && stick_off => Clear,
+                    (_, Some(6)) if action != neopets_sim::roberta::SPIN_CW_END => Horizontal,
+                    (_, Some(7)) if action != neopets_sim::roberta::SPIN_CCW_END => Horizontal,
+                    (_, Some(14)) => Turn,
+                    _ => Off,
+                }
+            };
+            let air_before = self.player.loco.air_sub;
             let clip = self.player.hero.clip_state();
             self.player.loco.update(&input, forward, left, clip);
+            if air_before == 0 && self.player.loco.air_sub != 0 {
+                self.player.hit_list.clear();
+                self.player.swing_serial = self.player.swing_serial.wrapping_add(1);
+            }
             let id = self.player.loco.action();
-            self.player.hero.request(id, false);
+            self.player.hero.request(id, force);
             self.player.hero.set_rate(self.player.loco.rate);
             self.hero_contacts(false);
             self.player.root_step = self.player.hero.tick();
+            (self.hero_index, self.weapon, self.shield) = saved;
+            self.coop_running = false;
             self.swap_player(i);
         }
     }
