@@ -509,7 +509,7 @@ pub fn sync_hud(
     let inputs = Inputs {
         c: if items_open { 240 } else { hud.c },
         g0: if items_open { 240 } else { hud.g0 },
-        mp_max: p.hero_mp_max,
+        mp_max: p.player.hero_mp_max,
         health_dividers: hud.health.dividers,
         pool_dividers: hud.pool.dividers,
         monster: mb.t != 0 && !p.quick.open,

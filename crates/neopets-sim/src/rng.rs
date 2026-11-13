@@ -35,6 +35,11 @@ impl Rng {
             .wrapping_add(year as u32)
     }
 
+    /// A fingerprint of the generator's state (for the per-tick state checksum).
+    pub fn fingerprint(&self) -> u64 {
+        self.words.iter().fold(self.index as u64, |h, &w| (h ^ w as u64).wrapping_mul(0x100_0000_01b3))
+    }
+
     fn twist(&mut self) {
         for i in 0..N {
             let y = (self.words[i] & UPPER) | (self.words[(i + 1) % N] & LOWER);

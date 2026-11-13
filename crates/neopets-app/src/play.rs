@@ -898,7 +898,7 @@ struct RouteSolids {
 impl RouteSolids {
     fn of(play: &Play) -> Self {
         let w = &play.world;
-        let at = play.loco.position();
+        let at = play.player.loco.position();
         let mut cylinders: Vec<([f32; 3], f32, f32)> = w.breakable_cylinders(at, f32::MAX).into_iter().map(|(b, l, r, _)| (b, l, r)).collect();
         cylinders.extend(play.all_object_cylinders());
         if let Some(patches) = play.foliage.get(&w.pack) {
@@ -1345,15 +1345,93 @@ enum Wait {
     Item(u16),
 }
 
-pub struct Play {
+/// One player's hero (docs/MULTIPLAYER.md step 1): the body, animation and model, health,
+/// magic and status timers, the climbing, ledge, block and riding states, the aim, shots,
+/// target list and lock, and the hero's own button latches. `Play::player` is the player being
+/// run; the other players wait in `Play::others` and are swapped in for their turn. The
+/// script-driven and world-wide state (held, scripted walks, dialogue, the rope manager) stays
+/// in `Play`.
+pub struct Player {
     pub loco: Locomotion,
     pub camera: FollowCamera,
+    pub hero: HeroAnim,
+    pub model: ModelData,
+    /// The hero's 14 status timers (SPEC-0036).
+    pub statuses: neopets_sim::status::Statuses,
+    /// The hero's health and maximum (SPEC-0036 Start values), the band factor tables
+    /// (SPEC-0038 Behavior 18) and the last hit taken.
+    pub hero_hp: i32,
+    pub hero_max: i32,
+    pub hero_mp: i32,
+    pub hero_mp_max: i32,
+    /// The hero's hit flash frames left (SPEC-0046 step 6).
+    pub hero_flash: u8,
+    /// The hero's block state (state 18, SPEC-0033 Behavior 4A.2).
+    pub hold: Option<neopets_sim::block::Hold>,
+    /// States 19 and 58 (SPEC-0033 Behavior 51), the side-touch latch (Behavior 15A) and the
+    /// push-into-face counter (Behavior 15).
+    pub hang: Option<neopets_sim::block::Hang>,
+    /// The grab-line hang (state 28) and its cooldown (SPEC-0033 Behavior 9).
+    pub line_hang: Option<neopets_sim::grab::Hang>,
+    pub line_cooldown: u32,
+    /// The hero's touched flag from the last motion step (see `record_tick`'s contact pass).
+    pub touched: bool,
+    /// The characters whose touch latch the hero's push set this tick and on the tick before
+    /// (SPEC-0040 A boss and the hero in the character push): a boss's update runs before the
+    /// hero's there and so reads the earlier tick's.
+    pub hero_touch: (Vec<u64>, Vec<u64>),
+    /// Where a grab holds the hero (SPEC-0038 Behavior 15: he stays where he was seized).
+    pub held_at: Option<[f32; 3]>,
+    /// The ledge state (30, 35 or 47) and its held edge (SPEC-0033 Behavior 51).
+    pub ledge: Option<neopets_sim::ledge::Ledge>,
+    /// The frame record the ledge state holds (its links lead the shimmy round the loop).
+    pub ledge_record: Option<ground::FrameRecord>,
+    pub climb: Option<neopets_sim::block::Climb>,
+    /// State 41 and the grab cooldown (Behavior 20) the jump off sets.
+    pub ladder: Option<neopets_sim::ladder::Ladder>,
+    pub grab_cooldown: u32,
+    /// State 21 (SPEC-0033 Behavior 51).
+    pub panel: Option<neopets_sim::climb::Climb>,
+    pub side_touch: bool,
+    pub face_count: u32,
+    pub stick_centred: bool,
+    /// The hero's ground object on the last tick (SPEC-0018 riding): world, object index, its
+    /// rotation and translation then.
+    pub ride: Option<(u32, usize, neopets_sim::ride::Quat, [f32; 3])>,
+    /// A script's ride (RideObj, R-0259): the object and the hero's height above its origin.
+    pub ride_lock: Option<(usize, f32)>,
+    /// The Rope Gun (SPEC-0036 Right-stick aim mode; SPEC-0033 State 27): the aim mode, the
+    /// world's rope manager, state 27's phases and the right stick's converted Y this tick.
+    pub aim: neopets_sim::rope::AimMode,
+    /// The aim-view marker object (SPEC-0033 section 23), drawn with a stand-in (R-0280).
+    pub aim_view: neopets_sim::aimview::AimView,
+    pub rope_hero: Option<neopets_sim::rope::RopeHero>,
+    pub rope_y: f32,
+    /// Roberta's attack step, her six shot slots and the shot rows (SPEC-0036).
+    pub r_attack: Option<neopets_sim::roberta::RobertaAttack>,
+    pub hero_shots: Vec<neopets_sim::roberta::Shot>,
+    /// The hero's candidate list and its lock (SPEC-0040 Behavior 20).
+    pub candidates: neopets_sim::lock::Candidates,
+    /// The hero's target list (SPEC-0053 3.9), which the attack turn aims at.
+    pub targets: neopets_sim::lock::TargetList,
+    pub lock: Option<u64>,
+    /// Square held on the last input (the level scripts' Square release tests).
+    pub square_held: bool,
+    /// L1 held this tick (pad slot 0; SPEC-0038 Behavior 14 code 5).
+    pub l1_held: bool,
+    pub hero_trail: Option<usize>,
+    pub carried: Option<u64>,
+}
+
+pub struct Play {
+    /// The player being run, and the other players (docs/MULTIPLAYER.md).
+    pub player: Player,
+    #[allow(dead_code)] // Filled by local co-op (docs/MULTIPLAYER.md step 2).
+    pub others: Vec<Player>,
     /// SPEC-0028 section 11: the atmosphere zone selection and this frame's output (the blend
     /// factor b is the sky dome's role-10 opacity).
     atmos_sel: neopets_sim::atmosphere::Selector,
     pub atmos_out: neopets_sim::atmosphere::Output,
-    pub hero: HeroAnim,
-    pub model: ModelData,
     pub boot: BootTravel,
     /// The current world and the other resident buffer (E while T is current, T while E is).
     pub world: World,
@@ -1395,8 +1473,6 @@ pub struct Play {
     square_now: bool,
     /// Square's press edge as the script button query reads it (also while the hero is held).
     button_square: bool,
-    /// Square held on the last input (the level scripts' Square release tests).
-    square_held: bool,
     /// The Talk label is shown this tick, and the talked character (the speaker of its lines).
     pub talk_prompt: bool,
     pub talk_partner: Option<String>,
@@ -1431,14 +1507,7 @@ pub struct Play {
     pub attack: Option<neopets_sim::attack::TorAttack>,
     /// An attack press waiting for the next tick.
     pub attack_latch: bool,
-    /// The Rope Gun (SPEC-0036 Right-stick aim mode; SPEC-0033 State 27): the aim mode, the
-    /// world's rope manager, state 27's phases and the right stick's converted Y this tick.
-    pub aim: neopets_sim::rope::AimMode,
-    /// The aim-view marker object (SPEC-0033 section 23), drawn with a stand-in (R-0280).
-    pub aim_view: neopets_sim::aimview::AimView,
     pub rope: neopets_sim::rope::Rope,
-    rope_hero: Option<neopets_sim::rope::RopeHero>,
-    rope_y: f32,
     /// The world the rope manager belongs to (a world change resets it).
     rope_pack: u32,
     /// Diagnostic (NEOPETS_TRACE_ROPE): the scan's camera forward points at this aim target.
@@ -1482,38 +1551,10 @@ pub struct Play {
     gesture_words: neopets_sim::gesture::Words,
     /// The Miamouse catch switch, meshes and count, and the carried Miamouse (character id).
     pub catch: neopets_sim::miamouse::Catch,
-    carried: Option<u64>,
-    /// The hero's block state (state 18, SPEC-0033 Behavior 4A.2).
-    hold: Option<neopets_sim::block::Hold>,
-    /// States 19 and 58 (SPEC-0033 Behavior 51), the side-touch latch (Behavior 15A) and the
-    /// push-into-face counter (Behavior 15).
-    hang: Option<neopets_sim::block::Hang>,
-    /// The grab-line hang (state 28) and its cooldown (SPEC-0033 Behavior 9).
-    line_hang: Option<neopets_sim::grab::Hang>,
-    line_cooldown: u32,
     /// The debug tools' recorder: the last minute of input.
     pub recorder: Recorder,
-    /// The hero's touched flag from the last motion step (see `record_tick`'s contact pass).
-    touched: bool,
-    /// The characters whose touch latch the hero's push set this tick and on the tick before
-    /// (SPEC-0040 A boss and the hero in the character push): a boss's update runs before the
-    /// hero's there and so reads the earlier tick's.
-    hero_touch: (Vec<u64>, Vec<u64>),
     /// The trigger numbers of the breakable volumes the hero's body touched this tick.
     breakable_hits: Vec<u16>,
-    /// Where a grab holds the hero (SPEC-0038 Behavior 15: he stays where he was seized).
-    held_at: Option<[f32; 3]>,
-    /// The ledge state (30, 35 or 47) and its held edge (SPEC-0033 Behavior 51).
-    ledge: Option<neopets_sim::ledge::Ledge>,
-    climb: Option<neopets_sim::block::Climb>,
-    /// State 41 and the grab cooldown (Behavior 20) the jump off sets.
-    ladder: Option<neopets_sim::ladder::Ladder>,
-    grab_cooldown: u32,
-    /// State 21 (SPEC-0033 Behavior 51).
-    panel: Option<neopets_sim::climb::Climb>,
-    side_touch: bool,
-    face_count: u32,
-    stick_centred: bool,
     /// Hero switching (SPEC-0053): the selected hero (0 Tor, 1 Roberta), the parked hero, the
     /// swap mode, the running swap task and the L1 and R1 press edges kept for the next tick.
     pub hero_index: usize,
@@ -1525,23 +1566,13 @@ pub struct Play {
     pub l1_latch: bool,
     pub r1_latch: bool,
     pub last_swap: String,
-    /// Roberta's attack step, her six shot slots and the shot rows (SPEC-0036).
-    r_attack: Option<neopets_sim::roberta::RobertaAttack>,
-    pub hero_shots: Vec<neopets_sim::roberta::Shot>,
-    /// The hero's candidate list and its lock (SPEC-0040 Behavior 20).
-    pub candidates: neopets_sim::lock::Candidates,
     /// The talker list (SPEC-0022) and its eligible leader with its distance.
     talkers: neopets_sim::lock::TalkerList,
     talker: Option<(u64, f32)>,
-    /// The hero's target list (SPEC-0053 3.9), which the attack turn aims at.
-    pub targets: neopets_sim::lock::TargetList,
-    pub lock: Option<u64>,
     /// Diagnostic: the fight trace's target by character name (NEOPETS_TRACE_TARGET).
     pub fight_target: Option<String>,
     /// The duel trace (diagnostic; NEOPETS_TRACE_DUEL).
     pub fight_duel: Option<Duel>,
-    /// The frame record the ledge state holds (its links lead the shimmy round the loop).
-    ledge_record: Option<ground::FrameRecord>,
     /// The autopilot (this build's test tool; F7, `--autoplay`, NEOPETS_TRACE_AUTO).
     pub autopilot: Option<Autopilot>,
     shot_rows: neopets_sim::roberta::Rows,
@@ -1620,11 +1651,6 @@ pub struct Play {
     class20_hits: Vec<u64>,
     /// Slots loaded with activate false whose item placements are not spawned (LoadRegionQuiet).
     quiet_slots: std::collections::HashSet<(u32, u8)>,
-    /// The hero's ground object on the last tick (SPEC-0018 riding): world, object index, its
-    /// rotation and translation then.
-    ride: Option<(u32, usize, neopets_sim::ride::Quat, [f32; 3])>,
-    /// A script's ride (RideObj, R-0259): the object and the hero's height above its origin.
-    ride_lock: Option<(usize, f32)>,
     /// The Black Knight's tuning block (SPEC-0012, 0x2DA3E8).
     knight_words: Option<neopets_sim::knight::Words>,
     /// The Gelert Assassin's tuning words and data constants (SPEC-0013).
@@ -1682,8 +1708,6 @@ pub struct Play {
     hit_list: Vec<u64>,
     /// Bumped with each clear of the hit list: one melee swing (the thorn hazards' strike gate).
     swing_serial: u32,
-    /// L1 held this tick (pad slot 0; SPEC-0038 Behavior 14 code 5).
-    l1_held: bool,
     /// SPEC-0060 Cut: last tick's weapon point 2.5 along the blade's frame axis.
     reed_point: Option<[f32; 3]>,
     /// The flying boomerang's drawn frame state by character: the eased reference axis, the
@@ -1727,10 +1751,6 @@ pub struct Play {
     blade_last: Option<[f32; 3]>,
     /// The last hit, for the status line.
     pub last_hit: String,
-    /// The hero's health and maximum (SPEC-0036 Start values), the band factor tables
-    /// (SPEC-0038 Behavior 18) and the last hit taken.
-    pub hero_hp: i32,
-    pub hero_max: i32,
     bands: (Vec<f32>, Vec<f32>),
     pub last_hurt: String,
     /// The enemy projectile pool (SPEC-0029 Behavior 9).
@@ -1755,10 +1775,6 @@ pub struct Play {
     pub quick: neopets_sim::quick::QuickPanel,
     quick_rows: [[i32; 8]; 4],
     heal_tables: (Vec<i32>, Vec<i32>),
-    pub hero_mp: i32,
-    pub hero_mp_max: i32,
-    /// The hero's 14 status timers (SPEC-0036).
-    pub statuses: neopets_sim::status::Statuses,
     /// The in-play HUD's bar rules (SPEC-0023) and their boot words; the monster bar, its words,
     /// and the font and letter spacing of its name text (the value text of key 0x32).
     pub hud: neopets_sim::hud::Hud,
@@ -1805,7 +1821,6 @@ pub struct Play {
     /// The ids picked up before, for the first-pickup text.
     /// The swing-trail manager (SPEC-0034 3.8), the hero's held-weapon trail and each enemy's.
     pub trails: neopets_sim::trail::Trails,
-    hero_trail: Option<usize>,
     enemy_trails: HashMap<u64, usize>,
     dust_ids: Vec<i32>,
     /// The flight effect objects (ids 0 and 1) of each projectile slot, with the shot's start
@@ -1946,8 +1961,6 @@ pub struct Play {
     pub reload_wanted: bool,
     /// The developer menu's cheats (a test tool of this build; no spec).
     pub cheats: Cheats,
-    /// The hero's hit flash frames left (SPEC-0046 step 6).
-    pub hero_flash: u8,
     /// The book words (SPEC-0035 section 6.1) and whether the chooser shows "Read Book".
     pub books: neopets_sim::book::Books,
     book_prompt: bool,
@@ -2365,12 +2378,52 @@ impl Play {
             kinds.insert(o.pack, o.kind);
         }
         let mut play = Self {
-            loco,
-            camera,
+            player: Player {
+                loco,
+                camera,
+                hero,
+                model,
+                statuses: Default::default(),
+                hero_hp: hero_max,
+                hero_max,
+                hero_mp: hero_mp_max,
+                hero_mp_max,
+                hero_flash: 0,
+                hold: None,
+                hang: None,
+                line_hang: None,
+                line_cooldown: 0,
+                touched: false,
+                hero_touch: Default::default(),
+                held_at: None,
+                ledge: None,
+                ledge_record: None,
+                climb: None,
+                ladder: None,
+                grab_cooldown: 0,
+                panel: None,
+                side_touch: false,
+                face_count: 0,
+                stick_centred: true,
+                ride: None,
+                ride_lock: None,
+                aim: Default::default(),
+                aim_view: neopets_sim::aimview::AimView { lock_scale: 0.6, ..Default::default() },
+                rope_hero: None,
+                rope_y: 0.0,
+                r_attack: None,
+                hero_shots: Vec::new(),
+                candidates: Default::default(),
+                targets: Default::default(),
+                lock: None,
+                square_held: false,
+                l1_held: false,
+                hero_trail: None,
+                carried: None,
+            },
+            others: Vec::new(),
             atmos_sel: Default::default(),
             atmos_out: Default::default(),
-            hero,
-            model,
             boot,
             world,
             other,
@@ -2394,7 +2447,6 @@ impl Play {
             message: None,
             square_now: false,
             button_square: false,
-            square_held: false,
             talk_prompt: false,
             talk_partner: None,
             talk_with: None,
@@ -2423,7 +2475,6 @@ impl Play {
             trails: Default::default(),
             showcase: None,
             corner: None,
-            hero_trail: None,
             enemy_trails: HashMap::new(),
             dust_ids,
             shot_fx: vec![None; neopets_sim::projectile::SLOTS],
@@ -2463,13 +2514,9 @@ impl Play {
             stage_foliage: None,
             attack: None,
             attack_latch: false,
-            aim: Default::default(),
             // The user's choice (not the spec's 0.2): the marker stays twice its resting size
             // while it is on a target.
-            aim_view: neopets_sim::aimview::AimView { lock_scale: 0.6, ..Default::default() },
             rope: Default::default(),
-            rope_hero: None,
-            rope_y: 0.0,
             rope_pack: 0,
             rope_aim: None,
             weapon_drawn: false,
@@ -2519,16 +2566,10 @@ impl Play {
             charm_words,
             last_status: String::new(),
             rebind: Vec::new(),
-            r_attack: None,
-            hero_shots: Vec::new(),
-            candidates: Default::default(),
             talkers: Default::default(),
             talker: None,
-            targets: Default::default(),
-            lock: None,
             fight_target: None,
             fight_duel: None,
-            ledge_record: None,
             autopilot: None,
             shot_rows,
             hero_index: 0,
@@ -2540,24 +2581,8 @@ impl Play {
             r1_latch: false,
             last_swap: String::new(),
             catch: Default::default(),
-            carried: None,
-            hold: None,
-            hang: None,
-            ledge: None,
-            line_hang: None,
-            line_cooldown: 0,
-            touched: false,
             recorder: Default::default(),
-            hero_touch: Default::default(),
             breakable_hits: Vec::new(),
-            held_at: None,
-            climb: None,
-            ladder: None,
-            grab_cooldown: 0,
-            panel: None,
-            side_touch: false,
-            face_count: 0,
-            stick_centred: true,
             gesture: Default::default(),
             gesture_words,
             pending_off: Default::default(),
@@ -2602,13 +2627,10 @@ impl Play {
             class20_waits,
             class20_hits: Vec::new(),
             quiet_slots: std::collections::HashSet::new(),
-            ride: None,
-            ride_lock: None,
             knight_words,
             gelert_words,
             hit_list: Vec::new(),
             swing_serial: 0,
-            l1_held: false,
             reed_point: None,
             thrown_frame: Default::default(),
             head_look: Default::default(),
@@ -2631,8 +2653,6 @@ impl Play {
             recoil_material: 6,
             blade_last: None,
             last_hit: String::new(),
-            hero_hp: hero_max,
-            hero_max,
             bands,
             last_hurt: String::new(),
             shots: Default::default(),
@@ -2646,9 +2666,6 @@ impl Play {
             quick: Default::default(),
             quick_rows,
             heal_tables,
-            hero_mp: hero_mp_max,
-            hero_mp_max,
-            statuses: Default::default(),
             hud: Default::default(),
             hud_words,
             monster_bar: Default::default(),
@@ -2698,7 +2715,6 @@ impl Play {
             snapshot: None,
             reload_wanted: false,
             cheats: Cheats::default(),
-            hero_flash: 0,
             books: Default::default(),
             book_prompt: false,
             music: Default::default(),
@@ -2758,7 +2774,7 @@ impl Play {
     pub fn nearest_swap_point(&self) -> Option<[f32; 2]> {
         let o = self.other.as_ref()?;
         let [x0, z0, x1, z1] = o.ground.as_ref()?.bounds();
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let mut best: Option<([f32; 2], f32)> = None;
         let mut z = z0;
         while z < z1 {
@@ -2796,7 +2812,7 @@ impl Play {
     /// clear of them for the hero's body (except the first steps away from where he stands).
     fn route_search(&self, max_nodes: usize, goal: Goal, avoid: &std::collections::HashSet<(i32, i32)>, solids: Option<&RouteSolids>) -> Option<Vec<[f32; 2]>> {
         let o = self.other.as_ref();
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let step = 4.0;
         // Cells are keyed by height too (2-unit bands), so stacked floors are separate nodes.
         let key = |x: f32, z: f32, y: f32| ((x / step).round() as i32, (z / step).round() as i32, (y / 2.0).round() as i32);
@@ -2954,7 +2970,7 @@ impl Play {
     /// tables B and A); a pair with the current pack stops it; otherwise it is streamed into
     /// the other buffer when the buffer rule allows and it is not resident there already.
     fn pending_step(&mut self) {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         // The pending slot (SetWorldLoadOverRide) stands in for the cell's exit value, and is
         // set back to -1 whatever the step decides.
         let target = match self.pending_slot.take() {
@@ -2982,7 +2998,7 @@ impl Play {
 
     /// The neighbour pack the cell under the hero names, pairs included (the door rule's D).
     fn door_target(&self) -> Option<u32> {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let v = self.world.ground.as_ref().map_or(-1, |g| g.cell_value(p[0], p[2]));
         let id = self.world.neighbours.get(v);
         let slot = self.boot.areas.world_ids.iter().position(|&w| id >= 0 && w == id as u32)?;
@@ -2992,17 +3008,17 @@ impl Play {
     /// Move the hero to a landing in the current world and put the camera behind it.
     fn arrive(&mut self, pose: ([f32; 3], [f32; 3])) {
         self.place_hero(pose);
-        let f = followed(&self.loco, &self.world);
-        let trunks = self.near_trunks(self.camera.eye);
+        let f = followed(&self.player.loco, &self.world);
+        let trunks = self.near_trunks(self.player.camera.eye);
         let world = &self.world;
-        self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
+        self.player.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
     }
 
     /// The hero placed at a pose with no camera placement (SPEC-0027: MoveHero moves no camera).
     fn place_hero(&mut self, (l, g): ([f32; 3], [f32; 3])) {
-        self.loco.teleport(l, g);
+        self.player.loco.teleport(l, g);
         // The traversal holds of the world left behind end with the arrival.
-        (self.ladder, self.ledge, self.hang, self.climb, self.panel, self.hold) = (None, None, None, None, None, None);
+        (self.player.ladder, self.player.ledge, self.player.hang, self.player.climb, self.player.panel, self.player.hold) = (None, None, None, None, None, None);
     }
 
     /// Make the other world current and land on its plane k (teleport landing).
@@ -3033,15 +3049,15 @@ impl Play {
             if let Some(pack) = self.other.as_ref().map(|o| o.pack) {
                 self.job = Some(Job::ReloadTransition(pack));
             }
-            let (at, facing) = (self.loco.position(), self.loco.facing);
-            self.loco.teleport(at, facing);
-            self.loco.state = hero_states::STANCE;
-            self.grab_cooldown = 60;
+            let (at, facing) = (self.player.loco.position(), self.player.loco.facing);
+            self.player.loco.teleport(at, facing);
+            self.player.loco.state = hero_states::STANCE;
+            self.player.grab_cooldown = 60;
         }
-        let f = followed(&self.loco, &self.world);
-        let trunks = self.near_trunks(self.camera.eye);
+        let f = followed(&self.player.loco, &self.world);
+        let trunks = self.near_trunks(self.player.camera.eye);
         let world = &self.world;
-        self.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
+        self.player.camera.place_behind(&f, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
         self.fade = Default::default();
         // The bar progress is cleared only when the bars are not held: bars a LetterBoxOn holds
         // stay up after the movie (SPEC-0026 hand-off step 3, corrected 2026-11-09).
@@ -3070,14 +3086,14 @@ impl Play {
     /// with a flag 0x08 slot, whichever enemy it is); on the first tick none does he returns to
     /// state 1. A hit that reaches the grabber ends its strike state, so it frees him.
     fn held_step(&mut self) {
-        if self.loco.state != hero_states::HELD {
-            self.held_at = None;
+        if self.player.loco.state != hero_states::HELD {
+            self.player.held_at = None;
             return;
         }
         let holder = self.characters.iter().find(|c| c.enemy.as_ref().is_some_and(|e| e.outer == 2 && e.seq == 2 && e.selected.is_some_and(|k| e.p.slots[k].flags & 0x08 != 0)));
         let Some(holder) = holder else {
-            self.loco.state = hero_states::STANCE;
-            self.held_at = None;
+            self.player.loco.state = hero_states::STANCE;
+            self.player.held_at = None;
             return;
         };
         // SPEC-0005 Attach points and carrying (R-0158): he is carried at the enemy's attach point k,
@@ -3087,11 +3103,11 @@ impl Play {
         if let Some(m) = Self::attach_frame(holder, k) {
             let d = m.cols[2].map(|v| -v);
             let (rows, at) = enemy::carry_place(d, m.cols[1], m.t);
-            self.held_at = Some(at);
-            self.loco.body.position = at;
+            self.player.held_at = Some(at);
+            self.player.loco.body.position = at;
             let f = rows[2];
             if f[0].hypot(f[2]) > 1e-4 {
-                self.loco.facing = [f[0], 0.0, f[2]];
+                self.player.loco.facing = [f[0], 0.0, f[2]];
             }
         }
     }
@@ -3102,7 +3118,7 @@ impl Play {
     fn breakable_push_characters(&mut self) {
         let pack = self.world.pack;
         let pet = self.pet_char;
-        let cylinders = self.world.breakable_cylinders(self.loco.position(), f32::MAX);
+        let cylinders = self.world.breakable_cylinders(self.player.loco.position(), f32::MAX);
         if cylinders.is_empty() {
             return;
         }
@@ -3167,7 +3183,7 @@ impl Play {
 
     /// Diagnostic: the object solids near the hero.
     pub fn debug_object_solids(&self) -> String {
-        let h = self.loco.position();
+        let h = self.player.loco.position();
         self.object_solids(h).iter().map(|(p, b, s)| format!("pose at {:.1},{:.1},{:.1}: {} boxes {:?}, {} spheres", p.current[12], p.current[13], p.current[14], b.len(), b.first().map(|b| (b.origin, b.extents)), s.len())).collect::<Vec<_>>().join("; ")
     }
 
@@ -3467,13 +3483,13 @@ impl Play {
             Wait::Bars => self.bars.done,
             Wait::Choice(_) => !self.dialogue_open,
             Wait::HeroNear(t, d) => {
-                let p = self.loco.position();
+                let p = self.player.loco.position();
                 (t[0] - p[0]).hypot(t[2] - p[2]) <= d
             }
             Wait::Dialog => !self.dialogue_open,
             Wait::Loads => self.region_wanted.is_empty() && self.loads_out == 0,
             Wait::WheelSpin => self.wheel_spin.is_none(),
-            Wait::HeroOneShot => self.loco.state != neopets_sim::hero::ONE_SHOT,
+            Wait::HeroOneShot => self.player.loco.state != neopets_sim::hero::ONE_SHOT,
             Wait::Inside(i) => self.world.records.get(&i).is_none_or(|r| r.state == 0),
             Wait::Word(pack, w) => self.state.word_of(pack, w) == 0,
             Wait::Item(item) => self.state.has_item(item),
@@ -3600,10 +3616,10 @@ impl Play {
                 }
                 Action::NormalCamera { distance, angle, release } => {
                     self.cut = None;
-                    let f = followed(&self.loco, &self.world);
-                    let trunks = self.near_trunks(self.camera.eye);
+                    let f = followed(&self.player.loco, &self.world);
+                    let trunks = self.near_trunks(self.player.camera.eye);
                     let world = &self.world;
-                    self.camera.place_orbit(&f, distance, angle, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
+                    self.player.camera.place_orbit(&f, distance, angle, |x, z, c| world.probe(x, z, c).height, |e| clip_eye(world, &trunks, f.focus(), e));
                     if release {
                         self.held = false;
                         self.hero_walk = None;
@@ -3622,7 +3638,7 @@ impl Play {
                     self.open_line(line);
                     return Some(Wait::Dialog);
                 }
-                Action::HeroIdle => self.loco.enter_state(hero_states::STANCE, 0),
+                Action::HeroIdle => self.player.loco.enter_state(hero_states::STANCE, 0),
                 Action::MessageNoWait { line } => {
                     self.talk_partner = None;
                     self.talk_with = None;
@@ -3679,8 +3695,8 @@ impl Play {
                     // at that locator (SPEC-0030 row 35).
                     self.cut = None;
                     if let Some((at, _)) = usize::try_from(preset).ok().and_then(|k| self.locator(pack, k)) {
-                        self.camera.eye = at;
-                        self.camera.reset();
+                        self.player.camera.eye = at;
+                        self.player.camera.reset();
                     }
                     if release {
                         self.held = false;
@@ -3811,7 +3827,7 @@ impl Play {
                 Action::WaitCage { index } => return Some(Wait::Cage(index as usize)),
                 Action::SleepRandom { lo, hi } => return Some(Wait::Ticks(self.rng.range(lo as i32, hi as i32).max(0) as u32)),
                 Action::AlignObj { obj, t } => {
-                    let hero = self.loco.position();
+                    let hero = self.player.loco.position();
                     let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
                     if let Some(Some(o)) = w.and_then(|w| w.objects.get_mut(obj)) {
                         o.rest = align_z_to(o.rest, hero, t.clamp(0.0, 1.0));
@@ -4003,7 +4019,7 @@ impl Play {
                 // (user's report 35).
                 Action::LaunchFireMote { from, to, speed } => {
                     let Some((start, _)) = self.locator_tag(pack, from) else { return None };
-                    let hero = self.loco.position();
+                    let hero = self.player.loco.position();
                     let target = self.locator_tag(pack, to).map_or([hero[0], hero[1] + 1.5, hero[2]], |(p, _)| p);
                     self.shots.submit(neopets_sim::projectile::fire_mote(start, target, speed));
                 }
@@ -4059,7 +4075,7 @@ impl Play {
                     }
                 }
                 Action::Agro { entity } => {
-                    let hero = self.loco.position();
+                    let hero = self.player.loco.position();
                     let rng = &mut self.rng;
                     let c = self.characters.iter_mut().find(|c| c.pack == pack && c.entity == Some(entity))?;
                     c.held = false;
@@ -4204,11 +4220,11 @@ impl Play {
                     return Some(Wait::Loads);
                 }
                 Action::LevelState { flag, on } => self.state.set_level(flag, on),
-                Action::RefillMagic => self.hero_mp = self.hero_mp_max,
-                Action::RefillHealth => self.hero_hp = self.hero_max,
+                Action::RefillMagic => self.player.hero_mp = self.player.hero_mp_max,
+                Action::RefillHealth => self.player.hero_hp = self.player.hero_max,
                 Action::HeroHpAtLeast { percent } => {
-                    let floor = (self.hero_max as f32 * percent / 100.0) as i32;
-                    self.hero_hp = self.hero_hp.max(floor);
+                    let floor = (self.player.hero_max as f32 * percent / 100.0) as i32;
+                    self.player.hero_hp = self.player.hero_hp.max(floor);
                 }
                 Action::MiamouseInit { field, cage } => self.catch.init(field, cage),
                 Action::MiamouseDisable => self.catch.on = false,
@@ -4221,8 +4237,8 @@ impl Play {
                 // tick, and with WAIT while the hero stays in state 51. The scripts' CTL is taken
                 // as 1 (the hero returns to state 1).
                 Action::HeroAnim { anim, wait } => {
-                    self.loco.play_one_shot(anim, true);
-                    self.hero.request(anim, true);
+                    self.player.loco.play_one_shot(anim, true);
+                    self.player.hero.request(anim, true);
                     return Some(if wait { Wait::HeroOneShot } else { Wait::Ticks(1) });
                 }
                 Action::PayCoins { amount } => {
@@ -4236,8 +4252,8 @@ impl Play {
                 Action::HeroLoop { anim, seconds, control } => {
                     // SPEC-0030 Seconds to ticks; a negative time is one tick and it does not wait.
                     let ticks = if seconds < 0.0 { 1 } else { (seconds * 60.0) as i32 };
-                    self.loco.play_loop(anim, ticks, control);
-                    self.hero.request(anim, true);
+                    self.player.loco.play_loop(anim, ticks, control);
+                    self.player.hero.request(anim, true);
                 }
                 Action::ItemDeactivate { slot, ordinal } => {
                     if let Some(key) = self.slot_items.get(&(pack, slot)).and_then(|v| v.get(ordinal)).map(|p| p.key) {
@@ -4289,11 +4305,11 @@ impl Play {
                     }
                 }
                 Action::DamageHero { amount } => {
-                    let facing = self.loco.facing;
+                    let facing = self.player.loco.facing;
                     self.hero_hit(amount as f32, 0.0, false, facing, "script".into());
                 }
                 Action::KillHero => {
-                    if self.loco.state != hero_states::DEAD {
+                    if self.player.loco.state != hero_states::DEAD {
                         self.default_death();
                     }
                 }
@@ -4360,8 +4376,8 @@ impl Play {
                     };
                     if instance <= 3 {
                         if self.hero_index == 0 {
-                            self.hero_hp = self.hero_max;
-                            self.hero_mp = self.hero_mp_max;
+                            self.player.hero_hp = self.player.hero_max;
+                            self.player.hero_mp = self.player.hero_mp_max;
                         } else if let Some(p) = self.parked.as_mut() {
                             refill_parked(p);
                         }
@@ -4369,13 +4385,13 @@ impl Play {
                         if let Some(p) = self.parked.as_mut() {
                             refill_parked(p);
                         }
-                        self.hero_hp = self.hero_max;
-                        self.hero_mp = self.hero_mp_max;
+                        self.player.hero_hp = self.player.hero_max;
+                        self.player.hero_mp = self.player.hero_mp_max;
                     }
                 }
                 Action::LongFall => {
                     self.attack = None;
-                    self.loco.long_fall_start();
+                    self.player.loco.long_fall_start();
                 }
                 Action::InitMortog { target, centre, edge, hold } => {
                     // SPEC-0030 row 84: both locators must exist; the zone count starts at 0.
@@ -4419,11 +4435,11 @@ impl Play {
                     // The ride's end gives gravity and the ground snap back, as leaving a ladder
                     // does; they stayed off and a jump after the lift never came down (user's
                     // report 65).
-                    if self.ride_lock.is_some() {
-                        self.loco.body.no_gravity = false;
-                        self.loco.body.no_snap = false;
+                    if self.player.ride_lock.is_some() {
+                        self.player.loco.body.no_gravity = false;
+                        self.player.loco.body.no_snap = false;
                     }
-                    self.ride_lock = obj.and_then(|o| self.object_pose(pack, o, 0).map(|m| (o, self.loco.position()[1] - m[13])));
+                    self.player.ride_lock = obj.and_then(|o| self.object_pose(pack, o, 0).map(|m| (o, self.player.loco.position()[1] - m[13])));
                 }
                 Action::GroupEffects { group } => {
                     let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
@@ -4578,7 +4594,7 @@ impl Play {
                 Action::PlayHeroSound { hero, cue, locator, do_not_restart } => {
                     // Only for -1 or the selected hero's flag (0, Tor); at the locator or the hero.
                     if hero == -1 || hero == 0 {
-                        let at = locator.and_then(|i| self.world.entries.get(i)).map(|e| e.0).unwrap_or(self.loco.position());
+                        let at = locator.and_then(|i| self.world.entries.get(i)).map(|e| e.0).unwrap_or(self.player.loco.position());
                         self.sound.play(neopets_sim::sound::VOICE, cue, neopets_sim::sound::Play { emitter: Some(at), do_not_restart, ..Default::default() });
                     }
                 }
@@ -4634,7 +4650,7 @@ impl Play {
     /// This build's save states (F9, `states_menu`): saving is allowed only in free play, with no camera play, fade,
     /// letterbox, hold or scripted hero walk under way, so a scene is never cut in half.
     pub fn state_ready(&self) -> bool {
-        self.cut.is_none() && self.fade.target == 0.0 && self.bars.target == 0.0 && !self.held && self.hero_walk.is_none() && self.loco.state != hero_states::LADDER
+        self.cut.is_none() && self.fade.target == 0.0 && self.bars.target == 0.0 && !self.held && self.hero_walk.is_none() && self.player.loco.state != hero_states::LADDER
     }
 
     /// The hero at a save state's place and facing.
@@ -4659,7 +4675,7 @@ impl Play {
     /// A target play's anchor point: the hero at half its height, or an animated object's origin.
     fn target_anchor(&self, pack: u32, t: neopets_sim::level::CameraTarget) -> Option<[f32; 3]> {
         match t {
-            neopets_sim::level::CameraTarget::Hero => Some(add(self.loco.position(), [0.0, 0.5 * HERO_HEIGHT, 0.0])),
+            neopets_sim::level::CameraTarget::Hero => Some(add(self.player.loco.position(), [0.0, 0.5 * HERO_HEIGHT, 0.0])),
             neopets_sim::level::CameraTarget::Object(i) => self.object_matrix(pack, i).map(|m| [m[12], m[13], m[14]]),
         }
     }
@@ -4684,7 +4700,7 @@ impl Play {
     /// point of the fill end drawn on the previous tick; a live slot follows its saved screen
     /// point each tick. A fall while the slot is busy keeps the old anchor.
     fn hud_loss_step(&mut self) {
-        let values = [self.hero_hp, self.hero_mp];
+        let values = [self.player.hero_hp, self.player.hero_mp];
         let table = self.effect_table.clone();
         for k in 0..2 {
             if let Some((h, ..)) = self.hud_loss[k] {
@@ -4726,8 +4742,8 @@ impl Play {
                 None => (p.eye, p.rows[2], p.rows[1], p.focal),
             },
             None => {
-                let f = self.camera.focus;
-                let e = self.showcase.as_ref().map_or([self.camera.eye[0], self.camera.eye[1], self.camera.eye[2]], |s| s.eye);
+                let f = self.player.camera.focus;
+                let e = self.showcase.as_ref().map_or([self.player.camera.eye[0], self.player.camera.eye[1], self.player.camera.eye[2]], |s| s.eye);
                 ([e[0], e[1], e[2]], [f[0] - e[0], f[1] - e[1], f[2] - e[2]], [0.0, 1.0, 0.0], neopets_sim::camera::FOCAL)
             }
         };
@@ -4749,7 +4765,7 @@ impl Play {
     fn default_door(&mut self, n: usize) {
         let e = self.world.arrivals.get(n as i32);
         let plane = self.world.planes[n];
-        let f = self.loco.facing;
+        let f = self.player.loco.facing;
         let reverse = plane.f[0] * f[0] + plane.f[1] * f[1] + plane.f[2] * f[2] >= 0.0;
         let target = self.door_target();
         self.last_door = match self.world.buffer {
@@ -4820,11 +4836,11 @@ impl Play {
         // facing test failed unless the hero stood exactly in line (user report 99).
         // NEOPETS_TRACE_BUY (diagnostic): the stock and the pick every 30 ticks.
         if std::env::var_os("NEOPETS_TRACE_BUY").is_some() && self.ticks % 30 == 0 {
-            let h = self.loco.position();
+            let h = self.player.loco.position();
             let list: Vec<String> = slots.iter().filter(|(_, it)| it.flag == 1).map(|(_, it)| format!("{} at {:.1},{:.1},{:.1} ({:.1} away)", it.id, it.position[0], it.position[1], it.position[2], (it.position[0] - h[0]).hypot(it.position[2] - h[2]))).collect();
-            println!("      buy tick {}: hero {:.1},{:.1} pick {:?} stock {list:?}", self.ticks, h[0], h[2], neopets_sim::shop::buyable(&cands, h, self.loco.facing).map(|k| slots[k].1.id));
+            println!("      buy tick {}: hero {:.1},{:.1} pick {:?} stock {list:?}", self.ticks, h[0], h[2], neopets_sim::shop::buyable(&cands, h, self.player.loco.facing).map(|k| slots[k].1.id));
         }
-        let Some(k) = neopets_sim::shop::buyable(&cands, self.loco.position(), self.loco.facing) else { return false };
+        let Some(k) = neopets_sim::shop::buyable(&cands, self.player.loco.position(), self.player.loco.facing) else { return false };
         let (i, it) = slots[k];
         self.buyable = Some(i);
         if !self.square_now {
@@ -4942,7 +4958,7 @@ impl Play {
     /// (the lists of the previous tick). A candidate with no talk routine gives no talk and blocks
     /// nothing. Returns (index, distance, routine).
     fn talk_candidate(&self) -> Option<(usize, f32, u8)> {
-        let lock_on = self.targets.records.first().filter(|r| r.flag).map(|r| (r.id, r.d));
+        let lock_on = self.player.targets.records.first().filter(|r| r.flag).map(|r| (r.id, r.d));
         let id = neopets_sim::lock::talk_candidate(self.talker, lock_on)?;
         let i = self.characters.iter().position(|c| c.id == id)?;
         let c = &self.characters[i];
@@ -4988,44 +5004,44 @@ impl Play {
     fn roberta_step(&mut self, input: &HeroInput) {
         use neopets_sim::roberta::*;
         // The locked target's distance picks the swats (SPEC-0036 Attack router; Roberta air attack choice).
-        let hero_at = self.loco.position();
-        let locked = self.lock.and_then(|id| self.characters.iter().find(|c| c.id == id)).map(|c| {
+        let hero_at = self.player.loco.position();
+        let locked = self.player.lock.and_then(|id| self.characters.iter().find(|c| c.id == id)).map(|c| {
             let d = sub_v(c.position, hero_at);
             (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
         });
-        if self.r_attack.is_none() && (input.attack || self.attack_repeat) && (1..=6).contains(&self.loco.state) {
-            self.r_attack = Some(if self.gesture.mode == 0 && locked.is_some_and(|d| d < 5.0) { RobertaAttack::start_at(5) } else { RobertaAttack::start_with(self.gesture.mode) });
+        if self.player.r_attack.is_none() && (input.attack || self.attack_repeat) && (1..=6).contains(&self.player.loco.state) {
+            self.player.r_attack = Some(if self.gesture.mode == 0 && locked.is_some_and(|d| d < 5.0) { RobertaAttack::start_at(5) } else { RobertaAttack::start_with(self.gesture.mode) });
             self.draw_items(true);
         }
         // The air attack: in states 7 to 11, not phases 6, 7 or 9, used once a jump, with no Tattered Cloak
         // and a wand in her own entry.
-        if self.r_attack.is_none()
+        if self.player.r_attack.is_none()
             && (input.attack || input.circle_held)
-            && (7..=11).contains(&self.loco.state)
-            && !matches!(self.loco.phase, 6 | 7 | 9)
-            && self.loco.air_free()
+            && (7..=11).contains(&self.player.loco.state)
+            && !matches!(self.player.loco.phase, 6 | 7 | 9)
+            && self.player.loco.air_free()
             && self.equipment.entries[2][1] != Some(126)
             && self.equipment.entries[0][1].is_some()
         {
-            self.loco.use_air();
+            self.player.loco.use_air();
             self.hit_list.clear();
             self.swing_serial = self.swing_serial.wrapping_add(1);
-            self.r_attack = Some(RobertaAttack::start_at(if locked.is_some_and(|d| d < 8.0) { 12 } else { 11 }));
+            self.player.r_attack = Some(RobertaAttack::start_at(if locked.is_some_and(|d| d < 8.0) { 12 } else { 11 }));
             self.draw_items(true);
         }
         let mote = self.equipment.motes[1][2];
-        let Some(mut a) = self.r_attack.take() else { return };
-        let c = self.hero.clip_state();
+        let Some(mut a) = self.player.r_attack.take() else { return };
+        let c = self.player.hero.clip_state();
         // SPEC-0036 the leap: its point, kept while the touched flag is clear; a contact puts her back on it
         // and ends the leap. Entering it stores the point; cue 17 on its first tick.
         if a.sub == 8 {
-            let p = self.loco.position();
+            let p = self.player.loco.position();
             if a.f == 0 {
                 self.leap_point = p;
                 self.sound.play(neopets_sim::sound::WEAPON, 17, neopets_sim::sound::Play { emitter: Some(p), ..Default::default() });
             }
-            if self.touched && a.f > 0 {
-                self.loco.body.position = self.leap_point;
+            if self.player.touched && a.f > 0 {
+                self.player.loco.body.position = self.leap_point;
                 a.end_leap();
             } else {
                 self.leap_point = p;
@@ -5033,38 +5049,38 @@ impl Play {
         }
         // The landing turns back the way she leapt, at rate 0.25.
         if a.sub == 13 {
-            let (f, l) = (self.loco.facing, self.landing_dir);
+            let (f, l) = (self.player.loco.facing, self.landing_dir);
             if f[0] * l[0] + f[1] * l[1] + f[2] * l[2] > 0.98 {
                 a.end_landing();
             } else {
-                self.loco.steer_toward(l, 0.25);
+                self.player.loco.steer_toward(l, 0.25);
             }
         }
         let before = a.sub;
         a.endless_spin = self.cheats.spin;
         match a.tick(input.attack_held, input.attack, mote, Clip { action: c.action, progress: c.progress }) {
             Some((action, restart)) => {
-                self.loco.set_attack(Some(action));
+                self.player.loco.set_attack(Some(action));
                 if restart {
-                    self.hero.request(action, true);
+                    self.player.hero.request(action, true);
                 }
             }
             None => {
-                self.loco.set_attack(None);
+                self.player.loco.set_attack(None);
                 // SPEC-0036 End of an air shot or swat: above 0.25 she falls on with her velocity; else it is cleared.
                 if matches!(before, 11 | 12) {
-                    if self.loco.body.gap > 0.25 {
-                        self.loco.state = 7;
-                        self.loco.phase = 5;
+                    if self.player.loco.body.gap > 0.25 {
+                        self.player.loco.state = 7;
+                        self.player.loco.phase = 5;
                     } else {
-                        self.loco.body.velocity = [0.0; 3];
+                        self.player.loco.body.velocity = [0.0; 3];
                     }
                 }
                 return;
             }
         }
         if a.sub == 13 && before == 8 {
-            let f = self.loco.facing;
+            let f = self.player.loco.facing;
             self.landing_dir = [-f[0], -f[1], -f[2]];
         }
         if a.cleared {
@@ -5084,14 +5100,14 @@ impl Play {
         // SPEC-0036 Power attack and full release, Roberta: the object of the word-2 Mote.
         if before == 1 && matches!(a.sub, 9 | 14) {
             if let Some(id) = mote {
-                let hero = self.loco.position();
-                let f = self.loco.facing;
+                let hero = self.player.loco.position();
+                let f = self.player.loco.facing;
                 let w = self.weapon_reach();
                 let at = [hero[0] + f[0] * w, hero[1], hero[2] + f[2] * w];
                 let wa = self.weapon.and_then(|i| self.items.get(i)).filter(|i| i.is_weapon()).map_or(0.0, |i| i.stats[0] as f32);
                 let b = neopets_sim::mote::one_plus_percent(self.items.get(id).map_or(0.0, |i| i.stats[5] as f32));
                 let e = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
-                let scale = neopets_sim::charm::scale(wa, 1.5, b, self.statuses.damage_scale(), e);
+                let scale = neopets_sim::charm::scale(wa, 1.5, b, self.player.statuses.damage_scale(), e);
                 let spawned = match id {
                     165 => neopets_sim::charm::spawn_rocks(at, f, scale, self.orbit_angle_r, &mut self.rng),
                     166 => {
@@ -5111,18 +5127,18 @@ impl Play {
         if a.sub == 1 && a.f >= 7 {
             if let Some(id) = mote {
                 let held = self.state.items.get(&id).copied().unwrap_or(0) > 0;
-                if !(self.mote_objects.is_empty() && self.weapon.is_some() && held && self.hero_mp >= self.magic.roberta_full(mote).0) {
+                if !(self.mote_objects.is_empty() && self.weapon.is_some() && held && self.player.hero_mp >= self.magic.roberta_full(mote).0) {
                     a.f = 0;
                 }
             }
         }
         // The launcher.
-        let release = self.hero.frame_bits() & 0x20 != 0;
-        if !a.fired && release && self.hero_mp >= 1 {
+        let release = self.player.hero.frame_bits() & 0x20 != 0;
+        if !a.fired && release && self.player.hero_mp >= 1 {
             a.fired = true;
             self.roberta_launch(&a, mote);
         }
-        self.r_attack = Some(a);
+        self.player.r_attack = Some(a);
     }
 
     /// The launch of one burst for the attack's sub-state (SPEC-0036 Roberta shot projectile).
@@ -5132,8 +5148,8 @@ impl Play {
         let d = a.step_factor();
         let (row, count) = self.shot_rows.launch(class, sub, mote);
         let full = class == 3;
-        let p = self.loco.position();
-        let f = self.loco.facing;
+        let p = self.player.loco.position();
+        let f = self.player.loco.facing;
         let anchor = anchor(p, f);
         // Steps 1 to 4 (SPEC-0036 Roberta shot launch), per shot: modes 0 and 1 aim at the
         // lock, modes 2 to 5 at a random visible character within 60 and fan the direction;
@@ -5142,7 +5158,7 @@ impl Play {
         let weapon_a = self.weapon.and_then(|i| self.items.get(i)).map_or(0.0, |i| i.stats[0] as f32);
         let b = mote.and_then(|id| self.items.get(id)).map_or(1.0, |i| neopets_sim::mote::one_plus_percent(i.stats[5] as f32));
         let e = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
-        let scale = neopets_sim::charm::scale(weapon_a, d, b, self.statuses.damage_scale(), e);
+        let scale = neopets_sim::charm::scale(weapon_a, d, b, self.player.statuses.damage_scale(), e);
         let t = if full { mote.and_then(|id| neopets_sim::mote::power_index(1, id)).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0) } else { 1.0 };
         let status = (full && row.reaction != -1)
             .then(|| mote.and_then(|id| neopets_sim::mote::status_request(1, id, |k| self.design.attack_power(k))).map(|r| [row.reaction, r[1], r[2], r[3]]).unwrap_or([row.reaction, -1, -1, -1]));
@@ -5151,7 +5167,7 @@ impl Play {
         let visual = self.attack_fx.shot_tables.ids(class, step, mote);
         let mut launched = 0;
         for _ in 0..count {
-            if self.hero_shots.len() >= 6 {
+            if self.player.hero_shots.len() >= 6 {
                 break;
             }
             // The first full-release shot pays the cost and the word-2 charge.
@@ -5165,13 +5181,13 @@ impl Play {
             }
             // SPEC-0036 Launch: in right-stick aim mode, mode 0 drops the target; with none the aim is the
             // stored point of the aim scan below.
-            let aiming = self.aim.on;
+            let aiming = self.player.aim.on;
             let target = if row.homing == 0 && aiming {
                 None
             } else if row.homing <= 1 {
                 // The first record of the hero target list when its flag is set (SPEC-0036
                 // Launch; SPEC-0040: never the forced id or the enemy lock).
-                self.targets.records.first().filter(|r| r.flag).map(|r| r.id)
+                self.player.targets.records.first().filter(|r| r.flag).map(|r| r.id)
             } else {
                 self.shot_target()
             };
@@ -5180,8 +5196,8 @@ impl Play {
             // score, when that score is above 0.998 and its sightline from 1.5 below the eye is
             // clear, at its position raised by half its height; else eye + 150 x forward.
             let stored = {
-                let (forward, _) = self.camera.rows();
-                let eye = self.camera.eye;
+                let (forward, _) = self.player.camera.rows();
+                let eye = self.player.camera.eye;
                 let pack = self.world.pack;
                 let world = &self.world;
                 let low = [eye[0], eye[1] - 1.5, eye[2]];
@@ -5220,7 +5236,7 @@ impl Play {
                 launched += 1;
                 continue;
             }
-            self.hero_shots.push(Shot {
+            self.player.hero_shots.push(Shot {
                 position: anchor,
                 dir,
                 speed: row.speed,
@@ -5250,14 +5266,14 @@ impl Play {
     /// (started, then updated there each pass) and effect 0xF1 at the hero + (0, 0.5, 0) on its
     /// flat facing (started when not live, then moved); each stops when its timer says so.
     fn roberta_displays_step(&mut self) {
-        let (sub, f) = match (self.hero_index, self.r_attack.as_ref()) {
+        let (sub, f) = match (self.hero_index, self.player.r_attack.as_ref()) {
             (1, Some(a)) => (a.sub, a.f),
             _ => (0, 0),
         };
         let shown = self.r_displays.step(sub, f);
         let table = self.effect_table.clone();
-        let p = self.loco.position();
-        let fw = unit([self.loco.facing[0], 0.0, self.loco.facing[2]]);
+        let p = self.player.loco.position();
+        let fw = unit([self.player.loco.facing[0], 0.0, self.player.loco.facing[2]]);
         let frame = [[fw[2], 0.0, -fw[0]], [0.0, 1.0, 0.0], fw];
         // SPEC-0036 Roberta charge-up hold effect: 239 at the weapon-tip frame T (SPEC-0034
         // 3.17), as the attack driver computes it; the leap glow at the hero + (0, 0.5, 0).
@@ -5292,7 +5308,7 @@ impl Play {
     /// word-2 charge before the take-hit, sends a full release's status request, and disarms.
     fn shots_step(&mut self) {
         let pack = self.world.pack;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         // The hero's aim point for deflected shots, and the hero's guard (state 20 or Roberta's
         // spin, sub-states 6 and 7).
         let hero_aim = [hero[0], hero[1] + 0.5 * neopets_sim::motion::HERO_HEIGHT, hero[2]];
@@ -5303,7 +5319,7 @@ impl Play {
             let gelert = c.gelert.as_ref().is_some_and(|g| g.state == neopets_sim::gelert::State::Deflect) && c.anim.clip_state().action == 21;
             c.deflects |= knight || gelert;
         }
-        let mut shots = std::mem::take(&mut self.hero_shots);
+        let mut shots = std::mem::take(&mut self.player.hero_shots);
         let mut keep = Vec::new();
         for mut s in shots.drain(..) {
             let aim = if s.hostile {
@@ -5468,10 +5484,10 @@ impl Play {
                         Some(5 | 6) => 0.75,
                         _ => 1.0,
                     },
-                    _ => self.r_attack.as_ref().map_or(1.0, |a| a.step_factor()),
+                    _ => self.player.r_attack.as_ref().map_or(1.0, |a| a.step_factor()),
                 };
                 let e = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
-                neopets_sim::mote::melee(1.0, stat_a as f32, am, t_type, d, e, defence, self.statuses.damage_scale())
+                neopets_sim::mote::melee(1.0, stat_a as f32, am, t_type, d, e, defence, self.player.statuses.damage_scale())
             } else {
                 (damage, absorbed)
             };
@@ -5493,7 +5509,7 @@ impl Play {
                 self.character_status(i, r);
             }
         }
-        self.hero_shots = keep;
+        self.player.hero_shots = keep;
     }
 
     /// SPEC-0029 Behavior 9 Visual update: a shot's flight effects (ids 0 and 1) are effect
@@ -5575,7 +5591,7 @@ impl Play {
                 // preset 0 for its duration with the intensity by the camera's distance.
                 let s = if e.start * d == 0.0 { l } else { e.start * d };
                 if e.positional == 0 && t >= s && t < s + l {
-                    let (c, eye) = (self.characters[i].position, self.camera.eye);
+                    let (c, eye) = (self.characters[i].position, self.player.camera.eye);
                     let d2 = (0..3).map(|k| (c[k] - eye[k]) * (c[k] - eye[k])).sum::<f32>();
                     let m = neopets_sim::rumble::falloff(e.intensity, e.inner, e.outer, d2);
                     if m > 0.0 {
@@ -5634,7 +5650,7 @@ impl Play {
 
     /// A diagnostic one-shot of effect `id` 3 units in front of the hero, 1.5 above its feet.
     pub fn diagnostic_effect(&mut self, id: i32) {
-        let (p, f) = (self.loco.position(), self.loco.facing);
+        let (p, f) = (self.player.loco.position(), self.player.loco.facing);
         let table = self.effect_table.clone();
         self.effects.one_shot(&table, id, [p[0] + 3.0 * f[0], p[1] + 1.5, p[2] + 3.0 * f[2]], neopets_sim::effect::IDENTITY, &mut self.rng);
     }
@@ -5656,14 +5672,14 @@ impl Play {
         // The in-play controls gate (SPEC-0053 3.13), as far as this build tracks it: state not
         // 0x19, no box (dialogue) or menu, and game-state code 0 (no swap or door job running).
         // Group A (3.12) is not tested here.
-        let gate = self.loco.state != 25 && !self.dialogue_open && !self.menu_open && self.swap.is_none() && self.job.is_none();
+        let gate = self.player.loco.state != 25 && !self.dialogue_open && !self.menu_open && self.swap.is_none() && self.job.is_none();
         self.hud.swing.start(if self.hero_index == 0 { 1 } else { 0 }, accepted, blocked, gate);
         if self.swap.is_some() || !neopets_sim::swap::allowed(self.swap_mode, self.hero_index) || parked.hp <= 0 {
             self.last_swap = format!("switch refused (mode {}) on tick {}", self.swap_mode, self.ticks);
             return false;
         }
-        let dead = self.loco.state == hero_states::DEAD;
-        self.swap = Some(neopets_sim::swap::Task::new(1 - self.hero_index, extra, effects, flash, self.loco.state, dead));
+        let dead = self.player.loco.state == hero_states::DEAD;
+        self.swap = Some(neopets_sim::swap::Task::new(1 - self.hero_index, extra, effects, flash, self.player.loco.state, dead));
         self.last_swap = format!("switch to hero {} accepted on tick {}", 1 - self.hero_index, self.ticks);
         true
     }
@@ -5703,8 +5719,8 @@ impl Play {
                 if let Some(&e) = self.world.entries.first() {
                     self.arrive(e);
                 }
-                self.loco.state = hero_states::STANCE;
-                self.statuses.clear_all();
+                self.player.loco.state = hero_states::STANCE;
+                self.player.statuses.clear_all();
             }
             None => {}
         }
@@ -5767,9 +5783,9 @@ impl Play {
             }
             // The heal sets both pools to their maxima and clears the statuses (SPEC-0053 3.7).
             if hero == self.hero_index {
-                self.hero_hp = self.hero_max;
-                self.hero_mp = self.hero_mp_max;
-                self.statuses.clear_all();
+                self.player.hero_hp = self.player.hero_max;
+                self.player.hero_mp = self.player.hero_mp_max;
+                self.player.statuses.clear_all();
             } else if let Some(p) = self.parked.as_mut() {
                 p.hp = p.hp_max;
                 p.mp = p.mp_max;
@@ -5818,31 +5834,31 @@ impl Play {
     /// and the animation rig of the new outfit, the animation's clip kept playing; the renderer
     /// re-spawns the hero.
     pub fn set_outfit(&mut self, resource: u32, model: ModelData, mut anim: HeroAnim) {
-        let action = self.hero.clip_state().action;
+        let action = self.player.hero.clip_state().action;
         anim.play(action);
-        self.model = model;
-        self.hero = anim;
+        self.player.model = model;
+        self.player.hero = anim;
         self.outfits[self.hero_index.min(1)] = resource;
         self.spawned = false;
     }
 
     fn exchange_heroes(&mut self) {
         let Some(mut p) = self.parked.take() else { return };
-        std::mem::swap(&mut self.hero, &mut p.anim);
-        std::mem::swap(&mut self.model, &mut p.model);
-        std::mem::swap(&mut self.hero_hp, &mut p.hp);
-        std::mem::swap(&mut self.hero_mp, &mut p.mp);
-        std::mem::swap(&mut self.hero_max, &mut p.hp_max);
-        std::mem::swap(&mut self.hero_mp_max, &mut p.mp_max);
+        std::mem::swap(&mut self.player.hero, &mut p.anim);
+        std::mem::swap(&mut self.player.model, &mut p.model);
+        std::mem::swap(&mut self.player.hero_hp, &mut p.hp);
+        std::mem::swap(&mut self.player.hero_mp, &mut p.mp);
+        std::mem::swap(&mut self.player.hero_max, &mut p.hp_max);
+        std::mem::swap(&mut self.player.hero_mp_max, &mut p.mp_max);
         self.parked = Some(p);
         self.hero_index = 1 - self.hero_index;
         // Each hero keeps its own quick-item marker (SPEC-0021 +0x155C; SPEC-0053 3.7 step 8);
         // Roberta's starts at -1.
         std::mem::swap(&mut self.quick.marker, &mut self.other_marker);
         // SPEC-0053 step 9: the incoming hero's target list is emptied.
-        self.targets.clear();
+        self.player.targets.clear();
         self.draw_items(false);
-        self.statuses.clear_all();
+        self.player.statuses.clear_all();
         self.attack = None;
         self.hero_colour = self.design.hero_colour(self.hero_index).unwrap_or([128; 3]);
         self.weapon = self.equipment.entries[0][self.hero_index];
@@ -5860,11 +5876,11 @@ impl Play {
                 dialogue: self.dialogue_open,
                 quick_open: self.quick.open,
                 code_zero: !self.dialogue_open,
-                state: self.loco.state,
-                height: self.loco.body.gap.max(0.0),
-                grounded: self.loco.body.gap <= 0.15,
+                state: self.player.loco.state,
+                height: self.player.loco.body.gap.max(0.0),
+                grounded: self.player.loco.body.gap <= 0.15,
                 v: neopets_sim::hero::speed_value(input),
-                stunned: self.statuses.active(neopets_sim::status::STUN),
+                stunned: self.player.statuses.active(neopets_sim::status::STUN),
                 fade_moving: self.fade.alpha != self.fade.target,
             };
             if neopets_sim::swap::ready(&r) {
@@ -5882,12 +5898,12 @@ impl Play {
                     self.effects.stop(&table, h);
                     self.effects.release(h);
                 }
-                self.hero_shots.clear();
-                self.r_attack = None;
+                self.player.hero_shots.clear();
+                self.player.r_attack = None;
                 if effects {
                     self.cue(0xB0);
                     let table = self.effect_table.clone();
-                    let at = self.loco.position();
+                    let at = self.player.loco.position();
                     self.swap_at = at;
                     self.effects.one_shot(&table, 0xFB9, at, neopets_sim::effect::IDENTITY, &mut self.rng);
                 }
@@ -5909,7 +5925,7 @@ impl Play {
                 }
             }
             Some(neopets_sim::swap::Step::Carry { state, extra }) => {
-                self.loco.state = state;
+                self.player.loco.state = state;
                 if extra {
                     self.hud.rearm_all();
                 }
@@ -5934,26 +5950,26 @@ impl Play {
     fn block_step(&mut self) -> bool {
         // SPEC-0033 state 21 exits: "Stop Climbing" (label 18) in any sub-mode but 7; Square
         // drops the hero off (state 7, air phase 5, request 67).
-        if self.loco.state == hero_states::PANEL {
-            if self.panel.is_some_and(|c| c.sub != 7) {
+        if self.player.loco.state == hero_states::PANEL {
+            if self.player.panel.is_some_and(|c| c.sub != 7) {
                 self.door_prompt = Some(18);
                 if self.square_now {
-                    self.panel = None;
-                    self.loco.drop_off();
+                    self.player.panel = None;
+                    self.player.loco.drop_off();
                 }
             }
             return true;
         }
         // SPEC-0022: on the ladder "Stop Climbing" (label 18); Square returns to state 1.
-        if self.loco.state == hero_states::LADDER {
+        if self.player.loco.state == hero_states::LADDER {
             self.door_prompt = Some(18);
             if self.square_now {
                 self.leave_ladder();
             }
             return true;
         }
-        if self.loco.state == hero_states::HANG {
-            if self.hero.clip_state().action == 73 {
+        if self.player.loco.state == hero_states::HANG {
+            if self.player.hero.clip_state().action == 73 {
                 self.door_prompt = Some(20);
                 if self.square_now {
                     self.leave_edge(hero_states::STANCE, 0.0);
@@ -5961,12 +5977,12 @@ impl Play {
             }
             return true;
         }
-        if self.loco.state == hero_states::CLIMB {
+        if self.player.loco.state == hero_states::CLIMB {
             return true;
         }
         // State 30's let go: Square with label 20 while hanging (Behavior 44), to state 1.
-        if self.loco.state == hero_states::LEDGE {
-            if self.hero.clip_state().action == 73 {
+        if self.player.loco.state == hero_states::LEDGE {
+            if self.player.hero.clip_state().action == 73 {
                 self.door_prompt = Some(20);
                 if self.square_now {
                     self.leave_ledge(hero_states::STANCE);
@@ -5974,29 +5990,29 @@ impl Play {
             }
             return true;
         }
-        if matches!(self.loco.state, hero_states::LEDGE_UP | hero_states::LEDGE_RISE) {
+        if matches!(self.player.loco.state, hero_states::LEDGE_UP | hero_states::LEDGE_RISE) {
             return true;
         }
-        if self.loco.state == hero_states::BLOCK {
-            if self.hero.clip_state().action == neopets_sim::block::ANIM_STILL && self.stick_centred {
+        if self.player.loco.state == hero_states::BLOCK {
+            if self.player.hero.clip_state().action == neopets_sim::block::ANIM_STILL && self.player.stick_centred {
                 self.door_prompt = Some(20);
                 if self.square_now {
-                    self.loco.state = hero_states::STANCE;
-                    self.hold = None;
+                    self.player.loco.state = hero_states::STANCE;
+                    self.player.hold = None;
                 }
             }
             return true;
         }
-        if neopets_sim::hero::busy_state(self.loco.state) || !(1..=6).contains(&self.loco.state) {
+        if neopets_sim::hero::busy_state(self.player.loco.state) || !(1..=6).contains(&self.player.loco.state) {
             return false;
         }
-        let (hero, f) = (self.loco.position(), self.loco.facing);
+        let (hero, f) = (self.player.loco.position(), self.player.loco.facing);
         let Some((k, d)) = neopets_sim::block::current(&self.world.blocks, hero) else { return false };
         let Some(m) = neopets_sim::block::face(&self.world.blocks[k], d, hero, f) else { return false };
         self.door_prompt = Some(10);
         if self.square_now {
-            self.loco.enter_block();
-            self.hold = Some(neopets_sim::block::Hold { block: k, face: m, latched: false });
+            self.player.loco.enter_block();
+            self.player.hold = Some(neopets_sim::block::Hold { block: k, face: m, latched: false });
         }
         true
     }
@@ -6006,20 +6022,20 @@ impl Play {
     /// motion; the grab clears the motion) and starts the block moves, with cue 11 and the
     /// strain voice (Tor 33, Roberta 57) on an accepted push.
     fn hold_step(&mut self, input: &HeroInput) {
-        self.stick_centred = neopets_sim::hero::speed_value(input) <= 0.0;
+        self.player.stick_centred = neopets_sim::hero::speed_value(input) <= 0.0;
         self.edge_step(input);
-        if self.loco.state != hero_states::BLOCK {
-            self.hold = None;
+        if self.player.loco.state != hero_states::BLOCK {
+            self.player.hold = None;
             return;
         }
-        let Some(mut hold) = self.hold.filter(|h| h.block < self.world.blocks.len()) else {
-            self.hold = None;
-            self.loco.state = hero_states::STANCE;
+        let Some(mut hold) = self.player.hold.filter(|h| h.block < self.world.blocks.len()) else {
+            self.player.hold = None;
+            self.player.loco.state = hero_states::STANCE;
             return;
         };
         let v = neopets_sim::hero::speed_value(input);
-        let stick = self.loco.target.map(|c| c * v);
-        let clip = self.hero.hold_clip();
+        let stick = self.player.loco.target.map(|c| c * v);
+        let clip = self.player.hero.hold_clip();
         // SPEC-0048 Push start step 2: the footprint step reads the block's floor patch outline
         // and the ground at the block and at the hero point.
         let (ground, poses) = (&self.world.ground, &self.world.owner_poses);
@@ -6029,17 +6045,17 @@ impl Play {
             let h = g.probe_owned(x, z, c, &owner);
             h.found.then_some(h.height)
         });
-        let footing = neopets_sim::block::Footing { inside: &inside, ground: &probe, hero: self.loco.position() };
-        let step = hold.tick_on(&mut self.world.blocks, self.loco.position(), self.loco.facing, stick, clip, Some(&footing));
-        self.hold = Some(hold);
+        let footing = neopets_sim::block::Footing { inside: &inside, ground: &probe, hero: self.player.loco.position() };
+        let step = hold.tick_on(&mut self.world.blocks, self.player.loco.position(), self.player.loco.facing, stick, clip, Some(&footing));
+        self.player.hold = Some(hold);
         if let Some((dir, rate)) = step.steer {
-            self.loco.steer_toward(dir, rate);
+            self.player.loco.steer_toward(dir, rate);
         }
         if let Some(p) = step.place {
-            self.loco.body.velocity = [0.0; 3];
-            self.loco.body.position = p;
+            self.player.loco.body.velocity = [0.0; 3];
+            self.player.loco.body.position = p;
         }
-        self.loco.block_request(step.request);
+        self.player.loco.block_request(step.request);
         if step.pushed {
             self.cue(11);
             // SPEC-0031 Block push: with the level's registered area-slot cue.
@@ -6101,20 +6117,20 @@ impl Play {
     /// motion (positions rounded to 0.1).
     pub fn block_trace(&self) -> String {
         let r = |v: [f32; 3]| v.map(|c| (c * 10.0).round() / 10.0);
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let near = neopets_sim::block::current(&self.world.blocks, hero).map(|(k, d)| {
             let b = &self.world.blocks[k];
-            (k, (d * 10.0).round() / 10.0, r(b.position), b.moving, neopets_sim::block::face(b, d, hero, self.loco.facing))
+            (k, (d * 10.0).round() / 10.0, r(b.position), b.moving, neopets_sim::block::face(b, d, hero, self.player.loco.facing))
         });
-        format!("state {} touch {} clip {} prompt {:?} hold {:?} hero {:?} facing {:?} root {:?} block {:?}", self.loco.state, self.side_touch, self.hero.clip_state().action, self.prompt_shown, self.hold.map(|h| (h.block, h.face, h.latched)), r(hero), r(self.loco.facing), self.root_step, near)
+        format!("state {} touch {} clip {} prompt {:?} hold {:?} hero {:?} facing {:?} root {:?} block {:?}", self.player.loco.state, self.player.side_touch, self.player.hero.clip_state().action, self.prompt_shown, self.player.hold.map(|h| (h.block, h.face, h.latched)), r(hero), r(self.player.loco.facing), self.root_step, near)
     }
 
     /// Diagnostic: the full stick (forward, side) that points the hero straight at a point.
     pub fn stick_toward(&self, x: f32, z: f32) -> (f32, f32) {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let (dx, dz) = (x - p[0], z - p[2]);
         let d = dx.hypot(dz).max(1e-6);
-        let (f, l) = self.camera.rows();
+        let (f, l) = self.player.camera.rows();
         let fl = (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
         ((dx * f[0] + dz * f[2]) / d / fl, (dx * l[0] + dz * l[2]) / d)
     }
@@ -6187,7 +6203,7 @@ impl Play {
     }
 
     pub fn blockers(&self) -> Vec<String> {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let mut out = Vec::new();
         for (k, (m, b)) in self.world.all_boxes.iter().enumerate() {
             let mut q = p;
@@ -6244,22 +6260,22 @@ impl Play {
         let Some(r) = self.world.rails.get(k).copied() else { return };
         let n = [r.normal[0], r.normal[1], r.normal[2]];
         let (u, v) = ([r.u[0], r.u[1], r.u[2]], [r.v[0], r.v[1], r.v[2]]);
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let plane = |q: [f32; 4], p: [f32; 3]| q[0] * p[0] + q[1] * p[1] + q[2] * p[2] + q[3];
         let (a, b, c) = (0.9 - plane(r.normal, p), 0.8 - plane(r.u, p), up - plane(r.v, p));
-        self.loco.body.position = std::array::from_fn(|i| p[i] + a * n[i] + b * u[i] + c * v[i]);
-        self.loco.facing = [-n[0], 0.0, -n[2]];
-        self.ladder = Some(neopets_sim::ladder::Ladder::new(k));
-        self.loco.enter_state(hero_states::LADDER, 93);
+        self.player.loco.body.position = std::array::from_fn(|i| p[i] + a * n[i] + b * u[i] + c * v[i]);
+        self.player.loco.facing = [-n[0], 0.0, -n[2]];
+        self.player.ladder = Some(neopets_sim::ladder::Ladder::new(k));
+        self.player.loco.enter_state(hero_states::LADDER, 93);
     }
 
     /// Diagnostic (NEOPETS_TRACE_BLOCK): the camera-relative stick (forward, side) for a hero
     /// holding a block, toward the held face's direction turned by `turn` quarter turns (0 into
     /// the face: a push; 2 away from it: a pull; 1 and 3 the side moves).
     pub fn block_trace_stick_toward(&self, turn: i32) -> Option<(f32, f32)> {
-        let h = self.hold.filter(|h| h.latched)?;
+        let h = self.player.hold.filter(|h| h.latched)?;
         let n = self.world.blocks.get(h.block)?.direction((h.face as i32 + turn).rem_euclid(4))?;
-        let (f, l) = self.camera.rows();
+        let (f, l) = self.player.camera.rows();
         let fl = (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
         Some(((n[0] * f[0] + n[2] * f[2]) / fl, n[0] * l[0] + n[2] * l[2]))
     }
@@ -6283,16 +6299,16 @@ impl Play {
 
     /// Leave state 19 or 58 to `state`, moved `push` along the held face, with gravity back on.
     fn leave_edge(&mut self, state: u8, push: f32) {
-        let face = self.hang.map(|h| (h.block, h.face)).or(self.climb.map(|c| (c.block, c.face)));
+        let face = self.player.hang.map(|h| (h.block, h.face)).or(self.player.climb.map(|c| (c.block, c.face)));
         if let Some(d) = face.and_then(|(k, m)| self.world.blocks.get(k)?.direction(m as i32)) {
             for k in [0, 2] {
-                self.loco.body.position[k] += d[k] * push;
+                self.player.loco.body.position[k] += d[k] * push;
             }
         }
-        self.hang = None;
-        self.climb = None;
-        self.loco.body.no_gravity = false;
-        self.loco.enter_state(state, if state == hero_states::RUN { 4 } else { 0 });
+        self.player.hang = None;
+        self.player.climb = None;
+        self.player.loco.body.no_gravity = false;
+        self.player.loco.enter_state(state, if state == hero_states::RUN { 4 } else { 0 });
     }
 
     /// SPEC-0033 Behaviors 15, 15A and 51, after the hero update: in states 19 and 58 their
@@ -6301,66 +6317,66 @@ impl Play {
     /// enters state 19, and the push-into-face counter with the fit test enters state 58.
     fn edge_step(&mut self, input: &HeroInput) {
         // The grab cooldown (Behavior 20) the panel and ladder grabs share.
-        self.grab_cooldown = self.grab_cooldown.saturating_sub(1);
+        self.player.grab_cooldown = self.player.grab_cooldown.saturating_sub(1);
         let roped = self.rope_step(input);
         self.aim_view_step();
         if roped {
             return;
         }
         self.panel_step(input);
-        if self.loco.state == hero_states::PANEL {
+        if self.player.loco.state == hero_states::PANEL {
             return;
         }
         self.ladder_step(input);
-        if self.loco.state == hero_states::LADDER {
+        if self.player.loco.state == hero_states::LADDER {
             return;
         }
         self.line_step(input);
-        if self.loco.state == hero_states::LINE {
+        if self.player.loco.state == hero_states::LINE {
             return;
         }
-        let hero = self.loco.position();
-        let c = self.hero.clip_state();
-        let clip = neopets_sim::block::EdgeClip { action: c.action, progress: c.progress, bits: self.hero.frame_bits() };
+        let hero = self.player.loco.position();
+        let c = self.player.hero.clip_state();
+        let clip = neopets_sim::block::EdgeClip { action: c.action, progress: c.progress, bits: self.player.hero.frame_bits() };
         let v = neopets_sim::hero::speed_value(input);
-        let stick = self.loco.target.map(|x| x * v);
-        let f = self.loco.facing;
+        let stick = self.player.loco.target.map(|x| x * v);
+        let f = self.player.loco.facing;
         let side_axis = neopets_sim::hero::basis(f)[0];
         let (a, b) = (stick[0] * f[0] + stick[2] * f[2], stick[0] * side_axis[0] + stick[2] * side_axis[2]);
         let forward = a > 0.0 && a.abs() > b.abs();
         if self.ledge_step(input.side, forward) {
             return;
         }
-        let step = match self.loco.state {
-            hero_states::HANG => self.hang.as_mut().map(|h| h.tick(&self.world.blocks, hero, input.side, forward, self.loco.body.gap, clip)),
+        let step = match self.player.loco.state {
+            hero_states::HANG => self.player.hang.as_mut().map(|h| h.tick(&self.world.blocks, hero, input.side, forward, self.player.loco.body.gap, clip)),
             hero_states::CLIMB => {
-                let touched = self.touched;
-                self.climb.as_mut().map(|h| {
+                let touched = self.player.touched;
+                self.player.climb.as_mut().map(|h| {
                     h.touched = touched;
                     h.tick(&self.world.blocks, hero, forward, clip)
                 })
             }
             _ => {
-                self.hang = None;
-                self.climb = None;
+                self.player.hang = None;
+                self.player.climb = None;
                 let found = neopets_sim::block::current(&self.world.blocks, hero).and_then(|(k, d)| Some((k, neopets_sim::block::face(&self.world.blocks[k], d, hero, f)?)));
-                let grab = (input.jump && (1..=10).contains(&self.loco.state)) || (self.loco.airborne() && (0..=5).contains(&self.loco.phase));
-                if let (true, true, Some((k, m))) = (grab, self.side_touch, found) {
-                    self.hang = Some(neopets_sim::block::Hang::new(k, m));
-                    self.loco.enter_state(hero_states::HANG, 72);
+                let grab = (input.jump && (1..=10).contains(&self.player.loco.state)) || (self.player.loco.airborne() && (0..=5).contains(&self.player.loco.phase));
+                if let (true, true, Some((k, m))) = (grab, self.player.side_touch, found) {
+                    self.player.hang = Some(neopets_sim::block::Hang::new(k, m));
+                    self.player.loco.enter_state(hero_states::HANG, 72);
                     self.trace_edge("hang", k, m);
-                } else if (1..=6).contains(&self.loco.state) {
+                } else if (1..=6).contains(&self.player.loco.state) {
                     // The counter: reset with no face, up to 15 at one; from 15 the fit test runs
                     // every tick and a pass enters state 58.
                     match found {
-                        None => self.face_count = 0,
+                        None => self.player.face_count = 0,
                         Some((k, m)) => {
-                            if self.face_count < neopets_sim::block::FACE_COUNT {
-                                self.face_count += 1;
+                            if self.player.face_count < neopets_sim::block::FACE_COUNT {
+                                self.player.face_count += 1;
                             } else if neopets_sim::block::fits(&self.world.blocks[k], m, hero, f, a, b) {
-                                self.climb = Some(neopets_sim::block::Climb::new(k, m));
-                                self.loco.enter_state(hero_states::CLIMB, 70);
-                                self.face_count = 0;
+                                self.player.climb = Some(neopets_sim::block::Climb::new(k, m));
+                                self.player.loco.enter_state(hero_states::CLIMB, 70);
+                                self.player.face_count = 0;
                                 self.trace_edge("climb", k, m);
                             }
                         }
@@ -6369,19 +6385,19 @@ impl Play {
                 None
             }
         };
-        if !matches!(self.loco.state, hero_states::HANG | hero_states::CLIMB) {
+        if !matches!(self.player.loco.state, hero_states::HANG | hero_states::CLIMB) {
             return;
         }
-        let Some(step) = step.or(Some(neopets_sim::block::EdgeStep { request: self.loco.action(), ..Default::default() })) else { return };
-        self.loco.body.no_gravity = true;
-        self.loco.body.velocity = [0.0; 3];
+        let Some(step) = step.or(Some(neopets_sim::block::EdgeStep { request: self.player.loco.action(), ..Default::default() })) else { return };
+        self.player.loco.body.no_gravity = true;
+        self.player.loco.body.velocity = [0.0; 3];
         if let Some(d) = step.facing {
-            self.loco.steer_toward(d, 0.5);
+            self.player.loco.steer_toward(d, 0.5);
         }
         if let Some(p) = step.place {
-            self.loco.body.position = p;
+            self.player.loco.body.position = p;
         }
-        self.loco.block_request(step.request);
+        self.player.loco.block_request(step.request);
         if let Some((state, push)) = step.exit {
             self.leave_edge(state, push);
             self.trace_edge("leave", state as usize, 0);
@@ -6395,47 +6411,47 @@ impl Play {
     pub fn diag_ceiling(&mut self, k: usize) {
         let Some(r) = self.world.panels.get(k).copied() else { return };
         let mid: [f32; 3] = std::array::from_fn(|j| -r.normal[3] * r.normal[j] + (0.5 * r.lu - r.u[3]) * r.u[j] + (0.5 * r.lv - r.v[3]) * r.v[j]);
-        self.loco.body.position = [mid[0], mid[1] - 4.0, mid[2]];
-        self.panel = Some(neopets_sim::climb::Climb::ceiling(k));
-        self.loco.enter_state(hero_states::PANEL, 48);
-        self.grab_cooldown = 0;
+        self.player.loco.body.position = [mid[0], mid[1] - 4.0, mid[2]];
+        self.player.panel = Some(neopets_sim::climb::Climb::ceiling(k));
+        self.player.loco.enter_state(hero_states::PANEL, 48);
+        self.player.grab_cooldown = 0;
     }
 
     fn panel_step(&mut self, input: &HeroInput) {
-        let hero = self.loco.position();
-        if self.loco.state != hero_states::PANEL {
-            self.panel = None;
-            let ground = (1..=6).contains(&self.loco.state);
-            let jumping = (7..=10).contains(&self.loco.state) || (43..=46).contains(&self.loco.state);
-            if self.grab_cooldown > 0 || !(ground || jumping) || self.world.panels.is_empty() {
+        let hero = self.player.loco.position();
+        if self.player.loco.state != hero_states::PANEL {
+            self.player.panel = None;
+            let ground = (1..=6).contains(&self.player.loco.state);
+            let jumping = (7..=10).contains(&self.player.loco.state) || (43..=46).contains(&self.player.loco.state);
+            if self.player.grab_cooldown > 0 || !(ground || jumping) || self.world.panels.is_empty() {
                 return;
             }
             let v = neopets_sim::hero::speed_value(input);
             // Behavior 22A: the wall grab first; the air routine's ceiling grab while in a jump state.
-            if let Some(k) = neopets_sim::climb::grab_wall(&self.world.panels, hero, self.loco.facing, self.loco.target, v) {
-                self.panel = Some(neopets_sim::climb::Climb::new(k));
-                self.loco.enter_state(hero_states::PANEL, 121);
+            if let Some(k) = neopets_sim::climb::grab_wall(&self.world.panels, hero, self.player.loco.facing, self.player.loco.target, v) {
+                self.player.panel = Some(neopets_sim::climb::Climb::new(k));
+                self.player.loco.enter_state(hero_states::PANEL, 121);
                 self.trace_edge("panel", k, 1);
             } else if let Some(k) = neopets_sim::climb::grab_ceiling(&self.world.panels, hero).filter(|_| jumping) {
-                self.panel = Some(neopets_sim::climb::Climb::ceiling(k));
-                self.loco.enter_state(hero_states::PANEL, 48);
+                self.player.panel = Some(neopets_sim::climb::Climb::ceiling(k));
+                self.player.loco.enter_state(hero_states::PANEL, 48);
                 self.trace_edge("ceiling", k, 18);
             } else {
                 return;
             }
         }
-        let Some(mut c) = self.panel else {
+        let Some(mut c) = self.player.panel else {
             self.leave_ladder();
             return;
         };
-        let clip = self.hero.clip_state();
+        let clip = self.player.hero.clip_state();
         // In the top-edge hang (sub-mode 17) the stick values are the camera-relative stick
         // vector projected onto the panel: f into the wall, s along the hero's left (SPEC-0033
         // Top-edge hang), so a pure-forward push is blocked only when the camera is square on.
         let (mut f, mut s) = (input.forward, input.side);
         if c.sub == 17 {
             if let Some(t) = self.world.panels.get(c.target) {
-                let (cf, cl) = self.camera.rows();
+                let (cf, cl) = self.player.camera.rows();
                 let flat = |v: [f32; 3]| unit([v[0], 0.0, v[2]]);
                 let (cf, cl) = (flat(cf), flat(cl));
                 let w: [f32; 3] = std::array::from_fn(|k| input.forward * cf[k] + input.side * cl[k]);
@@ -6448,35 +6464,35 @@ impl Play {
         // Sub-mode 4's heading: the camera-relative stick direction.
         let speed = neopets_sim::hero::speed_value(input);
         let heading = {
-            let (cf, cl) = self.camera.rows();
+            let (cf, cl) = self.player.camera.rows();
             let flat = |v: [f32; 3]| unit([v[0], 0.0, v[2]]);
             let (cf, cl) = (flat(cf), flat(cl));
             unit(std::array::from_fn(|k| input.forward * cf[k] + input.side * cl[k]))
         };
-        let view = neopets_sim::climb::View { facing: self.loco.facing, heading, speed, hero, f, s, gap: self.loco.body.gap, clip: (clip.action, clip.progress), cooldown: self.grab_cooldown };
+        let view = neopets_sim::climb::View { facing: self.player.loco.facing, heading, speed, hero, f, s, gap: self.player.loco.body.gap, clip: (clip.action, clip.progress), cooldown: self.player.grab_cooldown };
         let sub = c.sub;
         let step = c.tick(&self.world.panels, view);
-        self.panel = Some(c);
+        self.player.panel = Some(c);
         if c.sub != sub {
             self.trace_edge("panel sub", c.target, c.sub);
         }
-        self.loco.body.no_gravity = true;
-        self.loco.body.velocity = [0.0; 3];
+        self.player.loco.body.no_gravity = true;
+        self.player.loco.body.velocity = [0.0; 3];
         if let Some((f, w)) = step.facing {
-            self.loco.steer_toward(f, w);
+            self.player.loco.steer_toward(f, w);
         }
         if let Some(p) = step.place {
-            self.loco.body.position = p;
+            self.player.loco.body.position = p;
         }
         if let Some(r) = step.request {
-            self.loco.block_request(r);
+            self.player.loco.block_request(r);
         }
         if let Some(k) = step.cooldown {
-            self.grab_cooldown = k;
+            self.player.grab_cooldown = k;
         }
-        self.loco.rate = step.rate;
+        self.player.loco.rate = step.rate;
         if step.leave {
-            self.panel = None;
+            self.player.panel = None;
             self.leave_ladder();
             self.trace_edge("panel off", c.target, 0);
         }
@@ -6489,22 +6505,22 @@ impl Play {
     /// slide and the let-go (Square shows the let-go label 20).
     fn line_step(&mut self, input: &HeroInput) {
         use neopets_sim::grab;
-        self.line_cooldown = self.line_cooldown.saturating_sub(1);
-        let hero = self.loco.position();
-        if self.loco.state != hero_states::LINE {
-            self.line_hang = None;
-            let jumping = (7..=10).contains(&self.loco.state) || (43..=46).contains(&self.loco.state);
-            if !jumping || self.line_cooldown > 0 {
+        self.player.line_cooldown = self.player.line_cooldown.saturating_sub(1);
+        let hero = self.player.loco.position();
+        if self.player.loco.state != hero_states::LINE {
+            self.player.line_hang = None;
+            let jumping = (7..=10).contains(&self.player.loco.state) || (43..=46).contains(&self.player.loco.state);
+            if !jumping || self.player.line_cooldown > 0 {
                 return;
             }
             let mask = self.world.collis_mask;
             let Some(k) = self.world.grab_lines.iter().position(|l| (l.mask == 0 || l.mask & mask != 0) && l.reaches(hero)) else { return };
-            self.line_hang = Some(grab::Hang::new(k));
-            self.loco.enter_state(hero_states::LINE, 112);
+            self.player.line_hang = Some(grab::Hang::new(k));
+            self.player.loco.enter_state(hero_states::LINE, 112);
             self.trace_edge("grab line", k, 0);
         }
-        let Some(mut h) = self.line_hang else {
-            self.loco.drop_off();
+        let Some(mut h) = self.player.line_hang else {
+            self.player.loco.drop_off();
             return;
         };
         let square = std::mem::take(&mut self.square_now);
@@ -6512,36 +6528,36 @@ impl Play {
         // pushed right seeks on the -B1 side (side word 0), left on the +B1 side (1).
         let mut launch = None;
         if input.cross_held && input.side.abs() > 40.0 / 127.5 {
-            let f = self.loco.facing;
+            let f = self.player.loco.facing;
             let b1 = neopets_sim::hero::basis(f)[0];
             let side = if input.side > 0.0 { 1 } else { 0 };
             launch = h.seek(&self.world.grab_lines, hero, f, b1, side);
         }
         h.cross = input.cross_held;
-        h.playing = self.hero.clip_state().action;
-        h.finished = self.hero.clip_state().finished;
+        h.playing = self.player.hero.clip_state().action;
+        h.finished = self.player.hero.clip_state().finished;
         // Test 4: the touched flag in the slide with the cooldown expired lets go, then the
         // long-fall landing (state 48); the attach's 60-tick cooldown keeps it off at first.
-        if launch.is_none() && h.mode == 1 && self.touched && self.line_cooldown < 1 {
+        if launch.is_none() && h.mode == 1 && self.player.touched && self.player.line_cooldown < 1 {
             if let Some(line) = self.world.grab_lines.get(h.line).copied() {
-                self.line_hang = None;
-                self.line_cooldown = grab::COOLDOWN;
-                self.loco.line_let_go(line.u.map(|c| c * 15.0));
-                self.loco.long_fall_start();
+                self.player.line_hang = None;
+                self.player.line_cooldown = grab::COOLDOWN;
+                self.player.loco.line_let_go(line.u.map(|c| c * 15.0));
+                self.player.loco.long_fall_start();
                 self.trace_edge("line touched: long fall", h.line, 0);
                 return;
             }
         }
-        let mut step = h.tick(&self.world.grab_lines, hero, self.loco.body.gap, square);
+        let mut step = h.tick(&self.world.grab_lines, hero, self.player.loco.body.gap, square);
         if let Some(r) = launch {
             step.request = r;
         }
-        self.line_hang = Some(h);
+        self.player.line_hang = Some(h);
         let Some(line) = self.world.grab_lines.get(h.line).copied() else { return };
         if step.let_go {
-            self.line_hang = None;
-            self.line_cooldown = grab::COOLDOWN;
-            self.loco.line_let_go(line.u.map(|c| c * 15.0));
+            self.player.line_hang = None;
+            self.player.line_cooldown = grab::COOLDOWN;
+            self.player.loco.line_let_go(line.u.map(|c| c * 15.0));
             self.trace_edge("let go of line", h.line, 0);
             return;
         }
@@ -6551,78 +6567,78 @@ impl Play {
         if !square {
             self.sound.play(neopets_sim::sound::MAIN, 141, neopets_sim::sound::Play { do_not_restart: true, ..Default::default() });
         }
-        self.loco.body.no_gravity = true;
-        self.loco.body.velocity = [0.0; 3];
-        self.loco.steer_toward([line.u[0], 0.0, line.u[2]], 1.0);
+        self.player.loco.body.no_gravity = true;
+        self.player.loco.body.velocity = [0.0; 3];
+        self.player.loco.steer_toward([line.u[0], 0.0, line.u[2]], 1.0);
         if let Some(p) = step.place {
-            self.loco.body.position = p;
+            self.player.loco.body.position = p;
         }
-        self.loco.block_request(step.request);
+        self.player.loco.block_request(step.request);
     }
 
     fn leave_ladder(&mut self) {
-        self.ladder = None;
-        self.loco.body.no_gravity = false;
-        self.loco.body.no_snap = false;
-        self.loco.enter_state(hero_states::STANCE, 0);
+        self.player.ladder = None;
+        self.player.loco.body.no_gravity = false;
+        self.player.loco.body.no_snap = false;
+        self.player.loco.enter_state(hero_states::STANCE, 0);
     }
 
     /// SPEC-0033 Behaviors 13 and 22: the ladder grab test from the ground and while jumping
     /// (the cooldown 0), and state 41 each tick: facing the ladder, motion cleared, no gravity,
     /// the mount move, the rung clips, the climb off the top, stepping off, and the jump off.
     fn ladder_step(&mut self, input: &HeroInput) {
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let v = neopets_sim::hero::speed_value(input);
-        if self.loco.state != hero_states::LADDER {
-            self.ladder = None;
-            let ground = (1..=6).contains(&self.loco.state);
-            let jumping = (7..=10).contains(&self.loco.state) || (43..=46).contains(&self.loco.state);
-            if self.grab_cooldown > 0 || !(ground || jumping) || self.world.rails.is_empty() {
+        if self.player.loco.state != hero_states::LADDER {
+            self.player.ladder = None;
+            let ground = (1..=6).contains(&self.player.loco.state);
+            let jumping = (7..=10).contains(&self.player.loco.state) || (43..=46).contains(&self.player.loco.state);
+            if self.player.grab_cooldown > 0 || !(ground || jumping) || self.world.rails.is_empty() {
                 return;
             }
-            let stick = self.loco.target;
+            let stick = self.player.loco.target;
             if std::env::var_os("NEOPETS_TRACE_CLIMB").is_some() {
                 for (k, r) in self.world.rails.iter().enumerate() {
                     let pl = |q: [f32; 4]| q[0] * hero[0] + q[1] * hero[1] + q[2] * hero[2] + q[3];
                     let d = pl(r.normal);
                     if d.abs() < 3.0 && pl(r.u) > -2.0 && pl(r.u) < r.lu.abs() + 2.0 && pl(r.v).abs() < 3.0 {
                         let n = [r.normal[0], r.normal[1], r.normal[2]];
-                        println!("      grab test tick {} rail {k} d {d:.2} x {:.2} y {:.2} lu {:.1} facing.n {:.2} stick.n {:.2} speed {v:.2}", self.ticks, pl(r.u), pl(r.v), r.lu, dot(self.loco.facing, n), dot(stick, n));
+                        println!("      grab test tick {} rail {k} d {d:.2} x {:.2} y {:.2} lu {:.1} facing.n {:.2} stick.n {:.2} speed {v:.2}", self.ticks, pl(r.u), pl(r.v), r.lu, dot(self.player.loco.facing, n), dot(stick, n));
                     }
                 }
             }
-            if let Some(k) = neopets_sim::ladder::grab(&self.world.rails, hero, self.loco.facing, stick, v, false) {
-                self.ladder = Some(neopets_sim::ladder::Ladder::new(k));
-                self.loco.enter_state(hero_states::LADDER, 93);
+            if let Some(k) = neopets_sim::ladder::grab(&self.world.rails, hero, self.player.loco.facing, stick, v, false) {
+                self.player.ladder = Some(neopets_sim::ladder::Ladder::new(k));
+                self.player.loco.enter_state(hero_states::LADDER, 93);
                 self.trace_edge("ladder", k, 0);
             } else {
                 return;
             }
         }
-        let Some(mut l) = self.ladder else {
+        let Some(mut l) = self.player.ladder else {
             self.leave_ladder();
             return;
         };
-        let c = self.hero.clip_state();
-        let step = l.tick(&self.world.rails, hero, input.forward, input.jump, self.loco.body.gap, (c.action, c.progress));
+        let c = self.player.hero.clip_state();
+        let step = l.tick(&self.world.rails, hero, input.forward, input.jump, self.player.loco.body.gap, (c.action, c.progress));
         if std::env::var_os("NEOPETS_TRACE_CLIMB").is_some() {
             let r = self.world.rails[l.rail];
             let pl = |q: [f32; 4]| q[0] * hero[0] + q[1] * hero[1] + q[2] * hero[2] + q[3];
-            println!("      ladder tick {} sub {} clip {} {:.2} gap {:.2} forward {} y {:.2} step {:?} d {:.3} x {:.3} v {:.3} place {:?}", self.ticks, l.sub, c.action, c.progress, self.loco.body.gap, input.forward, hero[1], step.request, pl(r.normal), pl(r.u), pl(r.v), step.place);
+            println!("      ladder tick {} sub {} clip {} {:.2} gap {:.2} forward {} y {:.2} step {:?} d {:.3} x {:.3} v {:.3} place {:?}", self.ticks, l.sub, c.action, c.progress, self.player.loco.body.gap, input.forward, hero[1], step.request, pl(r.normal), pl(r.u), pl(r.v), step.place);
         }
-        self.ladder = Some(l);
-        self.loco.body.no_gravity = true;
+        self.player.ladder = Some(l);
+        self.player.loco.body.no_gravity = true;
         // SPEC-0033 Behavior 13: on the ladder nothing but the state's own steps and the clips move
         // him. A rung just under the floor stalled the mount when the ground lifted him back each
         // tick (user's reports 23 and 25).
-        self.loco.body.no_snap = true;
-        self.loco.body.velocity = [0.0; 3];
-        self.loco.steer_toward(step.facing, 1.0);
+        self.player.loco.body.no_snap = true;
+        self.player.loco.body.velocity = [0.0; 3];
+        self.player.loco.steer_toward(step.facing, 1.0);
         if let Some(p) = step.place {
-            self.loco.body.position = p;
+            self.player.loco.body.position = p;
         }
         if let Some(r) = step.request {
-            self.loco.block_request(r);
+            self.player.loco.block_request(r);
         }
         if step.cue {
             self.cue(140);
@@ -6630,10 +6646,10 @@ impl Play {
         match step.leave {
             Some(true) => {
                 // The jump off: -0.5 times the facing, +2.0 up, and the 30-tick cooldown.
-                let f = self.loco.facing;
-                self.ladder = None;
-                self.grab_cooldown = neopets_sim::ladder::COOLDOWN;
-                self.loco.jump_off([-neopets_sim::ladder::JUMP_BACK * f[0], neopets_sim::ladder::JUMP_UP, -neopets_sim::ladder::JUMP_BACK * f[2]]);
+                let f = self.player.loco.facing;
+                self.player.ladder = None;
+                self.player.grab_cooldown = neopets_sim::ladder::COOLDOWN;
+                self.player.loco.jump_off([-neopets_sim::ladder::JUMP_BACK * f[0], neopets_sim::ladder::JUMP_UP, -neopets_sim::ladder::JUMP_BACK * f[2]]);
                 self.trace_edge("ladder jump", l.rail, 0);
             }
             Some(false) => {
@@ -6650,38 +6666,38 @@ impl Play {
     /// gravity, the motion cleared). Reports whether a ledge state owns the tick.
     fn ledge_step(&mut self, side: f32, forward: bool) -> bool {
         use neopets_sim::ledge::{self, Class, Edge, Ledge};
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         // SPEC-0033 Behavior 51 state 30, step 1 (R-0193): the ladder check, first on every tick; the
         // let-go exit, state 41 and both item-manager flags cleared.
-        if self.loco.state == ledge::HANG && self.grab_cooldown <= 0 && !self.world.rails.is_empty() {
-            let v = (self.loco.target[0].hypot(self.loco.target[2]) > 0.0) as u8 as f32;
-            if let Some(k) = neopets_sim::ladder::grab(&self.world.rails, hero, self.loco.facing, self.loco.target, v, true) {
+        if self.player.loco.state == ledge::HANG && self.player.grab_cooldown <= 0 && !self.world.rails.is_empty() {
+            let v = (self.player.loco.target[0].hypot(self.player.loco.target[2]) > 0.0) as u8 as f32;
+            if let Some(k) = neopets_sim::ladder::grab(&self.world.rails, hero, self.player.loco.facing, self.player.loco.target, v, true) {
                 self.leave_ledge(hero_states::STANCE);
-                self.ladder = Some(neopets_sim::ladder::Ladder::new(k));
-                self.loco.enter_state(hero_states::LADDER, 93);
+                self.player.ladder = Some(neopets_sim::ladder::Ladder::new(k));
+                self.player.loco.enter_state(hero_states::LADDER, 93);
                 if self.weapon_drawn {
                     self.set_weapon_drawn(false);
                 }
                 return true;
             }
         }
-        if !matches!(self.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE | ledge::DROP) {
+        if !matches!(self.player.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE | ledge::DROP) {
             // Left the hang by another route (a hit's hurt state, a knock): the ledge's
             // no-gravity word goes too, as the character update clears it every tick (SPEC-0040;
             // user's reports 90 to 92: hit while hanging, the hero floated up for good).
-            if self.ledge.take().is_some() {
-                self.loco.body.no_gravity = false;
+            if self.player.ledge.take().is_some() {
+                self.player.loco.body.no_gravity = false;
             }
-            self.loco.body.no_snap = false;
-            if (1..=4).contains(&self.loco.state) && !self.drop_check() {
+            self.player.loco.body.no_snap = false;
+            if (1..=4).contains(&self.player.loco.state) && !self.drop_check() {
                 return false;
             }
-            if self.loco.state != ledge::DROP && !(self.loco.airborne() && (0..=5).contains(&self.loco.phase)) {
+            if self.player.loco.state != ledge::DROP && !(self.player.loco.airborne() && (0..=5).contains(&self.player.loco.phase)) {
                 return false;
             }
         }
-        if !matches!(self.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE | ledge::DROP) {
-            let f = self.loco.facing;
+        if !matches!(self.player.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE | ledge::DROP) {
+            let f = self.player.loco.facing;
             let toward = |e: &Edge| -(e.face[0] * f[0] + e.face[2] * f[2]);
             // The held edge: the record the hero's wall contact offers (Behavior 51A item 2; the
             // contact ran at the end of the last tick, so the hero's position now is where it left
@@ -6713,39 +6729,39 @@ impl Play {
             if !ledge::faces_into(&edge, hero, f) {
                 return false;
             }
-            self.ledge_record = Some(record);
-            let Some(class) = ledge::choose(edge.h(hero), hero[1], ground, self.loco.body.normal[1], true) else { return false };
+            self.player.ledge_record = Some(record);
+            let Some(class) = ledge::choose(edge.h(hero), hero[1], ground, self.player.loco.body.normal[1], true) else { return false };
             let (state, request) = match class {
                 Class::Hang => (ledge::HANG, 72),
-                Class::Climb if self.loco.body.velocity[1] > 0.0 => (ledge::CLIMB_RISE, 134),
+                Class::Climb if self.player.loco.body.velocity[1] > 0.0 => (ledge::CLIMB_RISE, 134),
                 Class::Climb => (ledge::CLIMB_FALL, 75),
             };
-            self.ledge = Some(Ledge::new(state, edge));
-            self.loco.enter_state(state, request);
+            self.player.ledge = Some(Ledge::new(state, edge));
+            self.player.loco.enter_state(state, request);
             self.trace_edge("ledge", state as usize, 0);
         }
-        let c = self.hero.clip_state();
+        let c = self.player.hero.clip_state();
         // State 37's depth check: the ground 2.0 and 2.5 ahead more than 4.5 below (or none) at
         // both points makes the edge deep.
-        let f = self.loco.facing;
+        let f = self.player.loco.facing;
         let deep = [2.0, 2.5].iter().all(|&k| self.world.ground_at(hero[0] + f[0] * k, hero[2] + f[2] * k, hero[1] + 1.0).is_none_or(|g| hero[1] - g > 4.5));
         // SPEC-0018 Climb and hang data: the held record's links, for the hang's shimmy.
-        let (next, prev) = match self.ledge_record.as_ref() {
+        let (next, prev) = match self.player.ledge_record.as_ref() {
             Some(r) => (self.world.edge_link(r, true), self.world.edge_link(r, false)),
             None => (None, None),
         };
-        let bits = self.hero.frame_bits();
-        let touched = self.touched;
-        if let Some(l) = self.ledge.as_mut() {
+        let bits = self.player.hero.frame_bits();
+        let touched = self.player.touched;
+        if let Some(l) = self.player.ledge.as_mut() {
             l.next = next.as_ref().map(edge_of);
             l.prev = prev.as_ref().map(edge_of);
         }
-        let Some(mut step) = self.ledge.as_mut().map(|l| {
+        let Some(mut step) = self.player.ledge.as_mut().map(|l| {
             if l.state == ledge::DROP {
-                l.drop_tick(hero, f, deep, self.loco.body.gap, touched, c.action)
+                l.drop_tick(hero, f, deep, self.player.loco.body.gap, touched, c.action)
             } else {
                 l.frame_bits = bits;
-                l.tick(hero, side, forward, self.loco.body.gap, ledge::Clip { action: c.action, progress: c.progress })
+                l.tick(hero, side, forward, self.player.loco.body.gap, ledge::Clip { action: c.action, progress: c.progress })
             }
         }) else {
             self.leave_ledge(hero_states::STANCE);
@@ -6754,7 +6770,7 @@ impl Play {
         // SPEC-0033 Behavior 51: the obstacle probes. State 30: while 60 or 61 runs, 0.25 to the moving
         // side, a hit requests 73. States 35 and 47, sub-mode 2 (47 also 1): at the hero, a hit ends in
         // state 1; state 47 also kicks the velocity by -2.0 along the facing.
-        let (ledge_state, ledge_sub) = self.ledge.as_ref().map_or((0, 0), |l| (l.state, l.sub));
+        let (ledge_state, ledge_sub) = self.player.ledge.as_ref().map_or((0, 0), |l| (l.state, l.sub));
         if ledge_state == ledge::HANG {
             let action = step.request.filter(|a| matches!(a, 60 | 61)).unwrap_or(c.action);
             if matches!(action, 60 | 61) {
@@ -6770,12 +6786,12 @@ impl Play {
             if std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
                 println!("      state 47 touched on tick {} sub {ledge_sub}", self.ticks);
             }
-            let (vy, gap) = (self.loco.body.velocity[1], self.loco.body.gap);
+            let (vy, gap) = (self.player.loco.body.velocity[1], self.player.loco.body.gap);
             self.leave_ledge(if vy > 0.0 || gap > 0.0 { hero_states::JUMP } else { hero_states::STANCE });
             if vy <= 0.0 && gap > 0.0 {
-                self.loco.phase = 5;
+                self.player.loco.phase = 5;
             } else if vy > 0.0 {
-                self.loco.phase = 0;
+                self.player.loco.phase = 0;
             }
             return true;
         } else if (ledge_state == ledge::CLIMB_FALL && ledge_sub == 2) || (ledge_state == ledge::CLIMB_RISE && matches!(ledge_sub, 1 | 2)) {
@@ -6784,27 +6800,27 @@ impl Play {
                     println!("      state {ledge_state} obstacle on tick {} sub {ledge_sub}", self.ticks);
                 }
                 if ledge_state == ledge::CLIMB_RISE {
-                    self.loco.body.velocity[0] -= 2.0 * f[0];
-                    self.loco.body.velocity[2] -= 2.0 * f[2];
+                    self.player.loco.body.velocity[0] -= 2.0 * f[0];
+                    self.player.loco.body.velocity[2] -= 2.0 * f[2];
                 }
                 self.leave_ledge(hero_states::STANCE);
                 return true;
             }
         }
         if std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
-            println!("      ledge tick {} sub {:?} clip {} {:.2} gap {:.2} place {:?} bone0 {:?} facing {:?} record {:?} s {:.2}", self.ticks, self.ledge.map(|l| l.sub), c.action, c.progress, self.loco.body.gap, step.place, self.hero.main_translations().first(), self.loco.facing, self.ledge_record.map(|r| (r.own, r.next, r.prev)), self.ledge.map_or(0.0, |l| l.edge.along(hero)));
+            println!("      ledge tick {} sub {:?} clip {} {:.2} gap {:.2} place {:?} bone0 {:?} facing {:?} record {:?} s {:.2}", self.ticks, self.player.ledge.map(|l| l.sub), c.action, c.progress, self.player.loco.body.gap, step.place, self.player.hero.main_translations().first(), self.player.loco.facing, self.player.ledge_record.map(|r| (r.own, r.next, r.prev)), self.player.ledge.map_or(0.0, |l| l.edge.along(hero)));
         }
-        self.loco.body.no_gravity = true;
-        self.loco.body.velocity = [0.0; 3];
+        self.player.loco.body.no_gravity = true;
+        self.player.loco.body.velocity = [0.0; 3];
         // While hanging the hero is below the top it holds, inside the step-up reach of the
         // ground constraint; the no-snap flag keeps it there (this build's choice: the spec does
         // not name the flag's writer; R-0106).
-        self.loco.body.no_snap = self.loco.state == ledge::HANG;
+        self.player.loco.body.no_snap = self.player.loco.state == ledge::HANG;
         if step.voice {
             self.sound.play(neopets_sim::sound::VOICE, 9, neopets_sim::sound::Play { emitter: Some(hero), do_not_restart: true, ..Default::default() });
         }
         if step.push {
-            let p = &mut self.loco.body.position;
+            let p = &mut self.player.loco.body.position;
             p[0] += 0.01 * f[0];
             p[2] += 0.01 * f[2];
         }
@@ -6816,31 +6832,31 @@ impl Play {
             self.drop_refuse = 0;
         }
         if let Some(d) = step.facing {
-            self.loco.steer_toward(d, step.rate.unwrap_or(0.5));
+            self.player.loco.steer_toward(d, step.rate.unwrap_or(0.5));
         }
         if let Some(p) = step.place {
-            self.loco.body.position = p;
+            self.player.loco.body.position = p;
         }
         if let Some(r) = step.request {
-            self.loco.block_request(r);
+            self.player.loco.block_request(r);
         }
         // The hang moved onto a linked record: it is the held one now.
         if let Some(n) = step.took {
-            self.ledge_record = if n { next } else { prev };
+            self.player.ledge_record = if n { next } else { prev };
         }
         // State 38's stage 3: state 21, sub-mode 17, with the panel as the target.
         if let Some(k) = self.drop_panel.filter(|_| step.hang) {
             self.drop_panel = None;
             self.leave_ledge(hero_states::STANCE);
-            self.panel = Some(neopets_sim::climb::Climb::from_drop(k));
-            self.loco.enter_state(hero_states::PANEL, 73);
+            self.player.panel = Some(neopets_sim::climb::Climb::from_drop(k));
+            self.player.loco.enter_state(hero_states::PANEL, 73);
             return true;
         }
         if step.hang {
-            if let Some(l) = self.ledge.as_mut() {
+            if let Some(l) = self.player.ledge.as_mut() {
                 *l = Ledge::new(ledge::HANG, l.edge);
             }
-            self.loco.enter_state(ledge::HANG, 72);
+            self.player.loco.enter_state(ledge::HANG, 72);
             self.trace_edge("ledge", ledge::HANG as usize, 0);
         }
         if let Some(s) = step.exit {
@@ -6863,7 +6879,7 @@ impl Play {
         if self.world.ground.is_none() {
             return false;
         }
-        let (hero, f, v, state) = (self.loco.position(), self.loco.facing, self.loco.body.velocity, self.loco.state);
+        let (hero, f, v, state) = (self.player.loco.position(), self.player.loco.facing, self.player.loco.body.velocity, self.player.loco.state);
         self.drop_panel = None;
         // SPEC-0033 Drop onto a panel (state 38): the drop test on a type-10 record whose V is near
         // vertical, in state 1 or 2 (the air and running branches are the frame records').
@@ -6884,9 +6900,9 @@ impl Play {
                     }
                 }
                 self.drop_panel = Some(k);
-                self.ledge_record = None;
-                self.ledge = Some(Ledge::drop_from(e, state));
-                self.loco.enter_state(ledge::DROP, 0);
+                self.player.ledge_record = None;
+                self.player.ledge = Some(Ledge::drop_from(e, state));
+                self.player.loco.enter_state(ledge::DROP, 0);
                 self.trace_edge("drop panel", k, 0);
                 return true;
             }
@@ -6914,7 +6930,7 @@ impl Play {
             // longer jumps off its side (user's report 86).
             let surface = self.world.probe(hero[0], hero[2], hero[1] + 2.5).surface;
             if toward && (3..=4).contains(&state) && !matches!(surface, Some(1 | 6)) && !matches!(e.kind, 1 | 6) {
-                self.loco.edge_jump();
+                self.player.loco.edge_jump();
                 if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
                     let k = self.world.probe(hero[0], hero[2], hero[1] + 2.5);
                     println!("      edge jump ground kind {:?} surface {:?} patch {:?}; record type {} face {:?}", k.kind, k.surface, k.patch, e.kind, e.face);
@@ -6923,9 +6939,9 @@ impl Play {
                 return false;
             }
             if (toward || state == 1) && !matches!(e.kind, 3 | 6) {
-                self.ledge_record = Some(r);
-                self.ledge = Some(Ledge::drop_from(e, state));
-                self.loco.enter_state(ledge::DROP, 0);
+                self.player.ledge_record = Some(r);
+                self.player.ledge = Some(Ledge::drop_from(e, state));
+                self.player.loco.enter_state(ledge::DROP, 0);
                 self.trace_edge("drop", state as usize, 0);
                 return true;
             }
@@ -6942,13 +6958,13 @@ impl Play {
         if self.world.pack != P {
             return;
         }
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         for (k, objs) in [0..=3usize, 4..=8, 9..=14].into_iter().enumerate() {
             let w = 90 + k as u8;
             let ready = self.ticks as i32 >= self.state.word_of(P, w);
             if ready && objs.into_iter().any(|o| self.anim_locator(P, o, 0, 0).is_some_and(|l| sub(l, hero).iter().map(|v| v * v).sum::<f32>() <= 4.0)) {
                 self.state.set_word(P, w, self.ticks as i32 + 18);
-                let f = self.loco.facing;
+                let f = self.player.loco.facing;
                 self.hero_hit(10.0, 0.0, false, f, "a crusher".into());
             }
         }
@@ -6961,7 +6977,7 @@ impl Play {
         if self.world.ground.is_none() {
             return true;
         }
-        let Some(held) = self.ledge_record.as_ref() else { return false };
+        let Some(held) = self.player.ledge_record.as_ref() else { return false };
         let r = contact::HERO_RADIUS;
         let plane = |m: [f32; 4]| m[0] * q[0] + m[1] * q[1] + m[2] * q[2] + m[3];
         self.world.edge_frames(q[0], q[2]).into_iter().any(|x| {
@@ -7021,20 +7037,20 @@ impl Play {
     /// SPEC-0036 Knockback on the hero: the long fall with the new velocity, and any ledge
     /// hold dropped (the hero is no longer on it).
     fn knock_hero(&mut self, velocity: [f32; 3]) {
-        self.ledge = None;
-        self.loco.knock(velocity);
+        self.player.ledge = None;
+        self.player.loco.knock(velocity);
     }
 
     fn leave_ledge(&mut self, state: u8) {
-        self.ledge = None;
-        self.loco.body.no_gravity = false;
-        self.loco.body.no_snap = false;
-        self.loco.enter_state(state, if state == hero_states::RUN { 4 } else { 0 });
+        self.player.ledge = None;
+        self.player.loco.body.no_gravity = false;
+        self.player.loco.body.no_snap = false;
+        self.player.loco.enter_state(state, if state == hero_states::RUN { 4 } else { 0 });
     }
 
     fn trace_edge(&self, what: &str, a: usize, b: u8) {
         if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
-            println!("      {what} {a} {b} on tick {} at {:?}", self.ticks, self.loco.position());
+            println!("      {what} {a} {b} on tick {} at {:?}", self.ticks, self.player.loco.position());
         }
     }
 
@@ -7061,11 +7077,11 @@ impl Play {
     }
 
     fn catch_step(&mut self) -> bool {
-        if self.loco.state == hero_states::CARRY {
-            if matches!(self.loco.carry, 1 | 2) && self.carried.is_some() {
+        if self.player.loco.state == hero_states::CARRY {
+            if matches!(self.player.loco.carry, 1 | 2) && self.player.carried.is_some() {
                 self.door_prompt = Some(28);
                 if self.square_now {
-                    self.loco.drop_carry();
+                    self.player.loco.drop_carry();
                 }
                 return true;
             }
@@ -7074,7 +7090,7 @@ impl Play {
         if self.hero_busy() || !self.catch.on {
             return false;
         }
-        let (hero, f) = (self.loco.position(), self.loco.facing);
+        let (hero, f) = (self.player.loco.position(), self.player.loco.facing);
         let pack = self.world.pack;
         let Some(id) = self
             .characters
@@ -7087,8 +7103,8 @@ impl Play {
         };
         self.door_prompt = Some(27);
         if self.square_now {
-            self.loco.start_carry();
-            self.carried = Some(id);
+            self.player.loco.start_carry();
+            self.player.carried = Some(id);
         }
         true
     }
@@ -7096,10 +7112,10 @@ impl Play {
     /// Diagnostic: a point 2.5 behind the nearest catchable Miamouse while catching is on (the
     /// mouse itself once the hero is behind it).
     pub fn mouse_goal(&self) -> Option<[f32; 2]> {
-        if !self.catch.on || self.carried.is_some() {
+        if !self.catch.on || self.player.carried.is_some() {
             return None;
         }
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let c = self
             .characters
             .iter()
@@ -7113,21 +7129,21 @@ impl Play {
 
     /// Diagnostic: the cage mesh's middle while a Miamouse is carried.
     pub fn cage_goal(&self) -> Option<[f32; 2]> {
-        self.carried?;
+        self.player.carried?;
         let m = self.world.navmeshes.get(usize::try_from(self.catch.cage).ok()?)?;
         let n = m.len();
         let c = (0..n).map(|t| m.centroid(t)).fold([0.0f32; 3], |a, b| [a[0] + b[0], a[1] + b[1], a[2] + b[2]]);
         // First a point 11 north of the cage's middle (round the posts), then straight south at
         // it, so the hero faces the cage at the fence.
         let (x, z) = (c[0] / n.max(1) as f32, c[2] / n.max(1) as f32);
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let near = (p[0] - x).abs() < 3.0 && p[2] < z + 12.5;
         Some(if near { [x, z] } else { [x + 1.5, z + 11.0] })
     }
 
     /// Diagnostic: the release point (the held point + 1.0 forward) is in the cage zone.
     pub fn hero_in_cage(&self) -> bool {
-        let (h, f) = (self.held_place().0, self.loco.facing);
+        let (h, f) = (self.held_place().0, self.player.loco.facing);
         neopets_sim::miamouse::Catch::in_mesh(&self.world.navmeshes, self.catch.cage, [h[0] + f[0], h[1], h[2] + f[2]])
     }
 
@@ -7236,10 +7252,10 @@ impl Play {
     /// of the unit horizontal direction to the threat with the facing.
     fn guard_step(&mut self) {
         self.guard_timer = self.guard_timer.saturating_sub(1);
-        if self.loco.state != hero_states::STANCE || !self.weapon_drawn || self.shield.is_none() {
+        if self.player.loco.state != hero_states::STANCE || !self.weapon_drawn || self.shield.is_none() {
             return;
         }
-        let (p, f) = (self.loco.position(), self.loco.facing);
+        let (p, f) = (self.player.loco.position(), self.player.loco.facing);
         let ahead = |q: [f32; 3]| {
             let (dx, dz) = (q[0] - p[0], q[2] - p[2]);
             let d = dx.hypot(dz);
@@ -7260,7 +7276,7 @@ impl Play {
     /// SPEC-0036 Guard predicate: the hero is in state 20, or Roberta is in attack sub-state 6
     /// or 7 (the spin), or the guard timer is above 0.
     pub fn hero_guarding(&self) -> bool {
-        self.loco.state == hero_states::GUARD || (self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 6 | 7))) || self.guard_timer > 0
+        self.player.loco.state == hero_states::GUARD || (self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 6 | 7))) || self.guard_timer > 0
     }
 
     fn set_weapon_drawn(&mut self, on: bool) {
@@ -7273,19 +7289,19 @@ impl Play {
     /// SPEC-0040 Behavior 29 per tick: the L1 guard with a shield sets both flags; states 25 and
     /// 28 and a talk clear them.
     fn items_flags_step(&mut self) {
-        if self.loco.state == hero_states::GUARD && self.shield.is_some() {
+        if self.player.loco.state == hero_states::GUARD && self.shield.is_some() {
             self.draw_items(true);
         }
-        if matches!(self.loco.state, 25 | 28) || self.dialogue_open {
+        if matches!(self.player.loco.state, 25 | 28) || self.dialogue_open {
             self.draw_items(false);
         }
     }
 
     /// The hero's attach point k as a world frame (SPEC-0005 Attach points).
     fn hero_attach(&self, k: usize) -> Option<neopets_data::anim::Affine> {
-        let (p, f) = (self.loco.position(), self.loco.facing);
-        let frames = self.hero.bone_frames();
-        let &(bone, angles, offset) = self.hero.bones().attach.get(k)?;
+        let (p, f) = (self.player.loco.position(), self.player.loco.facing);
+        let frames = self.player.hero.bone_frames();
+        let &(bone, angles, offset) = self.player.hero.bones().attach.get(k)?;
         Some(placement(p, f).mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)))
     }
 
@@ -7320,7 +7336,7 @@ impl Play {
     fn weapon_tip(&self) -> Option<[f32; 3]> {
         let (base, z0) = self.weapon_line()?;
         let p = add(base, scale(z0, self.weapon_reach()));
-        Some(add(p, scale(unit(sub_v(self.camera.eye, p)), 0.2)))
+        Some(add(p, scale(unit(sub_v(self.player.camera.eye, p)), 0.2)))
     }
 
     /// The drawn weapon's base point and long axis: its frame's third axis, in the hand or stowed.
@@ -7332,7 +7348,7 @@ impl Play {
 
     pub fn hero_items(&self) -> Vec<(u32, neopets_data::anim::Affine, HeroItemScale)> {
         let mut out = Vec::new();
-        if self.equipment.entries[2][self.hero_index] == Some(126) || self.loco.state == hero_states::DEAD {
+        if self.equipment.entries[2][self.hero_index] == Some(126) || self.player.loco.state == hero_states::DEAD {
             return out;
         }
         let neg = |v: [f32; 3]| v.map(|c| -c);
@@ -7374,9 +7390,9 @@ impl Play {
     /// with its head in the hero's (user's report 21). The third value is the basis rows, which
     /// the 1.25 is measured along: the second row is the Miamouse's up.
     fn held_place(&self) -> ([f32; 3], [f32; 3], Option<[[f32; 3]; 3]>) {
-        let (p, f) = (self.loco.position(), self.loco.facing);
-        let frames = self.hero.bone_frames();
-        self.hero
+        let (p, f) = (self.player.loco.position(), self.player.loco.facing);
+        let frames = self.player.hero.bone_frames();
+        self.player.hero
             .bones()
             .attach
             .first()
@@ -7395,12 +7411,12 @@ impl Play {
     /// 57 is left another way), then each free Miamouse's routine and walk, and the delivery
     /// step on the level states.
     fn mice_step(&mut self) {
-        let hclip = self.hero.clip_state();
+        let hclip = self.player.hero.clip_state();
         let (held_at, held_facing, held_rows) = self.held_place();
-        let forward = self.loco.facing;
-        let carrying = self.loco.state == hero_states::CARRY;
-        if let Some(id) = self.carried {
-            let release = !carrying || (self.loco.carry == 3 && hclip.action == 181);
+        let forward = self.player.loco.facing;
+        let carrying = self.player.loco.state == hero_states::CARRY;
+        if let Some(id) = self.player.carried {
+            let release = !carrying || (self.player.loco.carry == 3 && hclip.action == 181);
             if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
                 if let (Some(m), Some(wk)) = (c.miamouse.as_mut(), c.walker.as_mut()) {
                     if release {
@@ -7408,8 +7424,8 @@ impl Play {
                         c.anim.play(neopets_sim::miamouse::CLIP_RELEASED);
                         c.position = wk.position();
                         c.carry_rows = None;
-                        self.carried = None;
-                    } else if !(self.loco.carry == 0 && hclip.action != 178) {
+                        self.player.carried = None;
+                    } else if !(self.player.loco.carry == 0 && hclip.action != 178) {
                         wk.place(held_at);
                         c.position = held_at;
                         c.carry_rows = held_rows;
@@ -7423,10 +7439,10 @@ impl Play {
                 }
             }
         }
-        let hero = self.loco.position();
-        let hero_state = self.loco.state;
+        let hero = self.player.loco.position();
+        let hero_state = self.player.loco.state;
         let pack = self.world.pack;
-        let carried = self.carried;
+        let carried = self.player.carried;
         let mut delivered = 0;
         let world = &self.world;
         for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive && Some(c.id) != carried) {
@@ -7615,16 +7631,16 @@ impl Play {
             let (hp_now, hp_other) = if tor { (hp_tor, hp_rob) } else { (hp_rob, hp_tor) };
             let (mp_now, mp_other) = if tor { (mp_tor, mp_rob) } else { (mp_rob, mp_tor) };
             if up.health {
-                self.hero_max += hp_now;
-                self.hero_hp = self.hero_max;
+                self.player.hero_max += hp_now;
+                self.player.hero_hp = self.player.hero_max;
                 if let Some(p) = self.parked.as_mut() {
                     p.hp_max += hp_other;
                     p.hp = p.hp_max;
                 }
             }
             if up.magic {
-                self.hero_mp_max += mp_now;
-                self.hero_mp = self.hero_mp_max;
+                self.player.hero_mp_max += mp_now;
+                self.player.hero_mp = self.player.hero_mp_max;
                 if let Some(p) = self.parked.as_mut() {
                     p.mp_max += mp_other;
                     p.mp = p.mp_max;
@@ -7633,7 +7649,7 @@ impl Play {
             self.luck = neopets_sim::items::clamp_luck(self.luck + up.luck);
             self.cue(159);
             // A stat-up is never stored, so the report's item log would not show it.
-            self.last_pickup = format!("stat-up item {id} on tick {}: hp max {}, mp max {}", self.ticks, self.hero_max, self.hero_mp_max);
+            self.last_pickup = format!("stat-up item {id} on tick {}: hp max {}, mp max {}", self.ticks, self.player.hero_max, self.player.hero_mp_max);
             return true;
         }
         self.state.give(id, n as u32);
@@ -7670,7 +7686,7 @@ impl Play {
     /// SPEC-0033 Behavior 3, the busy routine (IsHeroOccupied), all four parts: the state list, the script-held states,
     /// the stun timer and a moving screen effect. It reads no sub-state and no air phase.
     fn hero_busy(&self) -> bool {
-        neopets_sim::hero::busy_state(self.loco.state) || matches!(self.loco.state, 33 | 48 | 50 | 51 | 52 | 53 | 55) || self.statuses.active(neopets_sim::status::STUN) || self.fade.moving()
+        neopets_sim::hero::busy_state(self.player.loco.state) || matches!(self.player.loco.state, 33 | 48 | 50 | 51 | 52 | 53 | 55) || self.player.statuses.active(neopets_sim::status::STUN) || self.fade.moving()
     }
 
     fn start_showcase(&mut self, id: u16, pack: u32) {
@@ -7706,10 +7722,10 @@ impl Play {
         if let Some(k) = stinger {
             self.stinger(k);
         }
-        self.loco.play_one_shot(pose, true);
-        self.hero.request(pose, true);
+        self.player.loco.play_one_shot(pose, true);
+        self.player.hero.request(pose, true);
         self.showcase_effect(id);
-        let eye = self.camera.eye;
+        let eye = self.player.camera.eye;
         self.showcase = Some(Showcase { id, pack, pose, floating, text, ticks: 0, opened: None, angle: 0.0, eye: [eye[0], eye[1], eye[2]] });
     }
 
@@ -7721,7 +7737,7 @@ impl Play {
         self.showcase_effect_stop();
         if let Some(effect) = neopets_sim::items::effect_id(id) {
             let table = self.effect_table.clone();
-            let at = self.loco.position();
+            let at = self.player.loco.position();
             self.showcase_fx = Some(self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, effect, at, neopets_sim::effect::IDENTITY)));
         }
     }
@@ -7738,7 +7754,7 @@ impl Play {
     /// point (SPEC-0021 Draw, with S = 512).
     fn showcase_effect_step(&mut self) {
         let Some(h) = self.showcase_fx else { return };
-        let (p, f) = (self.loco.position(), self.loco.facing);
+        let (p, f) = (self.player.loco.position(), self.player.loco.facing);
         let at = if self.showcase.is_some() {
             [p[0] + 1.1 * f[0], p[1] + 2.8, p[2] + 1.1 * f[2]]
         } else if let Some(c) = self.corner.as_ref() {
@@ -7769,7 +7785,7 @@ impl Play {
         s.ticks += 1;
         // Task step 1 (R-0188): SetHeroSceneCamera(0.9425, 10.0): the eye closes 1 percent a tick on the
         // pivot plus (10 along the forward row turned by 0.9425, 1.5 up).
-        let (focus, f) = (self.camera.focus, self.loco.facing);
+        let (focus, f) = (self.player.camera.focus, self.player.loco.facing);
         let (sn, cs) = 0.9425f32.sin_cos();
         let goal = [focus[0] + 10.0 * (f[0] * cs - f[2] * sn), focus[1] + 1.5, focus[2] + 10.0 * (f[2] * cs + f[0] * sn)];
         s.eye = std::array::from_fn(|k| s.eye[k] + 0.01 * (goal[k] - s.eye[k]));
@@ -7783,15 +7799,15 @@ impl Play {
         }
         let done = s.opened.is_some_and(|t| s.ticks >= t + 120) && !self.dialogue_open;
         if done {
-            if self.loco.state == neopets_sim::hero::ONE_SHOT {
-                self.loco.state = hero_states::STANCE;
+            if self.player.loco.state == neopets_sim::hero::ONE_SHOT {
+                self.player.loco.state = hero_states::STANCE;
             }
             return;
         }
-        if self.loco.state != neopets_sim::hero::ONE_SHOT {
-            self.loco.play_one_shot(s.pose, true);
+        if self.player.loco.state != neopets_sim::hero::ONE_SHOT {
+            self.player.loco.play_one_shot(s.pose, true);
         }
-        self.hero.request(s.pose, false);
+        self.player.hero.request(s.pose, false);
         self.showcase = Some(s);
     }
 
@@ -7844,7 +7860,7 @@ impl Play {
 
     pub fn showcase_item(&self) -> Option<(u16, u32, [f32; 3], f32)> {
         let s = self.showcase.as_ref().filter(|s| s.floating)?;
-        let (p, f) = (self.loco.position(), self.loco.facing);
+        let (p, f) = (self.player.loco.position(), self.player.loco.facing);
         Some((s.id, s.pack, [p[0] + 1.1 * f[0], p[1] + 2.8, p[2] + 1.1 * f[2]], s.angle))
     }
 
@@ -7855,14 +7871,14 @@ impl Play {
     /// trails of +0x48 = 0 entries (element-coloured) and the Black Knight's own trail.
     fn trail_step(&mut self) {
         use neopets_sim::trail;
-        if self.hero.frame_bits() & 1 != 0 {
-            let place = placement(self.loco.position(), self.loco.facing);
-            let frames = self.hero.bone_frames();
-            if let Some(&(Some(bone), angles, offset)) = self.hero.bones().attach.first() {
+        if self.player.hero.frame_bits() & 1 != 0 {
+            let place = placement(self.player.loco.position(), self.player.loco.facing);
+            let frames = self.player.hero.bone_frames();
+            if let Some(&(Some(bone), angles, offset)) = self.player.hero.bones().attach.first() {
                 if let Some(bw) = frames.get(bone) {
                     let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                     let (p1, p2) = trail::held_points(w.t, unit(w.cols[2]), 0.6 * self.weapon_reach());
-                    self.hero_trail = self.trails.hold(self.hero_trail, trail::HELD, p1, p2);
+                    self.player.hero_trail = self.trails.hold(self.player.hero_trail, trail::HELD, p1, p2);
                 }
             }
         }
@@ -7905,20 +7921,20 @@ impl Play {
     /// count open). Interpretation: D as the previous axis (the spec gives it as a stored
     /// secondary direction, Medium); the type-10 world-face candidates are not tested.
     fn blade_recoil(&mut self) {
-        let window = self.hero.frame_bits() & 1 != 0;
+        let window = self.player.hero.frame_bits() & 1 != 0;
         if self.hero_index != 0 || !window {
             self.blade_last = None;
             return;
         }
-        let p = self.loco.position();
-        let place = placement(p, self.loco.facing);
-        let frames = self.hero.bone_frames();
-        let Some(&(Some(bone), angles, offset)) = self.hero.bones().attach.first() else { return };
+        let p = self.player.loco.position();
+        let place = placement(p, self.player.loco.facing);
+        let frames = self.player.hero.bone_frames();
+        let Some(&(Some(bone), angles, offset)) = self.player.hero.bones().attach.first() else { return };
         let Some(bw) = frames.get(bone) else { return };
         let w = place.mul(bw).mul(&attach_rotation(offset, angles));
         let (q, u) = (w.t, unit(w.cols[2]));
         let d = self.blade_last.replace(u).unwrap_or(u);
-        if self.candidates.records.first().is_some_and(|r| r.in_range) {
+        if self.player.candidates.records.first().is_some_and(|r| r.in_range) {
             return;
         }
         let tri = neopets_sim::trigger::blade_triangle(q, u, d, self.weapon_reach());
@@ -7953,18 +7969,18 @@ impl Play {
     /// petpet or status factors). Uses this tick's poses (the original reads the previous pass).
     fn hero_swing(&mut self) {
         // The air slash and the plunge run the same scan with their sub-states (SPEC-0033 Air attacks).
-        let air = self.loco.air_sub;
+        let air = self.player.loco.air_sub;
         // Roberta's melee window, in any sub-state but the leap (SPEC-0036 Roberta's arm table).
         let roberta = self.hero_index == 1;
-        let r_sub = self.r_attack.as_ref().filter(|a| roberta && a.sub != 8).map(|a| a.sub);
-        let (Some(sub), true) = (r_sub.or(self.attack.as_ref().map(|a| a.sub)).or((air != 0).then_some(air)), self.hero.frame_bits() & 1 != 0) else {
+        let r_sub = self.player.r_attack.as_ref().filter(|a| roberta && a.sub != 8).map(|a| a.sub);
+        let (Some(sub), true) = (r_sub.or(self.attack.as_ref().map(|a| a.sub)).or((air != 0).then_some(air)), self.player.hero.frame_bits() & 1 != 0) else {
             self.last_axis = None;
             return;
         };
-        let p = self.loco.position();
-        let place = placement(p, self.loco.facing);
-        let frames = self.hero.bone_frames();
-        let Some(&(Some(bone), angles, offset)) = self.hero.bones().attach.first() else { return };
+        let p = self.player.loco.position();
+        let place = placement(p, self.player.loco.facing);
+        let frames = self.player.hero.bone_frames();
+        let Some(&(Some(bone), angles, offset)) = self.player.hero.bones().attach.first() else { return };
         let Some(bw) = frames.get(bone) else { return };
         let w = place.mul(bw).mul(&attach_rotation(offset, angles));
         let (anchor, axis) = (w.t, unit(w.cols[2]));
@@ -7974,7 +7990,7 @@ impl Play {
         let d2 = self.last_axis.replace(axis);
         let pack = self.world.pack;
         let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|i| i.is_weapon()).map_or(0, |i| i.stats[0]);
-        let g = self.statuses.damage_scale();
+        let g = self.player.statuses.damage_scale();
         // SPEC-0036 Damage: the attack Mote in word 2 gives B and C; P is the attack power table
         // value only in the power step (sub-state 10).
         let mote_id = self.equipment.motes[self.hero_index.min(1)][2];
@@ -7985,7 +8001,7 @@ impl Play {
         };
         let mut landed = 0;
         let mut knight_block = false;
-        let hero_at = self.loco.position();
+        let hero_at = self.player.loco.position();
         // Factor E: the live petpet of kind 0 or 7 (SPEC-0047 Passive bonuses).
         let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
         let mut hits = Vec::new();
@@ -8050,7 +8066,7 @@ impl Play {
             // (the block plays its hit reaction, SPEC-0038 Behavior 44, outer 7) and counts as
             // landed; otherwise the swing has no effect at all and the target stays out of the
             // hit list, so a later window tick can still be blocked.
-            let hf = self.loco.facing;
+            let hf = self.player.loco.facing;
             let power_hit = sub == 10 && mote_id.is_some() && !roberta;
             // SPEC-0012 G15: the Black Knight is unhittable and guarding on every tick its stun
             // gate does not pass: the swing is blocked whatever the facing (Blocking Angle 1.0):
@@ -8121,7 +8137,7 @@ impl Play {
             // SPEC-0036 Damage: x = P A B C D E (P, B, C, E are 1 without a Mote or petpet), y = x
             // − defence, truncated; D by sub-state.
             let d_factor = match sub {
-                _ if roberta => self.r_attack.as_ref().map_or(1.0, |a| a.step_factor()),
+                _ if roberta => self.player.r_attack.as_ref().map_or(1.0, |a| a.step_factor()),
                 4 | 12 => 2.0,
                 5 | 6 => 0.75,
                 _ => 1.0,
@@ -8333,12 +8349,12 @@ impl Play {
     /// hittable characters of the world against their body cylinders; a target not on its
     /// list (and with a free slot) is listed and takes trunc((scale x C - defence) x P).
     fn mote_objects_step(&mut self) {
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let pack = self.world.pack;
         let mut objects = std::mem::take(&mut self.mote_objects);
         // Wind's centre: the ground probed from 8 above the hero.
         let ground = self.world.ground_at(hero[0], hero[2], hero[1] + 8.0);
-        let facing = self.loco.facing;
+        let facing = self.player.loco.facing;
         // The beams' query point: attach point 0 of the posed body, advanced along its Z axis by the weapon reach.
         let reach = self.weapon_reach();
         let query = self.hero_attach(0).map_or_else(
@@ -8617,7 +8633,7 @@ impl Play {
     /// Spending more magic than the hero has sets it to 0 (SPEC-0036 Magic).
     fn pay_mp(&mut self, cost: i32) {
         if cost > 0 && !self.cheats.magic {
-            self.hero_mp = (self.hero_mp - cost).max(0);
+            self.player.hero_mp = (self.player.hero_mp - cost).max(0);
         }
     }
 
@@ -8640,7 +8656,7 @@ impl Play {
                 }
             }
         }
-        self.last_mote = format!("Mote {id} used {n} charge ({} left), mp {} on tick {}", self.state.items.get(&id).copied().unwrap_or(0), self.hero_mp, self.ticks);
+        self.last_mote = format!("Mote {id} used {n} charge ({} left), mp {} on tick {}", self.state.items.get(&id).copied().unwrap_or(0), self.player.hero_mp, self.ticks);
     }
 
     /// SPEC-0036 Power-ready check, each held tick from F = 50: with a Mote in word 2 the hero
@@ -8652,12 +8668,12 @@ impl Play {
         }
         let Some(id) = self.equipment.motes[0][2] else { return };
         let held = self.state.items.get(&id).copied().unwrap_or(0) > 0;
-        let ready = self.mote_objects.is_empty() && self.weapon.is_some() && held && self.hero_mp >= self.magic.tor_power(Some(id)).0;
+        let ready = self.mote_objects.is_empty() && self.weapon.is_some() && held && self.player.hero_mp >= self.magic.tor_power(Some(id)).0;
         if !ready {
             if let Some(a) = self.attack.as_mut() {
                 a.f = 0;
             }
-            self.last_mote = format!("power attack not ready (Mote {id}, mp {}) on tick {}", self.hero_mp, self.ticks);
+            self.last_mote = format!("power attack not ready (Mote {id}, mp {}) on tick {}", self.player.hero_mp, self.ticks);
         }
     }
 
@@ -8671,14 +8687,14 @@ impl Play {
             self.spend_charge(2, id, n);
             // The object of the word-2 Mote at the hero position plus facing x reach, storing
             // the scale A x D x B x G x E (D = 1 at sub-state 10; E = 1, no petpet).
-            let hero = self.loco.position();
-            let f = self.loco.facing;
+            let hero = self.player.loco.position();
+            let f = self.player.loco.facing;
             let w = self.weapon_reach();
             let at = [hero[0] + f[0] * w, hero[1], hero[2] + f[2] * w];
             let a = self.weapon.and_then(|i| self.items.get(i)).filter(|i| i.is_weapon()).map_or(0.0, |i| i.stats[0] as f32);
             let b = neopets_sim::mote::one_plus_percent(self.items.get(id).map_or(0.0, |i| i.stats[5] as f32));
             let e = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
-            let scale = neopets_sim::charm::scale(a, 1.0, b, self.statuses.damage_scale(), e);
+            let scale = neopets_sim::charm::scale(a, 1.0, b, self.player.statuses.damage_scale(), e);
             let spawned = neopets_sim::charm::spawn_tor(id, &self.charm_words, at, hero, self.orbit_angle, scale);
             if let Some(o) = spawned.first() {
                 self.last_mote = format!("Mote {id} power-attack object x{} (scale {scale}, {} ticks) on tick {}", spawned.len(), o.life, self.ticks);
@@ -8723,7 +8739,7 @@ impl Play {
             if let Some(m0) = self.equipment.motes[0][0] {
                 let (cost, q0) = self.magic.armour(0, Some(m0));
                 let charge = self.state.items.get(&m0).copied().unwrap_or(0) as i32;
-                if q0 <= charge && self.hero_mp >= cost && mote::element_passes(element, mote::element(Some(m0))) {
+                if q0 <= charge && self.player.hero_mp >= cost && mote::element_passes(element, mote::element(Some(m0))) {
                     d = mote::armour_mote(d, stat(self, m0, 7));
                     self.spend_charge(0, m0, mote::charge_armour(q0, stat(self, body, 1)));
                     self.pay_mp(cost);
@@ -8748,7 +8764,7 @@ impl Play {
             return self.boss_info.clone();
         }
         let pack = self.world.pack;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let live = |c: &&Character| c.pack == pack && !c.inactive && c.dying.is_none() && Self::is_boss(c) && c.knight.is_none() && !c.gelert.as_ref().is_some_and(|g| g.clone);
         let Some(c) = self.characters.iter().filter(live).min_by(|a, b| {
             // A boss under the script's hold (a watcher, or one in its intro) comes after a free one.
@@ -8911,7 +8927,7 @@ impl Play {
     /// its reach (3.5, or the body radius + 2.5) and presses attack every 18 ticks, running to
     /// one more than 8 away.
     pub fn fight_rules(&self, c: &Character) -> FightPlan {
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let Some(e) = c.enemy.as_ref() else {
             return FightPlan { goal: [c.position[0], c.position[2]], ..Default::default() };
         };
@@ -8942,7 +8958,7 @@ impl Play {
         } else if e.airborne() && height > 2.5 && d < 6.0 {
             plan.close = true;
             plan.jump = t % 50 == 0;
-            plan.attack = matches!(self.loco.state, 7..=11) && t % 6 == 0;
+            plan.attack = matches!(self.player.loco.state, 7..=11) && t % 6 == 0;
         } else if plan.close {
             plan.attack = t % 18 == 0;
             plan.attack_held = t % 18 < 4;
@@ -8962,7 +8978,7 @@ impl Play {
     pub fn duel_step(&mut self) -> Option<FightPlan> {
         let mut duel = self.fight_duel.take()?;
         let pack = self.world.pack;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let alive = |c: &Character| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && c.enemy.as_ref().is_some_and(|e| !e.is_dead()) && c.row.is_some_and(|r| r.hostile && r.class == Some(17));
         // The current target ends when it dies, leaves or runs out of time.
         if let Some(k) = duel.current {
@@ -9005,7 +9021,7 @@ impl Play {
             self.face_point(at[0], at[2]);
         }
         let k = duel.current?;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let Some(c) = self.characters.iter().find(|c| c.id == duel.records[k].id) else {
             self.fight_duel = Some(duel);
             return None;
@@ -9041,7 +9057,7 @@ impl Play {
         let plan = self.fight_rules(c);
         // NEOPETS_TRACE_DUEL_STEP: the plan and both sides once a second.
         if t % 60 == 0 && std::env::var_os("NEOPETS_TRACE_DUEL_STEP").is_some() {
-            println!("      duel tick {t}: {} d {d:.1} height {height:.1} enemy state {} outer {} seq {} clip {} hp {} | hero state {} action {} | plan {:?}", c.name, e.state, e.outer, e.seq, clip.action, c.hp, self.loco.state, self.loco.action(), plan);
+            println!("      duel tick {t}: {} d {d:.1} height {height:.1} enemy state {} outer {} seq {} clip {} hp {} | hero state {} action {} | plan {:?}", c.name, e.state, e.outer, e.seq, clip.action, c.hp, self.player.loco.state, self.player.loco.action(), plan);
         }
         self.fight_duel = Some(duel);
         Some(plan)
@@ -9102,9 +9118,9 @@ impl Play {
             self.ticks,
             self.world.pack,
             self.other.as_ref().map(|o| o.pack),
-            self.loco.state,
-            self.hero_hp,
-            self.hero_max,
+            self.player.loco.state,
+            self.player.hero_hp,
+            self.player.hero_max,
             self.held,
             self.hero_walk.is_some(),
             self.fade.alpha,
@@ -9125,7 +9141,7 @@ impl Play {
     }
 
     pub fn fight_goal(&self) -> Option<([f32; 2], bool)> {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         // A Juppie in a stage with no living enemy about: stand on the stage's first unused
         // locator so its slam reaches it (diagnostic only).
         let enemies = self.characters.iter().any(|c| c.pack == self.world.pack && !c.inactive && c.enemy.as_ref().is_some_and(|e| !e.is_dead()) && c.dying.is_none());
@@ -9169,7 +9185,7 @@ impl Play {
     /// Diagnostic herding goal: 3.5 behind the nearest Whinny that is not penned, on the far
     /// side from the pen point.
     pub fn herd_goal(&self) -> Option<[f32; 2]> {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let w = self
             .characters
             .iter()
@@ -9199,27 +9215,27 @@ impl Play {
         if let Some(o) = std::env::var("NEOPETS_TRACE_RIDE").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
             if self.ticks % 25 == 0 {
                 let pack = self.world.pack;
-                println!("      RIDE tick {} pose {:?} drawn {:?} lock {:?} anim {:?}", self.ticks, self.object_pose(pack, o, 0).map(|m| m[13]), self.object_matrix(pack, o).map(|m| m[13]), self.ride_lock, self.world.object_anims.get(o).map(|a| (a.state, a.time)));
+                println!("      RIDE tick {} pose {:?} drawn {:?} lock {:?} anim {:?}", self.ticks, self.object_pose(pack, o, 0).map(|m| m[13]), self.object_matrix(pack, o).map(|m| m[13]), self.player.ride_lock, self.world.object_anims.get(o).map(|a| (a.state, a.time)));
             }
         }
         // A script's ride: the hero's height follows the object, with no gravity or ground snap.
-        if let Some((o, dy)) = self.ride_lock {
+        if let Some((o, dy)) = self.player.ride_lock {
             match self.object_pose(self.world.pack, o, 0) {
                 Some(m) => {
-                    self.loco.body.position[1] = m[13] + dy;
-                    self.loco.body.velocity = [0.0; 3];
-                    self.loco.body.no_gravity = true;
-                    self.loco.body.no_snap = true;
+                    self.player.loco.body.position[1] = m[13] + dy;
+                    self.player.loco.body.velocity = [0.0; 3];
+                    self.player.loco.body.no_gravity = true;
+                    self.player.loco.body.no_snap = true;
                     // The carry starts afresh after the ride: its last pose of the platform is
                     // from before the move, and its jump threw the hero into the sky.
-                    self.ride = None;
-                    self.loco.body.platform_dy = None;
+                    self.player.ride = None;
+                    self.player.loco.body.platform_dy = None;
                     return;
                 }
                 None => {
-                    self.ride_lock = None;
-                    self.loco.body.no_gravity = false;
-                    self.loco.body.no_snap = false;
+                    self.player.ride_lock = None;
+                    self.player.loco.body.no_gravity = false;
+                    self.player.loco.body.no_snap = false;
                 }
             }
         }
@@ -9228,7 +9244,7 @@ impl Play {
         // hero hovered 0.15 over it while it sank (user's report 49).
         self.refresh_owner_poses();
         let pack = self.world.pack;
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let hit = self.world.probe(p[0], p[2], p[1] + 2.5);
         let owner = hit
             .patch
@@ -9238,26 +9254,26 @@ impl Play {
         // SPEC-0040 item 6b: the platform pointer is set every tick the ground is an object's
         // patch; its vertical displacement this tick (0 on the first tick on it) drives the
         // constraint, so the hero sinks and rises with the platform (user's report 49: he bobbed).
-        self.loco.body.platform_dy = now.map(|(o, m)| match self.ride {
+        self.player.loco.body.platform_dy = now.map(|(o, m)| match self.player.ride {
             Some((wp, po, _, t_prev)) if wp == pack && po == o => m[13] - t_prev[1],
             _ => 0.0,
         });
-        if let (Some((o, m)), Some((wp, po, q_prev, t_prev))) = (now, self.ride) {
-            if wp == pack && po == o && self.loco.body.gap <= 0.25 {
-                let (d, f) = neopets_sim::ride::carry(p, self.loco.facing, &m, q_prev, t_prev, false);
+        if let (Some((o, m)), Some((wp, po, q_prev, t_prev))) = (now, self.player.ride) {
+            if wp == pack && po == o && self.player.loco.body.gap <= 0.25 {
+                let (d, f) = neopets_sim::ride::carry(p, self.player.loco.facing, &m, q_prev, t_prev, false);
                 if d.iter().any(|v| v.abs() > 1e-6) {
                     for k in 0..3 {
-                        self.loco.body.position[k] += d[k];
+                        self.player.loco.body.position[k] += d[k];
                     }
                 }
                 let l = f[0].hypot(f[2]);
-                if l > 1e-4 && (f[0] - self.loco.facing[0]).abs() + (f[2] - self.loco.facing[2]).abs() > 1e-6 {
-                    self.loco.facing = [f[0] / l, 0.0, f[2] / l];
-                    self.loco.target = self.loco.facing;
+                if l > 1e-4 && (f[0] - self.player.loco.facing[0]).abs() + (f[2] - self.player.loco.facing[2]).abs() > 1e-6 {
+                    self.player.loco.facing = [f[0] / l, 0.0, f[2] / l];
+                    self.player.loco.target = self.player.loco.facing;
                 }
             }
         }
-        self.ride = now.map(|(o, m)| (pack, o, neopets_sim::ride::rotation_of(&m), [m[12], m[13], m[14]]));
+        self.player.ride = now.map(|(o, m)| (pack, o, neopets_sim::ride::rotation_of(&m), [m[12], m[13], m[14]]));
     }
 
     /// Developer menu: wear body item `id` (its hero's body entry), whatever its id: the other
@@ -9277,19 +9293,19 @@ impl Play {
 
     /// Diagnostic: the hero put at a point as it is (no ground probe).
     pub fn place_exact(&mut self, p: [f32; 3]) {
-        let f = self.loco.facing;
+        let f = self.player.loco.facing;
         self.arrive((p, f));
     }
 
     pub fn place_at(&mut self, x: f32, z: f32, c: f32) {
-        let y = self.world.ground_at(x, z, c).unwrap_or(self.loco.position()[1]);
-        let f = self.loco.facing;
+        let y = self.world.ground_at(x, z, c).unwrap_or(self.player.loco.position()[1]);
+        let f = self.player.loco.facing;
         self.arrive(([x, y, z], f));
     }
 
     /// Diagnostic: turn the hero toward a point and put the camera behind it.
     pub fn face_point(&mut self, x: f32, z: f32) {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         self.arrive((p, [x - p[0], 0.0, z - p[2]]));
     }
 
@@ -9418,7 +9434,7 @@ impl Play {
     fn stream_pack(&mut self, pack: u32) {
         let Some(world) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack) else { return };
         let Some(recs) = self.blocks.get(&pack) else { return };
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let d2 = |p: [f32; 3]| (p[0] - hero[0]).powi(2) + (p[1] - hero[1]).powi(2) + (p[2] - hero[2]).powi(2);
         let (grid, zones) = (self.world.zones.as_ref(), self.zones);
         let cell = |p: [f32; 3]| {
@@ -9677,7 +9693,7 @@ impl Play {
             // character counts, corpses too; that slot streams in the original, so only records within 280 of the hero do here.
             // Other slots keep the cap of 15 of a load with keep clear (this build does not carry the keep argument).
             let spore = key == 619;
-            let hero = self.loco.position();
+            let hero = self.player.loco.position();
             let cap = if s == EMBEDDED_SLOT { self.max_active.get(&pack).copied().unwrap_or(6) } else if spore { 6 } else { BLOCK_OBJECTS }.min(BLOCK_OBJECTS);
             let near = |c: &Character| (c.position[0] - hero[0]).powi(2) + (c.position[1] - hero[1]).powi(2) + (c.position[2] - hero[2]).powi(2) < STREAM_RANGE;
             let active = self.characters.iter().filter(|c| c.pack == pack && c.slot == s).filter(|c| if spore { near(c) } else { c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) }).count();
@@ -9700,7 +9716,7 @@ impl Play {
             if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
                 c.summoner = owner;
             }
-            let hero = self.loco.position();
+            let hero = self.player.loco.position();
             let rng = &mut self.rng;
             if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
                 c.inactive = false;
@@ -9727,7 +9743,7 @@ impl Play {
             Some(h) => [at[0], h, at[2]],
             None => at,
         };
-        let facing = self.loco.facing;
+        let facing = self.player.loco.facing;
         let (radius, weight) = row.map_or((0.5, 1.0), |r| (r.radius, r.weight.max(0.1)));
         anim.play(6);
         self.pet_char = Some(self.next_character);
@@ -9815,7 +9831,7 @@ impl Play {
         self.deactivate_pet();
         let region = neopets_sim::petpet::package(live.kind);
         self.petpet = Some(live);
-        self.pet_spawn = Some(neopets_sim::petpet::spawn_point(self.loco.position(), self.loco.facing));
+        self.pet_spawn = Some(neopets_sim::petpet::spawn_point(self.player.loco.position(), self.player.loco.facing));
         let pack = self.world.pack;
         self.slot_regions.insert((pack, PET_SLOT), region);
         self.region_wanted.push((pack, PET_SLOT, region));
@@ -9860,9 +9876,9 @@ impl Play {
     fn pet_step(&mut self) {
         let Some(id) = self.pet_char else { return };
         let food = self.characters.iter().find(|c| c.id == id).and_then(|c| self.nearest_food(c.position, false));
-        let hero = self.loco.position();
-        let hf = self.loco.facing;
-        let idle = matches!(self.loco.state, hero_states::STANCE);
+        let hero = self.player.loco.position();
+        let hf = self.player.loco.facing;
+        let idle = matches!(self.player.loco.state, hero_states::STANCE);
         let counting = !self.dialogue_open;
         let pack = self.world.pack;
         let Some(c) = self.characters.iter_mut().find(|c| c.id == id) else { return };
@@ -9959,10 +9975,10 @@ impl Play {
     /// without one plays cue 0xA2. The food is the selected quick item (which item the feed
     /// takes is not given; R-0094).
     fn feed_step(&mut self) {
-        if self.hero_busy() || !(1..=6).contains(&self.loco.state) {
+        if self.hero_busy() || !(1..=6).contains(&self.player.loco.state) {
             return;
         }
-        let (hero, f) = (self.loco.position(), self.loco.facing);
+        let (hero, f) = (self.player.loco.position(), self.player.loco.facing);
         let pack = self.world.pack;
         let front = |p: [f32; 3], r: f32| {
             let d = [p[0] - hero[0], p[2] - hero[2]];
@@ -9993,7 +10009,7 @@ impl Play {
         });
         match food.filter(|&id| neopets_sim::petpet::feedable(id) && self.items.get(id).is_some_and(|i| i.kind == 12)) {
             Some(id) => {
-                self.loco.feed();
+                self.player.loco.feed();
                 self.feeding = Some(id);
             }
             None => self.cue(0xA2),
@@ -10006,16 +10022,16 @@ impl Play {
     /// reserved and not collectable, and one is removed from the inventory.
     fn feed_finish(&mut self) {
         let Some(food) = self.feeding else { return };
-        let clip = self.hero.clip_state();
-        let done = clip.action == neopets_sim::hero::ANIM_FEED && clip.progress >= 0.99 || self.loco.state == hero_states::STANCE;
+        let clip = self.player.hero.clip_state();
+        let done = clip.action == neopets_sim::hero::ANIM_FEED && clip.progress >= 0.99 || self.player.loco.state == hero_states::STANCE;
         if !done {
-            if self.loco.state != neopets_sim::hero::FEED {
+            if self.player.loco.state != neopets_sim::hero::FEED {
                 self.feeding = None;
             }
             return;
         }
         self.feeding = None;
-        let (hero, f) = (self.loco.position(), self.loco.facing);
+        let (hero, f) = (self.player.loco.position(), self.player.loco.facing);
         let pack = self.world.pack;
         let pet = self.pet_char;
         let best = self
@@ -10116,7 +10132,7 @@ impl Play {
                     .map(|(p, t, _)| (p, t))
             });
             let world = &self.world;
-            let (hero, hero_state) = (self.loco.position(), self.loco.state);
+            let (hero, hero_state) = (self.player.loco.position(), self.player.loco.state);
             let hit = self.class20_hits.contains(&id);
             let c = &mut self.characters[i];
             let clip = c.anim.clip_state();
@@ -10132,7 +10148,7 @@ impl Play {
             let Some(k) = c.class20.as_mut() else { continue };
             let act = k.tick_on(&v, self.class20_waits, &mut self.rng, &on_mesh);
             if act.launch {
-                self.loco.launch_up(neopets_sim::petpet::CLASS20_LAUNCH);
+                self.player.loco.launch_up(neopets_sim::petpet::CLASS20_LAUNCH);
                 self.last_pet = format!("class 20 creature {id} launched the hero on tick {}", self.ticks);
             }
             if let Some(a) = act.anim {
@@ -10167,7 +10183,7 @@ impl Play {
     /// food counts as reachable).
     fn wild_step(&mut self) {
         let pack = self.world.pack;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.wild.is_some() && !c.inactive && !c.held).map(|c| c.id).collect();
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
@@ -10240,8 +10256,8 @@ impl Play {
     fn boss_step(&mut self) {
         let hits = std::mem::take(&mut self.boss_hits);
         let pack = self.world.pack;
-        let hero = self.loco.position();
-        let hf = self.loco.facing;
+        let hero = self.player.loco.position();
+        let hf = self.player.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.boss.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
@@ -10267,7 +10283,7 @@ impl Play {
             let mote = self.equipment.motes[1][2];
             let gst = mote.and_then(|m| self.items.get(m)).map_or(0.0, |it| it.stats[6] as f32);
             let shot_slots: Vec<(usize, [f32; 3], f32, i32)> = self
-                .hero_shots
+                .player.hero_shots
                 .iter()
                 .enumerate()
                 .filter(|(_, s)| s.armed())
@@ -10379,15 +10395,15 @@ impl Play {
             }
             // The hit helper: bounced shots fly on; counted ones are disarmed.
             for &k in &act.bounced {
-                if let Some(s) = self.hero_shots.get_mut(k) {
+                if let Some(s) = self.player.hero_shots.get_mut(k) {
                     s.bounce(&mut self.rng);
                 }
             }
             let mut gone = act.absorbed.clone();
             gone.sort_unstable();
             for &k in gone.iter().rev() {
-                if k < self.hero_shots.len() {
-                    self.hero_shots.remove(k);
+                if k < self.player.hero_shots.len() {
+                    self.player.hero_shots.remove(k);
                 }
             }
             // SPEC-0015 sub-step 2: while stunned (not in the dazed loop) a thin wall lies along
@@ -10404,18 +10420,18 @@ impl Play {
                     let c = [b[0] + 0.5 * l * u[0], b[1], b[2] + 0.5 * l * u[2]];
                     let origin: [f32; 3] = std::array::from_fn(|k| c[k] - 2.0 * UP[k] - 15.0 * u[k] - 0.5 * w[k]);
                     let wall = contact::BoxShape { origin, axes: [UP, u, w], extents: [4.0, 30.0, 1.0] };
-                    contact::resolve(&mut self.loco.body.position, &[wall], contact::HERO_RADIUS);
+                    contact::resolve(&mut self.player.loco.body.position, &[wall], contact::HERO_RADIUS);
                 }
             }
             if let Some(p) = act.blocker {
                 // The head cylinder (radius 4.0, length 10.0) pushes the hero's body out.
-                let pos = self.loco.position();
+                let pos = self.player.loco.position();
                 let (dx, dz) = (pos[0] - p[0], pos[2] - p[2]);
                 let d = (dx * dx + dz * dz).sqrt();
                 let r = 4.0 + contact::HERO_RADIUS;
                 if d < r && d > 1e-4 && (pos[1] - p[1]).abs() <= 5.0 {
                     let k = (r - d) / d;
-                    let b = &mut self.loco.body.position;
+                    let b = &mut self.player.loco.body.position;
                     b[0] += dx * k;
                     b[2] += dz * k;
                 }
@@ -10536,7 +10552,7 @@ impl Play {
     /// registered routine or the lock chest of each fired index runs, then the records decay.
     fn trigger_step(&mut self) {
         let frame = self.ticks as i64;
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let mut fired: Vec<u16> = self.world.volumes.iter().filter(|v| v.hero_touches(p)).map(|v| v.index).collect();
         // SPEC-0018 Breakable cylinders: a flag-9 volume fires its number on a body contact (a
         // chest's is a stale number that starts nothing).
@@ -10555,7 +10571,7 @@ impl Play {
         }
         // SPEC-0028 Hero shot pass: each live shot fires the volumes its point and radius touch,
         // with object 0 (the shot word set); a shot can fire several triggers in one tick.
-        let mut shot: Vec<u16> = self.hero_shots.iter().flat_map(|s| self.world.shot_volumes.iter().filter(|v| v.shot_hits(s.position, s.radius)).map(|v| v.index)).collect();
+        let mut shot: Vec<u16> = self.player.hero_shots.iter().flat_map(|s| self.world.shot_volumes.iter().filter(|v| v.shot_hits(s.position, s.radius)).map(|v| v.index)).collect();
         shot.sort_unstable();
         shot.dedup();
         for &i in &shot {
@@ -10851,7 +10867,7 @@ impl Play {
                     v.extend([Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 1.0, wait: false }]);
                 }
                 // Effect 790 at B = X + 2.9 d, facing d, and cue 142 on the main slot.
-                let (x, d) = locator.and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.loco.position(), self.loco.facing));
+                let (x, d) = locator.and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.player.loco.position(), self.player.loco.facing));
                 let b = [x[0] + 2.9 * d[0], x[1] + 2.9 * d[1], x[2] + 2.9 * d[2]];
                 let f = unit([d[0], 0.0, d[2]]);
                 let table = self.effect_table.clone();
@@ -10883,7 +10899,7 @@ impl Play {
         self.world.opened.insert(g);
         let Some((p, d)) = group.locators.first().and_then(|&k| usize::try_from(k).ok()).and_then(|k| self.world.entries.get(k).copied()) else { return };
         // Step 1: the hero at P - 2.2 D, facing D.
-        self.loco.teleport([p[0] - 2.2 * d[0], p[1] - 2.2 * d[1], p[2] - 2.2 * d[2]], d);
+        self.player.loco.teleport([p[0] - 2.2 * d[0], p[1] - 2.2 * d[1], p[2] - 2.2 * d[2]], d);
         // Steps 3 to 5: camera [0], the marker off, effect 4036 at P + 2.9 D with no rotation.
         let camera = |k: usize| group.cameras.get(k).and_then(|&c| usize::try_from(c).ok()).map(|track| Action::PlayCamera { track, wait: false, end: 0, speed: 1.0 });
         let table = self.effect_table.clone();
@@ -10975,10 +10991,10 @@ impl Play {
         let pack = self.world.pack;
         let wild: Vec<(u64, [f32; 3], Option<u32>)> = self.characters.iter().filter(|c| c.pack == pack && c.wild.is_some() && !c.inactive).map(|c| (c.id, c.position, c.anim.clip_state().action.into())).collect();
         if let (true, Some(&(_, at, _))) = (place, wild.first()) {
-            self.loco.teleport([at[0] + 3.0, at[1], at[2]], [-1.0, 0.0, 0.0]);
+            self.player.loco.teleport([at[0] + 3.0, at[1], at[2]], [-1.0, 0.0, 0.0]);
         }
-        let h = self.loco.position();
-        format!("hero {:.1},{:.1},{:.1} state {} busy {} prompt {:?} feeding {:?} pet {:?} last {:?}; wild {:?}", h[0], h[1], h[2], self.loco.state, self.hero_busy(), self.door_prompt, self.feeding, self.pet_char, self.last_pet, wild.iter().map(|w| (w.0, w.1[0] as i32, w.1[2] as i32, w.2)).collect::<Vec<_>>())
+        let h = self.player.loco.position();
+        format!("hero {:.1},{:.1},{:.1} state {} busy {} prompt {:?} feeding {:?} pet {:?} last {:?}; wild {:?}", h[0], h[1], h[2], self.player.loco.state, self.hero_busy(), self.door_prompt, self.feeding, self.pet_char, self.last_pet, wild.iter().map(|w| (w.0, w.1[0] as i32, w.1[2] as i32, w.2)).collect::<Vec<_>>())
     }
 
     /// Diagnostic: which walking maps hold locators `a` to `b` of the current world, as stored and on the ground.
@@ -10996,7 +11012,7 @@ impl Play {
 
     /// SPEC-0021 Pickup step 1: the search point, the feet plus 2.0 along the facing plus 0.8 up (R-0234).
     fn pickup_point(&self) -> [f32; 3] {
-        let (p, f) = (self.loco.position(), unit(self.loco.facing));
+        let (p, f) = (self.player.loco.position(), unit(self.player.loco.facing));
         [p[0] + 2.0 * f[0], p[1] + 2.0 * f[1] + 0.8, p[2] + 2.0 * f[2]]
     }
 
@@ -11075,27 +11091,27 @@ impl Play {
             return;
         };
         let p = [at[0] - 3.0, at[1], at[2]];
-        self.loco.teleport(p, [1.0, 0.0, 0.0]);
+        self.player.loco.teleport(p, [1.0, 0.0, 0.0]);
     }
 
     /// Diagnostic: the hero picks up the first Miamouse where he stands.
     pub fn diag_pick_up(&mut self) {
         let pack = self.world.pack;
         if let Some(id) = self.characters.iter().find(|c| c.pack == pack && c.miamouse.is_some()).map(|c| c.id) {
-            self.loco.start_carry();
-            self.carried = Some(id);
+            self.player.loco.start_carry();
+            self.player.carried = Some(id);
         }
     }
 
     /// Diagnostic: the carry's state.
     pub fn debug_carry(&self) -> String {
-        let p = self.loco.position();
-        format!("hero {:.1},{:.1} state {} carry {} carried {:?} on {}", p[0], p[2], self.loco.state, self.loco.carry, self.carried, self.catch.on)
+        let p = self.player.loco.position();
+        format!("hero {:.1},{:.1} state {} carry {} carried {:?} on {}", p[0], p[2], self.player.loco.state, self.player.loco.carry, self.player.carried, self.catch.on)
     }
 
     /// Diagnostic: item `id` placed 5.5 ahead of the hero, a little above the ground.
     pub fn diag_place_item(&mut self, id: u16) {
-        let (p, f) = (self.loco.position(), unit(self.loco.facing));
+        let (p, f) = (self.player.loco.position(), unit(self.player.loco.facing));
         let pack = self.world.pack;
         let at = [p[0] + 5.5 * f[0], p[1] + 1.0, p[2] + 5.5 * f[2]];
         let spawned = self.spawn_item(pack, neopets_sim::items::Spawn { id, point: at, placed: true, charm: false, s0: 1.0, s1: 1.0, delay: 0.0, larg: -1.0, direction: Some(f), flag: 0, map: 0, price: 0 });
@@ -11108,8 +11124,8 @@ impl Play {
         let b = self.world.breakables.get(id)?;
         let state = b.state;
         if let (true, Some(v)) = (drop, b.volume) {
-            let f = self.loco.facing;
-            self.loco.teleport([v.centre[0], v.centre[1] + v.height.abs() + 3.0, v.centre[2]], f);
+            let f = self.player.loco.facing;
+            self.player.loco.teleport([v.centre[0], v.centre[1] + v.height.abs() + 3.0, v.centre[2]], f);
         }
         Some(state)
     }
@@ -11120,19 +11136,19 @@ impl Play {
             println!("CHEST no group {g}; {} groups", self.world.groups.len());
             return;
         };
-        let (x, d) = group.locators.first().and_then(|&k| usize::try_from(k).ok()).and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.loco.position(), self.loco.facing));
+        let (x, d) = group.locators.first().and_then(|&k| usize::try_from(k).ok()).and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.player.loco.position(), self.player.loco.facing));
         let point = group.drops.first().and_then(|&id| usize::try_from(id).ok()).and_then(|id| self.world.placements.get(id)).filter(|(region, _)| *region == 0xFF).and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
         println!("CHEST group {g} kind {} key {} at {x:?} facing {d:?} drops {:?} placement {:?}", group.kind, group.key, group.drops, group.drops.first().and_then(|&id| usize::try_from(id).ok()).and_then(|id| self.world.placements.get(id)));
         if let Some(p) = point {
             println!("CHEST point key {} group {} count {} flags {} map {}", p.key, p.group, p.count, p.flags, p.map);
         }
-        self.loco.teleport(x, d);
+        self.player.loco.teleport(x, d);
         self.chest_reward(g);
     }
 
     /// Diagnostic: the live dropped items of the current world and their distances from the hero.
     pub fn diag_drops(&self) -> String {
-        let h = self.loco.position();
+        let h = self.player.loco.position();
         let Some(pool) = self.pools.get(&self.world.pack) else { return String::new() };
         let list: Vec<String> = pool
             .slots
@@ -11144,7 +11160,7 @@ impl Play {
                 format!("{} state {} ready {} delay {:.1} at {:.1},{:.1},{:.1} d {d:.2}", it.id, it.state, it.ready(), it.delay, it.position[0], it.position[1], it.position[2])
             })
             .collect();
-        format!("hero {:.1},{:.1},{:.1} state {} NP {} last {}: {}", h[0], h[1], h[2], self.loco.state, self.state.neopoints, self.last_pickup, list.join("; "))
+        format!("hero {:.1},{:.1},{:.1} state {} NP {} last {}: {}", h[0], h[1], h[2], self.player.loco.state, self.state.neopoints, self.last_pickup, list.join("; "))
     }
 
     /// SPEC-0048 Lock chests step 6: the drop action on reward [0] (a placement id through the
@@ -11155,7 +11171,7 @@ impl Play {
     fn chest_reward(&mut self, g: usize) {
         let Some(group) = self.world.groups.get(g).cloned() else { return };
         let locator = group.locators.first().and_then(|&k| usize::try_from(k).ok());
-        let (x, d) = locator.and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.loco.position(), self.loco.facing));
+        let (x, d) = locator.and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.player.loco.position(), self.player.loco.facing));
         let sealed = group.kind == 2;
         let a = if sealed { [x[0] + 2.2 * d[0], x[1] + 2.2 * d[1], x[2] + 2.2 * d[2]] } else { [x[0] + 2.4 * d[0], x[1] + 2.4 * d[1] + 0.4, x[2] + 2.4 * d[2]] };
         let point = group
@@ -11179,7 +11195,7 @@ impl Play {
         if self.job.is_some() {
             return;
         }
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let Some(n) = self.world.touched_door(p) else { return };
         if self.world.scripted_doors {
             // SPEC-0006 Doors, item 5: the registered callback decides. Context 0 starts on
@@ -11232,11 +11248,11 @@ impl Play {
                 *last = Some(now);
             }
         }
-        self.recorder.push(self.ticks, input, self.world.pack, self.loco.position(), &self.state, self.hero_hp);
+        self.recorder.push(self.ticks, input, self.world.pack, self.player.loco.position(), &self.state, self.player.hero_hp);
         {
             // The bug report's history row: the hero as the previous tick left him.
-            let (p, v, b) = (self.loco.position(), self.loco.body.velocity, &self.loco.body);
-            let c = self.hero.clip_state();
+            let (p, v, b) = (self.player.loco.position(), self.player.loco.body.velocity, &self.player.loco.body);
+            let c = self.player.hero.clip_state();
             let row = format!(
                 "{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{:.2},{:.3},{},{},{},{},{},{},{},{},{},{}",
                 self.ticks,
@@ -11247,8 +11263,8 @@ impl Play {
                 v[0],
                 v[1],
                 v[2],
-                self.loco.state,
-                self.loco.phase,
+                self.player.loco.state,
+                self.player.loco.phase,
                 c.action,
                 c.progress,
                 b.gap,
@@ -11256,34 +11272,34 @@ impl Play {
                 b.no_gravity as u8,
                 b.no_snap as u8,
                 b.platform_dy.map_or(String::new(), |d| format!("{d:.3}")),
-                self.ride_lock.map_or(String::new(), |r| r.0.to_string()),
-                self.ledge.as_ref().map_or(String::new(), |l| format!("{:?}", l.state)),
-                self.hero_hp,
-                self.hero_mp,
+                self.player.ride_lock.map_or(String::new(), |r| r.0.to_string()),
+                self.player.ledge.as_ref().map_or(String::new(), |l| format!("{:?}", l.state)),
+                self.player.hero_hp,
+                self.player.hero_mp,
                 self.attack.is_some() as u8,
                 self.dialogue_open as u8,
             );
             self.recorder.note(row);
         }
-        self.l1_held = input.guard;
-        self.rope_y = -neopets_sim::camera::converter_a(pad.right_y);
+        self.player.l1_held = input.guard;
+        self.player.rope_y = -neopets_sim::camera::converter_a(pad.right_y);
         // NEOPETS_TRACE_AIM=n (diagnostic): the right stick pushed up on tick n, starting aim mode;
         // the aim view's mode changes are printed.
         if std::env::var("NEOPETS_TRACE_AIM").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(self.ticks) {
-            self.rope_y = 87.5;
+            self.player.rope_y = 87.5;
         }
         self.ticks += 1;
         // The hit flashes run down one frame a tick (60 ticks a second).
-        self.hero_flash = self.hero_flash.saturating_sub(1);
+        self.player.hero_flash = self.player.hero_flash.saturating_sub(1);
         for c in &mut self.characters {
             c.flash = c.flash.saturating_sub(1);
         }
         // Developer cheats: full health and magic every tick.
         if self.cheats.god {
-            self.hero_hp = self.hero_max;
+            self.player.hero_hp = self.player.hero_max;
         }
         if self.cheats.magic {
-            self.hero_mp = self.hero_mp_max;
+            self.player.hero_mp = self.player.hero_mp_max;
         }
         self.equipment_step();
         // SPEC-0053: while a swap runs (game-state code 5) the hero takes no input.
@@ -11344,36 +11360,36 @@ impl Play {
         if let Some(i) = pass.respawn {
             // Timer F: the start pose becomes entry record i; the respawn at the start pose,
             // in state 60 for death mode 2.
-            let pose = self.world.entries.get(i as usize).copied().unwrap_or((self.loco.position(), self.loco.facing));
+            let pose = self.world.entries.get(i as usize).copied().unwrap_or((self.player.loco.position(), self.player.loco.facing));
             self.arrive(pose);
             if self.death.mode == 2 {
-                self.loco.set_end_state(hero_states::RESPAWN);
+                self.player.loco.set_end_state(hero_states::RESPAWN);
                 self.penalty_due = true;
             }
             self.death.mode = 0;
         }
         if std::mem::take(&mut self.penalty_due) {
             // State 60's first tick: the plain deduct of min(5, health - 1).
-            self.hero_hp -= neopets_sim::death::respawn_penalty(self.hero_hp);
+            self.player.hero_hp -= neopets_sim::death::respawn_penalty(self.player.hero_hp);
         }
         // SPEC-0027 Update order: the camera runs first, from the hero's previous pose.
         let w = &self.world;
-        self.camera.negate_elevation = self.loco.state == hero_states::PANEL && self.panel.is_some_and(|c| c.sub == 4);
+        self.player.camera.negate_elevation = self.player.loco.state == hero_states::PANEL && self.player.panel.is_some_and(|c| c.sub == 4);
         // The hero's target, the nearest noticed enemy: the lock's head record.
-        self.camera.target_point = self.lock.and_then(|id| self.characters.iter().find(|c| c.id == id && c.pack == w.pack)).map(|c| c.position);
+        self.player.camera.target_point = self.player.lock.and_then(|id| self.characters.iter().find(|c| c.id == id && c.pack == w.pack)).map(|c| c.position);
         // SPEC-0027 Death camera: once timer E runs, mode 8 on the dying hero; it ends with the page.
-        if self.death.timer_e.running() && self.camera.blend.is_none() {
-            self.camera.start_blend(15.0, 0.0, 1.5, 0.01);
+        if self.death.timer_e.running() && self.player.camera.blend.is_none() {
+            self.player.camera.start_blend(15.0, 0.0, 1.5, 0.01);
         }
-        if self.camera.blend.is_some() && !self.death.timer_e.running() && !self.death.flag_e {
-            self.camera.blend = None;
+        if self.player.camera.blend.is_some() && !self.death.timer_e.running() && !self.death.flag_e {
+            self.player.camera.blend = None;
         }
-        if self.camera.blend.is_some() {
-            let f = self.loco.facing;
-            self.camera.blend_step(f, |e| push_eye(w, e));
+        if self.player.camera.blend.is_some() {
+            let f = self.player.loco.facing;
+            self.player.camera.blend_step(f, |e| push_eye(w, e));
         } else {
-        let trunks = self.near_trunks(self.camera.eye);
-        let fol = followed(&self.loco, w);
+        let trunks = self.near_trunks(self.player.camera.eye);
+        let fol = followed(&self.player.loco, w);
         // The camera's ground world (SPEC-0027 Ground clearance step 2, Two worlds at an
         // exterior and interior door): the current world when it has ground under the eye
         // (probed from 2.5 above), else the other resident world when it has, else the current
@@ -11391,7 +11407,7 @@ impl Play {
         };
         let no_trunks: Vec<([f32; 3], f32)> = Vec::new();
         let trunks_of = |g: &World| if std::ptr::eq(g, w) { &trunks } else { &no_trunks };
-        self.camera.update(
+        self.player.camera.update(
             &fol,
             pad,
             |x, z, c| w.probe(x, z, c).height,
@@ -11416,7 +11432,7 @@ impl Play {
         // SPEC-0028 section 11: the atmosphere zones of the current world, picked from the eye.
         {
             let flags = &self.state.flags;
-            self.atmos_out = self.atmos_sel.select(self.world.pack, &self.world.atmos, self.camera.eye, &|f| flags.contains(&f));
+            self.atmos_out = self.atmos_sel.select(self.world.pack, &self.world.atmos, self.player.camera.eye, &|f| flags.contains(&f));
         }
         // SPEC-0027 Scripted cameras: the play is sampled and its end mode acts.
         if let Some(cut) = self.cut.as_mut() {
@@ -11429,7 +11445,7 @@ impl Play {
                 }
             }
         }
-        let (forward, left) = self.camera.rows();
+        let (forward, left) = self.player.camera.rows();
         // The interaction chooser shows the prompt posted on the previous tick and sets the
         // confirm flag on a Square press edge.
         // An open dialogue box takes Square to close it, and holds the hero in place.
@@ -11461,30 +11477,30 @@ impl Play {
             // SPEC-0056 Talk facing: in the conversation the hero turns toward its partner
             // with weight 0.1 and the partner toward the hero with weight 0.3.
             if let Some(c) = self.talk_with.and_then(|id| self.characters.iter_mut().find(|c| c.id == id)) {
-                let h = self.loco.position();
+                let h = self.player.loco.position();
                 let to_hero = [h[0] - c.position[0], 0.0, h[2] - c.position[2]];
                 c.facing = neopets_sim::hero::steer(c.facing, to_hero, 0.3);
-                self.loco.steer_toward(to_hero.map(|v| -v), 0.1);
+                self.player.loco.steer_toward(to_hero.map(|v| -v), 0.1);
             }
         }
         // SPEC-0052 Control locks: the script hold, a running camera play and a moving fade
         // take the hero's input; a scripted walk (SPEC-0033 4A.4 and 4A.5) steers it instead.
         // The script button query (IsButtonPressed) reads the pad, not the hero's input.
         self.button_square = input.square;
-        self.square_held = input.square_held;
+        self.player.square_held = input.square_held;
         if self.held || self.cut.is_some_and(|c| c.state == 1) || self.fade.moving() {
             input = HeroInput::default();
         }
         if let Some((t, face, last)) = self.hero_walk {
-            let p = self.loco.position();
+            let p = self.player.loco.position();
             let (dx, dz) = (t[0] - p[0], t[2] - p[2]);
             let d = dx.hypot(dz);
             // Arrival within 0.25 (or once the distance grows inside 1.0: the stick walk
             // cannot always land within 0.25).
             if d < 0.25 || (d < 1.0 && d > last) {
                 match face {
-                    Some(g) if self.loco.facing[0] * g[0] + self.loco.facing[2] * g[2] < 0.99 => {
-                        self.loco.steer_toward([g[0], 0.0, g[2]], 0.1);
+                    Some(g) if self.player.loco.facing[0] * g[0] + self.player.loco.facing[2] * g[2] < 0.99 => {
+                        self.player.loco.steer_toward([g[0], 0.0, g[2]], 0.1);
                         self.hero_walk = Some((t, face, 0.0));
                     }
                     _ => self.hero_walk = None,
@@ -11520,7 +11536,7 @@ impl Play {
         // in-play gate passes (cue 0x9A); while it is open (the first closed) its handler runs,
         // takes Cross, Square and Circle, and re-arms the equipment panels each call.
         let mote_was_open = self.mote_panel.open;
-        if !self.quick.open && !self.mote_panel.open && panel.down && self.loco.state != 0x19 && !self.dialogue_open {
+        if !self.quick.open && !self.mote_panel.open && panel.down && self.player.loco.state != 0x19 && !self.dialogue_open {
             self.mote_panel.open = true;
             panel.down = false;
             self.cue_fixed(0x9A);
@@ -11565,7 +11581,7 @@ impl Play {
         }
         let inv = &self.state.items;
         let owns = |id: i32| id >= 0 && inv.get(&(id as u16)).is_some_and(|&n| n > 0);
-        let out = self.quick.tick(panel, self.loco.state != 0x19 && !self.mote_panel.open, &self.quick_rows, &owns);
+        let out = self.quick.tick(panel, self.player.loco.state != 0x19 && !self.mote_panel.open, &self.quick_rows, &owns);
         if self.quick.open {
             self.mote_panel.open = false;
         }
@@ -11587,7 +11603,7 @@ impl Play {
         // SPEC-0022 chooser step 3: with the weapon out, a held attack button with no press edge
         // and no Square press enters the attack state again (holding the button repeats it).
         let mut repeat = input.attack_held && !input.attack && !input.square && self.weapon_drawn;
-        if out.consumed || was_open || self.statuses.active(neopets_sim::status::STUN) {
+        if out.consumed || was_open || self.player.statuses.active(neopets_sim::status::STUN) {
             input.jump = false;
             input.attack = false;
             repeat = false;
@@ -11610,7 +11626,7 @@ impl Play {
             input.attack = false;
             repeat = false;
         }
-        if matches!(self.loco.state, hero_states::DEAD | hero_states::HURT | hero_states::LONG_FALL) {
+        if matches!(self.player.loco.state, hero_states::DEAD | hero_states::HURT | hero_states::LONG_FALL) {
             input = HeroInput { side: input.side, forward: input.forward, ..HeroInput::default() };
             repeat = false;
         }
@@ -11629,7 +11645,7 @@ impl Play {
         self.attack_fx_step();
         self.shot_fx_step();
         self.items_flags_step();
-        if self.hero_index == 0 && self.attack.is_none() && (input.attack || repeat) && (1..=6).contains(&self.loco.state) {
+        if self.hero_index == 0 && self.attack.is_none() && (input.attack || repeat) && (1..=6).contains(&self.player.loco.state) {
             self.attack = Some(neopets_sim::attack::TorAttack::start_with(self.gesture.mode));
             self.draw_items(true);
         }
@@ -11637,40 +11653,40 @@ impl Play {
         // SPEC-0036 Tor's flick lunge: the point is kept while the touched flag is clear; on contact he is held
         // on it and the lunge goes on.
         if self.attack.as_ref().is_some_and(|a| a.sub == 9) {
-            if self.touched {
-                self.loco.body.position = self.leap_point;
+            if self.player.touched {
+                self.player.loco.body.position = self.leap_point;
             } else {
-                self.leap_point = self.loco.position();
+                self.leap_point = self.player.loco.position();
             }
         }
         if let Some(a) = self.attack.as_mut() {
-            let c = self.hero.clip_state();
+            let c = self.player.hero.clip_state();
             a.mote = self.equipment.motes[0][2];
             a.endless_spin = self.cheats.spin;
             // SPEC-0036 Tor arm-table point: in the flick lunge a contact puts him back at the last position without one.
             if a.sub == 9 {
-                if self.touched && a.f > 0 {
-                    self.loco.body.position = self.leap_point;
+                if self.player.touched && a.f > 0 {
+                    self.player.loco.body.position = self.leap_point;
                 } else {
-                    self.leap_point = self.loco.position();
+                    self.leap_point = self.player.loco.position();
                 }
             }
             match a.tick(input.attack_held, input.attack, neopets_sim::attack::Clip { action: c.action, progress: c.progress }) {
                 Some(r) => {
-                    self.loco.set_attack(Some(r.action));
+                    self.player.loco.set_attack(Some(r.action));
                     force = r.restart;
                 }
                 None => {
                     self.attack = None;
-                    self.loco.set_attack(None);
+                    self.player.loco.set_attack(None);
                 }
             }
         }
         self.power_ready_step();
         if let Some(h) = self.power_fx {
             if self.attack.as_ref().is_some_and(|a| a.sub == 10) {
-                let f = self.loco.facing;
-                let (p, w) = (self.loco.position(), self.weapon_reach());
+                let f = self.player.loco.facing;
+                let (p, w) = (self.player.loco.position(), self.weapon_reach());
                 self.effects.set_position(h, [p[0] + f[0] * w, p[1], p[2] + f[2] * w]);
             } else {
                 let table = self.effect_table.clone();
@@ -11707,7 +11723,7 @@ impl Play {
             // SPEC-0036 Tor's sub-state 13 (the recoil): while the current action is not 26, the
             // recoil voice cue by the recoil material (SPEC-0028 Blade recoil; 13 for the
             // element mismatch's material 4, SPEC-0048 Element recoil) and the rumble request.
-            if sub == 13 && self.hero.clip_state().action != 26 {
+            if sub == 13 && self.player.hero.clip_state().action != 26 {
                 self.sound.play(VOICE, neopets_sim::trigger::recoil_cue(self.recoil_material).into(), Cue::default());
                 let (p, t, m) = self.landing_rumble;
                 self.rumble.request(&self.rumble_presets, p, t, m);
@@ -11751,23 +11767,23 @@ impl Play {
                 self.sound.play(neopets_sim::sound::WEAPON, 14, neopets_sim::sound::Play::default());
             }
         }
-        self.loco.shield = self.shield.is_some();
+        self.player.loco.shield = self.shield.is_some();
         self.status_step();
         self.starlight_step();
         self.guard_step();
-        self.loco.p1 = self.weapon_drawn;
-        self.loco.roberta = self.hero_index == 1;
-        self.loco.air_ok = self.hero_index == 0 && self.equipment.entries[2][self.hero_index] != Some(126);
+        self.player.loco.p1 = self.weapon_drawn;
+        self.player.loco.roberta = self.hero_index == 1;
+        self.player.loco.air_ok = self.hero_index == 0 && self.equipment.entries[2][self.hero_index] != Some(126);
         // SPEC-0036 the stick step: Tor's 7 and 8 in the attack window; his power step 10 only with
         // Mote 162 (0xA2) in word 2 and the stick off centre, with no window test (corrected
         // 2026-11-09); Roberta's spins until the end clip, and her sub-state 14's turn.
         let stick_off = input.forward != 0.0 || input.side != 0.0;
-        self.loco.stick_step = {
+        self.player.loco.stick_step = {
             use neopets_sim::hero::StickStep::*;
-            let action = self.hero.clip_state().action;
+            let action = self.player.hero.clip_state().action;
             let mote = self.attack.as_ref().and_then(|a| a.mote);
-            match (self.attack.as_ref().map(|a| a.sub), self.r_attack.as_ref().map(|a| a.sub)) {
-                (Some(7 | 8), _) if self.hero.frame_bits() & 1 != 0 => Clear,
+            match (self.attack.as_ref().map(|a| a.sub), self.player.r_attack.as_ref().map(|a| a.sub)) {
+                (Some(7 | 8), _) if self.player.hero.frame_bits() & 1 != 0 => Clear,
                 (Some(10), _) if mote == Some(0xA2) && stick_off => Clear,
                 (_, Some(6)) if action != neopets_sim::roberta::SPIN_CW_END => Horizontal,
                 (_, Some(7)) if action != neopets_sim::roberta::SPIN_CCW_END => Horizontal,
@@ -11775,19 +11791,19 @@ impl Play {
                 _ => Off,
             }
         };
-        let air_before = self.loco.air_sub;
+        let air_before = self.player.loco.air_sub;
         // SPEC-0033 Behavior 4A.1: the kind word of the patch under the feet, not its surface code.
-        let feet = self.loco.position();
-        self.loco.slow_patch = matches!(self.world.probe(feet[0], feet[2], feet[1] + 2.5).kind, Some(1 | 6));
-        let arriving = self.loco.state == hero_states::ARRIVAL;
-        self.loco.update(&input, forward, left, self.hero.clip_state());
+        let feet = self.player.loco.position();
+        self.player.loco.slow_patch = matches!(self.world.probe(feet[0], feet[2], feet[1] + 2.5).kind, Some(1 | 6));
+        let arriving = self.player.loco.state == hero_states::ARRIVAL;
+        self.player.loco.update(&input, forward, left, self.player.hero.clip_state());
         // SPEC-0040 state 59: music stinger 0 plays when the arrival clip ends (the death effect
         // the state also spawns is not identified).
-        if arriving && self.loco.state == hero_states::STANCE {
+        if arriving && self.player.loco.state == hero_states::STANCE {
             self.stinger(0);
         }
         // An air attack's start: the hit list cleared and the weapon drawn.
-        if air_before == 0 && self.loco.air_sub != 0 {
+        if air_before == 0 && self.player.loco.air_sub != 0 {
             self.hit_list.clear();
             self.swing_serial = self.swing_serial.wrapping_add(1);
             self.set_weapon_drawn(true);
@@ -11798,11 +11814,11 @@ impl Play {
         // While a conversation runs the emote consumer owns the hero's main id.
         if !self.dialogue_open {
             // While the guard timer runs the idle hero holds the shield up (animation 63).
-            let id = if self.loco.state == hero_states::STANCE && self.guard_timer > 0 { 63 } else { self.loco.action() };
-            self.hero.request(id, force);
+            let id = if self.player.loco.state == hero_states::STANCE && self.guard_timer > 0 { 63 } else { self.player.loco.action() };
+            self.player.hero.request(id, force);
         }
-        self.loco.haste = self.cheats.haste_factor();
-        self.hero.set_rate(self.loco.rate * self.loco.haste_rate());
+        self.player.loco.haste = self.cheats.haste_factor();
+        self.player.hero.set_rate(self.player.loco.rate * self.player.loco.haste_rate());
         if !self.cheats.noclip {
             self.ride_step();
         }
@@ -11810,10 +11826,10 @@ impl Play {
         let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
         // A script's ride (R-0259) moves the hero with its object: no wall, box or ceiling push
         // takes him off it (pack 956's lift shaft held him at 46.6 while the platform went on).
-        let noclip = self.cheats.noclip || self.ride_lock.is_some();
-        let hero_state = self.loco.state;
-        let block_contact = !noclip && !matches!(self.loco.state, 18 | 19 | 30 | 41 | 58);
-        let wall_contact = !noclip && !matches!(self.loco.state, 21 | 23 | 30 | 35 | 37 | 38 | 41 | 47);
+        let noclip = self.cheats.noclip || self.player.ride_lock.is_some();
+        let hero_state = self.player.loco.state;
+        let block_contact = !noclip && !matches!(self.player.loco.state, 18 | 19 | 30 | 41 | 58);
+        let wall_contact = !noclip && !matches!(self.player.loco.state, 21 | 23 | 30 | 35 | 37 | 38 | 41 | 47);
         let side_touch = Cell::new(false);
         // The motion record's touched flag (+0x238; SPEC-0018 Slide response step 6): cleared
         // by the hero branch each step and set by any contact that writes a normal; here any
@@ -11828,19 +11844,19 @@ impl Play {
         // this driver: then the candidate takes the same full overlap (SPEC-0040, A boss and the
         // hero in the character push; R-0154). The collidable word (+0x284) and the class
         // callback (a common enemy's attack mode 2) are not built.
-        let hero_at = self.loco.position();
+        let hero_at = self.player.loco.position();
         let touch_ids = RefCell::new(Vec::new());
         let shoved = RefCell::new(Vec::new());
         let breakable_hits = RefCell::new(Vec::new());
         // SPEC-0036 Leap, step 1: in the leap Roberta is left out of the character body contacts.
-        let leaping = self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| a.sub == 8);
+        let leaping = self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| a.sub == 8);
         let bodies: Vec<([f32; 3], f32, f32, u64)> = if noclip || leaping || matches!(hero_state, 33 | 53) {
             Vec::new()
         } else {
             self.characters
                 .iter()
                 // The carried Miamouse sits in his hands: its body pushing him made him wander (user's report 18).
-                .filter(|c| self.pack_drawn(c.pack) && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && Some(c.id) != self.pet_char && Some(c.id) != self.carried)
+                .filter(|c| self.pack_drawn(c.pack) && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && Some(c.id) != self.pet_char && Some(c.id) != self.player.carried)
                 .filter_map(|c| c.row.map(|r| (c.position, r.radius, r.height, c.id)))
                 .filter(|(q, ..)| (q[0] - hero_at[0]).powi(2) + (q[1] - hero_at[1]).powi(2) + (q[2] - hero_at[2]).powi(2) < 400.0)
                 .collect()
@@ -11873,8 +11889,8 @@ impl Play {
         // chests' object 0), with the hero's own body radius. The other primitives of an
         // object's header and the double turn of a rotated object are not built.
         let object_cylinders: Vec<([f32; 3], f32, f32)> = if noclip { Vec::new() } else { self.object_cylinders(hero_at) };
-        let object_solids = if noclip || matches!(self.loco.state, 21 | 38 | 41) { Vec::new() } else { self.object_solids(hero_at) };
-        self.loco.record_tick(
+        let object_solids = if noclip || matches!(self.player.loco.state, 21 | 38 | 41) { Vec::new() } else { self.object_solids(hero_at) };
+        self.player.loco.record_tick(
             self.root_step,
             |x, z, c| {
                 let mut hit = world.probe(x, z, c);
@@ -12051,13 +12067,13 @@ impl Play {
                 c.floor || on_top || box_floor
             },
         );
-        self.touched = touched.get();
-        if let Some(at) = self.held_at.filter(|_| self.loco.state == hero_states::HELD) {
-            self.loco.body.position = at;
-            self.loco.body.velocity = [0.0; 3];
+        self.player.touched = touched.get();
+        if let Some(at) = self.player.held_at.filter(|_| self.player.loco.state == hero_states::HELD) {
+            self.player.loco.body.position = at;
+            self.player.loco.body.velocity = [0.0; 3];
         }
         self.breakable_hits = breakable_hits.into_inner();
-        self.hero_touch = (touch_ids.into_inner(), std::mem::take(&mut self.hero_touch.0));
+        self.player.hero_touch = (touch_ids.into_inner(), std::mem::take(&mut self.player.hero_touch.0));
         for (id, d) in shoved.into_inner() {
             if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
                 c.position[0] += d[0];
@@ -12068,44 +12084,44 @@ impl Play {
             }
         }
         // The side-touch latch the next hero update reads (SPEC-0033 Behavior 15A).
-        self.side_touch = side_touch.get();
+        self.player.side_touch = side_touch.get();
         // SPEC-0055 8A: the deadly-ground kill (kind 2, gap 0.085 or less; no health change),
         // then the death-state handler of state 16.
         let hp = {
-            let p = self.loco.position();
+            let p = self.player.loco.position();
             self.world.probe(p[0], p[2], p[1] + neopets_sim::motion::PROBE_CEILING)
         };
         let deadly = (hp.found && hp.kind == Some(2))
             .then(|| neopets_sim::death::Deadly { respawn: hp.respawn.unwrap_or(0xFF), surface: hp.surface.unwrap_or(0) });
         // The probed gap (a block top under the hero is not deadly ground).
-        let probed_gap = self.loco.position()[1] - hp.height;
+        let probed_gap = self.player.loco.position()[1] - hp.height;
         if neopets_sim::death::deadly_kill(deadly, probed_gap) {
             // The death effect of the surface (0x81 hot burst, 0xBC water splash; SPEC-0055 8A,
             // SPEC-0034 section 37) when the hero enters the death state.
-            if self.loco.state != hero_states::DEAD {
+            if self.player.loco.state != hero_states::DEAD {
                 if let Some(e) = neopets_sim::death::death_clip(deadly).1 {
                     let table = self.effect_table.clone();
-                    self.effects.one_shot(&table, e as i32, self.loco.position(), neopets_sim::effect::IDENTITY, &mut self.rng);
+                    self.effects.one_shot(&table, e as i32, self.player.loco.position(), neopets_sim::effect::IDENTITY, &mut self.rng);
                 }
             }
             self.death_hook();
-        } else if self.loco.state != hero_states::DEAD
-            && neopets_sim::death::hurting_tick(hp.found.then_some(hp.surface).flatten(), deadly.is_some(), self.loco.body.gap, self.ticks as f32 / 60.0, 1.0 / 60.0)
+        } else if self.player.loco.state != hero_states::DEAD
+            && neopets_sim::death::hurting_tick(hp.found.then_some(hp.surface).flatten(), deadly.is_some(), self.player.loco.body.gap, self.ticks as f32 / 60.0, 1.0 / 60.0)
         {
             // SPEC-0057 7A rule 2: a normal hit of 10 with no knockback (overlay rule 3 is not
             // built: the overlay entry's point test is not read).
-            let f = self.loco.facing;
+            let f = self.player.loco.facing;
             self.hero_hit(neopets_sim::death::HURT_DAMAGE, 0.0, false, f, "a hurting surface".into());
         }
-        if self.loco.state == hero_states::DEAD {
+        if self.player.loco.state == hero_states::DEAD {
             // SPEC-0053 3.8 d: with the death clip at 0.95, a switch to the partner (both flags
             // and the extra flag set) is requested every tick; a running or accepted switch
             // keeps the game going, a refusal or a dead partner leads to game over.
-            let clip = self.hero.clip_state();
+            let clip = self.player.hero.clip_state();
             let at_end = deadly.is_none() && clip.progress >= 0.95;
             let takes_over = at_end && (self.swap.is_some() || self.request_switch(true, true, true));
             let id = self.death.handler(deadly, clip, takes_over);
-            self.loco.set_death_clip(id);
+            self.player.loco.set_death_clip(id);
         }
         // World swap: a hit in the other buffer makes it current (the original waits for the
         // next frame; here it takes effect before the next tick).
@@ -12177,7 +12193,7 @@ impl Play {
                 if self.weapon_drawn {
                     self.draw_items(false);
                 } else {
-                    self.loco.sneak();
+                    self.player.loco.sneak();
                 }
             }
         }
@@ -12185,10 +12201,10 @@ impl Play {
             self.state.hero.swap_mode = self.swap_mode;
             self.state.hero.selected = self.hero_index;
             let parked_dead = self.parked.as_ref().is_some_and(|p| p.hp <= 0);
-            let live_dead = self.loco.state == hero_states::DEAD;
+            let live_dead = self.player.loco.state == hero_states::DEAD;
             self.state.hero.dead = if self.hero_index == 0 { [live_dead, parked_dead] } else { [parked_dead, live_dead] };
             self.state.hero.swapping = self.swap.is_some();
-            let window = self.attack.is_some() && self.hero.frame_bits() & 1 != 0;
+            let window = self.attack.is_some() && self.player.hero.frame_bits() & 1 != 0;
             self.state.hero.strike = window && !self.window_was;
             self.window_was = window;
             if self.state.carry.is_empty() {
@@ -12216,15 +12232,15 @@ impl Play {
             self.state.hero.sub = self.attack.as_ref().map_or(0, |a| a.sub);
             self.state.hero.occupied = self.hero_busy() || self.held;
             self.state.hero.attack_mote = self.equipment.motes[0][2];
-            self.state.hero.hp = self.hero_hp;
-            self.state.hero.hp_max = self.hero_max;
+            self.state.hero.hp = self.player.hero_hp;
+            self.state.hero.hp_max = self.player.hero_max;
             self.state.hero.pet_kind = self.petpet.as_ref().map(|p| p.kind);
             self.state.miamice_caged = self.catch.count;
             self.state.hero.shield_mote = self.equipment.motes[0][1];
-            self.state.hero.square_held = self.square_held;
+            self.state.hero.square_held = self.player.square_held;
             self.state.hero.deflected = self.shots.deflected();
             self.state.hero.tick = self.ticks;
-            self.state.hero.position = self.loco.position();
+            self.state.hero.position = self.player.loco.position();
             self.state.obj_times = self.world.object_anims.iter().enumerate().map(|(i, a)| (i, a.time)).collect();
             self.state.anim_locators = level::tracked_locators(pack)
                 .iter()
@@ -12235,15 +12251,15 @@ impl Play {
                 self.state.trigger_raw = self.rng.next_u32();
             }
             self.state.cloak_worn = self.cloak_worn;
-            self.state.hero.hp_fraction = self.hero_hp as f32 / self.hero_max.max(1) as f32;
+            self.state.hero.hp_fraction = self.player.hero_hp as f32 / self.player.hero_max.max(1) as f32;
             let actions = if swapping { Vec::new() } else { level::on_update(self.world.pack, &mut self.state, self.dialogue_open) };
             // NEOPETS_TRACE_WORDS: the current module's words, object 0's time and the hero
             // every 30 ticks.
             if std::env::var_os("NEOPETS_TRACE_WORDS").is_some() && self.ticks % 30 == 0 {
                 let mut w: Vec<(u8, i32)> = self.state.words.iter().filter(|((p, _), v)| *p == pack && **v != 0).map(|((_, k), v)| (*k, *v)).collect();
                 w.sort_unstable();
-                let p = self.loco.position();
-                println!("      words of {pack} on tick {}: {w:?}; object 0 at {:.2}; hero ({:.1}, {:.1}, {:.1}) hp {} state {} held {}", self.ticks, self.state.obj_times.get(&0).copied().unwrap_or(-1.0), p[0], p[1], p[2], self.hero_hp, self.loco.state, self.held);
+                let p = self.player.loco.position();
+                println!("      words of {pack} on tick {}: {w:?}; object 0 at {:.2}; hero ({:.1}, {:.1}, {:.1}) hp {} state {} held {}", self.ticks, self.state.obj_times.get(&0).copied().unwrap_or(-1.0), p[0], p[1], p[2], self.player.hero_hp, self.player.loco.state, self.held);
             }
             self.state.hero.hits.clear();
             self.state.hit_now.clear();
@@ -12289,14 +12305,14 @@ impl Play {
             }
         }
         self.prompt_shown = self.door_prompt.take();
-        self.root_step = self.hero.tick();
-        if self.loco.state == hero_states::HELD {
+        self.root_step = self.player.hero.tick();
+        if self.player.loco.state == hero_states::HELD {
             self.root_step = [0.0; 3];
         }
         self.head_look_step();
-        let (at, facing) = (self.loco.position(), self.loco.facing);
+        let (at, facing) = (self.player.loco.position(), self.player.loco.facing);
         if std::env::var_os("NEOPETS_NO_CHAINS").is_none() {
-            self.hero.chain_step(at, facing);
+            self.player.hero.chain_step(at, facing);
         }
         self.sound_step();
         self.clip_effects_step();
@@ -12485,7 +12501,7 @@ impl Play {
         // A released world's script threads end with its module (SPEC-0030 Lifetime: the
         // module's threads last until its buffer is released).
         self.threads.retain(|t| resident.contains(&t.pack));
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let talking = if self.dialogue_open { self.talk_with } else { None };
         // Whinnies: routine, group count after each member (SPEC-0049), motion-record tick.
         let world = &mut self.world;
@@ -12576,11 +12592,11 @@ impl Play {
         // dialogue box is up.
         if !self.dialogue_open {
             let v = neopets_sim::hud::Values {
-                hp: self.hero_hp,
-                hp_max: self.hero_max,
-                mp: self.hero_mp,
-                mp_max: self.hero_mp_max,
-                poisoned: self.statuses.active(neopets_sim::status::POISON),
+                hp: self.player.hero_hp,
+                hp_max: self.player.hero_max,
+                mp: self.player.hero_mp,
+                mp_max: self.player.hero_mp_max,
+                poisoned: self.player.statuses.active(neopets_sim::status::POISON),
             };
             self.hud.tick(v, self.quick.open, &self.hud_words);
             self.hud_loss_step();
@@ -12773,31 +12789,31 @@ impl Play {
             .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead() || e.lock_vetoed(c.anim.clip_state().action)) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable() && c.ghost.as_ref().is_none_or(|g| g.targetable))
             .map(|c| (c.id, c.position))
             .collect();
-        let attacking = self.loco.state == hero_states::ATTACK;
+        let attacking = self.player.loco.state == hero_states::ATTACK;
         let exists = |id: u64| self.characters.iter().any(|c| c.id == id);
-        self.lock = self.candidates.tick(&chars, exists, self.loco.position(), self.loco.facing, attacking);
+        self.player.lock = self.player.candidates.tick(&chars, exists, self.player.loco.position(), self.player.loco.facing, attacking);
         // SPEC-0010 Hero lock-on: while its companion exists the Cloud Beast writes its id into the
         // hero's forced lock word every tick (both bodies are otherwise unhittable, so no
         // candidate scan finds them).
         let forced = self.characters.iter().find(|c| c.pack == pack && c.slot == CLOUD_SLOT && c.cloud.is_some() && c.dying.is_none()).filter(|_| self.characters.iter().any(|o| o.pack == pack && o.slot == CLOUD_SLOT && o.cloud.is_none() && o.dying.is_none())).map(|c| c.id);
         if forced.is_some() {
-            self.lock = forced;
+            self.player.lock = forced;
         }
         // SPEC-0053 3.9: the target list, with the clear-path test from the hero's chest to the
         // character's target point.
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let eye = add(hero, [0.0, 1.5, 0.0]);
         let points: Vec<(u64, [f32; 3])> = chars.iter().map(|&(id, p)| (id, self.aim_point(id).unwrap_or(p))).collect();
         let clear = |id: u64| {
             let Some(&(_, at)) = points.iter().find(|c| c.0 == id) else { return false };
             self.world.ground.as_ref().is_none_or(|g| g.segment_clear(eye, at, true))
         };
-        let mut targets = std::mem::take(&mut self.targets);
-        targets.tick(&chars, hero, self.loco.facing, self.hero_index.min(1), clear);
-        self.targets = targets;
+        let mut targets = std::mem::take(&mut self.player.targets);
+        targets.tick(&chars, hero, self.player.loco.facing, self.hero_index.min(1), clear);
+        self.player.targets = targets;
         // SPEC-0022 Candidate lists: the talker list, the townsfolk of the current world.
         let talkers: Vec<(u64, [f32; 3])> = self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.townsfolk.is_some()).map(|c| (c.id, c.position)).collect();
-        self.talker = self.talkers.tick(&talkers, hero, self.loco.facing);
+        self.talker = self.talkers.tick(&talkers, hero, self.player.loco.facing);
         // SPEC-0040 Behavior 20 item 7, the attack turn: while the hero attacks, toward the head
         // of the target list when it is a candidate; else, for Tor, toward the nearest intact
         // breakable ahead (dot above 0.5) within his reach of 12.0. Roberta never turns toward a
@@ -12809,12 +12825,12 @@ impl Play {
         // Roberta's leap (sub-state 8) clears the auto-facing flag every tick and her landing
         // (13) does its own turn, so the attack turn does not run there; the forced id is Tor's
         // only (SPEC-0040 Behavior 20 item 7, SPEC-0036 Leap).
-        if !tor && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 8 | 13)) {
+        if !tor && self.player.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 8 | 13)) {
             return;
         }
         let forced = forced.filter(|_| tor);
-        let f = self.loco.facing;
-        let target = forced.and_then(|id| self.aim_point(id)).or_else(|| self.targets.records.first().filter(|r| r.flag).and_then(|r| self.aim_point(r.id))).or_else(|| {
+        let f = self.player.loco.facing;
+        let target = forced.and_then(|id| self.aim_point(id)).or_else(|| self.player.targets.records.first().filter(|r| r.flag).and_then(|r| self.aim_point(r.id))).or_else(|| {
             if !tor {
                 return None;
             }
@@ -12837,7 +12853,7 @@ impl Play {
                 if std::env::var_os("NEOPETS_TRACE_TURN").is_some() {
                     println!("      attack turn on tick {}: facing {:?} -> {:?} toward {:?}", self.ticks, f.map(|v| (v * 100.0).round() / 100.0), nf.map(|v| (v * 100.0).round() / 100.0), to.map(|v| v.round()));
                 }
-                self.loco.facing = nf;
+                self.player.loco.facing = nf;
             }
         }
     }
@@ -12877,7 +12893,7 @@ impl Play {
     /// The finder with its reach (the Supernova's bolt: 45.0).
     fn shot_target_within(&mut self, reach: f32) -> Option<u64> {
         let pack = self.world.pack;
-        let h = self.loco.position();
+        let h = self.player.loco.position();
         let eye = add(h, [0.0, 1.5, 0.0]);
         let mut found = Vec::new();
         for c in self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable()) {
@@ -12913,10 +12929,10 @@ impl Play {
             return;
         }
         if find(self, 9).is_none() {
-            let f = self.loco.facing;
+            let f = self.player.loco.facing;
             // The stand-in arena: six points on the stage's ring around the hero (radius 40 by
             // default, `stage_view::ring`), point 0 ahead of the hero.
-            let centre = self.loco.position();
+            let centre = self.player.loco.position();
             let a0 = f[0].atan2(f[2]);
             let ring: [([f32; 3], [f32; 3]); 6] = std::array::from_fn(|k| {
                 let a = a0 + k as f32 * std::f32::consts::FRAC_PI_3;
@@ -12987,7 +13003,7 @@ impl Play {
             // SPEC-0010 Companion: pinned to the boss (bone 11 of the stand-in: above the cloud)
             // and turned toward the hero with weight 0.1 along the horizontal direction.
             let p = self.characters[b].position;
-            let hero = self.loco.position();
+            let hero = self.player.loco.position();
             let k = &mut self.characters[c];
             k.position = [p[0], p[1] + crate::placeholder::COMPANION_RIDE, p[2]];
             let to = [hero[0] - k.position[0], 0.0, hero[2] - k.position[2]];
@@ -13052,8 +13068,8 @@ impl Play {
             return;
         }
         let Some(mut cloud) = self.characters[b].cloud.take() else { return };
-        let hero = self.loco.position();
-        let shots: Vec<([f32; 3], [f32; 3])> = if self.hero_index == 1 { self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect() } else { Vec::new() };
+        let hero = self.player.loco.position();
+        let shots: Vec<([f32; 3], [f32; 3])> = if self.hero_index == 1 { self.player.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect() } else { Vec::new() };
         let world = &self.world;
         let ground = |x: f32, z: f32, c: f32| world.ground_at(x, z, c).unwrap_or(0.0);
         let stage = world.pack == STAGE_PACK;
@@ -13084,7 +13100,7 @@ impl Play {
             hp: c.hp,
             max_hp: c.row.map_or(240, |r| r.hit_points as i32),
             hero,
-            hero_forward: self.loco.facing,
+            hero_forward: self.player.loco.facing,
             hero_radius: contact::HERO_RADIUS,
             hero_height: HERO_HEIGHT,
             variant: self.hero_index.min(1) as u8,
@@ -13103,7 +13119,7 @@ impl Play {
         cloud.advance_clip();
         // NEOPETS_TRACE_CLOUD: the controller's state changes and hits (trace only).
         if std::env::var_os("NEOPETS_TRACE_CLOUD").is_some() && (before != (cloud.state, cloud.stage) || !act.hits.is_empty() || act.knock.is_some() || act.self_damage > 0) {
-            println!("CLOUD tick {} {:?} stage {} -> {:?} stage {} clip {} hp {} hero hp {} dist {:.1} hits {:?} knock {:?} self {}", self.ticks, before.0, before.1, cloud.state, cloud.stage, cloud.clip.id, v.hp, self.hero_hp, (v.position[0] - hero[0]).hypot(v.position[2] - hero[2]), act.hits, act.knock, act.self_damage);
+            println!("CLOUD tick {} {:?} stage {} -> {:?} stage {} clip {} hp {} hero hp {} dist {:.1} hits {:?} knock {:?} self {}", self.ticks, before.0, before.1, cloud.state, cloud.stage, cloud.clip.id, v.hp, self.player.hero_hp, (v.position[0] - hero[0]).hypot(v.position[2] - hero[2]), act.hits, act.knock, act.self_damage);
         }
         // NEOPETS_TRACE_CLOUD_BALLS: the live balls every 5 ticks, and each burst (trace only).
         if std::env::var_os("NEOPETS_TRACE_CLOUD_BALLS").is_some() && (self.ticks % 5 == 0 || !act.bursts.is_empty()) {
@@ -13183,7 +13199,7 @@ impl Play {
             }
         }
         if let Some(k) = act.knock {
-            if self.loco.state != hero_states::DEAD {
+            if self.player.loco.state != hero_states::DEAD {
                 self.knock_hero(k);
             }
         }
@@ -13397,7 +13413,7 @@ impl Play {
         if b.roberta {
             self.trace_select_hero(1);
         }
-        (self.hero_hp, self.hero_mp) = (self.hero_max, self.hero_mp_max);
+        (self.player.hero_hp, self.player.hero_mp) = (self.player.hero_max, self.player.hero_mp_max);
         if let Place::Trigger(k) = b.place {
             let at = self.world.all_volumes.iter().find(|v| v.index == k).map(|v| match v.shape {
                 neopets_sim::trigger::Shape::Sphere { centre, .. } => centre,
@@ -13406,7 +13422,7 @@ impl Play {
             });
             if let Some(p) = at {
                 let y = self.world.ground_at(p[0], p[2], p[1] + 8.0).unwrap_or(p[1]);
-                let facing = self.loco.facing;
+                let facing = self.player.loco.facing;
                 self.arrive(([p[0], y, p[2]], facing));
             }
         }
@@ -13436,22 +13452,22 @@ impl Play {
     /// reset targets are not built; Medium); the controller steps the yaw and pitch and the
     /// look point turns head joint 6. Without the bit the head keeps its animated pose.
     fn head_look_step(&mut self) {
-        self.hero.set_look(None);
+        self.player.hero.set_look(None);
         // NEOPETS_TRACE_LOOK: the main id and its head-look bit once a second (trace only).
         if std::env::var_os("NEOPETS_TRACE_LOOK").is_some() && self.ticks % 60 == 0 {
-            println!("LOOK tick {} action {} allowed {} state {} yaw {:.2} pitch {:.2}", self.ticks, self.hero.action(), self.hero.head_look_allowed(), self.loco.state, self.head_look.yaw, self.head_look.pitch);
+            println!("LOOK tick {} action {} allowed {} state {} yaw {:.2} pitch {:.2}", self.ticks, self.player.hero.action(), self.player.hero.head_look_allowed(), self.player.loco.state, self.head_look.yaw, self.head_look.pitch);
         }
         // NEOPETS_NO_LOOK: no head look (comparison traces only).
-        if !self.hero.head_look_allowed() || std::env::var_os("NEOPETS_NO_LOOK").is_some() {
+        if !self.player.hero.head_look_allowed() || std::env::var_os("NEOPETS_NO_LOOK").is_some() {
             return;
         }
-        let place = placement(self.loco.position(), self.loco.facing);
-        let Some(head) = self.hero.bone_frames().get(crate::character::HEAD_JOINT).map(|f| place.apply(f.t)) else { return };
+        let place = placement(self.player.loco.position(), self.player.loco.facing);
+        let Some(head) = self.player.hero.bone_frames().get(crate::character::HEAD_JOINT).map(|f| place.apply(f.t)) else { return };
         let (side, fwd) = (place.cols[0], place.cols[2]);
         let pack = self.world.pack;
         let live = |c: &&Character| c.pack == pack && !c.inactive && c.dying.is_none();
         let partner = self.talk_partner.as_ref().filter(|_| self.dialogue_open).and_then(|n| self.characters.iter().filter(live).find(|c| &c.name == n));
-        let locked = self.lock.and_then(|id| self.characters.iter().filter(live).find(|c| c.id == id));
+        let locked = self.player.lock.and_then(|id| self.characters.iter().filter(live).find(|c| c.id == id));
         let range = if self.hero_index == 0 { 12.0 } else { 25.0 };
         let ahead = || {
             self.characters
@@ -13469,13 +13485,13 @@ impl Play {
         let target = if std::env::var_os("NEOPETS_TRACE_LOOK_SIDE").is_some() { add(add(head, scale(side, 5.0)), [0.0, 2.0, 0.0]) } else { target };
         let point = self.head_look.step(head, target, fwd, side, false);
         if std::env::var_os("NEOPETS_TRACE_LOOK").is_some() && self.ticks % 60 == 0 {
-            println!("LOOK head {head:?} hero {:?} target {target:?} fwd {fwd:?} side {side:?} point {point:?}", self.loco.position());
+            println!("LOOK head {head:?} hero {:?} target {target:?} fwd {fwd:?} side {side:?} point {point:?}", self.player.loco.position());
         }
-        let v = sub_v(point, self.loco.position());
+        let v = sub_v(point, self.player.loco.position());
         let local = [v[0] * side[0] + v[2] * side[2], v[1], v[0] * fwd[0] + v[2] * fwd[2]];
-        self.hero.set_look(Some(local));
+        self.player.hero.set_look(Some(local));
         if std::env::var_os("NEOPETS_TRACE_LOOK").is_some() && self.ticks % 60 == 0 {
-            if let Some(f) = self.hero.bone_frames().get(crate::character::HEAD_JOINT) {
+            if let Some(f) = self.player.hero.bone_frames().get(crate::character::HEAD_JOINT) {
                 let z = place.rotate(f.cols[2]);
                 let l = (z[0] * z[0] + z[1] * z[1] + z[2] * z[2]).sqrt();
                 let d = sub_v(point, place.apply(f.t));
@@ -13486,12 +13502,12 @@ impl Play {
     }
 
     fn enemies_step(&mut self) {
-        let hero = self.loco.position();
-        let hero_facing = self.loco.facing;
+        let hero = self.player.loco.position();
+        let hero_facing = self.player.loco.facing;
         let hplace = placement(hero, hero_facing);
-        let hframes = self.hero.bone_frames();
+        let hframes = self.player.hero.bone_frames();
         let caps: Vec<Cylinder> = self
-            .hero
+            .player.hero
             .bones()
             .hurt
             .iter()
@@ -13502,23 +13518,23 @@ impl Play {
                 Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
             })
             .collect();
-        let bands = enemy::band_factors(self.loco.state, &self.bands.0, &self.bands.1);
+        let bands = enemy::band_factors(self.player.loco.state, &self.bands.0, &self.bands.1);
         // SPEC-0038 Behavior 44 defences: the hero's swing class (attack sub-state +0xF90 by
         // hero) and the live hero shots as (position, velocity per tick).
         let swing_sub = match self.hero_index {
             0 => self.attack.as_ref().map(|a| a.sub),
-            _ => self.r_attack.as_ref().map(|a| a.sub),
+            _ => self.player.r_attack.as_ref().map(|a| a.sub),
         };
         let hero_swing = swing_sub.and_then(|s| enemy::swing_class(self.hero_index, s));
-        let hero_recover = self.hero.frame_bits() & 0x800 != 0;
-        let shot_paths: Vec<([f32; 3], [f32; 3])> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect();
+        let hero_recover = self.player.hero.frame_bits() & 0x800 != 0;
+        let shot_paths: Vec<([f32; 3], [f32; 3])> = self.player.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect();
         let guarding = self.hero_guarding();
         // SPEC-0007 Hit reaction and invulnerability / SPEC-0036 Hittable predicate: no common
         // enemy picks an attack (and its cooldowns wait) while the hero is not hittable: in
         // states 16, 17, 25, 33, 36, 48, 50 to 55, 57, 59 and 60, in Roberta's leap and landing
         // sub-states (8 and 13), under the script hold, or while a dialogue box is up.
-        let roberta_leap = self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 8 | 13));
-        let attackable = !matches!(self.loco.state, 16 | 17 | 25 | 33 | 36 | 48 | 50..=55 | 57 | 59 | 60) && !roberta_leap && !self.held && !self.dialogue_open;
+        let roberta_leap = self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 8 | 13));
+        let attackable = !matches!(self.player.loco.state, 16 | 17 | 25 | 33 | 36 | 48 | 50..=55 | 57 | 59 | 60) && !roberta_leap && !self.held && !self.dialogue_open;
         // SPEC-0038 Behavior 45: the attack manager's frame, before the enemies read their wait
         // flags; the capacity from the selected hero's weapon and body item.
         let h = self.hero_index.min(1);
@@ -13615,7 +13631,7 @@ impl Play {
         followable.sort_by_key(|f| (f.0 != EMBEDDED_SLOT, f.0));
         // SPEC-0029 Behavior 23 (R-0278): the grab gate reads the hero's touched flag (the contact
         // flag of his motion record), not a stun status.
-        let (hero_is_held, hero_is_stunned) = (self.loco.state == hero_states::HELD, self.touched);
+        let (hero_is_held, hero_is_stunned) = (self.player.loco.state == hero_states::HELD, self.player.touched);
         let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
             let Character { id, name, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, hp, .. } = c else { continue };
@@ -13703,7 +13719,7 @@ impl Play {
             // velocity x the defend time (ticks) against the enemy's body capsule.
             v.hero_swing = hero_swing;
             v.hero_recover = hero_recover;
-            v.l1_held = self.l1_held;
+            v.l1_held = self.player.l1_held;
             v.waits = mgr.waits(*id);
             let own = e.spawn.alarm;
             v.alarm_serial = own.and_then(|g| self.alarms.get(&(world.pack, g)).copied()).unwrap_or(0);
@@ -13808,7 +13824,7 @@ impl Play {
                     .get(req.emit)
                     .and_then(|&(bone, angles, offset)| Some(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)).t))
                     .unwrap_or([p[0], p[1] + 0.5 * row.height, p[2]]);
-                let cam = &self.camera;
+                let cam = &self.player.camera;
                 let fwd = unit(sub_v(cam.focus, cam.eye));
                 let to = unit(sub_v(p, cam.eye));
                 let out_of_cone = fwd[0] * to[0] + fwd[1] * to[1] + fwd[2] * to[2] < 0.85;
@@ -13938,7 +13954,7 @@ impl Play {
         // The projectile pool's update, after the region passes (SPEC-0029 Behavior 9).
         let owners: HashMap<u64, ([f32; 3], f32, f32)> =
             self.characters.iter().map(|c| (c.id, (c.position, c.row.map_or(1.0, |r| r.radius), c.row.map_or(3.0, |r| r.height)))).collect();
-        let gap = self.loco.body.gap;
+        let gap = self.player.loco.body.gap;
         // The shield-Mote slot's element kind (SPEC-0029 Behavior 9 rule 2).
         let shield = self.equipment.motes[self.hero_index.min(1)][1].map(|m| neopets_sim::mote::element(Some(m)));
         let events = {
@@ -13955,7 +13971,7 @@ impl Play {
                 hero_facing,
                 guard: guarding,
                 shield,
-                poisoned: self.statuses.active(neopets_sim::status::POISON),
+                poisoned: self.player.statuses.active(neopets_sim::status::POISON),
                 owner_exists: &owner_exists,
                 owner_body: &owner_body,
                 target_body: &owner_body,
@@ -14001,7 +14017,7 @@ impl Play {
                 neopets_sim::projectile::Event::Status { code, chance, seconds } => {
                     // SPEC-0029 Behavior 9: int[0, 100] at most the chance; no stun while stunned.
                     let r = self.rng.range(0, 100);
-                    if r <= chance && !(code == 0 && self.statuses.active(neopets_sim::status::STUN)) {
+                    if r <= chance && !(code == 0 && self.player.statuses.active(neopets_sim::status::STUN)) {
                         self.hero_status(code, seconds);
                     }
                 }
@@ -14062,7 +14078,7 @@ impl Play {
                     // The drain starts when none is active: its body effect 464 above the hero.
                     if self.drain.is_none() {
                         let d = neopets_sim::sisters::Drain::start(&self.drain_words, &mut self.rng);
-                        let at = add(self.loco.position(), [0.0, self.drain_words.body_height, 0.0]);
+                        let at = add(self.player.loco.position(), [0.0, self.drain_words.body_height, 0.0]);
                         let body = self.effects.add_object(neopets_sim::effect::EffectObject::new(&self.effect_table, 464, at, neopets_sim::effect::IDENTITY));
                         self.drain = Some((d, body, Vec::new()));
                     }
@@ -14071,9 +14087,9 @@ impl Play {
                     // SPEC-0011 Leach: effect 4039 at the hero's model point, then 50 MP drained
                     // (not below 0). The MP-empty hook's HUD re-arm is the HUD's change test.
                     let table = self.effect_table.clone();
-                    let p = add(self.loco.position(), [0.0, 1.5, 0.0]);
+                    let p = add(self.player.loco.position(), [0.0, 1.5, 0.0]);
                     self.effects.one_shot(&table, 4039, p, neopets_sim::effect::IDENTITY, &mut self.rng);
-                    self.hero_mp = (self.hero_mp - self.sister_words.leach_drain).max(0);
+                    self.player.hero_mp = (self.player.hero_mp - self.sister_words.leach_drain).max(0);
                 }
                 neopets_sim::projectile::Event::Effect { id, at } => {
                     let table = self.effect_table.clone();
@@ -14103,7 +14119,7 @@ impl Play {
                 if let Some(taken) = neopets_sim::items::steal_amount(sl.steal_chance, sl.steal_min, sl.steal_max, self.state.neopoints, &mut self.rng).filter(|&t| t > 0) {
                     self.state.neopoints -= taken;
                     let pack = self.world.pack;
-                    let p = self.loco.position();
+                    let p = self.player.loco.position();
                     let spawn = |id: u16| neopets_sim::items::Spawn { id, point: [p[0], p[1] + 1.0, p[2]], placed: false, charm: false, s0: 0.25, s1: 1.0, delay: 0.0, larg: -1.0, direction: None, flag: 0, map: 0, price: 0 };
                     for id in neopets_sim::items::coin_split(taken, &self.coins.0, &self.coins.1) {
                         self.spawn_item(pack, spawn(id));
@@ -14157,13 +14173,13 @@ impl Play {
         // is what leaves him in state 48).
         for g in grabs_after_strikes {
             match g {
-                enemy::Grab::Seize if !matches!(self.loco.state, hero_states::DEAD | hero_states::HELD) => {
+                enemy::Grab::Seize if !matches!(self.player.loco.state, hero_states::DEAD | hero_states::HELD) => {
                     self.attack = None;
-                    self.ledge = None;
-                    self.hold = None;
-                    self.held_at = Some(self.loco.position());
-                    self.loco.state = hero_states::HELD;
-                    self.loco.body.velocity = [0.0; 3];
+                    self.player.ledge = None;
+                    self.player.hold = None;
+                    self.player.held_at = Some(self.player.loco.position());
+                    self.player.loco.state = hero_states::HELD;
+                    self.player.loco.body.velocity = [0.0; 3];
                     // SPEC-0033 Behavior 1C source 3: preset 0, 1.0 s, magnitude 0.7, with the
                     // shared countdown loaded with 60.
                     self.rumble.request(&self.rumble_presets, 0, 1.0, 0.7);
@@ -14177,9 +14193,9 @@ impl Play {
                     }
                     self.grab_rumble -= 1;
                 }
-                enemy::Grab::Refuse if self.loco.state != hero_states::DEAD => self.loco.state = hero_states::STANCE,
-                enemy::Grab::Throw(velocity) if self.loco.state != hero_states::DEAD => {
-                    self.held_at = None;
+                enemy::Grab::Refuse if self.player.loco.state != hero_states::DEAD => self.player.loco.state = hero_states::STANCE,
+                enemy::Grab::Throw(velocity) if self.player.loco.state != hero_states::DEAD => {
+                    self.player.held_at = None;
                     self.grab_rumble = -1;
                     self.knock_hero(velocity);
                 }
@@ -14245,39 +14261,39 @@ impl Play {
     /// flag 1), slow and speed, the regeneration statuses, then the trickle toward 10 % + 1.
     fn status_step(&mut self) {
         use neopets_sim::status as st;
-        let state = self.loco.state;
+        let state = self.player.loco.state;
         let moving = (2..=6).contains(&state) || state == 32;
         let attacking = self.attack.as_ref().is_some_and(|a| (2..=12).contains(&a.sub));
-        let t = self.statuses.tick(self.hero_hp, moving, attacking);
+        let t = self.player.statuses.tick(self.player.hero_hp, moving, attacking);
         if t.stunned && state != hero_states::DEAD {
             self.attack = None;
-            self.loco.set_end_state(hero_states::STANCE);
+            self.player.loco.set_end_state(hero_states::STANCE);
         }
-        self.loco.status_scale = t.scale;
+        self.player.loco.status_scale = t.scale;
         if let Some(d) = t.poison {
-            let f = self.loco.facing;
+            let f = self.player.loco.facing;
             if state != hero_states::DEAD {
                 self.hero_hit(d as f32, 0.0, true, f, "poison".into());
             }
         }
-        self.hero_hp = (self.hero_hp + t.hp).min(self.hero_max);
-        self.hero_mp = (self.hero_mp + t.mp).min(self.hero_mp_max);
-        let poisoned = self.statuses.active(st::POISON);
+        self.player.hero_hp = (self.player.hero_hp + t.hp).min(self.player.hero_max);
+        self.player.hero_mp = (self.player.hero_mp + t.mp).min(self.player.hero_mp_max);
+        let poisoned = self.player.statuses.active(st::POISON);
         // SPEC-0047 Passive bonuses: the petpet point is added to the item trickle of the same
         // tick before the cap, with no alive or poison gate.
         let (kind, t) = (self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
         let (mut hp, mut mp) = (self.pet_bonus.hp_point(kind, t), self.pet_bonus.mp_point(kind, t));
         if !poisoned {
-            mp += neopets_sim::status::trickle(self.hero_mp, self.hero_mp_max, self.ticks, false);
-            if self.hero_hp > 0 && self.loco.state != hero_states::DEAD {
-                hp += neopets_sim::status::trickle(self.hero_hp, self.hero_max, self.ticks, true);
+            mp += neopets_sim::status::trickle(self.player.hero_mp, self.player.hero_mp_max, self.ticks, false);
+            if self.player.hero_hp > 0 && self.player.loco.state != hero_states::DEAD {
+                hp += neopets_sim::status::trickle(self.player.hero_hp, self.player.hero_max, self.ticks, true);
             }
         }
         if hp > 0 {
-            self.hero_hp = (self.hero_hp + hp).min(self.hero_max);
+            self.player.hero_hp = (self.player.hero_hp + hp).min(self.player.hero_max);
         }
         if mp > 0 {
-            self.hero_mp = (self.hero_mp + mp).min(self.hero_mp_max);
+            self.player.hero_mp = (self.player.hero_mp + mp).min(self.player.hero_mp_max);
         }
     }
 
@@ -14295,7 +14311,7 @@ impl Play {
         }
         self.starlight_free();
         // SPEC-0021 57: the point 2.0 above the hero, stored once; the effects start in 60 ticks.
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         self.starlight = Some(Starlight { at: [p[0], p[1] + 2.0, p[2]], timer: 60, age: 0, objects: None, hits: Vec::new() });
         self.cue(0xA0);
         let left = {
@@ -14376,7 +14392,7 @@ impl Play {
     /// changes; the status, revive and Starlight items have their own effects below. Charms run the
     /// equipped slot routine, which is not implemented: their use is refused.
     fn use_item(&mut self, id: u16) {
-        if self.loco.state == hero_states::DEAD {
+        if self.player.loco.state == hero_states::DEAD {
             return;
         }
         // SPEC-0021 Use-request gate item 2: a registered use hook diverts the use (the item is
@@ -14428,14 +14444,14 @@ impl Play {
         };
         let applied = match (id, buff) {
             (_, Some(s)) => {
-                let ok = !self.statuses.active(s) && self.statuses.apply(s as i32, -1);
+                let ok = !self.player.statuses.active(s) && self.player.statuses.apply(s as i32, -1);
                 Some(ok)
             }
             (54, _) => {
-                let any = [st::CURSE, st::POISON, st::SLOW].iter().any(|&s| self.statuses.active(s));
+                let any = [st::CURSE, st::POISON, st::SLOW].iter().any(|&s| self.player.statuses.active(s));
                 if any {
                     for s in [st::CURSE, st::POISON, st::SLOW] {
-                        self.statuses.clear(s);
+                        self.player.statuses.clear(s);
                     }
                 }
                 Some(any)
@@ -14461,10 +14477,10 @@ impl Play {
         }
         match id {
             58 => {
-                self.statuses.apply(st::HEALTH_REGEN as i32, -1);
+                self.player.statuses.apply(st::HEALTH_REGEN as i32, -1);
             }
             59 => {
-                self.statuses.apply(st::MAGIC_REGEN as i32, -1);
+                self.player.statuses.apply(st::MAGIC_REGEN as i32, -1);
             }
             _ => {}
         }
@@ -14481,9 +14497,9 @@ impl Play {
         let tb = self.heal_tables.1.first().copied().unwrap_or(300);
         // Items 58 and 59 use the factor 1.0 directly (T + 1); the others p x 0.01.
         let (a, b) = match id {
-            58 => (neopets_sim::quick::heal_factor(ta, 1.0, self.hero_hp, self.hero_max, true), neopets_sim::quick::heal(tb, pb, self.hero_mp, self.hero_mp_max, true)),
-            59 => (neopets_sim::quick::heal(ta, pa, self.hero_hp, self.hero_max, true), neopets_sim::quick::heal_factor(tb, 1.0, self.hero_mp, self.hero_mp_max, true)),
-            _ => (neopets_sim::quick::heal(ta, pa, self.hero_hp, self.hero_max, true), neopets_sim::quick::heal(tb, pb, self.hero_mp, self.hero_mp_max, true)),
+            58 => (neopets_sim::quick::heal_factor(ta, 1.0, self.player.hero_hp, self.player.hero_max, true), neopets_sim::quick::heal(tb, pb, self.player.hero_mp, self.player.hero_mp_max, true)),
+            59 => (neopets_sim::quick::heal(ta, pa, self.player.hero_hp, self.player.hero_max, true), neopets_sim::quick::heal_factor(tb, 1.0, self.player.hero_mp, self.player.hero_mp_max, true)),
+            _ => (neopets_sim::quick::heal(ta, pa, self.player.hero_hp, self.player.hero_max, true), neopets_sim::quick::heal(tb, pb, self.player.hero_mp, self.player.hero_mp_max, true)),
         };
         if a.is_none() && b.is_none() {
             self.cue(162);
@@ -14499,10 +14515,10 @@ impl Play {
             self.cue(155);
         }
         if let Some(hp) = a {
-            self.hero_hp = hp;
+            self.player.hero_hp = hp;
         }
         if let Some(mp) = b {
-            self.hero_mp = mp;
+            self.player.hero_mp = mp;
         }
         let left = {
             let n = self.state.items.entry(id).or_insert(0);
@@ -14510,7 +14526,7 @@ impl Play {
             *n
         };
         self.quick.used(id as i32, left);
-        self.last_pickup = format!("used item {id} on tick {}: hp {}, mp {} ({left} left)", self.ticks, self.hero_hp, self.hero_mp);
+        self.last_pickup = format!("used item {id} on tick {}: hp {}, mp {} ({left} left)", self.ticks, self.player.hero_hp, self.player.hero_mp);
     }
 
     /// The item type of an id (config type; -1 when the table has no record).
@@ -14766,12 +14782,12 @@ impl Play {
         let Some(i) = self.pools.get(&pack).and_then(|pool| pool.collectable(p, base, contact::HERO_RADIUS, &|id| self.design.item_important(id))) else { return };
         let Some(it) = self.pools.get(&pack).and_then(|pool| pool.slots[i]) else { return };
         let coin = neopets_sim::items::is_coin(it.id);
-        let state = self.loco.state;
+        let state = self.player.loco.state;
         // SPEC-0021 Auto-collect step 3: an item that is neither a coin nor a Mote is refused
         // while the hero is occupied: an action state of 7 to 0x13, 0x15, 0x17 to 0x1E, 0x21,
         // 0x23, 0x25, 0x26, 0x29 or 0x2B to 0x3C, the stun status, or a screen fade.
         let mote = (160..=173).contains(&it.id);
-        let occupied = matches!(state, 7..=0x13 | 0x15 | 0x17..=0x1E | 0x21 | 0x23 | 0x25 | 0x26 | 0x29 | 0x2B..=0x3C) || self.statuses.active(0) || self.fade.moving();
+        let occupied = matches!(state, 7..=0x13 | 0x15 | 0x17..=0x1E | 0x21 | 0x23 | 0x25 | 0x26 | 0x29 | 0x2B..=0x3C) || self.player.statuses.active(0) || self.fade.moving();
         if !coin && !mote && occupied {
             return;
         }
@@ -14825,7 +14841,7 @@ impl Play {
     /// discards hits; a dead hero takes none; Tor's charge sub-states 1 and 10 are busy), the
     /// deduct and the default death, and the knockback. Returns whether the hero died.
     fn hero_hit(&mut self, damage: f32, knockback: f32, blocked: bool, attacker_facing: [f32; 3], what: String) -> bool {
-        if self.dialogue_open || self.loco.state == hero_states::DEAD || self.cheats.god {
+        if self.dialogue_open || self.player.loco.state == hero_states::DEAD || self.cheats.god {
             return false;
         }
         let damage = damage.max(0.0).trunc() as i32;
@@ -14837,27 +14853,27 @@ impl Play {
             self.shield_raised = self.shield.is_some();
         }
         // A hit on a living hero ends an active stun.
-        self.statuses.clear(neopets_sim::status::STUN);
+        self.player.statuses.clear(neopets_sim::status::STUN);
         let busy = self.attack.as_ref().is_some_and(|a| matches!(a.sub, 1 | 10));
         if !busy && blocked {
             // The shield slot's "block small".
             self.sound.play(neopets_sim::sound::SHIELD, 0, neopets_sim::sound::Play::default());
-            self.loco.block();
+            self.player.loco.block();
         } else if !busy {
             self.attack = None;
             // The 32/192 flinch reads Tor's weapon entry for both heroes (SPEC-0036 state 17).
-            self.loco.hurt(self.equipment.entries[0][0].is_some());
+            self.player.loco.hurt(self.equipment.entries[0][0].is_some());
         }
-        self.hero_hp -= damage;
-        self.hero_flash = HIT_FLASH;
-        self.last_hurt = format!("took {damage} ({what}) on tick {}, hp {}", self.ticks, self.hero_hp.max(0));
+        self.player.hero_hp -= damage;
+        self.player.hero_flash = HIT_FLASH;
+        self.last_hurt = format!("took {damage} ({what}) on tick {}, hp {}", self.ticks, self.player.hero_hp.max(0));
         // SPEC-0031 Hero impact: melee or projectile with no armour plays 170; the voice slot
         // plays hit big (1) on a fair draw of 0, else hit small (0).
         self.cue(170);
         let big = self.rng.next_u32() % 2 == 0;
         self.sound.play(neopets_sim::sound::VOICE, if big { 1 } else { 0 }, neopets_sim::sound::Play::default());
-        if self.hero_hp <= 0 {
-            self.hero_hp = 0;
+        if self.player.hero_hp <= 0 {
+            self.player.hero_hp = 0;
             self.death_hook();
             return true;
         }
@@ -14873,7 +14889,7 @@ impl Play {
     /// not yet dead consults the current area's death callback, whose task actions start and
     /// whose flag 1 skips the default death.
     fn death_hook(&mut self) {
-        if self.loco.state != hero_states::DEAD {
+        if self.player.loco.state != hero_states::DEAD {
             if let Some((skip, actions)) = level::on_hero_death(self.world.pack, self.hero_index, &mut self.state) {
                 self.last_fx = format!("death callback of {} on tick {} (skip {skip})", self.world.pack, self.ticks);
                 self.apply(&actions);
@@ -14892,8 +14908,8 @@ impl Play {
     /// level events, the phase 2 heal).
     fn gnarfas_step(&mut self) {
         let pack = self.world.pack;
-        let hero = self.loco.position();
-        let hf = self.loco.facing;
+        let hero = self.player.loco.position();
+        let hf = self.player.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.gnarfas.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
@@ -14902,10 +14918,10 @@ impl Play {
             let world = &self.world;
             let locator = |k: usize| world.tags.iter().position(|&t| t as usize == k).and_then(|i| world.entries.get(i)).map(|e| e.0);
             let trees = neopets_sim::gnarfas::TREES.map(locator);
-            let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0), s.radius)).collect();
+            let shots: Vec<([f32; 3], [f32; 3], f32)> = self.player.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0), s.radius)).collect();
             // SPEC-0020: "the hero is down" is action state 16 only.
-            let busy = self.loco.state == 16;
-            let st = self.loco.state;
+            let busy = self.player.loco.state == 16;
+            let st = self.player.loco.state;
             let c = &mut self.characters[i];
             let body = c.row.map_or(1.0, |r| r.radius);
             // A missile path (its point to point + n x velocity) against the body cylinder (radius
@@ -14939,8 +14955,8 @@ impl Play {
                 position: c.position,
                 facing: c.facing,
                 hero,
-                hero_hp: self.hero_hp,
-                hero_max: self.hero_max,
+                hero_hp: self.player.hero_hp,
+                hero_max: self.player.hero_max,
                 hero_busy: busy,
                 hero_blocks: st == 20 && faces,
                 hero_down: matches!(st, 7..=11 | 0x2B..=0x2E),
@@ -15027,7 +15043,7 @@ impl Play {
                 self.state.set_level(f, true);
             }
             if act.heal_hero {
-                self.hero_hp = self.hero_max;
+                self.player.hero_hp = self.player.hero_max;
             }
             let d = {
                 let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
@@ -15064,17 +15080,17 @@ impl Play {
     fn ixi_step(&mut self) {
         use neopets_sim::combat::Cylinder;
         let pack = self.world.pack;
-        let hero_touch = self.hero_touch.1.clone();
-        let hero = self.loco.position();
-        let hf = self.loco.facing;
+        let hero_touch = self.player.hero_touch.1.clone();
+        let hero = self.player.loco.position();
+        let hf = self.player.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.ixi.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         if ids.is_empty() {
             return;
         }
         let hplace = placement(hero, hf);
-        let hframes = self.hero.bone_frames();
+        let hframes = self.player.hero.bone_frames();
         let caps: Vec<Cylinder> = self
-            .hero
+            .player.hero
             .bones()
             .hurt
             .iter()
@@ -15085,8 +15101,8 @@ impl Play {
                 Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
             })
             .collect();
-        let (st, guarding_now) = (self.loco.state, self.hero_guarding());
-        let attacking = self.attack.is_some() || self.r_attack.is_some();
+        let (st, guarding_now) = (self.player.loco.state, self.hero_guarding());
+        let attacking = self.attack.is_some() || self.player.r_attack.is_some();
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
             let level_flags = self.state.level_flags.clone();
@@ -15095,7 +15111,7 @@ impl Play {
             let c = &mut self.characters[i];
             let (radius, height) = c.row.map_or((1.5, 3.5), |r| (r.radius, r.height.max(1.0)));
             let body = Cylinder { center: add(c.position, [0.0, 0.5 * height, 0.0]), axis: UP, radius, length: height };
-            let missile_contact = self.hero_shots.iter().any(|s| {
+            let missile_contact = self.player.hero_shots.iter().any(|s| {
                 // The shot speed is per second (it moves speed / 60 a tick): 120 ticks ahead.
                 let end = add(s.position, scale(s.dir, s.speed / 60.0 * 120.0));
                 neopets_sim::combat::segment_meets(s.position, end, &Cylinder { radius: radius + s.radius, ..body })
@@ -15241,8 +15257,8 @@ impl Play {
 
     fn king_step(&mut self) {
         let pack = self.world.pack;
-        let hero = self.loco.position();
-        let hf = self.loco.facing;
+        let hero = self.player.loco.position();
+        let hf = self.player.loco.facing;
         // SPEC-0019 G15: a King under script control (the phase scenes) plays at R = 1.0.
         for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.king.is_some() && c.held) {
             c.anim.set_rate(1.0);
@@ -15253,7 +15269,7 @@ impl Play {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
             let world = &self.world;
             let ground = |x: f32, z: f32| world.ground_at(x, z, 1.0e6).unwrap_or(0.0);
-            let st = self.loco.state;
+            let st = self.player.loco.state;
             let attacking = self.attack.is_some();
             let c = &mut self.characters[i];
             let fwd = unit([c.facing[0], 0.0, c.facing[2]]);
@@ -15388,17 +15404,17 @@ impl Play {
         use neopets_sim::knight as kn;
         let pack = self.world.pack;
         self.boss_info.clear();
-        let hero = self.loco.position();
-        let hf = self.loco.facing;
+        let hero = self.player.loco.position();
+        let hf = self.player.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.knight.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         let Some(words) = self.knight_words else { return };
         if ids.is_empty() {
             return;
         }
         let hplace = placement(hero, hf);
-        let hframes = self.hero.bone_frames();
+        let hframes = self.player.hero.bone_frames();
         let caps: Vec<Cylinder> = self
-            .hero
+            .player.hero
             .bones()
             .hurt
             .iter()
@@ -15413,18 +15429,18 @@ impl Play {
         // equipped (3.5 with none).
         let body_len = self.weapon_reach() + 2.0;
         let body = Cylinder { center: add(hero, [0.0, 0.5 * body_len, 0.0]), axis: UP, radius: 1.0, length: body_len };
-        let shots: Vec<([f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
+        let shots: Vec<([f32; 3], f32)> = self.player.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
         // The hero's damage query for the knight (argument 1.0), rounded down.
         let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|i| i.is_weapon()).map_or(1, |i| i.stats[0]);
         let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
-        let hero_damage = neopets_sim::mote::melee(1.0, stat_a as f32, None, -1, 1.0, e_factor, 0.0, self.statuses.damage_scale()).0;
+        let hero_damage = neopets_sim::mote::melee(1.0, stat_a as f32, None, -1, 1.0, e_factor, 0.0, self.player.statuses.damage_scale()).0;
         let hero_mesh = neopets_sim::nav::closest(&self.world.navmeshes, hero, 1);
-        let (hero_index, attacking, guarding) = (self.hero_index as u8, self.loco.state == hero_states::ATTACK, self.hero_guarding());
+        let (hero_index, attacking, guarding) = (self.hero_index as u8, self.player.loco.state == hero_states::ATTACK, self.hero_guarding());
         // SPEC-0012 G9, the strike-active predicate: Tor in the attack state with sub-state 11 or
         // 12 or in jump state 7 in air phase 8 or 9; Roberta in the attack state with 5 or 12.
         let striking = match self.hero_index {
-            0 => (attacking && self.attack.as_ref().is_some_and(|a| matches!(a.sub, 11 | 12))) || (self.loco.state == 7 && matches!(self.loco.phase, 8 | 9)),
-            _ => attacking && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 5 | 12)),
+            0 => (attacking && self.attack.as_ref().is_some_and(|a| matches!(a.sub, 11 | 12))) || (self.player.loco.state == 7 && matches!(self.player.loco.phase, 8 | 9)),
+            _ => attacking && self.player.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 5 | 12)),
         };
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
@@ -15592,8 +15608,8 @@ impl Play {
             for &f in &act.clear_level {
                 self.state.set_level(f, false);
             }
-            if act.consume_shot && !self.hero_shots.is_empty() {
-                self.hero_shots.remove(0);
+            if act.consume_shot && !self.player.hero_shots.is_empty() {
+                self.player.hero_shots.remove(0);
             }
             if let Some(p) = spark {
                 let table = self.effect_table.clone();
@@ -15607,7 +15623,7 @@ impl Play {
                 };
                 if self.hero_hit(damage as f32, 0.0, false, d, "the Black Knight".into()) {
                     if let Some(kv) = knock {
-                        self.loco.body.velocity = kv;
+                        self.player.loco.body.velocity = kv;
                     }
                 }
             }
@@ -15631,8 +15647,8 @@ impl Play {
         use neopets_sim::combat::Cylinder;
         use neopets_sim::gelert as ge;
         let pack = self.world.pack;
-        let hero = self.loco.position();
-        let hf = self.loco.facing;
+        let hero = self.player.loco.position();
+        let hf = self.player.loco.facing;
         let Some(words) = self.gelert_words.clone() else { return };
         // A deactivated Gelert (DeactivateEntity, or 753's slot character before CharacterActivate)
         // does not run (user's report 119: its hit-count event ended the meeting early).
@@ -15649,9 +15665,9 @@ impl Play {
             println!("      gelerts on tick {}: {}", self.ticks, all.join(" "));
         }
         let hplace = placement(hero, hf);
-        let hframes = self.hero.bone_frames();
+        let hframes = self.player.hero.bone_frames();
         let caps: Vec<Cylinder> = self
-            .hero
+            .player.hero
             .bones()
             .hurt
             .iter()
@@ -15662,11 +15678,11 @@ impl Play {
                 Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
             })
             .collect();
-        let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0), s.radius)).collect();
+        let shots: Vec<([f32; 3], [f32; 3], f32)> = self.player.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0), s.radius)).collect();
         let attacking = self.attack.is_some();
         let guarding = self.hero_guarding();
-        let hero_anim = self.hero.clip_state().action;
-        let ratio = self.hero_hp as f32 / self.hero_max.max(1) as f32;
+        let hero_anim = self.player.hero.clip_state().action;
+        let ratio = self.player.hero_hp as f32 / self.player.hero_max.max(1) as f32;
         let clones_alive = self.characters.iter().filter(|c| c.pack == pack && c.gelert.as_ref().is_some_and(|g| g.clone && g.state != ge::State::CloneWait)).count();
         let level_flags = self.state.level_flags.clone();
         let level = |f: u16| level_flags.contains(&f);
@@ -15896,7 +15912,7 @@ impl Play {
             self.shots.submit(s);
         }
         for (a, b) in walls {
-            self.hero_shots.retain(|s| !ge::wall_stops(a, b, s.position, scale(s.dir, s.speed / 60.0)));
+            self.player.hero_shots.retain(|s| !ge::wall_stops(a, b, s.position, scale(s.dir, s.speed / 60.0)));
         }
         let table = self.effect_table.clone();
         for (e, p) in effects {
@@ -15978,7 +15994,7 @@ impl Play {
     /// not built).
     fn sisters_step(&mut self) {
         let pack = self.world.pack;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.sister.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         if ids.is_empty() {
             self.sister_group = Default::default();
@@ -15988,7 +16004,7 @@ impl Play {
         if self.sister_group.recount(alive) {
             self.state.set_level(2, true);
         }
-        let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0), s.radius)).collect();
+        let shots: Vec<([f32; 3], [f32; 3], f32)> = self.player.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0), s.radius)).collect();
         // SPEC-0044 1174 Checkpoints: the fourth word is a locator for 40 percent of the balls.
         let aim_point = usize::try_from(self.state.act1_indices[3]).ok().filter(|_| pack == 1174).and_then(|k| self.locator(pack, k)).map(|l| l.0);
         for id in ids {
@@ -16024,7 +16040,7 @@ impl Play {
                 level: &level,
                 far,
                 aim_point,
-                hero_climbing: matches!(self.loco.state, 30 | 34 | 35 | 38 | 47),
+                hero_climbing: matches!(self.player.loco.state, 30 | 34 | 35 | 38 | 47),
             };
             let Some(s) = c.sister.as_mut() else { continue };
             let before = s.state;
@@ -16204,7 +16220,7 @@ impl Play {
     /// equipment); the stop ends every effect. The slot effects' 0.5 scale is not applied.
     fn drain_step(&mut self, step: neopets_sim::sisters::DrainStep) {
         use neopets_sim::sisters::DrainStep;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let table = self.effect_table.clone();
         let Some((_, body, slots)) = self.drain.as_mut() else { return };
         match step {
@@ -16247,17 +16263,17 @@ impl Play {
     fn draik_step(&mut self) {
         use neopets_sim::combat::Cylinder;
         let pack = self.world.pack;
-        let hero = self.loco.position();
-        let hero_state = self.loco.state;
-        let hf = self.loco.facing;
+        let hero = self.player.loco.position();
+        let hero_state = self.player.loco.state;
+        let hf = self.player.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.draik.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         if ids.is_empty() {
             return;
         }
         let hplace = placement(hero, hf);
-        let hframes = self.hero.bone_frames();
+        let hframes = self.player.hero.bone_frames();
         let caps: Vec<Cylinder> = self
-            .hero
+            .player.hero
             .bones()
             .hurt
             .iter()
@@ -16304,7 +16320,7 @@ impl Play {
                 })
             });
             let near_shot = |p: [f32; 3], r: f32| groups.iter().any(|&b| { let q = sub_v(p, point(b)); (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt() } < 5.0 + r);
-            let shot_group = self.hero_shots.iter().any(|s| near_shot(s.position, s.radius));
+            let shot_group = self.player.hero_shots.iter().any(|s| near_shot(s.position, s.radius));
             let bits = c.anim.frame_bits();
             let contact = (0..5).any(|n| {
                 if bits & (1 << n) == 0 {
@@ -16332,7 +16348,7 @@ impl Play {
                 mouth,
                 chest: point(1),
                 melee: swing.is_some(),
-                shots: !self.hero_shots.is_empty(),
+                shots: !self.player.hero_shots.is_empty(),
                 melee_group,
                 shot_group,
                 weapon_contact: contact,
@@ -16393,7 +16409,7 @@ impl Play {
             let parts: Vec<[f32; 3]> = act.breaks.iter().map(|&p| point(neopets_sim::draik::PART_BONES[p])).collect();
             let from = c.position;
             if act.consume_shot {
-                self.hero_shots.retain(|s| !near_shot(s.position, s.radius));
+                self.player.hero_shots.retain(|s| !near_shot(s.position, s.radius));
             }
             for &f in &act.set_level {
                 self.state.set_level(f, true);
@@ -16466,15 +16482,15 @@ impl Play {
     /// height up (her mouth bone is not given); the cast glow of the orb's kind follows it.
     fn faerie_step(&mut self) {
         let pack = self.world.pack;
-        let hero = self.loco.position();
-        let hf = self.loco.facing;
+        let hero = self.player.loco.position();
+        let hf = self.player.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.faerie.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         let swing = self.weapon_segment();
         let guarding = self.hero_guarding();
         let kind = neopets_sim::darkest::attack_kind(self.equipment.motes[self.hero_index.min(1)][1]);
-        let attacking = if self.hero_index == 0 { self.attack.is_some() } else { self.r_attack.is_some() };
-        let form2 = if self.hero_index == 0 { self.attack.as_ref().is_some_and(|a| matches!(a.sub, 4 | 7 | 8 | 12)) } else { self.r_attack.as_ref().is_some_and(|a| a.sub == 4) };
-        let shots: Vec<([f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
+        let attacking = if self.hero_index == 0 { self.attack.is_some() } else { self.player.r_attack.is_some() };
+        let form2 = if self.hero_index == 0 { self.attack.as_ref().is_some_and(|a| matches!(a.sub, 4 | 7 | 8 | 12)) } else { self.player.r_attack.as_ref().is_some_and(|a| a.sub == 4) };
+        let shots: Vec<([f32; 3], f32)> = self.player.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
             let level_flags = self.state.level_flags.clone();
@@ -16495,7 +16511,7 @@ impl Play {
             }
             // NEOPETS_TRACE_FAERIE: the stun-time measurements (diagnostic).
             if std::env::var_os("NEOPETS_TRACE_FAERIE").is_some() && c.faerie.as_ref().is_some_and(|f| f.code == 5) && attacking {
-                let sub = if self.hero_index == 0 { self.attack.as_ref().map(|a| a.sub) } else { self.r_attack.as_ref().map(|a| a.sub) };
+                let sub = if self.hero_index == 0 { self.attack.as_ref().map(|a| a.sub) } else { self.player.r_attack.as_ref().map(|a| a.sub) };
                 println!("      faerie stun: attacking sub {sub:?} form2 {form2} swing {} reaches {reaches} on tick {}", swing.is_some(), self.ticks);
             }
             let clip = c.anim.clip_state();
@@ -16554,8 +16570,8 @@ impl Play {
             let mut gone: Vec<usize> = act.absorbed.clone();
             gone.sort_unstable();
             for k in gone.into_iter().rev() {
-                if k < self.hero_shots.len() {
-                    self.hero_shots.remove(k);
+                if k < self.player.hero_shots.len() {
+                    self.player.hero_shots.remove(k);
                 }
             }
             let table = self.effect_table.clone();
@@ -16605,8 +16621,8 @@ impl Play {
             }
             if let Some(p) = act.push {
                 self.attack = None;
-                let at = add(self.loco.position(), p.offset);
-                self.loco.body.position = at;
+                let at = add(self.player.loco.position(), p.offset);
+                self.player.loco.body.position = at;
                 self.knock_hero(p.velocity);
             }
         }
@@ -16619,8 +16635,8 @@ impl Play {
     /// taken 0.75 of her height up (her hand or staff point is not given).
     fn fyora_step(&mut self) {
         let pack = self.world.pack;
-        let hero = self.loco.position();
-        let hf = self.loco.facing;
+        let hero = self.player.loco.position();
+        let hf = self.player.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.fyora.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         if ids.is_empty() {
             self.duel = [None; 4];
@@ -16685,16 +16701,16 @@ impl Play {
     fn serpent_step(&mut self) {
         use neopets_sim::combat::Cylinder;
         let pack = self.world.pack;
-        let hero = self.loco.position();
-        let hf = self.loco.facing;
+        let hero = self.player.loco.position();
+        let hf = self.player.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.serpent.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         if ids.is_empty() {
             return;
         }
         let hplace = placement(hero, hf);
-        let hframes = self.hero.bone_frames();
+        let hframes = self.player.hero.bone_frames();
         let caps: Vec<Cylinder> = self
-            .hero
+            .player.hero
             .bones()
             .hurt
             .iter()
@@ -16708,7 +16724,7 @@ impl Play {
         let world = &self.world;
         let locator = |k: usize| world.tags.iter().position(|&t| t as usize == k).and_then(|i| world.entries.get(i)).map(|e| e.0);
         let anchors = neopets_sim::serpent::ANCHORS.map(|ids| ids.map(locator));
-        let (code, blocking, stunned) = (self.loco.state, self.hero_guarding(), self.statuses.active(neopets_sim::status::STUN));
+        let (code, blocking, stunned) = (self.player.loco.state, self.hero_guarding(), self.player.statuses.active(neopets_sim::status::STUN));
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
             let level_flags = self.state.level_flags.clone();
@@ -16770,9 +16786,9 @@ impl Play {
             // SPEC-0016 sub 7 (R-0272): every tick of the stun a contact sphere of radius 4.0 at
             // the mouth joint blocks the hero's body (no damage), through the slide response.
             if matches!(after, neopets_sim::serpent::State::Bite(neopets_sim::serpent::Bite::Stun { .. })) {
-                let body = &mut self.loco.body;
+                let body = &mut self.player.loco.body;
                 if contact::sphere_push(&mut body.position, &mut body.velocity, v.mouth, 4.0, contact::HERO_RADIUS, 3.5) {
-                    self.touched = true;
+                    self.player.touched = true;
                 }
             }
             // SPEC-0016 6A: in state 0 the neck look at the active hero (joints 6 and 17 of the
@@ -16827,8 +16843,8 @@ impl Play {
             if let Some(setup) = act.launch {
                 self.shots.submit(setup);
             }
-            if act.consume_shot && !self.hero_shots.is_empty() {
-                self.hero_shots.remove(0);
+            if act.consume_shot && !self.player.hero_shots.is_empty() {
+                self.player.hero_shots.remove(0);
             }
             if let Some(damage) = act.lunge {
                 let d = {
@@ -16841,7 +16857,7 @@ impl Play {
                     self.effects.one_shot(&table, 222, add(hero, [0.0, 1.5, 0.0]), neopets_sim::effect::IDENTITY, &mut self.rng);
                 }
                 // SPEC-0016: the lunge writes state 54 over what the hit left, on this tick.
-                self.loco.state = hero_states::GET_UP;
+                self.player.loco.state = hero_states::GET_UP;
             }
         }
     }
@@ -16852,12 +16868,12 @@ impl Play {
         // hero is not dead (Roberta is not in this build and counts as alive).
         self.stinger(3);
         // The "knocked out" voice cue, at the hero, do-not-restart.
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         self.sound.play(neopets_sim::sound::VOICE, 2, neopets_sim::sound::Play { emitter: Some(p), do_not_restart: true, ..Default::default() });
         self.attack = None;
         self.hit_list.clear();
-        self.statuses.clear_all();
-        self.loco.die();
+        self.player.statuses.clear_all();
+        self.player.loco.die();
     }
 
     /// SPEC-0025 Save points, per tick for the current world's own region: the nearest point,
@@ -16866,8 +16882,8 @@ impl Play {
     /// no door job and no death or game-over state, then the glow (SPEC-0034 section 36).
     fn save_point_step(&mut self, square: bool) {
         let gate = self.job.is_none() && self.death.page.is_none() && !self.death.flag_e;
-        let busy = hero_states::busy_state(self.loco.state);
-        let r = self.save_points.step(&self.world.save_points, self.loco.position(), gate, square, busy);
+        let busy = hero_states::busy_state(self.player.loco.state);
+        let r = self.save_points.step(&self.world.save_points, self.player.loco.position(), gate, square, busy);
         self.save_prompt = r.prompt;
         self.save_glow_step(r.glow_at);
         // Cue 0xA8 is kept alive within 15 units, with no emitter (the zero-flag branch's quirk).
@@ -16876,7 +16892,7 @@ impl Play {
         }
         if r.open {
             if r.restart {
-                self.restart = Some((self.loco.position(), self.loco.facing));
+                self.restart = Some((self.player.loco.position(), self.player.loco.facing));
             }
             self.save_open = true;
         }
@@ -16928,15 +16944,15 @@ impl Play {
             }
         }
         // The bush logic.
-        let eye = self.camera.eye;
-        let hero = self.loco.position();
+        let eye = self.player.camera.eye;
+        let hero = self.player.loco.position();
         // The hero's speed for the bush bend: this build takes its movement this tick (units
         // per second), as root motion moves the hero rather than the body velocity.
         let moved = self.bend_last.map_or(0.0, |l: [f32; 3]| ((hero[0] - l[0]).powi(2) + (hero[2] - l[2]).powi(2)).sqrt() * 60.0);
         self.bend_last = Some(hero);
-        let facing = self.loco.facing;
+        let facing = self.player.loco.facing;
         let weapon = self.weapon_segment();
-        let shots: Vec<([f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
+        let shots: Vec<([f32; 3], f32)> = self.player.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
         let table = self.effect_table.clone();
         let mut drops: Vec<(u32, [f32; 3], Vec<u16>)> = Vec::new();
         let mut sparkles = Vec::new();
@@ -17047,9 +17063,9 @@ impl Play {
         // moves him out to 5.5 K + 1.175 and clips his velocity into the trunk.
         let trunks = self.near_trunks(eye);
         for (base, radius) in trunks {
-            let pos = self.loco.position();
+            let pos = self.player.loco.position();
             if let Some((d, n)) = contact::upright_cylinder_push(pos, contact::HERO_RADIUS, HERO_HEIGHT, base, 25.0, radius) {
-                let b = &mut self.loco.body;
+                let b = &mut self.player.loco.body;
                 for k in 0..3 {
                     b.position[k] += d[k];
                 }
@@ -17105,14 +17121,14 @@ impl Play {
         };
         // The hero is first; a caster with no hulls has nothing to cast.
         let mut casters: Vec<Option<&Character>> = vec![None];
-        let mut distances = vec![if self.shadow_hulls[self.hero_index.min(1)].is_empty() { f32::MAX } else { far(self.loco.position()) }];
+        let mut distances = vec![if self.shadow_hulls[self.hero_index.min(1)].is_empty() { f32::MAX } else { far(self.player.loco.position()) }];
         for c in self.characters.iter().filter(|c| c.pack == self.world.pack && !c.inactive && !c.model.shadow.is_empty()) {
             casters.push(Some(c));
             distances.push(far(c.position));
         }
         for k in sh::choose(&distances) {
             let (key, p, facing, frames) = match casters[k] {
-                None => (None, self.loco.position(), self.loco.facing, self.hero.bone_frames()),
+                None => (None, self.player.loco.position(), self.player.loco.facing, self.player.hero.bone_frames()),
                 Some(c) => (Some(c.id), c.position, c.facing, c.anim.bone_frames()),
             };
             let place = placement(p, facing);
@@ -17145,7 +17161,7 @@ impl Play {
     pub fn diag_give(&mut self, id: u16, n: i32) {
         let added = self.party_add(id, n);
         let parked = self.parked.as_ref().map(|p| (p.hp, p.hp_max, p.mp, p.mp_max));
-        println!("GIVE {id} x{n}: added {added}, hero {}/{} {}/{}, parked {parked:?}, luck {}, wallet {}, held {:?}, caption {:?}", self.hero_hp, self.hero_max, self.hero_mp, self.hero_mp_max, self.luck, self.state.neopoints, self.state.items.get(&id), self.price_lines[0]);
+        println!("GIVE {id} x{n}: added {added}, hero {}/{} {}/{}, parked {parked:?}, luck {}, wallet {}, held {:?}, caption {:?}", self.player.hero_hp, self.player.hero_max, self.player.hero_mp, self.player.hero_mp_max, self.luck, self.state.neopoints, self.state.items.get(&id), self.price_lines[0]);
     }
 
     /// NEOPETS_TRACE_CASTERS: the characters casting a shadow (kind key 720), their hull counts and the
@@ -17157,11 +17173,11 @@ impl Play {
     /// The Rope Gun's muzzle M = T + 0.37F - S of weapon attach frame 0 (SPEC-0033 State 27),
     /// or the hero's position 1.2 up when the frame is missing.
     fn rope_muzzle(&self) -> [f32; 3] {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let frame = (|| {
-            let place = placement(p, self.loco.facing);
-            let frames = self.hero.bone_frames();
-            let &(Some(bone), angles, offset) = self.hero.bones().attach.first()? else { return None };
+            let place = placement(p, self.player.loco.facing);
+            let frames = self.player.hero.bone_frames();
+            let &(Some(bone), angles, offset) = self.player.hero.bones().attach.first()? else { return None };
             Some(place.mul(frames.get(bone)?).mul(&attach_rotation(offset, angles)))
         })();
         frame.map_or(add(p, [0.0, 1.2, 0.0]), |w| sub(add(w.t, scale(unit(w.cols[2]), 0.37)), unit(w.cols[0])))
@@ -17170,7 +17186,7 @@ impl Play {
     /// The rope's drawn strand: the muzzle M and the endpoint Q while the manager is out or
     /// attached (SPEC-0033 State 27).
     pub fn rope_line(&self) -> Option<([f32; 3], [f32; 3])> {
-        (self.rope.state != neopets_sim::rope::RopeState::Idle && self.loco.state == neopets_sim::rope::STATE).then(|| (self.rope_muzzle(), self.rope.q))
+        (self.rope.state != neopets_sim::rope::RopeState::Idle && self.player.loco.state == neopets_sim::rope::STATE).then(|| (self.rope_muzzle(), self.rope.q))
     }
 
     /// SPEC-0036 Right-stick aim mode, the aim view mode, and SPEC-0033 section 23, the marker
@@ -17181,12 +17197,12 @@ impl Play {
     /// in hero control here).
     fn aim_view_step(&mut self) {
         use neopets_sim::aimview as av;
-        let aiming = self.aim.on;
+        let aiming = self.player.aim.on;
         let tor = self.hero_index == 0;
         let anchor = aiming && self.rope.anchor.is_some();
         let character = aiming && !anchor && !tor && {
-            let (forward, _) = self.camera.rows();
-            let eye = self.camera.eye;
+            let (forward, _) = self.player.camera.rows();
+            let eye = self.player.camera.eye;
             let low = [eye[0], eye[1] - 1.5, eye[2]];
             let pack = self.world.pack;
             let mut best = f32::MIN;
@@ -17210,22 +17226,22 @@ impl Play {
         };
         let mode = av::mode(aiming, tor, anchor, character);
         let rope_gun = self.state.has_item(av::ROPE_GUN);
-        let was = self.aim_view.mode;
-        self.aim_view.step(1.0 / 60.0, mode, rope_gun);
-        if was != self.aim_view.mode && std::env::var_os("NEOPETS_TRACE_AIM").is_some() {
-            println!("      aim view tick {}: mode {} -> {} (asked {mode}), scale {:.3}, colour {:?}", self.ticks, was, self.aim_view.mode, self.aim_view.scale.value, self.aim_view.rgba());
+        let was = self.player.aim_view.mode;
+        self.player.aim_view.step(1.0 / 60.0, mode, rope_gun);
+        if was != self.player.aim_view.mode && std::env::var_os("NEOPETS_TRACE_AIM").is_some() {
+            println!("      aim view tick {}: mode {} -> {} (asked {mode}), scale {:.3}, colour {:?}", self.ticks, was, self.player.aim_view.mode, self.player.aim_view.scale.value, self.player.aim_view.rgba());
         }
     }
 
     /// The aim-view marker's draw frame when it is active: its centre (the camera eye plus 10
     /// times the forward row), its spin angle, its scale and its colour (SPEC-0033 section 23).
     pub fn aim_marker(&self) -> Option<([f32; 3], [f32; 3], f32, f32, [f32; 4])> {
-        let v = &self.aim_view;
+        let v = &self.player.aim_view;
         if !v.active {
             return None;
         }
-        let (forward, _) = self.camera.rows();
-        let at = add(self.camera.eye, forward.map(|c| c * neopets_sim::aimview::DISTANCE));
+        let (forward, _) = self.player.camera.rows();
+        let at = add(self.player.camera.eye, forward.map(|c| c * neopets_sim::aimview::DISTANCE));
         Some((at, forward, v.spin.value, v.scale.value, v.rgba()))
     }
 
@@ -17239,16 +17255,16 @@ impl Play {
         if self.rope_pack != self.world.pack {
             self.rope_pack = self.world.pack;
             self.rope.reset();
-            if self.rope_hero.take().is_some() && self.loco.state == rp::STATE {
-                self.loco.body.no_gravity = false;
-                self.loco.enter_state(hero_states::STANCE, 0);
+            if self.player.rope_hero.take().is_some() && self.player.loco.state == rp::STATE {
+                self.player.loco.body.no_gravity = false;
+                self.player.loco.enter_state(hero_states::STANCE, 0);
             }
         }
         let has = self.state.has_item(rp::ITEM);
-        let attack_sub = if self.hero_index == 0 { self.attack.as_ref().map(|a| a.sub) } else { self.r_attack.as_ref().map(|a| a.sub) };
-        let scan = self.aim.step(self.loco.state, attack_sub, self.rope_y, input.r2_held, input.circle_held);
-        if self.loco.state != rp::STATE {
-            self.rope_hero = None;
+        let attack_sub = if self.hero_index == 0 { self.attack.as_ref().map(|a| a.sub) } else { self.player.r_attack.as_ref().map(|a| a.sub) };
+        let scan = self.player.aim.step(self.player.loco.state, attack_sub, self.player.rope_y, input.r2_held, input.circle_held);
+        if self.player.loco.state != rp::STATE {
+            self.player.rope_hero = None;
             if scan && has {
                 let (eye, mut f, _, _) = self.view();
                 if let Some(t) = self.rope_aim.and_then(|k| self.world.aim_targets.get(k)) {
@@ -17298,44 +17314,44 @@ impl Play {
             } else {
                 self.rope.select(None);
             }
-            if !(self.aim.on && has && self.rope.anchor.is_some() && input.r2_held && self.loco.state == hero_states::STANCE) {
+            if !(self.player.aim.on && has && self.rope.anchor.is_some() && input.r2_held && self.player.loco.state == hero_states::STANCE) {
                 return false;
             }
-            self.rope_hero = Some(rp::RopeHero::default());
-            self.loco.enter_state(rp::STATE, rp::FIRE_CLIP);
+            self.player.rope_hero = Some(rp::RopeHero::default());
+            self.player.loco.enter_state(rp::STATE, rp::FIRE_CLIP);
             self.trace_edge("rope", self.rope.anchor.unwrap_or(0), 0);
         }
-        let Some(mut h) = self.rope_hero else {
-            self.loco.enter_state(hero_states::STANCE, 0);
+        let Some(mut h) = self.player.rope_hero else {
+            self.player.loco.enter_state(hero_states::STANCE, 0);
             return false;
         };
         let m = self.rope_muzzle();
         self.rope.update(m);
-        let c = self.hero.clip_state();
-        let view = rp::View { p: self.loco.position(), m, clip: (c.action, c.progress), frame_bits: self.hero.frame_bits(), touched: self.touched, square: input.square };
+        let c = self.player.hero.clip_state();
+        let view = rp::View { p: self.player.loco.position(), m, clip: (c.action, c.progress), frame_bits: self.player.hero.frame_bits(), touched: self.player.touched, square: input.square };
         let step = h.tick(view, &mut self.rope);
-        self.rope_hero = Some(h);
+        self.player.rope_hero = Some(h);
         if step.holster {
             self.set_weapon_drawn(false);
         }
         if let Some(r) = step.request {
-            self.loco.block_request(r);
+            self.player.loco.block_request(r);
         }
         if let Some((d, w)) = step.face {
-            self.loco.steer_toward(d, w);
+            self.player.loco.steer_toward(d, w);
         }
         if let Some(cue) = step.cue {
             self.cue(cue);
         }
-        self.loco.extra = step.push;
-        self.loco.body.no_gravity = step.no_gravity;
+        self.player.loco.extra = step.push;
+        self.player.loco.body.no_gravity = step.no_gravity;
         if step.no_gravity {
-            self.loco.body.velocity = [0.0; 3];
+            self.player.loco.body.velocity = [0.0; 3];
         }
         if step.exit {
-            self.rope_hero = None;
-            self.loco.body.no_gravity = false;
-            self.loco.enter_state(hero_states::STANCE, 0);
+            self.player.rope_hero = None;
+            self.player.loco.body.no_gravity = false;
+            self.player.loco.enter_state(hero_states::STANCE, 0);
             self.trace_edge("rope off", 0, 0);
             return false;
         }
@@ -17345,13 +17361,13 @@ impl Play {
     /// The hero's weapon segment as a thin cylinder while the attack window is open (frame bit
     /// 1; SPEC-0036), from the weapon attach point along its axis over the weapon reach.
     fn weapon_segment(&self) -> Option<neopets_sim::combat::Cylinder> {
-        let roberta = self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| a.sub != 8);
-        if (self.attack.is_none() && self.loco.air_sub == 0 && !roberta) || self.hero.frame_bits() & 1 == 0 {
+        let roberta = self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| a.sub != 8);
+        if (self.attack.is_none() && self.player.loco.air_sub == 0 && !roberta) || self.player.hero.frame_bits() & 1 == 0 {
             return None;
         }
-        let place = placement(self.loco.position(), self.loco.facing);
-        let frames = self.hero.bone_frames();
-        let &(Some(bone), angles, offset) = self.hero.bones().attach.first()? else { return None };
+        let place = placement(self.player.loco.position(), self.player.loco.facing);
+        let frames = self.player.hero.bone_frames();
+        let &(Some(bone), angles, offset) = self.player.hero.bones().attach.first()? else { return None };
         let w = place.mul(frames.get(bone)?).mul(&attach_rotation(offset, angles));
         let axis = unit(w.cols[2]);
         let l = self.weapon_reach() + 2.0;
@@ -17435,18 +17451,18 @@ impl Play {
     fn attack_fx_step(&mut self) {
         let table = self.effect_table.clone();
         let h = self.hero_index;
-        let pos = self.loco.position();
+        let pos = self.player.loco.position();
         let m = self.equipment.motes[h.min(1)][2].map(|id| id as i32);
         let idx = m.and_then(|id| usize::try_from(id - 160).ok()).filter(|&k| k < 14);
         let (sub, f) = match h {
             0 => self.attack.as_ref().map_or((0, 0), |a| (a.sub, a.f)),
-            _ => self.r_attack.as_ref().map_or((0, 0), |a| (a.sub, a.f)),
+            _ => self.player.r_attack.as_ref().map_or((0, 0), |a| (a.sub, a.f)),
         };
         let charged = f > if h == 0 { 50 } else { 80 };
-        let place = placement(pos, self.loco.facing);
-        let frames = self.hero.bone_frames();
-        let z0 = self.hero.bones().attach.first().and_then(|&(bone, angles, offset)| Some(unit(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)).cols[2]))).unwrap_or(self.loco.facing);
-        let eye = self.camera.eye;
+        let place = placement(pos, self.player.loco.facing);
+        let frames = self.player.hero.bone_frames();
+        let z0 = self.player.hero.bones().attach.first().and_then(|&(bone, angles, offset)| Some(unit(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)).cols[2]))).unwrap_or(self.player.loco.facing);
+        let eye = self.player.camera.eye;
         let toward = |p: [f32; 3]| add(p, scale(unit(sub_v(eye, p)), 0.2));
         // The base point and axis of the held weapon: attach point 0 (SPEC-0036 Attack-id spawn dispatch). A sheathed
         // sword has no line or tip light: the user's report of the game; the driver's words leave it open (R-0227).
@@ -17454,7 +17470,7 @@ impl Play {
         let (base, z0) = self.weapon_line().unwrap_or((pos, z0));
         let n = toward(add(base, scale(z0, 0.48)));
         let t = toward(add(base, scale(z0, self.weapon_reach())));
-        let fw = unit([self.loco.facing[0], 0.0, self.loco.facing[2]]);
+        let fw = unit([self.player.loco.facing[0], 0.0, self.player.loco.facing[2]]);
         let frame = [[fw[2], 0.0, -fw[0]], [0.0, 1.0, 0.0], fw];
         let fx = &mut self.attack_fx;
         let (effects, rng) = (&mut self.effects, &mut self.rng);
@@ -17546,7 +17562,7 @@ impl Play {
     /// position.
     fn shot_fx_step(&mut self) {
         let table = self.effect_table.clone();
-        let live: std::collections::HashMap<u32, ([f32; 3], [f32; 3])> = self.hero_shots.iter().map(|s| (s.id, (s.position, s.dir))).collect();
+        let live: std::collections::HashMap<u32, ([f32; 3], [f32; 3])> = self.player.hero_shots.iter().map(|s| (s.id, (s.position, s.dir))).collect();
         let frame_of = flat_frame;
         let ids: Vec<u32> = self.attack_fx.shots.keys().copied().collect();
         for id in ids {
@@ -17635,7 +17651,7 @@ impl Play {
 
     /// The hero's marker in the lines-only collision view: three crossed lines at his body's middle.
     pub fn debug_hero_cross(&self) -> Vec<(u8, [f32; 3], [f32; 3])> {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let c = [p[0], p[1] + 1.75, p[2]];
         let line = |k: usize, s: f32| {
             let (mut a, mut b) = (c, c);
@@ -17649,7 +17665,7 @@ impl Play {
     /// The debug tools' collision view: (kind, from, to) lines of the resident worlds (kinds: debug_tools::KINDS).
     pub fn debug_lines(&self, range: f32, kinds: &[u8]) -> Vec<(u8, [f32; 3], [f32; 3])> {
         let mut out = Vec::new();
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let near = |p: [f32; 3]| (p[0] - hero[0]).hypot(p[2] - hero[2]) < 300.0;
         let add = |a: [f32; 3], s: f32, b: [f32; 3]| -> [f32; 3] { std::array::from_fn(|k| a[k] + s * b[k]) };
         let boxed = |out: &mut Vec<(u8, [f32; 3], [f32; 3])>, kind: u8, o: [f32; 3], axes: [[f32; 3]; 3], e: [f32; 3]| {
@@ -17809,7 +17825,7 @@ impl Play {
 
     /// The collision view's list: what is nearest the hero within `range`, by name, those touching him first.
     pub fn debug_nearby(&self, range: f32) -> String {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         let w = &self.world;
         let mut rows: Vec<(bool, f32, String)> = Vec::new();
         let flat = |q: [f32; 3]| (q[0] - p[0]).hypot(q[2] - p[2]);
@@ -17891,21 +17907,21 @@ impl Play {
 
     /// The debug tools' inspector: the hero, and the character nearest the view's centre.
     pub fn debug_inspect(&self) -> String {
-        let h = self.loco.position();
+        let h = self.player.loco.position();
         let mut s = format!(
             "HERO {} at {:.1}, {:.1}, {:.1}\nstate {} phase {} action {} gap {:.2} hp {}/{} mp {}/{} busy {}\nworld {} other {:?} tick {} fade {:.0}->{:.0}\n",
             if self.hero_index == 0 { "Tor" } else { "Roberta" },
             h[0],
             h[1],
             h[2],
-            self.loco.state,
-            self.loco.phase,
-            self.hero.action(),
-            self.loco.body.gap,
-            self.hero_hp,
-            self.hero_max,
-            self.hero_mp,
-            self.hero_mp_max,
+            self.player.loco.state,
+            self.player.loco.phase,
+            self.player.hero.action(),
+            self.player.loco.body.gap,
+            self.player.hero_hp,
+            self.player.hero_max,
+            self.player.hero_mp,
+            self.player.hero_mp_max,
             self.hero_busy(),
             self.world.pack,
             self.other.as_ref().map(|o| o.pack),
@@ -18097,8 +18113,8 @@ impl Play {
     /// state meets a breakable's cylinder or rectangle from above; it takes the hero route's
     /// contact rule. (The motion step skips the solid response for such a hero.)
     fn landing_break(&mut self) {
-        let p = self.loco.position();
-        let (state, vy) = (self.loco.state, self.loco.body.velocity[1]);
+        let p = self.player.loco.position();
+        let (state, vy) = (self.player.loco.state, self.player.loco.body.velocity[1]);
         if !matches!(state, 7..=11 | 43..=46) || vy >= 0.0 {
             return;
         }
@@ -18157,7 +18173,7 @@ impl Play {
 
     fn breakable_contact(&mut self, test: impl Fn(&neopets_data::world::Volume) -> bool) {
         // SPEC-0048 Break routes step 3: an attack contact gives the pieces their push.
-        self.break_from = Some(self.loco.position());
+        self.break_from = Some(self.player.loco.position());
         self.breakable_contact_inner(test);
         self.break_from = None;
     }
@@ -18286,7 +18302,7 @@ impl Play {
         let b = |k: usize| g.breakables.get(k).and_then(|&b| usize::try_from(b).ok());
         let o = |k: usize| g.objects.get(k).and_then(|&o| usize::try_from(o).ok());
         let camera = |k: usize| g.cameras.get(k).and_then(|&c| usize::try_from(c).ok());
-        let (x, d) = g.locators.first().and_then(|&k| usize::try_from(k).ok()).and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.loco.position(), self.loco.facing));
+        let (x, d) = g.locators.first().and_then(|&k| usize::try_from(k).ok()).and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.player.loco.position(), self.player.loco.facing));
         let fx = [x[0] + 2.9 * d[0], x[1] + 2.9 * d[1], x[2] + 2.9 * d[2]];
         let secs = |s: f32| Action::Sleep { ticks: (s * 60.0).round() as u32 };
         let mut v: Vec<Action> = Vec::new();
@@ -18351,13 +18367,13 @@ impl Play {
 
     /// Diagnostic: the hero 8 from the nearest intact breakable with pieces, and it breaks.
     pub fn diag_break_nearest(&mut self) {
-        let h = self.loco.position();
+        let h = self.player.loco.position();
         let far = |p: [f32; 3]| (p[0] - h[0]).hypot(p[2] - h[2]);
         let near = self.world.breakables.iter().enumerate().filter(|(_, b)| matches!(b.state, 1 | 3) && !b.debris.is_empty()).min_by(|a, b| far(a.1.position()).total_cmp(&far(b.1.position()))).map(|(i, b)| (i, b.position()));
         if let Some((i, p)) = near {
-            let f = self.loco.facing;
+            let f = self.player.loco.facing;
             let at = [p[0] - 8.0 * f[0], p[1] + 1.0, p[2] - 8.0 * f[2]];
-            self.loco.teleport(at, f);
+            self.player.loco.teleport(at, f);
             self.diag_break_attack(i);
         }
     }
@@ -18369,7 +18385,7 @@ impl Play {
                 println!("      piece type {} material {} model {:?} half {:?} count {}", d.kind, d.material, d.model, d.half, d.count);
             }
         }
-        self.break_from = Some(self.loco.position());
+        self.break_from = Some(self.player.loco.position());
         self.break_one_with(i, true);
         self.break_from = None;
         println!("      debris live {}", self.debris.pieces.len());
@@ -18558,11 +18574,11 @@ impl Play {
     /// The hero's status apply from a hit, a shot or a script, with the immunity block's
     /// one-shot (SPEC-0036 Status display and cues) at the hero's origin (R-0045).
     fn hero_status(&mut self, code: i32, seconds: i32) -> bool {
-        if let Some(fx) = self.statuses.immunity_block(code) {
+        if let Some(fx) = self.player.statuses.immunity_block(code) {
             let table = self.effect_table.clone();
-            self.effects.one_shot(&table, fx, self.loco.position(), neopets_sim::effect::IDENTITY, &mut self.rng);
+            self.effects.one_shot(&table, fx, self.player.loco.position(), neopets_sim::effect::IDENTITY, &mut self.rng);
         }
-        self.statuses.apply(code, seconds)
+        self.player.statuses.apply(code, seconds)
     }
 
     /// SPEC-0036 Status display and cues for the hero and the common enemies: a status that
@@ -18573,7 +18589,7 @@ impl Play {
     fn status_display_step(&mut self) {
         let table = self.effect_table.clone();
         let hero_point = self.hero_attach(7).map(|a| a.t);
-        let mut who: Vec<(u64, [bool; 14], [f32; 3])> = vec![(Self::HERO_DISPLAY, std::array::from_fn(|c| self.statuses.active(c)), hero_point.unwrap_or(self.loco.position()))];
+        let mut who: Vec<(u64, [bool; 14], [f32; 3])> = vec![(Self::HERO_DISPLAY, std::array::from_fn(|c| self.player.statuses.active(c)), hero_point.unwrap_or(self.player.loco.position()))];
         for c in &self.characters {
             if let Some(e) = c.enemy.as_ref().filter(|e| !e.is_dead() && !c.inactive) {
                 who.push((c.id, std::array::from_fn(|k| e.status(k)), Self::attach_point(c, 7).unwrap_or(c.position)));
@@ -18668,7 +18684,7 @@ impl Play {
             s.walk(&self.world.lights, &dynamic, at, &entry_zone);
             s.fill();
         };
-        walk(None, self.loco.position(), Some(&self.world));
+        walk(None, self.player.loco.position(), Some(&self.world));
         for c in &self.characters {
             walk(Some(c.id), c.position, [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == c.pack));
         }
@@ -18714,12 +18730,12 @@ impl Play {
             let (eye, ..) = self.view();
             self.world.probe(eye[0], eye[2], eye[1])
         } else {
-            let p = self.loco.position();
+            let p = self.player.loco.position();
             self.world.probe(p[0], p[2], p[1] + 2.5)
         };
         // NEOPETS_TRACE_ZONE (diagnostic): the probe in each resident world every 60 ticks.
         if std::env::var_os("NEOPETS_TRACE_ZONE").is_some() && self.ticks % 60 == 0 {
-            let p = self.loco.position();
+            let p = self.player.loco.position();
             let other = self.other.as_ref().map(|o| (o.pack, o.world_id, o.probe(p[0], p[2], p[1] + 2.5)));
             println!("      zone tick {}: current {} id {} found {} zone {:?}; other {:?}; row now {:?}", self.ticks, self.world.pack, self.world.world_id, hit.found, hit.zone, other.map(|(pk, id, h)| (pk, id, h.found, h.zone)), self.zones);
         }
@@ -18763,7 +18779,7 @@ impl Play {
     /// and the camera eye.
     pub fn placed_gates(&self) -> String {
         let w = &self.world;
-        let eye = self.camera.eye;
+        let eye = self.player.camera.eye;
         let list: Vec<String> = w
             .placed_effects
             .iter()
@@ -18782,7 +18798,7 @@ impl Play {
     /// inline type-11 volumes (kind and flags) and their walls at the hero's cell.
     pub fn objects_near(&self) -> String {
         let w = &self.world;
-        let h = self.loco.position();
+        let h = self.player.loco.position();
         let walls = w.object_wall_count(h[0], h[2]);
         let list: Vec<String> = (0..w.objects.len())
             .filter_map(|i| {
@@ -18828,6 +18844,60 @@ impl Play {
         (t != [1.0; 3]).then_some(t)
     }
 
+    /// Swaps player `i` of `others` into `player` (and the running player out to its place), so
+    /// that the hero code runs for it; swapping again restores the order (docs/MULTIPLAYER.md).
+    #[allow(dead_code)] // Used by local co-op (docs/MULTIPLAYER.md step 2).
+    pub fn swap_player(&mut self, i: usize) {
+        if let Some(p) = self.others.get_mut(i) {
+            std::mem::swap(&mut self.player, p);
+        }
+    }
+
+    /// A checksum of the simulation's state after a tick (docs/MULTIPLAYER.md step 1: refactors
+    /// must leave it unchanged): the tick and world, the hero's movement record, animation, HP
+    /// and MP, every character's id, position, facing, HP and clip, the random generator, the
+    /// story flags, items and Neopoints. FNV-1a over the values' bits.
+    pub fn checksum(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut put = |v: u64| {
+            for b in v.to_le_bytes() {
+                h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
+            }
+        };
+        let f = |x: f32| x.to_bits() as u64;
+        put(self.ticks);
+        put(self.world.pack as u64);
+        let p = self.player.loco.position();
+        for x in p {
+            put(f(x));
+        }
+        put(self.player.loco.state as u64);
+        let c = self.player.hero.clip_state();
+        put(c.action as u64);
+        put(f(c.progress));
+        put(self.player.hero_hp as u64);
+        put(self.player.hero_mp as u64);
+        for ch in &self.characters {
+            put(ch.id);
+            for x in ch.position.iter().chain(ch.facing.iter()) {
+                put(f(*x));
+            }
+            put(ch.hp as u64);
+            put(ch.anim.clip_state().action as u64);
+        }
+        put(self.rng.fingerprint());
+        for &fl in &self.state.flags {
+            put(fl as u64);
+        }
+        let mut items: Vec<(u16, u32)> = self.state.items.iter().map(|(&k, &v)| (k, v)).collect();
+        items.sort_unstable();
+        for (k, v) in items {
+            put(((k as u64) << 32) | v as u64);
+        }
+        put(self.state.neopoints as u64);
+        h
+    }
+
     pub fn status_tint(&self, id: Option<u64>) -> Option<[f32; 3]> {
         let o = self.overrides.get(&id.unwrap_or(Self::HERO_DISPLAY))?;
         (o.colour != [1.0; 3]).then_some(o.colour)
@@ -18845,7 +18915,7 @@ impl Play {
         }
         let Some(h) = self.placed_object(pack, slot) else { return };
         let listener = camera.then(|| {
-            let (eye, focus) = (self.camera.eye, self.camera.focus);
+            let (eye, focus) = (self.player.camera.eye, self.player.camera.focus);
             (eye, unit([focus[0] - eye[0], focus[1] - eye[1], focus[2] - eye[2]]))
         });
         self.effects.update(&table, h, listener, &mut self.rng);
@@ -18896,7 +18966,7 @@ impl Play {
     /// query passes and stopped when it fails.
     fn placed_zone_step(&mut self) {
         let table = self.effect_table.clone();
-        let (eye, focus) = (self.camera.eye, self.camera.focus);
+        let (eye, focus) = (self.player.camera.eye, self.player.camera.focus);
         let listener = (eye, unit([focus[0] - eye[0], focus[1] - eye[1], focus[2] - eye[2]]));
         let mut on: Vec<(u32, usize)> = self.placed_on.iter().copied().collect();
         on.sort_unstable();
@@ -18986,7 +19056,7 @@ impl Play {
             }
         }
         if let Some((_, objects)) = self.save_glow {
-            let (eye, focus) = (self.camera.eye, self.camera.focus);
+            let (eye, focus) = (self.player.camera.eye, self.player.camera.focus);
             let forward = unit([focus[0] - eye[0], focus[1] - eye[1], focus[2] - eye[2]]);
             for h in objects {
                 self.effects.update(&table, h, Some((eye, forward)), &mut self.rng);
@@ -19016,21 +19086,21 @@ impl Play {
             }
         }
         // The listener: the camera position plus 5 x its forward axis; rows right, up, forward.
-        let (eye, focus) = (self.camera.eye, self.camera.focus);
+        let (eye, focus) = (self.player.camera.eye, self.player.camera.focus);
         let f = unit([focus[0] - eye[0], focus[1] - eye[1], focus[2] - eye[2]]);
         let r = unit([f[1] * UP[2] - f[2] * UP[1], f[2] * UP[0] - f[0] * UP[2], f[0] * UP[1] - f[1] * UP[0]]);
         let u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
         s.listener = snd::Listener::from_camera(eye, [r, u, f]);
-        let p = self.loco.position();
-        let state = self.loco.state;
-        let grounded = self.loco.body.gap < 0.1;
+        let p = self.player.loco.position();
+        let state = self.player.loco.state;
+        let grounded = self.player.loco.body.gap < 0.1;
         let code = self.world.probe(p[0], p[2], p[1] + neopets_sim::motion::PROBE_CEILING).kind;
         // Footsteps: a new layer-0 frame with bit 0x80 or 0x100 while grounded; gait by state.
-        let frame = self.hero.layer0();
+        let frame = self.player.hero.layer0();
         if frame.map(|f| f.0) != self.foot_frame.map(|f| f.0) {
             self.foot_frame = None;
         }
-        if grounded && self.hero.frame_bits() & 0x180 != 0 && frame != self.foot_frame {
+        if grounded && self.player.hero.frame_bits() & 0x180 != 0 && frame != self.foot_frame {
             self.foot_frame = frame;
             let gait = match state {
                 4 => 40,
@@ -19051,9 +19121,9 @@ impl Play {
                 _ => None,
             };
             if let Some(&id) = entry.and_then(|e| self.dust_ids.get(e)) {
-                let joint = if self.hero.frame_bits() & 0x80 != 0 { 28 } else { 31 };
-                let frames = self.hero.bone_frames();
-                let at = frames.get(joint).map_or(p, |f| placement(p, self.loco.facing).mul(f).t);
+                let joint = if self.player.hero.frame_bits() & 0x80 != 0 { 28 } else { 31 };
+                let frames = self.player.hero.bone_frames();
+                let at = frames.get(joint).map_or(p, |f| placement(p, self.player.loco.facing).mul(f).t);
                 let table = self.effect_table.clone();
                 self.effects.one_shot(&table, id, at, neopets_sim::effect::IDENTITY, &mut self.rng);
             }
@@ -19071,12 +19141,12 @@ impl Play {
         }
         self.last_state = state;
         // Low health: cue 157 every tick below 0.15 of the maximum, with do-not-restart.
-        if self.hero_hp > 0 && (self.hero_hp as f32) < 0.15 * self.hero_max as f32 {
+        if self.player.hero_hp > 0 && (self.player.hero_hp as f32) < 0.15 * self.player.hero_max as f32 {
             self.sound.play(snd::MAIN, 157, Play { do_not_restart: true, ..Default::default() });
         }
         // Independently, low magic: cue 158 while the magic pool is below 0.15 of its maximum
         // (SPEC-0036 Low-health warning; the same hero and the same do-not-restart rule).
-        if self.hero_mp_max > 0 && (self.hero_mp as f32) < 0.15 * self.hero_mp_max as f32 {
+        if self.player.hero_mp_max > 0 && (self.player.hero_mp as f32) < 0.15 * self.player.hero_mp_max as f32 {
             self.sound.play(snd::MAIN, 158, Play { do_not_restart: true, ..Default::default() });
         }
         self.creature_sounds();
@@ -19140,7 +19210,7 @@ impl Play {
         use neopets_sim::sound::{Play, AREA};
         let l = self.sound.listener.point;
         let dist = |c: [f32; 3]| ((c[0] - l[0]).powi(2) + (c[1] - l[1]).powi(2) + (c[2] - l[2]).powi(2)).sqrt();
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let hero_d = |c: [f32; 3]| ((c[0] - hero[0]).powi(2) + (c[1] - hero[1]).powi(2) + (c[2] - hero[2]).powi(2)).sqrt();
         let default = self.sound.default_volume;
         for i in 0..self.world.ambients.len() {
@@ -19253,9 +19323,9 @@ impl Play {
             }
             out.clip
         };
-        let view = self.hero.emote_view();
+        let view = self.player.hero.emote_view();
         let out = self.hero_emotes.consume(view, true);
-        clips.extend(apply(&mut self.hero, out));
+        clips.extend(apply(&mut self.player.hero, out));
         if let Some(c) = self.talk_with.and_then(|t| self.characters.iter_mut().find(|c| c.id == t)) {
             let view = c.anim.emote_view();
             let busy = matches!(view.main, 65..=74 | 78 | 97 | 98 | 146 | 147);
@@ -19370,7 +19440,7 @@ impl Play {
         }
         // Intensity: k counts the characters in AI state 19 (agro) that are not dead.
         let k = self.characters.iter().filter(|c| c.enemy.as_ref().is_some_and(|e| e.state == 19 && !e.is_dead())).count();
-        self.intensity.tick(k, self.hero_hp, self.hero_max);
+        self.intensity.tick(k, self.player.hero_hp, self.player.hero_max);
     }
 
     /// The location a save names: the current world's map area, else the last named one, else
@@ -19399,8 +19469,8 @@ impl Play {
     /// the status words -1.
     pub fn write_slot(&self, s: &mut neopets_sim::save::Slot, date: &[u8]) {
         use neopets_sim::save::{self as sv, Group, at};
-        let p = self.loco.position();
-        let f = self.loco.facing;
+        let p = self.player.loco.position();
+        let f = self.player.loco.facing;
         s.set_vec4(at::POSITION, [p[0], p[1], p[2], 1.0]);
         s.set_vec4(at::FACING, [f[0], f[1], f[2], 0.0]);
         s.set_u32(at::ACTIVE_HERO, self.hero_index as u32);
@@ -19436,7 +19506,7 @@ impl Play {
         s.set_i32(at::LUCK, self.luck);
         // Each hero's maxima, by index (the parked hero's from its record).
         let parked = self.parked.as_ref().map_or((self.growth.start[1], self.growth.start[3], self.growth.start[1], self.growth.start[3]), |p| (p.hp, p.mp, p.hp_max, p.mp_max));
-        let live = (self.hero_hp, self.hero_mp, self.hero_max, self.hero_mp_max);
+        let live = (self.player.hero_hp, self.player.hero_mp, self.player.hero_max, self.player.hero_mp_max);
         let by_hero = if self.hero_index == 0 { [live, parked] } else { [parked, live] };
         for (h, v) in by_hero.iter().enumerate() {
             s.set_maximum_words(h, v.2, v.3);
@@ -19499,7 +19569,7 @@ impl Play {
         for h in 0..2 {
             s.set_pools(h, by_hero[h].0, by_hero[h].1);
             for i in 0..14 {
-                let ticks = if h == self.hero_index { self.statuses.timers[i] } else { -1 };
+                let ticks = if h == self.hero_index { self.player.statuses.timers[i] } else { -1 };
                 s.set_status(h, i, sv::status_seconds(ticks));
             }
             for k in 0..4 {
@@ -19636,11 +19706,11 @@ impl Play {
         if self.hero_index == 1 {
             self.exchange_heroes();
         }
-        self.hero_max = m[0][0];
-        self.hero_mp_max = m[0][1];
+        self.player.hero_max = m[0][0];
+        self.player.hero_mp_max = m[0][1];
         let (hp, mp) = s.pools(0);
-        self.hero_hp = hp.min(self.hero_max);
-        self.hero_mp = mp.min(self.hero_mp_max);
+        self.player.hero_hp = hp.min(self.player.hero_max);
+        self.player.hero_mp = mp.min(self.player.hero_mp_max);
         if let Some(p) = self.parked.as_mut() {
             let (hp, mp) = s.pools(1);
             (p.hp_max, p.mp_max) = (m[1][0], m[1][1]);
@@ -19653,9 +19723,9 @@ impl Play {
         }
         // SPEC-0025 Status timers: restored for the active hero once the heroes are settled (a switch
         // clears them, and a parked hero's are saved inactive).
-        self.statuses.clear_all();
+        self.player.statuses.clear_all();
         for i in 0..14 {
-            self.statuses.apply(i as i32, sv::restore_seconds(s.status(self.hero_index, i)));
+            self.player.statuses.apply(i as i32, sv::restore_seconds(s.status(self.hero_index, i)));
         }
         // SPEC-0025 Per-world tables and Count table. The resident worlds read their rows again.
         self.kill_table.clear();
@@ -19698,7 +19768,7 @@ impl Play {
         self.arrive(pose);
         // SPEC-0055 2A step 6 / SPEC-0025 Loading: the selected hero arrives in state 59 (clip
         // 175, the arrival pose, to progress 0.99, then state 1); it reads no stick meanwhile.
-        self.loco.set_end_state(hero_states::ARRIVAL);
+        self.player.loco.set_end_state(hero_states::ARRIVAL);
         self.flags_seen = self.state.flags.clone();
         // Options (Loading, step 15): the slot's block, then the apply rule.
         self.options.block = neopets_sim::options::Block::from_bytes(&s.0[at::OPTIONS..at::OPTIONS + 32]);
@@ -19721,7 +19791,7 @@ impl Play {
     /// killing hit (to reach a scene that waits on IsAI_Dead in a trace).
     pub fn dev_kill_entities(&mut self, entities: &[usize]) -> usize {
         let pack = self.world.pack;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let targets: Vec<usize> = (0..self.characters.len()).filter(|&i| self.characters[i].pack == pack && self.characters[i].entity.is_some_and(|e| entities.contains(&e))).collect();
         for &i in &targets {
             self.character_take_hit(i, 1_000_000, hero, "the developer kill ");
@@ -19731,7 +19801,7 @@ impl Play {
 
     pub fn dev_kill_enemies(&mut self) -> usize {
         let pack = self.world.pack;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let targets: Vec<usize> = (0..self.characters.len())
             .filter(|&i| {
                 let c = &self.characters[i];
@@ -19822,10 +19892,10 @@ impl Play {
             // A point with no real ground under it (SPEC-0066: the Fang's lies outside its pack's terrain, and a miss
             // reads as height 0): the hero stays at the entry, and an item comes to him.
             if let Some(at) = ground {
-                let f = self.loco.facing;
+                let f = self.player.loco.facing;
                 self.arrive((at, f));
             } else if first.is_none() {
-                let (h, f) = (self.loco.position(), self.loco.facing);
+                let (h, f) = (self.player.loco.position(), self.player.loco.facing);
                 let near = [h[0] + 3.0 * f[0], h[1], h[2] + 3.0 * f[2]];
                 if let Some(i) = self.pools.get_mut(&pack).and_then(|q| q.slots.iter_mut().flatten().find(|i| i.position[0] == p[0] && i.position[2] == p[2])) {
                     i.position = near;
@@ -19847,7 +19917,7 @@ impl Play {
         };
         use neopets_sim::stairs::{Pad, Puzzle, SPIN};
         let pack = self.world.pack;
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         if self.stairs.as_ref().is_none_or(|s| s.0 != pack) {
             self.stairs = Some((pack, Puzzle::new(self.stair_types.clone()), false, p[1]));
         }
@@ -19875,7 +19945,7 @@ impl Play {
             let z = to.p[2] + to.d[2] * (to.w - d) - to.f[2] * f;
             let above = p[1] - self.world.ground_at(p[0], p[2], p[1] + 8.0).unwrap_or(p[1]);
             let y = self.world.ground_at(x, z, to.p[1] + 8.0).unwrap_or(to.p[1]) + above;
-            let h = self.loco.facing;
+            let h = self.player.loco.facing;
             let along = h[0] * from.f[0] + h[1] * from.f[1] + h[2] * from.f[2];
             let side = h[0] * from.d[0] + h[1] * from.d[1] + h[2] * from.d[2];
             ([x, y, z], unit(std::array::from_fn(|k| -along * to.f[k] - side * to.d[k])))
@@ -19896,9 +19966,9 @@ impl Play {
         }
         let offset = state.1.accumulator;
         if let Some((at, f, dy)) = warp {
-            self.loco.teleport(at, f);
-            self.camera.eye[1] += dy;
-            self.camera.focus[1] += dy;
+            self.player.loco.teleport(at, f);
+            self.player.camera.eye[1] += dy;
+            self.player.camera.focus[1] += dy;
             // Step 4, the characters: each of the world's active characters moves by (0, dy, 0)
             // when dy > 0 and it stands strictly below M, or dy < 0 and strictly above M (M the
             // pads' midpoint height, 24.1535 on disc).
@@ -19931,7 +20001,7 @@ impl Play {
     /// The story checker (diagnostic): the hero beside the nearest character of that name, or else the nearest with any of
     /// these entity ids, facing it. False when none is in the current world.
     pub fn dev_go_near(&mut self, name: &str, ids: &[usize]) -> bool {
-        let (pack, hero) = (self.world.pack, self.loco.position());
+        let (pack, hero) = (self.world.pack, self.player.loco.position());
         let d = |p: [f32; 3]| (p[0] - hero[0]).hypot(p[2] - hero[2]);
         // A character out of its zone is inactive until the hero is near: it still counts.
         let live = || self.characters.iter().filter(|c| c.pack == pack);
@@ -19956,7 +20026,7 @@ impl Play {
         let Some(k) = self.dev_spawns.iter().position(|s| s.0 == region) else { return };
         let (_, ordinal) = self.dev_spawns.remove(k);
         let Some((mut pl, model, anim, row, tuning)) = loaded.into_iter().find(|l| l.0.ordinal == ordinal) else { return };
-        let (hero, f) = (self.loco.position(), self.loco.facing);
+        let (hero, f) = (self.player.loco.position(), self.player.loco.facing);
         let (x, z) = (hero[0] + 8.0 * f[0], hero[2] + 8.0 * f[2]);
         let y = self.safe_floor(x, z, hero[1] + 8.0).unwrap_or(hero[1]);
         pl.position = [x, y, z];
@@ -20001,17 +20071,17 @@ impl Play {
             self.haste_safe = None;
             return;
         }
-        let p = self.loco.position();
-        let gap = self.loco.body.gap;
+        let p = self.player.loco.position();
+        let gap = self.player.loco.body.gap;
         let floor = self.world.probe(p[0], p[2], p[1] + 8.0).found || self.other.as_ref().is_some_and(|o| o.probe(p[0], p[2], p[1] + 8.0).found);
         let safe_here = self.safe_floor(p[0], p[2], p[1] + 8.0).is_some();
         let (pack, other) = (self.world.pack, self.other.as_ref().map(|o| o.pack));
         let safe = self.haste_safe.filter(|s| s.0 == pack || Some(s.0) == other);
-        if safe_here && gap < 1.0 && !self.loco.airborne() {
+        if safe_here && gap < 1.0 && !self.player.loco.airborne() {
             self.haste_safe = Some((pack, p));
         } else if let Some((_, at)) = safe {
             if neopets_sim::hero::haste_left_world(floor, gap, at[1] - p[1]) {
-                let f = self.loco.facing;
+                let f = self.player.loco.facing;
                 self.arrive((at, f));
             }
         } else {
@@ -20038,7 +20108,7 @@ impl Play {
     pub fn dev_place(&mut self, at: [f32; 3], facing: [f32; 3]) -> bool {
         let Some(y) = self.world.ground_at(at[0], at[2], at[1]) else { return false };
         let n = facing[0].hypot(facing[2]);
-        let f = if n > 1e-6 { [facing[0] / n, 0.0, facing[2] / n] } else { self.loco.facing };
+        let f = if n > 1e-6 { [facing[0] / n, 0.0, facing[2] / n] } else { self.player.loco.facing };
         self.arrive(([at[0], y, at[2]], f));
         true
     }
@@ -20055,8 +20125,8 @@ impl Play {
     /// world items were spawned.
     pub fn dev_drop(&mut self, item: u16, ahead: f32) -> usize {
         let pack = self.world.pack;
-        let p = self.loco.position();
-        let f = self.loco.facing;
+        let p = self.player.loco.position();
+        let f = self.player.loco.facing;
         let at = [p[0] + ahead * f[0], p[1] + 1.0, p[2] + ahead * f[2]];
         let spawn = |id: u16, charm: bool| neopets_sim::items::Spawn {
             id,
@@ -20085,8 +20155,8 @@ impl Play {
 
     /// Developer menu: both heroes to full health and magic.
     pub fn dev_heal(&mut self) {
-        self.hero_hp = self.hero_max;
-        self.hero_mp = self.hero_mp_max;
+        self.player.hero_hp = self.player.hero_max;
+        self.player.hero_mp = self.player.hero_mp_max;
         if let Some(p) = self.parked.as_mut() {
             p.hp = p.hp_max;
             p.mp = p.mp_max;
@@ -20199,8 +20269,8 @@ impl Play {
     pub fn map_view(&self) -> crate::menus::MapView {
         crate::menus::MapView {
             hero_area: self.world.map_area.or(self.state.transition_map).unwrap_or(-1),
-            hero: self.loco.position(),
-            facing: self.loco.facing,
+            hero: self.player.loco.position(),
+            facing: self.player.loco.facing,
             flags: self.state.flags.iter().copied().collect(),
             maps: self.state.maps.iter().copied().collect(),
             collected: self.state.collected.iter().copied().collect(),
@@ -20289,7 +20359,7 @@ impl Play {
     }
 
     pub fn status_camera(&self) -> String {
-        let c = &self.camera;
+        let c = &self.player.camera;
         let p = camera::polar(std::array::from_fn(|k| c.eye[k] - c.focus[k]));
         format!(
             "CAMERA (SPEC-0027 mode 0): profile distance {:.0}, distance {:.2}, yaw {:.1} deg, elevation {:.3}, spin {:.4}",
@@ -20402,22 +20472,22 @@ impl Play {
     }
 
     pub fn status(&self) -> String {
-        let p = self.loco.position();
+        let p = self.player.loco.position();
         format!(
             "PLAY (M7): hero at ({:.1}, {:.1}, {:.1}), state {}, phase {}, action {}, rate {:.2}, gap {:.2}, hp {}/{}, mp {}/{}, {} NP{}. \
              WASD move, Shift run (R1), Space jump (Cross), J/L I/K or right stick camera, R recentre (R3)",
             p[0],
             p[1],
             p[2],
-            self.loco.state,
-            self.loco.phase,
-            self.loco.action(),
-            self.loco.rate,
-            self.loco.body.gap,
-            self.hero_hp,
-            self.hero_max,
-            self.hero_mp,
-            self.hero_mp_max,
+            self.player.loco.state,
+            self.player.loco.phase,
+            self.player.loco.action(),
+            self.player.loco.rate,
+            self.player.loco.body.gap,
+            self.player.hero_hp,
+            self.player.hero_max,
+            self.player.hero_mp,
+            self.player.hero_mp_max,
             self.state.neopoints,
             if self.last_hurt.is_empty() { String::new() } else { format!(" ({})", self.last_hurt) }
         ) + &if self.quick.open {

@@ -694,7 +694,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         let list: Vec<String> = p.characters.iter().map(|c| format!("{} {}{}", c.name, c.pack, if c.inactive || c.deactivated { " (off)" } else { "" })).collect();
         let flags: Vec<String> = [2, 3, 4, 5, 6, 124, 126, 143, 145, 146, 148, 149].iter().map(|&f| format!("{f}:{}", u8::from(p.state.flag(f)))).collect();
         info!("Developer ticks: {} after {} frames", p.ticks, *frames);
-        info!("Developer chars: world {} other {:?} hero {:?} flags [{}]: {}", p.world.pack, p.other.as_ref().map(|w| w.pack), p.loco.position(), flags.join(" "), list.join(", "));
+        info!("Developer chars: world {} other {:?} hero {:?} flags [{}]: {}", p.world.pack, p.other.as_ref().map(|w| w.pack), p.player.loco.position(), flags.join(" "), list.join(", "));
     }
     // With "objnear": the drawn objects near the hero logged ten seconds in (diagnostic).
     if *frames == 600 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("objnear")) {
@@ -731,7 +731,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
     if keys.just_pressed(KeyCode::F8) {
         if let Some(t) = cameras.iter().next() {
             let fc = dev.free.unwrap_or_else(|| FreeCam::from_transform(t));
-            let h = play.play.loco.position();
+            let h = play.play.player.loco.position();
             let path = "private/views.txt";
             let n = std::fs::read_to_string(path).map_or(0, |s| s.lines().filter(|l| l.starts_with("view ")).count()) + 1;
             let line = format!(
@@ -1140,7 +1140,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
             (label, target.map_or("-".to_string(), |k| k.to_string()))
         }
         Entry::Start => (format!("Start point ({} here)", p.dev_start_points()), dev.start.to_string()),
-        Entry::Heal => ("Full heal".into(), format!("{}/{} HP", p.hero_hp, p.hero_max)),
+        Entry::Heal => ("Full heal".into(), format!("{}/{} HP", p.player.hero_hp, p.player.hero_max)),
         Entry::Hero => (format!("Switch hero  (now {})", if p.hero_index == 0 { "Tor" } else { "Roberta" }), String::new()),
         Entry::Kill => ("Defeat every enemy here".into(), String::new()),
         Entry::CloudBeast => ("Spawn the Cloud Beast here (cut boss)".into(), String::new()),

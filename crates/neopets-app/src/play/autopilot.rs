@@ -108,7 +108,7 @@ impl Play {
     fn autopilot_tick(&mut self, a: &mut Autopilot, input: &mut HeroInput) {
         let t = self.ticks;
         let pack = self.world.pack;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let keep = HeroInput { square_held: input.square_held, ..Default::default() };
         *input = keep;
         if a.pack != pack {
@@ -166,7 +166,7 @@ impl Play {
             return;
         }
         // Below 40 % health: a potion from the quick panel when one is owned.
-        if self.hero_hp > 0 && self.hero_hp * 5 < self.hero_max * 2 {
+        if self.player.hero_hp > 0 && self.player.hero_hp * 5 < self.player.hero_max * 2 {
             let owned = (0..4).find(|&k| {
                 let id = self.quick.entries[k];
                 id >= 0 && self.state.items.get(&(id as u16)).is_some_and(|&n| n > 0)
@@ -474,7 +474,7 @@ impl Play {
 
     fn autopilot_choose(&self, a: &mut Autopilot) -> Target {
         let pack = self.world.pack;
-        let hero = self.loco.position();
+        let hero = self.player.loco.position();
         let d3 = |p: [f32; 3]| (p[0] - hero[0]).hypot(p[2] - hero[2]) + 2.0 * (p[1] - hero[1]).abs();
         // The validity test reads a copy, so the onward search and the door reset can write.
         let snap = a.clone();
@@ -559,7 +559,7 @@ impl Play {
             Target::Place(k) => self.world.entries.get(k).map(|e| e.0),
             Target::Spot(k) => self.world.all_volumes.get(k).map(Self::volume_middle),
             Target::Door(k) => self.world.planes.get(k).map(|pl| [pl.p[0] + 0.5 * pl.w * pl.d[0], pl.p[1], pl.p[2] + 0.5 * pl.w * pl.d[2]]),
-            Target::Herd => self.herd_goal().map(|g| [g[0], self.world.ground_at(g[0], g[1], self.loco.position()[1] + 3.0).unwrap_or(self.loco.position()[1]), g[1]]),
+            Target::Herd => self.herd_goal().map(|g| [g[0], self.world.ground_at(g[0], g[1], self.player.loco.position()[1] + 3.0).unwrap_or(self.player.loco.position()[1]), g[1]]),
             Target::Onward => onward,
         }
     }

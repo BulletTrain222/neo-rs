@@ -302,10 +302,10 @@ fn warp(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play, pack: u32) -> R
     if old.hero_index != play.hero_index {
         play.trace_select_hero(old.hero_index);
     }
-    play.hero_max = old.hero_max;
-    play.hero_hp = old.hero_hp;
-    play.hero_mp_max = old.hero_mp_max;
-    play.hero_mp = old.hero_mp;
+    play.player.hero_max = old.player.hero_max;
+    play.player.hero_hp = old.player.hero_hp;
+    play.player.hero_mp_max = old.player.hero_mp_max;
+    play.player.hero_mp = old.player.hero_mp;
     play.generation = old.generation + 1;
     play.options = old.options;
     play.cheats = old.cheats;
@@ -1463,7 +1463,7 @@ fn step_sim(
         }) {
             static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if play.play.ticks >= 60 && !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                play.play.statuses.apply(code as i32, secs);
+                play.play.player.statuses.apply(code as i32, secs);
             }
         }
         // NEOPETS_TRACE_DOWN, NEOPETS_TRACE_LEFT and NEOPETS_TRACE_CIRCLE="tick,...": a D-pad Down
@@ -1731,8 +1731,8 @@ fn step_sim(
                     let n: Vec<f32> = r.split(',').filter_map(|t| t.trim().parse().ok()).collect();
                     if k.trim().parse::<u64>().ok() == Some(play.play.ticks) && n.len() == 3 {
                         let y = play.play.world.ground_at(n[0], n[1], n[2]).unwrap_or(n[2]);
-                        let f = play.play.loco.facing;
-                        play.play.loco.teleport([n[0], y, n[1]], f);
+                        let f = play.play.player.loco.facing;
+                        play.play.player.loco.teleport([n[0], y, n[1]], f);
                     }
                 }
                 for (f, k) in std::env::var("NEOPETS_TRACE_LEVEL").unwrap_or_default().split(',').filter_map(|e| e.split_once('@')) {
@@ -2027,7 +2027,7 @@ fn save_state(play: &play::Play, name: &str) -> Result<String, String> {
     let mut file = neopets_sim::save::SaveFile::default();
     let date = save_date();
     play.write_slot(&mut file.slots[0], &date);
-    let (p, f) = (play.loco.position(), play.loco.facing);
+    let (p, f) = (play.player.loco.position(), play.player.loco.facing);
     let name = name.replace(['\n', '\r'], " ");
     let place = format!("{} {} {} {} {} {} {}\n{}\n{}\n", play.world.pack, p[0], p[1], p[2], f[0], f[1], f[2], name.trim(), String::from_utf8_lossy(&date));
     write_save(&format!("{dir}/{id}.bin"), &file)?;
@@ -5023,7 +5023,7 @@ fn play_trace(
             Some(slot) => match load_game_from(disc, index, &play, &slot) {
                 Ok(p) => {
                     play = p;
-                    println!("      loaded slot {k}: world {}, hero at {:?}", play.world.pack, play.loco.position());
+                    println!("      loaded slot {k}: world {}, hero at {:?}", play.world.pack, play.player.loco.position());
                 }
                 Err(e) => eprintln!("Slot {k} could not load: {e}"),
             },
@@ -5124,7 +5124,7 @@ fn play_trace(
     // NEOPETS_TRACE_ROOTS="a,b,...": each hero clip's key count and summed root records.
     if let Ok(v) = std::env::var("NEOPETS_TRACE_ROOTS") {
         for id in v.split(',').filter_map(|t| t.trim().parse::<u32>().ok()) {
-            println!("      hero clip {id}: {:?}", play.hero.root_sum(id));
+            println!("      hero clip {id}: {:?}", play.player.hero.root_sum(id));
         }
     }
     // NEOPETS_TRACE_MOTES="w0,w1,w2": diagnostic Mote ids set into Tor's equipment words 0 to
@@ -5230,8 +5230,8 @@ fn play_trace(
     // NEOPETS_TRACE_HP=n: the hero's starting hit points (diagnostic); a value above the
     // maximum raises the maximum too, so the boss-fight refills keep it.
     if let Some(hp) = std::env::var("NEOPETS_TRACE_HP").ok().and_then(|v| v.parse::<i32>().ok()) {
-        play.hero_hp = hp;
-        play.hero_max = play.hero_max.max(hp);
+        play.player.hero_hp = hp;
+        play.player.hero_max = play.player.hero_max.max(hp);
     }
     // NEOPETS_TRACE_PET="type,T": a diagnostic petpet activated by type at the start (F = T).
     if let Ok(v) = std::env::var("NEOPETS_TRACE_PET") {
@@ -5382,7 +5382,7 @@ fn play_trace(
     println!("Script groups of {}: {}", play.world.pack, kinds.join(" "));
     println!("Script volumes of {} (index, a point inside): {:?}", play.world.pack, play.world.volume_points());
     let solid_kinds: Vec<usize> = [1u8, 3, 4, 7].iter().map(|k| play.world.solids.iter().filter(|v| v.kind == *k).count()).collect();
-    let hero = play.loco.position();
+    let hero = play.player.loco.position();
     let mut near: Vec<(f32, u8, [f32; 3])> = play.world.solids.iter().map(|v| {
         let at = match v.shape {
             neopets_sim::trigger::Shape::Sphere { centre, .. } => centre,
@@ -5570,8 +5570,8 @@ fn play_trace(
         }
         // NEOPETS_TRACE_EYE=n: the camera every n ticks.
         if std::env::var("NEOPETS_TRACE_EYE").ok().and_then(|v| v.trim().parse::<u64>().ok()).is_some_and(|n| play.ticks % n == 0) {
-            let h = play.loco.position();
-            println!("EYE {} pack {} hero {:.2},{:.2},{:.2} state {} facing {:.2},{:.2} eye {:.2},{:.2},{:.2} focus {:.2},{:.2},{:.2} polar {:?}", play.ticks, play.world.pack, h[0], h[1], h[2], play.loco.state, play.loco.facing[0], play.loco.facing[2], play.camera.eye[0], play.camera.eye[1], play.camera.eye[2], play.camera.focus[0], play.camera.focus[1], play.camera.focus[2], play.camera.current);
+            let h = play.player.loco.position();
+            println!("EYE {} pack {} hero {:.2},{:.2},{:.2} state {} facing {:.2},{:.2} eye {:.2},{:.2},{:.2} focus {:.2},{:.2},{:.2} polar {:?}", play.ticks, play.world.pack, h[0], h[1], h[2], play.player.loco.state, play.player.loco.facing[0], play.player.loco.facing[2], play.player.camera.eye[0], play.player.camera.eye[1], play.player.camera.eye[2], play.player.camera.focus[0], play.player.camera.focus[1], play.player.camera.focus[2], play.player.camera.current);
         }
         // NEOPETS_DEV_OBJEND="tick:a,b": as in the window, in the trace (diagnostic).
         if let Some((k, objs)) = std::env::var("NEOPETS_DEV_OBJEND").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.trim().parse::<u64>().unwrap_or(0), b.split(',').filter_map(|s| s.trim().parse::<usize>().ok()).collect::<Vec<_>>())) {
@@ -5721,7 +5721,7 @@ fn play_trace(
         if std::env::var_os("NEOPETS_TRACE_BEND").is_some() {
             let bushes: Vec<([f32; 3], [f32; 3])> = play.foliage.get(&play.world.pack).into_iter().flatten().flat_map(|p| p.plants.iter().zip(&p.bushes).map(|(q, b)| (q.position, b.up))).collect();
             if play.ticks == 1 {
-                let hero = play.loco.position();
+                let hero = play.player.loco.position();
                 let mut near: Vec<_> = bushes.iter().map(|(q, _)| (((q[0] - hero[0]).hypot(q[2] - hero[2])), *q)).collect();
                 near.sort_by(|a, b| a.0.total_cmp(&b.0));
                 println!("      bushes {} nearest {:?}", bushes.len(), &near[..near.len().min(3)]);
@@ -5791,7 +5791,7 @@ fn play_trace(
             }
         }
         if play.ticks == 60 && std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
-            let hero = play.loco.position();
+            let hero = play.player.loco.position();
             let mut near: Vec<(f32, usize, [f32; 3], Option<u8>, i32)> = play.world.breakables.iter().enumerate().map(|(i, b)| { let p = b.position(); (((p[0] - hero[0]).powi(2) + (p[2] - hero[2]).powi(2)).sqrt(), i, p, b.volume.map(|v| v.kind), b.state) }).collect();
             near.sort_by(|a, b| a.0.total_cmp(&b.0));
             println!("      breakables {} (meshes {}), nearest {:?}", play.world.breakables.len(), play.world.breakables.iter().filter(|b| b.mesh.is_some()).count(), &near[..near.len().min(3)]);
@@ -5804,7 +5804,7 @@ fn play_trace(
         // NEOPETS_TRACE_DROP=n: the developer menu's coin drop (with item 160) on tick n.
         if std::env::var_os("NEOPETS_TRACE_POOL").is_some() && play.ticks % 20 == 0 {
             let live: Vec<String> = play.pools.get(&play.world.pack).map(|p| p.slots.iter().flatten().map(|it| format!("{}:{:.1}/{:.1}", it.id, it.age, it.lifetime)).collect()).unwrap_or_default();
-            println!("      pool on tick {} (hero state {} dialogue {}): {}", play.ticks, play.loco.state, play.dialogue_open, live.join(" "));
+            println!("      pool on tick {} (hero state {} dialogue {}): {}", play.ticks, play.player.loco.state, play.dialogue_open, live.join(" "));
         }
         // NEOPETS_TRACE_DROP_ITEM=id picks the item; NEOPETS_TRACE_DROP takes a list of ticks.
         if std::env::var("NEOPETS_TRACE_DROP").unwrap_or_default().split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| k == play.ticks) {
@@ -5814,7 +5814,7 @@ fn play_trace(
         }
         if quit_at.is_some_and(|k| k == play.ticks) || std::mem::take(&mut play.teardown_wanted) {
             quit_at = None;
-            let held = |p: &play::Play| (p.world.pack, p.hero_index, p.hero_hp, p.state.flags.len(), p.state.neopoints, p.snapshot.is_some(), p.characters.len(), p.generation);
+            let held = |p: &play::Play| (p.world.pack, p.hero_index, p.player.hero_hp, p.state.flags.len(), p.state.neopoints, p.snapshot.is_some(), p.characters.len(), p.generation);
             println!("      Quit on tick {}: before (world, hero, hp, flags, NP, snapshot, characters, game) {:?}", play.ticks, held(&play));
             match new_game(&mut archive.disc, &archive.index, &play) {
                 Ok(new) => {
@@ -5876,7 +5876,7 @@ fn play_trace(
                 route.clear();
                 println!("      waypoint left with the world on tick {}; {} left", play.ticks, legs.len() - 1);
             }
-            let p = play.loco.position();
+            let p = play.player.loco.position();
             if route.is_empty() && legs.len() > 1 {
                 route = match leg_y.first().copied().flatten() {
                     Some(y) => play.route_to(200_000, play::Goal::PointAt([legs[0][0], legs[0][1], y])),
@@ -5904,7 +5904,7 @@ fn play_trace(
             }
         }
         while !walk_path && route.len() > 1 && {
-            let p = play.loco.position();
+            let p = play.player.loco.position();
             (route[0][0] - p[0]).powi(2) + (route[0][1] - p[2]).powi(2) < 4.0
         } {
             route.remove(0);
@@ -5914,7 +5914,7 @@ fn play_trace(
             // The name "wild" follows the first wild petpet, to within 3 units.
             let wild = name == "wild";
             if let Some(c) = play.characters.iter().find(|c| (c.name == name || wild && c.wild.is_some()) && c.pack == play.world.pack) {
-                let p = play.loco.position();
+                let p = play.player.loco.position();
                 let t = [c.position[0], c.position[2]];
                 if (t[0] - p[0]).hypot(t[1] - p[2]) <= if wild { 3.0 } else { 4.5 } {
                     route.clear();
@@ -5952,8 +5952,8 @@ fn play_trace(
                 let n: Vec<f32> = p.split(',').filter_map(|x| x.trim().parse().ok()).collect();
                 if t.trim().parse::<u64>().ok() == Some(play.ticks) && n.len() == 3 {
                     let y = play.world.ground_at(n[0], n[1], n[2]).unwrap_or(n[2]);
-                    let f = play.loco.facing;
-                    play.loco.teleport([n[0], y, n[1]], f);
+                    let f = play.player.loco.facing;
+                    play.player.loco.teleport([n[0], y, n[1]], f);
                     println!("      hero warped to ({:.2}, {y:.2}, {:.2}) on tick {}", n[0], n[1], play.ticks);
                 }
             }
@@ -6031,16 +6031,16 @@ fn play_trace(
             route.first().copied().or(to.filter(|t| !t[0].is_nan()))
         };
         if let Some([tx, tz]) = goal.filter(|g| {
-            let p = play.loco.position();
+            let p = play.player.loco.position();
             (route.len() > 1 && !walk_path) || to.is_some_and(|t| t[0].is_nan()) || (g[0] - p[0]).hypot(g[1] - p[2]) > if walk_path { 1.5 } else { 2.0 }
         }) {
-            let p = play.loco.position();
-            let (f, l) = play.camera.rows();
+            let p = play.player.loco.position();
+            let (f, l) = play.player.camera.rows();
             let (dx, dz) = (tx - p[0], tz - p[2]);
             let len = (dx * dx + dz * dz).sqrt().max(1e-6);
             // Close, Roberta only turns: a slow step while her facing is off the target, none
             // once it is within about 8 degrees.
-            let aligned = (dx * play.loco.facing[0] + dz * play.loco.facing[2]) / (dx * dx + dz * dz).sqrt().max(1e-6) > 0.99;
+            let aligned = (dx * play.player.loco.facing[0] + dz * play.player.loco.facing[2]) / (dx * dx + dz * dz).sqrt().max(1e-6) > 0.99;
             let m = if fight.is_some_and(|f| f.1) && play.hero_index == 1 { if aligned { 0.0 } else { 0.15 } } else { 0.7 };
             forward = m * (dx * f[0] + dz * f[2]) / len / (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
             side = m * (dx * l[0] + dz * l[2]) / len;
@@ -6050,7 +6050,7 @@ fn play_trace(
         // NEOPETS_TRACE_PUSH_PACK=p: the push only while the hero is in pack p.
         let push_here = std::env::var("NEOPETS_TRACE_PUSH_PACK").ok().and_then(|v| v.trim().parse::<u32>().ok()).is_none_or(|k| k == play.world.pack);
         if let Some((x, z)) = std::env::var("NEOPETS_TRACE_PUSH").ok().filter(|_| push_here).and_then(|v| { let (a, b) = v.split_once(',')?; Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?)) }) {
-            (forward, side) = match play.loco.state {
+            (forward, side) = match play.player.loco.state {
                 58 => (0.0, 0.0),
                 41 => (1.0, 0.0),
                 _ => play.stick_toward(x, z),
@@ -6058,7 +6058,7 @@ fn play_trace(
         }
         // NEOPETS_TRACE_BLOCK: in the block state the stick points into the held face (centred
         // during the approach), so the hero pushes; the Square prompts are pressed as usual.
-        if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() && play.loco.state == neopets_sim::hero::BLOCK {
+        if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() && play.player.loco.state == neopets_sim::hero::BLOCK {
             // NEOPETS_TRACE_BLOCK_MOVE="tick:t;tick:t": from each tick on the stick turns t
             // quarter turns from the held face (0 push, 2 pull, 1 and 3 the side moves; "-"
             // centred).
@@ -6193,7 +6193,7 @@ fn play_trace(
         }) {
             // Tick 0: every 10 ticks, with the hero's position.
             if t == 0 && play.ticks % 10 == 0 {
-                let h = play.loco.position();
+                let h = play.player.loco.position();
                 println!("      hero tick {}: ({:.2}, {:.2}, {:.2}) ground under {:?}", play.ticks, h[0], h[1], h[2], play.world.ground_at(h[0], h[2], h[1] + 3.0));
             }
             if t == play.ticks {
@@ -6355,7 +6355,7 @@ fn play_trace(
             let (name, from) = v.rsplit_once('@').unwrap_or((v.as_str(), "0"));
             (from.trim().parse::<u64>().ok()? <= play.ticks).then(|| name.to_string())
         }) {
-            let h = play.loco.position();
+            let h = play.player.loco.position();
             let pack = play.world.pack;
             if let Some(c) = play.characters.iter().filter(|c| c.pack == pack && c.name == name && !c.inactive).min_by(|a, b| {
                 let d = |c: &&play::Character| (c.position[0] - h[0]).hypot(c.position[2] - h[2]);
@@ -6363,7 +6363,7 @@ fn play_trace(
             }) {
                 let (dx, dz) = (c.position[0] - h[0], c.position[2] - h[2]);
                 let l = dx.hypot(dz).max(1e-6);
-                play.loco.facing = [dx / l, 0.0, dz / l];
+                play.player.loco.facing = [dx / l, 0.0, dz / l];
             }
         }
         // NEOPETS_TRACE_FAERIE_DRIVE: when the Darkest Faerie's absorb window starts (code 7) the
@@ -6411,12 +6411,12 @@ fn play_trace(
                     continue;
                 }
                 if let Some(name) = what.strip_prefix("save:") {
-                    println!("      save state on tick {}: ready {} {:?} at {:?}", play.ticks, play.state_ready(), save_state(&play, name), play.loco.position());
+                    println!("      save state on tick {}: ready {} {:?} at {:?}", play.ticks, play.state_ready(), save_state(&play, name), play.player.loco.position());
                 } else if let Some(r) = what.strip_prefix("load:").and_then(|id| load_state(&mut archive.disc, &archive.index, &play, id)) {
                     match r {
                         Ok(p) => {
                             play = p;
-                            println!("      state load on tick {}: world {} hero at {:?} hp {}/{}", play.ticks, play.world.pack, play.loco.position(), play.hero_hp, play.hero_max);
+                            println!("      state load on tick {}: world {} hero at {:?} hp {}/{}", play.ticks, play.world.pack, play.player.loco.position(), play.player.hero_hp, play.player.hero_max);
                         }
                         Err(e) => println!("      state load failed: {e}"),
                     }
@@ -6434,10 +6434,10 @@ fn play_trace(
                 let Some((t, p)) = e.split_once(':') else { continue };
                 let n: Vec<f32> = p.split(',').filter_map(|t| t.trim().parse().ok()).collect();
                 if t.trim().parse::<u64>().ok() == Some(play.ticks) && n.len() >= 2 {
-                    let h = play.loco.position();
+                    let h = play.player.loco.position();
                     let (dx, dz) = (n[0] - h[0], n[1] - h[2]);
                     let l = dx.hypot(dz).max(1e-6);
-                    play.loco.facing = [dx / l, 0.0, dz / l];
+                    play.player.loco.facing = [dx / l, 0.0, dz / l];
                 }
             }
         }
@@ -6485,8 +6485,8 @@ fn play_trace(
             Some((k.trim().parse::<u64>().ok()?, x.trim().parse::<f32>().ok()?, z.trim().parse::<f32>().ok()?))
         }) {
             if play.ticks >= k {
-                let h = play.loco.position();
-                let (e, c) = (play.camera.eye, play.camera.focus);
+                let h = play.player.loco.position();
+                let (e, c) = (play.player.camera.eye, play.player.camera.focus);
                 let (fx, fz) = (c[0] - e[0], c[2] - e[2]);
                 let l = fx.hypot(fz).max(1e-6);
                 let (fx, fz) = (fx / l, fz / l);
@@ -6526,8 +6526,8 @@ fn play_trace(
             // NEOPETS_TRACE_CLIMB: the grab-block (10) and stop-climbing (18) prompts are not pressed, so the hero keeps
             // walking into the block.
             // NEOPETS_TRACE_NOAUTO: prompts are not pressed (only NEOPETS_TRACE_SQUARE presses).
-            square: (std::env::var_os("NEOPETS_TRACE_NOAUTO").is_none() && !story_order.quiet && play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()) && !(play.loco.state == neopets_sim::hero::BLOCK && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some()))
-                || (stalk.is_some() && !matches!(play.loco.state, 22 | 40))
+            square: (std::env::var_os("NEOPETS_TRACE_NOAUTO").is_none() && !story_order.quiet && play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()) && !(play.player.loco.state == neopets_sim::hero::BLOCK && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some()))
+                || (stalk.is_some() && !matches!(play.player.loco.state, 22 | 40))
                 || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             // NEOPETS_TRACE_GUARD=n (or "n-m"): the guard is held on every tick from tick n (up to
             // tick m) (diagnostic).
@@ -6539,7 +6539,7 @@ fn play_trace(
                     a.trim().parse::<u64>().is_ok_and(|n| play.ticks >= n) && b.trim().parse::<u64>().map_or(true, |m| play.ticks <= m)
                 })
                 || (std::env::var_os("NEOPETS_TRACE_GUARD_ORB").is_some() && {
-                    let h = play.loco.position();
+                    let h = play.player.loco.position();
                     play.characters.iter().filter_map(|c| c.faerie.as_ref()).flat_map(|f| f.slots.iter().flatten()).any(|s| (0..3).map(|k| (s.position[k] - h[k]).powi(2)).sum::<f32>() < 900.0)
                 }),
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
@@ -6582,7 +6582,7 @@ fn play_trace(
         // In a fight below half health the trace drinks: it opens the quick panel, selects the
         // first entry it owns and presses Cross (or closes the panel with Triangle).
         let mut input = input;
-        if fight.is_some() && play.hero_hp > 0 && play.hero_hp < play.hero_max / 2 {
+        if fight.is_some() && play.player.hero_hp > 0 && play.player.hero_hp < play.player.hero_max / 2 {
             let owned = (0..4).find(|&k| {
                 let id = play.quick.entries[k];
                 id >= 0 && play.state.items.get(&(id as u16)).is_some_and(|&n| n > 0)
@@ -6621,6 +6621,10 @@ fn play_trace(
             r.apply(&mut play, &mut input);
         }
         play.tick(&input, pad);
+        // NEOPETS_TRACE_CHECKSUM: the state checksum after each tick (docs/MULTIPLAYER.md step 1).
+        if std::env::var_os("NEOPETS_TRACE_CHECKSUM").is_some() {
+            println!("CHECKSUM {} {:016x}", play.ticks, play.checksum());
+        }
         // Loads go through the same background loader as the window; the trace does not wait.
         for line in streamer.pump(&mut play) {
             println!("      {line}");
@@ -6636,9 +6640,9 @@ fn play_trace(
             println!("      scene on tick {}: {now_scene}", play.ticks);
             scene = now_scene;
         }
-        let now: Vec<usize> = (0..14).filter(|&i| play.statuses.active(i)).collect();
+        let now: Vec<usize> = (0..14).filter(|&i| play.player.statuses.active(i)).collect();
         if now != statuses_shown {
-            println!("      hero statuses {now:?} on tick {} (hp {}, mp {})", play.ticks, play.hero_hp, play.hero_mp);
+            println!("      hero statuses {now:?} on tick {} (hp {}, mp {})", play.ticks, play.player.hero_hp, play.player.hero_mp);
             statuses_shown = now;
         }
         if !play.last_pickup.is_empty() && play.last_pickup != last_pickup {
@@ -6703,7 +6707,7 @@ fn play_trace(
             Some((a.trim().parse::<i32>().ok()?, b.trim().parse::<i32>().ok()?))
         }) {
             if play.ticks == 60 {
-                play.statuses.apply(code, secs);
+                play.player.statuses.apply(code, secs);
             }
             if let Some(t) = play.status_tint(None).filter(|_| play.ticks % 15 == 0) {
                 println!("      hero tint ({:.3}, {:.3}, {:.3}) on tick {}", t[0], t[1], t[2], play.ticks);
@@ -6733,15 +6737,15 @@ fn play_trace(
                 println!("      hop {hops}: standing before door 0 of {}", play.world.pack);
             }
         }
-        let (p, b) = (play.loco.position(), &play.loco.body);
+        let (p, b) = (play.player.loco.position(), &play.player.loco.body);
         println!(
             "{:5} pos ({:9.3} {:8.3} {:9.3}) state {:2} phase {:2} action {:3} gap {:8.3} vy {:7.3} n ({:.2} {:.2} {:.2})",
-            play.ticks, p[0], p[1], p[2], play.loco.state, play.loco.phase, play.loco.action(), b.gap, b.velocity[1],
+            play.ticks, p[0], p[1], p[2], play.player.loco.state, play.player.loco.phase, play.player.loco.action(), b.gap, b.velocity[1],
             b.normal[0], b.normal[1], b.normal[2]
         );
         // NEOPETS_TRACE_FACING: the facing, the stick target and the body velocity too.
         if std::env::var_os("NEOPETS_TRACE_FACING").is_some() {
-            println!("      facing {:?} target {:?} velocity {:?} root {:?} camera rows {:?}", play.loco.facing, play.loco.target, b.velocity, play.root_step, play.camera.rows()); println!("      eye {:?} focus {:?}", play.camera.eye, play.camera.focus);
+            println!("      facing {:?} target {:?} velocity {:?} root {:?} camera rows {:?}", play.player.loco.facing, play.player.loco.target, b.velocity, play.root_step, play.player.camera.rows()); println!("      eye {:?} focus {:?}", play.player.camera.eye, play.player.camera.focus);
         }
         if play.ticks % 60 == 0 {
             println!("      {}", play.status_camera());
@@ -6774,7 +6778,7 @@ fn play_trace(
         }
         if play.dialogue_open && play.ticks % 15 == 0 {
             let partner = play.talk_partner_view();
-            println!("      talking: hero main {} | partner {partner:?}", play.hero.action());
+            println!("      talking: hero main {} | partner {partner:?}", play.player.hero.action());
         }
         let stingers = std::mem::take(&mut play.stinger_requests);
         if !stingers.is_empty() {
@@ -6833,7 +6837,7 @@ fn play_trace(
                 let summary = |p: &play::Play| {
                     let mut inv: Vec<_> = p.state.items.iter().map(|(k, v)| (*k, *v)).collect();
                     inv.sort();
-                    format!("weapon {:?}, shield {:?}, items {inv:?}, flags {:?}, luck {}, statuses {:?}, restart {:?}, collected {:?}, maps {:?}", p.weapon, p.shield, p.state.flags, p.luck, p.statuses.timers, p.restart, p.state.collected, p.state.maps)
+                    format!("weapon {:?}, shield {:?}, items {inv:?}, flags {:?}, luck {}, statuses {:?}, restart {:?}, collected {:?}, maps {:?}", p.weapon, p.shield, p.state.flags, p.luck, p.player.statuses.timers, p.restart, p.state.collected, p.state.maps)
                 };
                 println!("Round trip before: {}", summary(&play));
                 println!("Round trip after:  {}", summary(&loaded));
@@ -7031,8 +7035,8 @@ fn play_frame(
 ) {
     let _span = crate::perf::span("play_frame");
     let Some(mut state) = play else { return };
-    let p = state.play.loco.position();
-    let f = state.play.loco.facing;
+    let p = state.play.player.loco.position();
+    let f = state.play.player.loco.facing;
     // Characters face +Z in model space (SPEC-0004); turn that onto the facing.
     let rotation = Quat::from_rotation_y(f[0].atan2(f[2]));
     if !state.play.spawned {
@@ -7046,22 +7050,22 @@ fn play_frame(
         // is drawn solid (Roberta's head dome among them, whose base alpha is 0). The additive
         // highlight itself is not drawn.
         {
-            for part in state.play.model.parts.iter_mut().filter(|p| p.program == Some(6) || (!p.colors.is_empty() && p.colors.iter().all(|c| c[3] < 0.5))) {
+            for part in state.play.player.model.parts.iter_mut().filter(|p| p.program == Some(6) || (!p.colors.is_empty() && p.colors.iter().all(|c| c[3] < 0.5))) {
                 for c in &mut part.colors {
                     c[3] = 1.0;
                 }
             }
         }
-        let parts = part_assets(&state.play.model, &mut meshes, &mut materials, &mut images);
+        let parts = part_assets(&state.play.player.model, &mut meshes, &mut materials, &mut images);
         // SPEC-0003 How a pass is drawn: two-pass parts' second layer, skinned with pass 0.
-        let second = pass1_assets(&state.play.model, &mut meshes, &mut pass1_materials, &mut images);
+        let second = pass1_assets(&state.play.player.model, &mut meshes, &mut pass1_materials, &mut images);
         let mut skinned = Vec::new();
         // GPU skinning (gpu_skin.rs), as for the world's characters.
-        let bones = state.play.hero.skin_matrices().len();
+        let bones = state.play.player.hero.skin_matrices().len();
         let gpu = gpu_skin::enabled() && gpu_skin::fits(bones);
         if gpu {
             for (i, mesh) in second.iter().map(|(i, m, _, _)| (*i, m)).chain(parts.iter().map(|(i, m, _)| (*i, m))) {
-                let part = &state.play.model.parts[i];
+                let part = &state.play.player.model.parts[i];
                 if !part.weights.is_empty() {
                     if let Some(mut m) = meshes.get_mut(mesh) {
                         gpu_skin::prepare_mesh(&mut m, part, bones);
@@ -7079,7 +7083,7 @@ fn play_frame(
                 }
                 let skin_of = |joints: &Vec<Entity>| skin.clone().map(|h| (bevy::mesh::skinning::SkinnedMesh { inverse_bindposes: h, joints: joints.clone() }, bevy::camera::visibility::NoFrustumCulling));
                 for (i, mesh, material, scroll) in second {
-                    let skinned_part = !state.play.model.parts[i].weights.is_empty();
+                    let skinned_part = !state.play.player.model.parts[i].weights.is_empty();
                     if skinned_part && !gpu {
                         skinned.push((mesh.clone(), i));
                     }
@@ -7092,7 +7096,7 @@ fn play_frame(
                     }
                 }
                 for (i, mesh, material) in parts {
-                    let skinned_part = !state.play.model.parts[i].weights.is_empty();
+                    let skinned_part = !state.play.player.model.parts[i].weights.is_empty();
                     if skinned_part && !gpu {
                         skinned.push((mesh.clone(), i));
                     }
@@ -7122,13 +7126,13 @@ fn play_frame(
     }
     // Performance: the hero's skin is rebuilt once per game tick (and when its flash or model
     // changes), not on every drawn frame.
-    let stamp = (state.play.ticks, state.play.hero_flash > 0, state.play.hero_index, state.skinned.len());
+    let stamp = (state.play.ticks, state.play.player.hero_flash > 0, state.play.hero_index, state.skinned.len());
     let fresh = std::mem::replace(&mut *hero_stamp, Some(stamp)) != Some(stamp);
-    let matrices = if fresh { state.play.hero.skin_matrices() } else { Vec::new() };
+    let matrices = if fresh { state.play.player.hero.skin_matrices() } else { Vec::new() };
     let tint = state.play.draw_tint(None, p);
     let lights = state.play.lights(None, p);
     if fresh && !hero_joints.is_empty() {
-        let look = gpu_skin::Look { light_rotation: rotation, lights: &lights, tint: tint.unwrap_or([1.0; 3]), slots: if state.play.hero_flash > 0 { &play::FLASH_COLOUR } else { &[[1.0; 3]; 15] }, ghost: 1.0 };
+        let look = gpu_skin::Look { light_rotation: rotation, lights: &lights, tint: tint.unwrap_or([1.0; 3]), slots: if state.play.player.hero_flash > 0 { &play::FLASH_COLOUR } else { &[[1.0; 3]; 15] }, ghost: 1.0 };
         let root = Transform::from_translation(Vec3::from(p)).with_rotation(rotation).compute_affine();
         for (e, m) in hero_joints.iter().zip(gpu_skin::joint_matrices(&root, &matrices, &look)) {
             if let Ok(mut g) = joint_query.get_mut(*e) {
@@ -7137,9 +7141,9 @@ fn play_frame(
         }
     }
     for (handle, i) in state.skinned.iter().filter(|_| fresh) {
-        let part = &state.play.model.parts[*i];
+        let part = &state.play.player.model.parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
-        let flash = (state.play.hero_flash > 0).then_some(&play::FLASH_COLOUR);
+        let flash = (state.play.player.hero_flash > 0).then_some(&play::FLASH_COLOUR);
         let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint, flash);
         if let Some(mut mesh) = meshes.get_mut(handle) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
@@ -7243,8 +7247,8 @@ fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     if let Some(v) = std::env::var("NEOPETS_DEV_HP").ok() {
         let n: Vec<i32> = v.split(':').filter_map(|s| s.trim().parse().ok()).collect();
         if n.len() == 3 && n[0] as u64 == t {
-            play.hero_max = n[2];
-            play.hero_hp = n[1];
+            play.player.hero_max = n[2];
+            play.player.hero_hp = n[1];
         }
     }
     // NEOPETS_DEV_ITEM="tick:id": that item placed ahead of the hero, for a picture.
@@ -7317,10 +7321,10 @@ fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
             let Some((k, p)) = e.split_once(':') else { continue };
             let n: Vec<f32> = p.split(',').filter_map(|x| x.trim().parse().ok()).collect();
             if k.trim().parse::<u64>().ok() == Some(t) && n.len() >= 2 {
-                let h = play.loco.position();
+                let h = play.player.loco.position();
                 let (dx, dz) = (n[0] - h[0], n[1] - h[2]);
                 let l = dx.hypot(dz).max(1e-6);
-                play.loco.facing = [dx / l, 0.0, dz / l];
+                play.player.loco.facing = [dx / l, 0.0, dz / l];
             }
         }
     }

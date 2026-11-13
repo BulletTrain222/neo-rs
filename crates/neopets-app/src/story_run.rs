@@ -281,7 +281,7 @@ impl StoryRun {
                     if g.kind == "DOOR" && !g.spots.is_empty() && t >= 40 && g.pack.is_none_or(|p| p == play.world.pack) {
                         let phase = (t - 40) % 150;
                         if phase % 25 == 0 && phase < 100 {
-                            let p = play.loco.position();
+                            let p = play.player.loco.position();
                             let (x, z) = [(4.0, 0.0), (-4.0, 0.0), (0.0, 4.0), (0.0, -4.0)][(phase / 25) as usize];
                             let (sx, sz, sy) = g.spots[0];
                             play.place_at(sx, sz, sy.map_or(1.0e4, |y| y + 8.0));

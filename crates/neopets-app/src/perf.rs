@@ -124,7 +124,7 @@ pub fn perf_overlay(
     while s.iter().map(|x| x.0).sum::<f32>() > 2.0 && s.len() > 1 {
         s.pop_front();
     }
-    let hero = play.as_deref().map(|p| Vec3::from(p.play.loco.position()));
+    let hero = play.as_deref().map(|p| Vec3::from(p.play.player.loco.position()));
     let speed = match (hero, *last_pos) {
         (Some(h), Some(l)) if dt > 0.0 => Vec2::new(h.x - l.x, h.z - l.z).length() / dt,
         _ => 0.0,
@@ -161,8 +161,8 @@ pub fn perf_overlay(
     ];
     if let Some(p) = play.as_deref() {
         let p = &p.play;
-        let pos = p.loco.position();
-        let f = p.loco.facing;
+        let pos = p.player.loco.position();
+        let f = p.player.loco.facing;
         let yaw = f[0].atan2(f[2]).to_degrees();
         let ground = p.world.ground_at(pos[0], pos[2], pos[1] + 2.5).map_or("none".to_string(), |g| format!("{g:.2} (gap {:.2})", pos[1] - g));
         text[1] = format!(
@@ -171,11 +171,11 @@ pub fn perf_overlay(
             pos[1],
             pos[2],
             if p.hero_index == 0 { "Tor" } else { "Roberta" },
-            p.loco.state,
-            p.hero_hp,
-            p.hero_max,
-            p.hero_mp,
-            p.hero_mp_max
+            p.player.loco.state,
+            p.player.hero_hp,
+            p.player.hero_max,
+            p.player.hero_mp,
+            p.player.hero_mp_max
         );
         let secs = p.ticks / 60;
         text[2] = format!(
@@ -194,19 +194,19 @@ pub fn perf_overlay(
         let enemies = here.iter().filter(|c| c.enemy.as_ref().is_some_and(|e| !e.is_dead())).count();
         let agro = here.iter().filter(|c| c.enemy.as_ref().is_some_and(|e| !e.is_dead() && e.state == 19)).count();
         let items = p.pools.get(&pack).map_or(0, |pool| pool.slots.iter().flatten().count());
-        let eye = p.camera.eye;
+        let eye = p.player.camera.eye;
         text[3] = format!(
             "Characters {} here, {} in all\nEnemies {enemies} alive, {agro} fighting\nShots {} enemy, {} hero   Items {items}\nRegion loads {}   Entities {}\nCamera {:.1}, {:.1}, {:.1} ({:.1} away)",
             here.len(),
             p.characters.len(),
             p.shots.live(),
-            p.hero_shots.len(),
+            p.player.hero_shots.len(),
             streamer.as_deref().map_or(0, |s| s.regions_out),
             entities.iter().count(),
             eye[0],
             eye[1],
             eye[2],
-            Vec3::from(eye).distance(Vec3::from(p.camera.focus))
+            Vec3::from(eye).distance(Vec3::from(p.player.camera.focus))
         );
     } else {
         text[3] = format!("Entities {}", entities.iter().count());

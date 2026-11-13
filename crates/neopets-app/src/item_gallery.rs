@@ -154,7 +154,7 @@ pub fn step(
         packs.retain(|&p| p != state.play.world.pack);
         packs.insert(0, state.play.world.pack);
         let found = find_models(archive, &packs);
-        gallery.centre = Vec3::from(state.play.loco.position()) + Vec3::new(0.0, 1500.0, 0.0);
+        gallery.centre = Vec3::from(state.play.player.loco.position()) + Vec3::new(0.0, 1500.0, 0.0);
         let mut report = String::new();
         let mut rows = Vec::new();
         for id in 0..=322u16 {

@@ -235,7 +235,7 @@ pub fn save_report(
         error!("Bug report: could not make {}: {e}", dir.display());
         return;
     }
-    let h = p.loco.position();
+    let h = p.player.loco.position();
     let (eye, forward, _, _) = p.view();
     let mut text = format!(
         "tick {}\nworld {} other {:?}\nhero {:.2},{:.2},{:.2} state {} phase {} hp {}/{} mp {}/{} hero index {}\neye {eye:?} forward {forward:?}\nflags {:?}\nneopoints {}\nitems {:?}\n\n",
@@ -245,12 +245,12 @@ pub fn save_report(
         h[0],
         h[1],
         h[2],
-        p.loco.state,
-        p.loco.phase,
-        p.hero_hp,
-        p.hero_max,
-        p.hero_mp,
-        p.hero_mp_max,
+        p.player.loco.state,
+        p.player.loco.phase,
+        p.player.hero_hp,
+        p.player.hero_max,
+        p.player.hero_mp,
+        p.player.hero_mp_max,
         p.hero_index,
         p.state.flags,
         p.state.neopoints,
@@ -515,7 +515,7 @@ fn shadow_summary(
     }
     out.push_str(&format!("meshes shown {shown}, casting {casting}, marked faint {faint}, marked off {off}
 "));
-    let h = p.loco.position();
+    let h = p.player.loco.position();
     for (pack, patches) in &p.foliage {
         let on = patches.iter().filter(|q| q.on).count();
         let mut hidden: Vec<(f32, usize, u16)> = patches
@@ -585,7 +585,7 @@ impl Replay {
                             p.place_at(x, z, y + 3.0);
                         }
                     }
-                    "hp" => p.hero_hp = v.parse().unwrap_or(p.hero_hp),
+                    "hp" => p.player.hero_hp = v.parse().unwrap_or(p.player.hero_hp),
                     "neopoints" => p.state.neopoints = v.parse().unwrap_or(0),
                     "flags" => {
                         for f in v.split(',').filter_map(|x| x.parse::<u16>().ok()) {
