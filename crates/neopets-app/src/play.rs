@@ -1372,6 +1372,15 @@ struct HeroSight {
 
 #[derive(Clone)]
 pub struct Player {
+    /// Down (co-op, not player 1): the ticks since this player went down, and the ticks player 1
+    /// has stood close by reviving it.
+    pub down: Option<u32>,
+    pub revive: u32,
+    /// Ticks until a landed shot's area may hurt this player again (co-op, not player 1).
+    pub area_cool: u32,
+    /// The held items drawn for this player when it is not player 1 (`hero_items`, taken in
+    /// `coop_step`; player 1's are read directly).
+    pub items_drawn: Vec<(u32, neopets_data::anim::Affine, HeroItemScale)>,
     /// Which hero this player is (0 Tor, 1 Roberta). Player 1 follows `Play::hero_index`; this is
     /// read for the other players.
     pub who: usize,
@@ -1478,6 +1487,8 @@ pub struct Play {
     pub others: Vec<Player>,
     /// Another player is swapped in (co-op), not player 1.
     coop_running: bool,
+    /// The world the co-op step last saw (a change puts the other players beside player 1).
+    coop_pack: u32,
     /// SPEC-0028 section 11: the atmosphere zone selection and this frame's output (the blend
     /// factor b is the sky dome's role-10 opacity).
     atmos_sel: neopets_sim::atmosphere::Selector,
@@ -2404,6 +2415,10 @@ impl Play {
         }
         let mut play = Self {
             player: Player {
+                down: None,
+                revive: 0,
+                area_cool: 0,
+                items_drawn: Vec::new(),
                 attack: None,
                 attack_repeat: false,
                 hit_list: Vec::new(),
@@ -2462,6 +2477,7 @@ impl Play {
             },
             others: Vec::new(),
             coop_running: false,
+            coop_pack: 0,
             atmos_sel: Default::default(),
             atmos_out: Default::default(),
             boot,
@@ -13133,6 +13149,63 @@ impl Play {
         }
     }
 
+    /// Local co-op (docs/MULTIPLAYER.md): the enemies' live shots against the other players. The
+    /// projectile pool tests player 1's body; here each flying shot (not turned back) whose sphere
+    /// meets another player's body (radius 1.175, height 3.5) is spent and hurts that player, and
+    /// a landed shot's area hurts a player standing in it at most once a second, both through
+    /// the player's own damage reduction (no guard, reflection or shot status for it yet).
+    fn coop_shots(&mut self) {
+        for k in 0..self.others.len() {
+            if self.others[k].down.is_some() {
+                continue;
+            }
+            let at = self.others[k].loco.position();
+            let grounded = self.others[k].loco.body.gap < 1.0;
+            let cool = &mut self.others[k].area_cool;
+            *cool = cool.saturating_sub(1);
+            let mut hits = Vec::new();
+            for slot in self.shots.slots.iter_mut() {
+                let Some(p) = slot.as_ref() else { continue };
+                // NEOPETS_TRACE_COOPSHOT: each shot within 8 units of another player (diagnostic).
+                if std::env::var_os("NEOPETS_TRACE_COOPSHOT").is_some() && (at[0] - p.position[0]).hypot(at[2] - p.position[2]) < 8.0 {
+                    println!("COOPSHOT kind {} area {} at_owner {} owner {:?} radius {:.2} area radius {:.2} at ({:.1}, {:.1}, {:.1}) player ({:.1}, {:.1}, {:.1}) grounded {}", p.s.kind, p.area, p.at_owner, p.s.owner, p.s.radius, p.s.area_radius, p.position[0], p.position[1], p.position[2], at[0], at[1], at[2], grounded);
+                }
+                // A landed shot's area (kind 1): within its radius on the ground, a pulse at most
+                // once a second, as the pool gives player 1.
+                if p.area {
+                    if *cool == 0 && grounded && (at[0] - p.position[0]).hypot(at[2] - p.position[2]) < p.s.area_radius {
+                        hits.push((p.s.damage.max(0.0), p.s.element));
+                        *cool = 60;
+                    }
+                    continue;
+                }
+                if p.at_owner || p.s.owner.is_none() {
+                    continue;
+                }
+                if neopets_sim::projectile::sphere_meets_body(p.position, p.s.radius, at, contact::HERO_RADIUS, HERO_HEIGHT) {
+                    hits.push((p.s.damage.max(0.0), p.s.element));
+                    *slot = None;
+                }
+            }
+            if hits.is_empty() {
+                continue;
+            }
+            self.swap_player(k);
+            let saved = (self.hero_index, self.weapon, self.shield);
+            let who = self.player.who.min(1);
+            (self.hero_index, self.weapon, self.shield) = (who, self.equipment.entries[0][who], self.equipment.entries[1][who]);
+            self.coop_running = true;
+            for (damage, element) in hits {
+                let d = self.enemy_damage(damage, false, element, 1.0);
+                let f = self.player.loco.facing;
+                self.hero_hit(d, 0.0, false, f, "a shot".into());
+            }
+            (self.hero_index, self.weapon, self.shield) = saved;
+            self.coop_running = false;
+            self.swap_player(k);
+        }
+    }
+
     /// The running player's `HeroSight` (as `enemies_step` reads player 1's).
     fn hero_sight(&self) -> HeroSight {
         let hero = self.player.loco.position();
@@ -13322,9 +13395,10 @@ impl Play {
             let Character { id, name, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, hp, .. } = c else { continue };
             let p = wk.position();
             // Local co-op: the nearest player's sight in place of player 1's.
+            // A player who can be attacked first (a downed one is passed over), then the nearest.
             let target = (0..sights.len()).min_by(|&a, &b| {
                 let d = |k: usize| (sights[k].hero[0] - p[0]).powi(2) + (sights[k].hero[2] - p[2]).powi(2);
-                d(a).total_cmp(&d(b))
+                (!sights[a].attackable).cmp(&!sights[b].attackable).then(d(a).total_cmp(&d(b)))
             });
             let (hero, hero_facing, caps, bands, attackable, hero_swing, hero_recover, shot_paths, guarding, hero_is_held, hero_is_stunned) = match target.map(|k| &sights[k]) {
                 Some(t) => (t.hero, t.facing, &t.caps, t.bands, t.attackable, t.swing, t.recover, &t.shot_paths, t.guarding, t.held, t.stunned),
@@ -13676,6 +13750,7 @@ impl Play {
             self.shots.tick(&env)
         };
         self.thorn_step(hero);
+        self.coop_shots();
         for ev in events {
             match ev {
                 neopets_sim::projectile::Event::Hero { damage, blocked, element, .. } => {
@@ -14583,10 +14658,17 @@ impl Play {
         self.cue(170);
         let big = self.rng.next_u32() % 2 == 0;
         self.sound.play(neopets_sim::sound::VOICE, if big { 1 } else { 0 }, neopets_sim::sound::Play::default());
-        // Local co-op: another player is not taken down yet (docs/MULTIPLAYER.md step 3: down and
-        // revive); it keeps 1 HP.
+        // Local co-op: another player at 0 HP goes down (its death clip; revived in `coop_step`),
+        // with no game over.
         if self.player.hero_hp <= 0 && self.coop_running {
-            self.player.hero_hp = 1;
+            self.player.hero_hp = 0;
+            if self.player.down.is_none() {
+                self.player.down = Some(0);
+                self.player.attack = None;
+                self.player.r_attack = None;
+                self.player.loco.state = hero_states::DEAD;
+                self.player.loco.set_death_clip(neopets_sim::death::death_clip(None).0);
+            }
             return false;
         }
         if self.player.hero_hp <= 0 {
@@ -19007,14 +19089,20 @@ impl Play {
         p.hero_shots.clear();
         p.hero_flash = 0;
         p.hero_trail = None;
+        self.place_beside(&mut p);
+        self.others.push(p);
+        true
+    }
+
+    /// Puts another player two units to player 1's right, on the ground there, facing as player 1.
+    fn place_beside(&self, p: &mut Player) {
         let at = self.player.loco.position();
         let f = self.player.loco.facing;
         let (rx, rz) = (-f[2], f[0]);
         let (x, z) = (at[0] + 2.0 * rx, at[2] + 2.0 * rz);
         let y = self.world.ground_at(x, z, at[1] + 2.5).unwrap_or(at[1]);
         p.loco.teleport([x, y, z], f);
-        self.others.push(p);
-        true
+        p.loco.body.velocity = [0.0; 3];
     }
 
     /// Player 2 leaves (local co-op).
@@ -19029,8 +19117,49 @@ impl Play {
     /// contacts and its animation. Pickups, doors, triggers, talking and the item panels are
     /// player 1's alone.
     pub fn coop_step(&mut self, inputs: &[(HeroInput, CameraPad)]) {
+        let pack = self.world.pack;
+        let moved_world = std::mem::replace(&mut self.coop_pack, pack) != pack;
         for i in 0..self.others.len() {
             let (mut input, pad) = inputs.get(i).copied().unwrap_or_default();
+            // Staying together: after a world change (doors, loads) or more than 60 units across
+            // or 25 up or down from player 1, player 2 is put beside player 1 again.
+            {
+                let (a, b) = (self.player.loco.position(), self.others[i].loco.position());
+                if moved_world || (a[0] - b[0]).hypot(a[2] - b[2]) > 60.0 || (a[1] - b[1]).abs() > 25.0 {
+                    let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
+                    self.place_beside(&mut o);
+                    self.others[i] = o;
+                }
+            }
+            // Down and revive: player 1 standing within 3 units for 2 seconds revives player 2
+            // at half health; else it gets up beside player 1 after 10 seconds.
+            if let Some(t) = self.others[i].down {
+                let (a, b) = (self.player.loco.position(), self.others[i].loco.position());
+                let near = (a[0] - b[0]).hypot(a[2] - b[2]) < 3.0 && self.player.loco.state != hero_states::DEAD;
+                let o = &mut self.others[i];
+                o.revive = if near { o.revive + 1 } else { 0 };
+                o.down = Some(t + 1);
+                let up = o.revive >= 120 || t + 1 >= 600;
+                if up {
+                    o.down = None;
+                    o.revive = 0;
+                    o.hero_hp = (o.hero_max / 2).max(1);
+                    o.loco.state = hero_states::STANCE;
+                    if t + 1 >= 600 {
+                        let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
+                        self.place_beside(&mut o);
+                        self.others[i] = o;
+                    }
+                }
+            }
+            // A downed player takes no input, nor does any player under player 1's control locks
+            // (SPEC-0052: the script hold, a running camera play, a moving fade) or talking.
+            if std::env::var_os("NEOPETS_TRACE_COOPLOCK").is_some() && self.ticks % 60 == 0 {
+                println!("COOPLOCK tick {} down {} dialogue {} held {} cut {} fade {} input fwd {}", self.ticks, self.others[i].down.is_some(), self.dialogue_open, self.held, self.cut.is_some_and(|c| c.state == 1), self.fade.moving(), input.forward);
+            }
+            if self.others[i].down.is_some() || self.dialogue_open || self.held || self.cut.is_some_and(|c| c.state == 1) || self.fade.moving() {
+                input = HeroInput::default();
+            }
             self.swap_player(i);
             let saved = (self.hero_index, self.weapon, self.shield);
             self.coop_running = true;
@@ -19097,6 +19226,7 @@ impl Play {
             self.player.hero.set_rate(self.player.loco.rate);
             self.hero_contacts(false);
             self.player.root_step = self.player.hero.tick();
+            self.player.items_drawn = self.hero_items();
             (self.hero_index, self.weapon, self.shield) = saved;
             self.coop_running = false;
             self.swap_player(i);

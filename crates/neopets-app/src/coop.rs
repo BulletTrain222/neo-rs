@@ -24,14 +24,16 @@ pub struct Coop {
     pub input: HeroInput,
     pub cam: CameraPad,
     pub jump: bool,
+    pub attack: bool,
     started: bool,
 }
 
 impl Coop {
-    /// Player 2's input for one tick (the jump press is taken).
+    /// Player 2's input for one tick (the jump and attack presses are taken).
     pub fn take(&mut self) -> (HeroInput, CameraPad) {
         let mut i = self.input;
         i.jump = std::mem::take(&mut self.jump);
+        i.attack = std::mem::take(&mut self.attack);
         (i, self.cam)
     }
 }
@@ -51,6 +53,7 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
         coop.started = true;
         if std::env::var_os("NEOPETS_COOP").is_some() && play.play.add_player() {
             coop.pad = gamepads.iter().map(|(e, _)| e).filter(|e| Some(*e) != first).min();
+            info!("co-op: player 2 added at start (NEOPETS_COOP), on controller {:?} of {}", coop.pad, gamepads.iter().count());
         }
     }
     if coop.pad.is_none() && !mute.0 {
@@ -77,6 +80,7 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
             coop.input.forward = 1.0;
             coop.cam.right_x = 170;
             coop.jump |= play.play.ticks % 90 == 45;
+            coop.attack |= play.play.ticks % 90 == 20;
         }
         return;
     };
@@ -99,6 +103,7 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
         ..Default::default()
     };
     coop.jump |= pressed(bindings::CROSS);
+    coop.attack |= pressed(bindings::CIRCLE) || pressed(bindings::R2);
     let r = g.right_stick();
     let byte = |v: f32| (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round() as u8;
     let invert = play.play.options.invert;

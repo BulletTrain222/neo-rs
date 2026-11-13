@@ -3848,21 +3848,28 @@ fn sync_hero_items(
     mut models: Local<std::collections::HashMap<u32, Option<([f32; 3], [f32; 3])>>>,
     mut frames: ResMut<HeroItemFrames>,
     mut lit: Local<std::collections::HashMap<u32, (neopets_data::model::ModelData, Vec<(Handle<Mesh>, usize)>)>>,
+    mut spawned: Local<std::collections::HashSet<u32>>,
 ) {
     let _span = crate::perf::span("sync_hero_items");
     frames.0.clear();
     let Some(state) = state else { return };
-    let items = state.play.hero_items();
+    // Player 1's held items by their display resource, then each other player's (local co-op,
+    // coop.rs) under its own key (the resource with the player's number in the top byte), so
+    // that the same sword in two hands is two models.
+    let mut items: Vec<(u32, u32, neopets_data::anim::Affine, play::HeroItemScale)> = state.play.hero_items().into_iter().map(|(r, f, s)| (r, r, f, s)).collect();
+    for (k, o) in state.play.others.iter().enumerate() {
+        items.extend(o.items_drawn.iter().map(|&(r, f, s)| (r | ((k as u32 + 1) << 24), r, f, s)));
+    }
     let mut archive = archive;
     let mut shown = std::collections::HashSet::new();
     // SPEC-0046 Light slots and the lit draw: the focus hero's held items are lit from his own
     // light state, following their rotation.
-    for (res, frame, _) in &items {
-        if let Some((m, handles)) = lit.get(res) {
+    for (key, res, frame, _) in &items {
+        if let (true, Some((m, handles))) = (key == res, lit.get(res)) {
             relight_model(m, handles, frame, &state.play.lights(None, frame.t), &mut meshes);
         }
     }
-    for (res, frame, scale) in &items {
+    for (key, res, frame, scale) in &items {
         if !models.contains_key(res) {
             let built = match archive.as_deref_mut() {
                 Some(Archive { disc, index }) => archive_view::model(disc, index, *res).unwrap_or_else(|e| {
@@ -3876,12 +3883,20 @@ fn sync_hero_items(
                 if std::env::var_os("NEOPETS_TRACE_PASS1").is_some() {
                     println!("hero item model {res}: bounds {:?} to {:?}, {} parts, {} two-pass, {} env pass 0, {} flipbook", m.min, m.max, m.parts.len(), m.parts.iter().filter(|p| p.pass1.is_some()).count(), m.parts.iter().filter(|p| p.env_map).count(), m.parts.iter().filter(|p| p.flipbook.is_some()).count());
                 }
-                let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                lit.insert(*res, (m, Vec::new()));
+            }
+            models.insert(*res, bounds);
+        }
+        if !spawned.contains(key) {
+            if let Some((m, handles)) = lit.get_mut(res) {
+                spawned.insert(*key);
+                let parts = part_assets(m, &mut meshes, &mut materials, &mut images);
                 // The held model's render pass 1 (the blade and metal shine; pass1.rs).
-                let second = pass1_assets(&m, &mut meshes, &mut pass1_materials, &mut images);
-                let handles: Vec<(Handle<Mesh>, usize)> = parts.iter().filter(|(k, ..)| m.parts[*k].lit).map(|(k, mesh, _)| (mesh.clone(), *k)).collect();
-                lit.insert(*res, (m, handles));
-                commands.spawn((HeroItemRoot(*res), Transform::IDENTITY, Visibility::Hidden)).with_children(|c| {
+                let second = pass1_assets(m, &mut meshes, &mut pass1_materials, &mut images);
+                if key == res {
+                    *handles = parts.iter().filter(|(k, ..)| m.parts[*k].lit).map(|(k, mesh, _)| (mesh.clone(), *k)).collect();
+                }
+                commands.spawn((HeroItemRoot(*key), Transform::IDENTITY, Visibility::Hidden)).with_children(|c| {
                     for (_, mesh, material) in parts {
                         c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
                     }
@@ -3893,7 +3908,6 @@ fn sync_hero_items(
                     }
                 });
             }
-            models.insert(*res, bounds);
         }
         let Some(Some((min, max))) = models.get(res).copied() else { continue };
         let f = match scale {
@@ -3903,10 +3917,12 @@ fn sync_hero_items(
         };
         let c = |k: usize| Vec4::new(frame.cols[k][0] * f, frame.cols[k][1] * f, frame.cols[k][2] * f, 0.0);
         let m = Mat4::from_cols(c(0), c(1), c(2), Vec4::new(frame.t[0], frame.t[1], frame.t[2], 1.0));
-        frames.0.insert(*res, m);
-        shown.insert(*res);
+        if key == res {
+            frames.0.insert(*res, m);
+        }
+        shown.insert(*key);
         for (_, root, mut t, mut vis) in &mut roots {
-            if root.0 == *res {
+            if root.0 == *key {
                 set_if(&mut t, Transform::from_matrix(m));
                 set_if(&mut vis, Visibility::Visible);
             }
@@ -6637,6 +6653,10 @@ fn play_trace(
         if std::env::var_os("NEOPETS_COOP").is_some() {
             if play.ticks == 1 {
                 println!("COOP player 2 joined: {}", play.add_player());
+                // NEOPETS_COOP_HP=n: player 2 starts with that much health (diagnostic).
+                if let (Some(h), Some(o)) = (std::env::var("NEOPETS_COOP_HP").ok().and_then(|v| v.parse::<i32>().ok()), play.others.first_mut()) {
+                    o.hero_hp = h;
+                }
             }
             // NEOPETS_COOP_ATTACK: player 2 stands and attacks every 40 ticks instead (with
             // NEOPETS_TRACE_GOD player 1 is not hit).
@@ -6656,7 +6676,7 @@ fn play_trace(
                 if let Some(o) = play.others.first() {
                     let q = o.loco.position();
                     let a = play.player.loco.position();
-                    println!("COOP {} p2 ({:.1}, {:.1}, {:.1}) state {} clip {} hp {} | p1 ({:.1}, {:.1}, {:.1}) hp {} | p2 eye ({:.1}, {:.1}, {:.1})", play.ticks, q[0], q[1], q[2], o.loco.state, o.hero.clip_state().action, o.hero_hp, a[0], a[1], a[2], play.player.hero_hp, o.camera.eye[0], o.camera.eye[1], o.camera.eye[2]);
+                    println!("COOP {} p2 ({:.1}, {:.1}, {:.1}) state {} clip {} hp {} down {:?} | p1 ({:.1}, {:.1}, {:.1}) hp {} | p2 eye ({:.1}, {:.1}, {:.1})", play.ticks, q[0], q[1], q[2], o.loco.state, o.hero.clip_state().action, o.hero_hp, o.down, a[0], a[1], a[2], play.player.hero_hp, o.camera.eye[0], o.camera.eye[1], o.camera.eye[2]);
                     let near: Vec<String> = play.characters.iter().filter(|c| c.enemy.is_some() && (c.position[0] - q[0]).hypot(c.position[2] - q[2]) < 15.0).map(|c| format!("{} hp {} at {:.1}", c.name, c.hp, (c.position[0] - q[0]).hypot(c.position[2] - q[2]))).collect();
                     println!("COOP {} enemies near p2: {}", play.ticks, near.join(", "));
                 }
