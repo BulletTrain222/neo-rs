@@ -2725,6 +2725,10 @@ impl Play {
         for &f in flags {
             play.state.set(f, true);
         }
+        // NEOPETS_START_FLAGS: see `run_init`.
+        for f in std::env::var("NEOPETS_START_FLAGS").unwrap_or_default().split(',').filter_map(|x| x.trim().parse::<u16>().ok()) {
+            play.state.set(f, true);
+        }
         // The resident transition world (T, loaded first) runs its Init at load completion too
         // (SPEC-0026; SPEC-0025 Loading): before, it did not, so the road module of 691 next to
         // the farm never loaded its bandits.
@@ -3192,7 +3196,14 @@ impl Play {
 
     /// The current world's Init (a world loaded by a door job).
     fn run_init(&mut self) {
+        // NEOPETS_START_FLAGS="a,b,...": those story flags set before each world's Init
+        // (diagnostic, to start a world in a given story state).
         self.state.switch_levels(self.world.pack);
+        if let Ok(v) = std::env::var("NEOPETS_START_FLAGS") {
+            for f in v.split(',').filter_map(|x| x.trim().parse::<u16>().ok()) {
+                self.state.set(f, true);
+            }
+        }
         self.kills_load(self.world.pack);
         self.before_init();
         let mut init = level::on_init(self.world.pack, &mut self.state);
@@ -7137,7 +7148,12 @@ impl Play {
         let mut out = Vec::new();
         // A boomerang's frame state lasts while it flies; the next throw starts again.
         self.thrown_frame.lock().unwrap_or_else(|e| e.into_inner()).retain(|id, _| self.characters.iter().any(|c| c.id == *id && c.king.as_ref().is_some_and(|k| k.boomerang.is_some())));
-        for c in self.characters.iter().filter(|c| !c.inactive && self.pack_drawn(c.pack) && c.enemy.as_ref().is_none_or(|e| !e.dead)) {
+        // A character the drawable test hides (SPEC-0046: a waiting enemy with cue word 0 on its
+        // hide pick, an invisible kind in its default state, the Cloud Beast's vanished bodies)
+        // draws no held item either: the bandits hidden along the 934 road showed their clubs,
+        // which followed the hidden pose (user report 139).
+        let hidden = |c: &Character| c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(c.anim.clip_state().action)) || self.cloud_hidden(c);
+        for c in self.characters.iter().filter(|c| !c.inactive && self.pack_drawn(c.pack) && c.enemy.as_ref().is_none_or(|e| !e.dead) && !hidden(c)) {
             for &(slot, _) in &c.model.attachments {
                 // The thrown-model word (SPEC-0046 Held items step 1): while the Werelupe King's
                 // boomerang flies (SPEC-0019 Boomerang flight) or the Black Knight's flying sword
