@@ -54,6 +54,7 @@ pub fn sync_trails(
         }
     }
     let empty = indices.is_empty();
+    pad_empty(&mut positions, &mut uvs, &mut colours, &mut indices);
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
@@ -61,7 +62,7 @@ pub fn sync_trails(
     mesh.insert_indices(Indices::U32(indices));
     match made.as_ref() {
         Some((h, _)) => {
-            let empty_again = empty && meshes.get(h).is_some_and(|m| m.count_vertices() == 0);
+            let empty_again = empty && meshes.get(h).is_some_and(|m| m.count_vertices() <= 3);
             if !empty_again {
                 if let Some(mut m) = meshes.get_mut(h) {
                     *m = mesh;
@@ -93,6 +94,19 @@ pub fn sync_trails(
     }
     for mut vis in &mut batch {
         *vis = if empty { Visibility::Hidden } else { Visibility::Visible };
+    }
+}
+
+/// An empty batch keeps one triangle of zero size: a mesh with no vertices gives up its GPU
+/// buffer slot, and the next write into the same mesh then copied into a slot already freed
+/// (Bevy's "Use-after-free: attempted to copy element data for an unallocated key", logged in
+/// pairs when the last swing trail ended; user's log of 2026-11-13).
+fn pad_empty(positions: &mut Vec<[f32; 3]>, uvs: &mut Vec<[f32; 2]>, colours: &mut Vec<[f32; 4]>, indices: &mut Vec<u32>) {
+    if indices.is_empty() {
+        positions.extend([[0.0; 3]; 3]);
+        uvs.extend([[0.0; 2]; 3]);
+        colours.extend([[0.0; 4]; 3]);
+        indices.extend([0, 1, 2]);
     }
 }
 
@@ -187,6 +201,8 @@ pub fn sync_effects(
             }
             indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
         }
+        let empty = indices.is_empty();
+        pad_empty(&mut positions, &mut uvs, &mut colours, &mut indices);
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
@@ -194,7 +210,7 @@ pub fn sync_effects(
         mesh.insert_indices(Indices::U32(indices));
         match made.meshes.get(group) {
             Some(h) => {
-                let empty_again = mesh.count_vertices() == 0 && meshes.get(h).is_some_and(|m| m.count_vertices() == 0);
+                let empty_again = empty && meshes.get(h).is_some_and(|m| m.count_vertices() <= 3);
                 if !empty_again {
                     if let Some(mut m) = meshes.get_mut(h) {
                         *m = mesh;
