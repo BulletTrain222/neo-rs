@@ -303,7 +303,11 @@ pub fn spawn(
         if let (true, Some(t)) = (soft, p.texture) {
             if let Some(m) = b.blend.get(&t) {
                 let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m.clone()), Transform::IDENTITY, part, b.sigs[i], rank(i, 0)));
-                if layer {
+                // Flat ground casts no sun shadow (see `is_ground`), its blended layer included: since
+                // a flat part soft only through its texture keeps its cut core (report 115), the
+                // torn grass strips along paths were no layer and their blended draw cast a dark line
+                // along every path edge with World shadows on (user report 123).
+                if layer || is_ground(p) {
                     e.insert(bevy::light::NotShadowCaster);
                 }
                 count += 1;

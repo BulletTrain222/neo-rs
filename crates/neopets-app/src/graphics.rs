@@ -241,7 +241,7 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, state: O
             // 1920 x 1080 on Vulkan, performance pass of 2026-11-12). With only the characters
             // casting it cost more than it saved (about 1 ms under MSAA at 2560 x 1600, and 1 to 6 ms
             // on DX12, where every extra draw is dear). NEOPETS_SUN_PREPASS: always, for comparison.
-            if settings.world_shadows || std::env::var_os("NEOPETS_SUN_PREPASS").is_some() {
+            if (settings.world_shadows && std::env::var_os("NEOPETS_NO_SUN_PREPASS").is_none()) || std::env::var_os("NEOPETS_SUN_PREPASS").is_some() {
                 c.insert(DepthPrepass);
             } else {
                 c.remove::<DepthPrepass>();
