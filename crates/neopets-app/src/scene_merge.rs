@@ -15,6 +15,60 @@ use bevy::prelude::*;
 
 use crate::{model_texture, part_signature, pass1, pass1_assets, DrawCull, PartSig, UvFlip, UvScroll, WorldPart, ZoneGate};
 
+/// A scene material drawn outside the depth prepass (see `Overlays`).
+#[derive(Asset, TypePath, bevy::render::render_resource::AsBindGroup, Debug, Clone, Default)]
+pub struct NoPrepass {}
+
+impl bevy::pbr::MaterialExtension for NoPrepass {
+    fn enable_prepass() -> bool {
+        false
+    }
+}
+
+pub type OverlayMaterial = bevy::pbr::ExtendedMaterial<StandardMaterial, NoPrepass>;
+
+/// For each scene material drawn by a part laid over other ground, its copy outside the depth
+/// prepass; `sync_overlays` keeps each copy equal to its source (graphics.rs lights and unlights
+/// the scene materials in place).
+#[derive(Resource, Default)]
+pub struct Overlays(HashMap<AssetId<StandardMaterial>, Handle<OverlayMaterial>>);
+
+impl Overlays {
+    fn of(&mut self, source: &Handle<StandardMaterial>, materials: &Assets<StandardMaterial>, ext: &mut Assets<OverlayMaterial>) -> Handle<OverlayMaterial> {
+        self.0
+            .entry(source.id())
+            .or_insert_with(|| ext.add(OverlayMaterial { base: materials.get(source).cloned().unwrap_or_default(), extension: NoPrepass {} }))
+            .clone()
+    }
+}
+
+pub struct OverlayPlugin;
+
+impl Plugin for OverlayPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(MaterialPlugin::<OverlayMaterial>::default()).init_resource::<Overlays>().add_systems(PostUpdate, sync_overlays);
+    }
+}
+
+/// Each copy follows its source material; a copy whose source is gone is dropped.
+fn sync_overlays(mut events: MessageReader<AssetEvent<StandardMaterial>>, mut overlays: ResMut<Overlays>, materials: Res<Assets<StandardMaterial>>, mut ext: ResMut<Assets<OverlayMaterial>>) {
+    for e in events.read() {
+        match *e {
+            AssetEvent::Modified { id } => {
+                if let (Some(h), Some(m)) = (overlays.0.get(&id), materials.get(id)) {
+                    if let Some(mut x) = ext.get_mut(h) {
+                        x.base = m.clone();
+                    }
+                }
+            }
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                overlays.0.remove(&id);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// The area cell a merged group covers, in world units.
 const CELL: f32 = 64.0;
 
@@ -38,12 +92,18 @@ fn lies_flat(p: &neopets_data::model::MeshPart) -> bool {
 /// above. A soft strip over such ground (a path's
 /// torn grass edge) needs no depth of its own, the ground under it hides what lies below; one
 /// over open space (the 758 street, water 42 units under it) does (user reports 115 and 124).
-fn ground_under(m: &neopets_data::model::ModelData, i: usize, skip: &dyn Fn(usize) -> bool) -> bool {
+fn ground_under(m: &neopets_data::model::ModelData, tris: &TriGrid, i: usize, skip: &dyn Fn(usize) -> bool, above: f32) -> bool {
     let p = &m.parts[i];
-    let tris = p.indices.len() / 3;
-    if tris == 0 {
+    if p.indices.len() < 3 {
         return false;
     }
+    // The triangles' centres first: most parts fail there, before the finer grid is made.
+    let centres = p.indices.chunks_exact(3).map(|t| t.iter().map(|&v| Vec3::from(p.positions[v as usize])).sum::<Vec3>() / 3.0);
+    centres.into_iter().all(|pt| tris.under(m, i, skip, above, pt)) && grid(p).into_iter().all(|pt| tris.under(m, i, skip, above, pt))
+}
+
+/// About one point per unit over a part's triangles.
+fn grid(p: &neopets_data::model::MeshPart) -> Vec<Vec3> {
     let mut centres = Vec::new();
     for t in p.indices.chunks_exact(3) {
         let [a, b, c] = [t[0], t[1], t[2]].map(|v| Vec3::from(p.positions[v as usize]));
@@ -55,47 +115,66 @@ fn ground_under(m: &neopets_data::model::ModelData, i: usize, skip: &dyn Fn(usiz
             }
         }
     }
-    let lo = centres.iter().fold(Vec3::MAX, |a, &c| a.min(c)) - Vec3::new(0.0, 1.5, 0.0);
-    let hi = centres.iter().fold(Vec3::MIN, |a, &c| a.max(c)) + Vec3::new(0.0, 0.5, 0.0);
-    let mut found = vec![false; centres.len()];
-    // The points by one-unit cell, so each triangle visits only the points under its extent.
-    let cell = |x: f32, z: f32| (x.floor() as i32, z.floor() as i32);
-    let mut cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
-    for (k, pt) in centres.iter().enumerate() {
-        cells.entry(cell(pt.x, pt.z)).or_default().push(k);
-    }
-    for (j, q) in m.parts.iter().enumerate() {
-        if j == i || q.scroll.is_some() || skip(j) || q.positions.is_empty() {
-            continue;
-        }
-        let qlo = q.positions.iter().fold(Vec3::MAX, |a, &v| a.min(Vec3::from(v)));
-        let qhi = q.positions.iter().fold(Vec3::MIN, |a, &v| a.max(Vec3::from(v)));
-        if qhi.x < lo.x || qlo.x > hi.x || qhi.z < lo.z || qlo.z > hi.z || qhi.y < lo.y || qlo.y > hi.y {
-            continue;
-        }
-        for t in q.indices.chunks_exact(3) {
-            let [a, b, c] = [t[0], t[1], t[2]].map(|k| Vec3::from(q.positions[k as usize]));
-            let d = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
-            if d.abs() < 1e-9 {
+    centres
+}
+
+/// A scene's flat-ish triangles (not scrolling) by 4-unit cell across, for `ground_under`; the
+/// few wider than 64 units (backdrops) are kept in one list, checked for every point.
+struct TriGrid(HashMap<(i32, i32), Vec<(u32, u32)>>, Vec<(u32, u32)>);
+
+impl TriGrid {
+    const CELL: f32 = 4.0;
+
+    fn new(m: &neopets_data::model::ModelData) -> Self {
+        let mut map: HashMap<(i32, i32), Vec<(u32, u32)>> = HashMap::new();
+        let mut wide = Vec::new();
+        for (j, q) in m.parts.iter().enumerate() {
+            if q.scroll.is_some() {
                 continue;
             }
-            let (x0, z0) = cell(a.x.min(b.x).min(c.x).max(lo.x), a.z.min(b.z).min(c.z).max(lo.z));
-            let (x1, z1) = cell(a.x.max(b.x).max(c.x).min(hi.x), a.z.max(b.z).max(c.z).min(hi.z));
-            for k in (x0..=x1).flat_map(|x| (z0..=z1).map(move |z| (x, z))).filter_map(|key| cells.get(&key)).flatten().copied() {
-                let pt = centres[k];
-                if found[k] {
+            for (t, tri) in q.indices.chunks_exact(3).enumerate() {
+                let [a, b, c] = [tri[0], tri[1], tri[2]].map(|k| Vec3::from(q.positions[k as usize]));
+                // Steep triangles (walls) are never the ground under a point.
+                if (b - a).cross(c - a).normalize_or_zero().y.abs() < 0.2 {
                     continue;
+                }
+                let (lo, hi) = (a.min(b).min(c), a.max(b).max(c));
+                if hi.x - lo.x > 64.0 || hi.z - lo.z > 64.0 {
+                    wide.push((j as u32, t as u32));
+                    continue;
+                }
+                let (lo, hi) = (lo / Self::CELL, hi / Self::CELL);
+                for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
+                    for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
+                        map.entry((x, z)).or_default().push((j as u32, t as u32));
+                    }
+                }
+            }
+        }
+        Self(map, wide)
+    }
+
+    /// Whether a triangle of another part than `i` (not `skip`ped) lies from 1.5 below the point
+    /// to `above` above it.
+    fn under(&self, m: &neopets_data::model::ModelData, i: usize, skip: &dyn Fn(usize) -> bool, above: f32, pt: Vec3) -> bool {
+        let key = ((pt.x / Self::CELL).floor() as i32, (pt.z / Self::CELL).floor() as i32);
+        self.0.get(&key).into_iter().flatten().chain(&self.1).any(|&(j, t)| {
+                let j = j as usize;
+                if j == i || skip(j) {
+                    return false;
+                }
+                let q = &m.parts[j];
+                let t = t as usize * 3;
+                let [a, b, c] = [q.indices[t], q.indices[t + 1], q.indices[t + 2]].map(|k| Vec3::from(q.positions[k as usize]));
+                let d = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+                if d.abs() < 1e-9 {
+                    return false;
                 }
                 let u = ((pt.x - a.x) * (c.z - a.z) - (c.x - a.x) * (pt.z - a.z)) / d;
                 let w = ((b.x - a.x) * (pt.z - a.z) - (pt.x - a.x) * (b.z - a.z)) / d;
-                if u >= 0.0 && w >= 0.0 && u + w <= 1.0 {
-                    let y = a.y + u * (b.y - a.y) + w * (c.y - a.y);
-                    found[k] = (pt.y - 1.5..=pt.y + 0.5).contains(&y);
-                }
-            }
-        }
+                u >= 0.0 && w >= 0.0 && u + w <= 1.0 && (pt.y - 1.5..=pt.y + above).contains(&(a.y + u * (b.y - a.y) + w * (c.y - a.y)))
+        })
     }
-    found.iter().all(|&f| f)
 }
 
 /// A part's triangles split into those solid at all three corners (vertex alpha at or above 120 of 128) and the others.
@@ -249,13 +328,27 @@ pub fn spawn(
     materials: &mut Assets<StandardMaterial>,
     pass1_materials: &mut Assets<pass1::Pass1Material>,
     images: &mut Assets<Image>,
+    overlays: &mut Overlays,
+    ext_materials: &mut Assets<OverlayMaterial>,
 ) -> usize {
     let m = &*b.model;
     let no_pass1 = std::env::var_os("NEOPETS_NO_PASS1").is_some();
     // NEOPETS_NO_MERGE: every part keeps its own entity, as before (diagnostic).
     let no_merge = std::env::var_os("NEOPETS_NO_MERGE").is_some();
     let mut env_textures: HashMap<usize, Handle<Image>> = HashMap::new();
-    let mut groups: HashMap<(AssetId<StandardMaterial>, Option<u8>, i32, i32, bool), (Handle<StandardMaterial>, Vec<usize>)> = HashMap::new();
+    let mut groups: HashMap<(AssetId<StandardMaterial>, Option<u8>, i32, i32, (bool, bool)), (Handle<StandardMaterial>, Vec<usize>)> = HashMap::new();
+    // Parts that are not ground for `ground_under`: soft or fading ones (their blended draws write
+    // no depth).
+    let soft_or_fading: Vec<bool> = m.parts.iter().map(|q| q.texture.is_some_and(|t| b.soft[t]) || crate::vertex_fades(q)).collect();
+    let not_ground = |j: usize| soft_or_fading[j];
+    // NEOPETS_NO_OVERLAY: flat parts over other ground stay in the depth prepass (diagnostic).
+    let no_overlay = std::env::var_os("NEOPETS_NO_OVERLAY");
+    let mut overlaid = vec![false; m.parts.len()];
+    let built_at = std::time::Instant::now();
+    let tris = TriGrid::new(m);
+    if std::env::var_os("NEOPETS_TRACE_LAYER").is_some() {
+        println!("TRIGRID {pack} {:.1} ms, {} cells, {} entries, {} wide", built_at.elapsed().as_secs_f64() * 1000.0, tris.0.len(), tris.0.values().map(Vec::len).sum::<usize>(), tris.1.len());
+    }
     let mut count = 0;
     let ranks = crate::draw_order::ranks(m);
     let rank = |i: usize, second: u32| crate::draw_order::DrawRank { pack: Some(pack), rank: ranks[i] + second };
@@ -335,7 +428,22 @@ pub fn spawn(
         if !apart {
             let n = p.positions.len().max(1) as f32;
             let c = p.positions.iter().fold([0.0f32; 2], |a, q| [a[0] + q[0] / n, a[1] + q[2] / n]);
-            let key = (material.id(), p.zone, (c[0] / CELL).floor() as i32, (c[1] / CELL).floor() as i32, is_ground(p));
+            // A flat part laid over other ground a little below it (a path over the grass): drawn
+            // outside the depth prepass, so ambient occlusion sees the ground under it and draws
+            // no crease along its edge (user report 124: the 909 path 215 lies 0.07 over the grass
+            // 211, and the soft strip over that edge showed the crease as a line).
+            let started = std::time::Instant::now();
+            // Ground level with it counts (within 0.02), but not a part already drawn this way, so
+            // two level parts cannot both leave the prepass with nothing in it under them.
+            let overlay = no_overlay.is_none() && lies_flat(p) && ground_under(m, &tris, i, &|j| not_ground(j) || overlaid[j], 0.02);
+            overlaid[i] = overlay;
+            if std::env::var_os("NEOPETS_TRACE_LAYER").is_some() && started.elapsed().as_secs_f64() > 0.005 {
+                println!("SLOW {pack} part {i} overlay {overlay} {:.1} ms, {} triangles", started.elapsed().as_secs_f64() * 1000.0, p.indices.len() / 3);
+            }
+            if overlay && std::env::var_os("NEOPETS_TRACE_LAYER").is_some() {
+                println!("OVERLAY {pack} part {i} tex {:?} {:.2} ms", p.texture, started.elapsed().as_secs_f64() * 1000.0);
+            }
+            let key = (material.id(), p.zone, (c[0] / CELL).floor() as i32, (c[1] / CELL).floor() as i32, (is_ground(p), overlay));
             groups.entry(key).or_insert_with(|| (material, Vec::new())).1.push(i);
             continue;
         }
@@ -351,7 +459,7 @@ pub fn spawn(
         // (`ground_under`): the path edge strips of 909 and 696 drew ambient occlusion's line
         // along every path with their cut core (user reports 124 and 125).
         let started = std::time::Instant::now();
-        let layer = lies_flat(p) && (fades || (soft && (std::env::var_os("NEOPETS_SOFT_LAYER").is_some() || ground_under(m, i, &|j| m.parts[j].texture.is_some_and(|t| b.soft[t]) || crate::vertex_fades(&m.parts[j])))));
+        let layer = lies_flat(p) && (fades || (soft && (std::env::var_os("NEOPETS_SOFT_LAYER").is_some() || ground_under(m, &tris, i, &not_ground, 0.5))));
         // NEOPETS_TRACE_LAYER: each flat part drawn as a layer, and the time taken (diagnostic).
         if layer && std::env::var_os("NEOPETS_TRACE_LAYER").is_some() {
             println!("LAYER {pack} part {i} tex {:?} fades {fades} soft {soft} {:.2} ms", p.texture, started.elapsed().as_secs_f64() * 1000.0);
@@ -448,9 +556,15 @@ pub fn spawn(
             }
         }
     }
-    for ((_, zone, _, _, flat), (material, list)) in groups {
+    for ((_, zone, _, _, (flat, overlay)), (material, list)) in groups {
         let parts: Vec<&neopets_data::model::MeshPart> = list.iter().map(|&i| &m.parts[i]).collect();
-        let mut e = commands.spawn((Mesh3d(meshes.add(merged_mesh(&parts))), MeshMaterial3d(material), Transform::IDENTITY, part));
+        let mesh = Mesh3d(meshes.add(merged_mesh(&parts)));
+        let mut e = if overlay {
+            let ext = overlays.of(&material, materials, ext_materials);
+            commands.spawn((mesh, MeshMaterial3d(ext), Transform::IDENTITY, part))
+        } else {
+            commands.spawn((mesh, MeshMaterial3d(material), Transform::IDENTITY, part))
+        };
         if flat {
             e.insert(bevy::light::NotShadowCaster);
         }

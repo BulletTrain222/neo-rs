@@ -1017,6 +1017,7 @@ fn main() {
         .add_plugins(gpu_skin::GpuSkinPlugin)
         .add_plugins(godrays::GodRaysPlugin)
         .add_plugins(water_reflect::WaterReflectPlugin)
+        .add_plugins(scene_merge::OverlayPlugin)
         .add_plugins(pass1::Pass1Plugin)
         .add_plugins(draw_order::DrawOrderPlugin)
         .add_plugins(shadow_view::ShadowPlugin)
@@ -2659,6 +2660,8 @@ fn sync_worlds(
     mut images: ResMut<Assets<Image>>,
     mut shown: Local<Vec<WorldPart>>,
     mut built: Local<std::collections::HashMap<WorldPart, scene_merge::Built>>,
+    mut overlays: ResMut<scene_merge::Overlays>,
+    mut ext_materials: ResMut<Assets<scene_merge::OverlayMaterial>>,
     mut sigs: ResMut<SceneSigs>,
     mut pending_fresh: Local<Vec<WorldPart>>,
     settings: Res<display::DisplaySettings>,
@@ -3033,7 +3036,12 @@ fn sync_worlds(
             *s |= t;
         }
         let _load = crate::perf::span("load:scene_spawn");
-        let n = scene_merge::spawn(&mut commands, k, pack, b, &mut meshes, &mut materials, &mut pass1_materials, &mut images);
+        let started = std::time::Instant::now();
+        let n = scene_merge::spawn(&mut commands, k, pack, b, &mut meshes, &mut materials, &mut pass1_materials, &mut images, &mut overlays, &mut ext_materials);
+        // NEOPETS_TRACE_LAYER: also the time each scene took to spawn (diagnostic).
+        if std::env::var_os("NEOPETS_TRACE_LAYER").is_some() {
+            println!("SPAWN {pack} {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
+        }
         sigs.0.insert(pack, b.sigs.clone());
         info!("scene of {pack}: {} parts in {n} entities ({} twins)", b.model.parts.len(), b.shared.iter().filter(|&&s| s).count());
     }
