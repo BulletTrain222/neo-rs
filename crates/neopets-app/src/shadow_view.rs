@@ -200,7 +200,7 @@ pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, se
         (n.len() == 3).then(|| [n[0], n[1], n[2]])
     });
     let dir = forced.unwrap_or_else(|| state.as_ref().map_or([0.35, -1.0, 0.25], |s| s.play.sun_direction()));
-    let d = Vec3::from(dir).normalize_or(Vec3::NEG_Y);
+    let d = tilted(Vec3::from(dir).normalize_or(Vec3::NEG_Y), forced.is_some());
     for (mut t, mut vis) in &mut suns {
         let want = if on { Visibility::Visible } else { Visibility::Hidden };
         if *vis != want {
@@ -212,6 +212,24 @@ pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, se
         }
     }
 }
+
+/// The sun at most SUN_HIGH degrees above the horizon, keeping the world light's compass
+/// direction (or a default one when it points straight down). A world light nearly overhead (696:
+/// y -0.99) laid every upright thing's shadow at its own foot, so flag poles and trunks cast
+/// none to see (user report 133; the user chose a lower sun). NEOPETS_SUN_DIR is taken as given.
+fn tilted(d: Vec3, as_given: bool) -> Vec3 {
+    if as_given || std::env::var_os("NEOPETS_SUN_OVERHEAD").is_some() {
+        return d;
+    }
+    let flat = Vec2::new(d.x, d.z);
+    let across = if flat.length() > 1e-3 { flat.normalize() } else { Vec2::new(0.35, 0.25).normalize() };
+    let high = (-d.y).clamp(-1.0, 1.0).asin().min(SUN_HIGH.to_radians());
+    let (s, c) = high.sin_cos();
+    Vec3::new(across.x * c, -s, across.y * c)
+}
+
+/// The sun's highest elevation, in degrees.
+const SUN_HIGH: f32 = 55.0;
 
 /// A mesh this module took out of the shadow casters (so the dome's own setting is left alone).
 #[derive(Component)]
