@@ -97,3 +97,102 @@ No spec covers it; spec requests are only for original behaviour the co-op rules
   stepping aside while player 1 climbs a scripted route).
 - Bosses were tuned for one hero. Scaling is left alone unless play shows a need.
 - Split screen doubles the drawing work.
+
+## Checklist: what is shared and what each player has (2026-11-13)
+
+Written to work from overnight. **[x]** done, **[ ]** to do, **[?]** built but unchecked.
+"Default" marks a rule chosen here because no decision had been made yet. Each default is easy to
+change, so say if one should go another way.
+
+### The model in one paragraph
+There is one game, the host's. It owns the world, the story, the enemies, the shared bag and the
+save. Each player has their own hero, health and magic, camera, HUD, controller, rumble and screen.
+On one PC the two players share a window (split screen). Online, the joiner's computer is a
+**viewer and a controller**: it sends its controller to the host and draws what the host sends.
+It must not make game decisions of its own (enemy choices, triggers, doors, pickups, scripts),
+because its copy would drift from the host's. Everything the joiner sees or hears comes from the
+host's state or from events the host sends: effects, shots, sounds, music and fades.
+
+### A. Shared by both players (one copy, the host's)
+| Thing | Rule | One PC | Online |
+|---|---|---|---|
+| World and loaded neighbour | Both always in the same world | [x] | [x] world change sends a new welcome |
+| Story flags and quests | One set | [x] | [x] sent each state |
+| Story triggers | Fired by player 1 only (keeps story order) | [x] | [ ] joiner's own triggers must not fire |
+| Doors and world exits | Either player; both go; player 2 placed beside | [ ] player 2's doors | [ ] |
+| Talk boxes | Player 1 opens and answers; both see the box | [x] | [x] shown on the joiner |
+| Talk box advance | Default: either player can press Cross to go on (not choose) | [ ] | [ ] |
+| Cutscenes (scripted camera, bars, fades) | Both watch; player 2 holds still | [x] | [x] camera and bars; [ ] fades |
+| Movies (FMV) | Both watch; default: player 1 skips for both | [x] | [ ] joiner plays the host's movie |
+| Shops | Player 1 drives; shared purse | [x] | [ ] joiner sees the shop page |
+| Neopoints, items, keys, quest items | One shared bag | [x] | [x] sent each state |
+| Health and magic pickups | Go to whoever touches them | [x] | [x] host decides |
+| Chests, switches, push blocks, levers | Either player; one state | [ ] player 2 | [ ] joiner sees their state |
+| Enemies, bosses, their health | One set; each targets the nearest standing player | [x] | [x] place, clip, health |
+| Enemy health bar (monster bar) | Shown to both | [x] | [ ] |
+| Shots (projectiles) | One pool; hit either player | [x] | [ ] joiner draws the host's |
+| Effects, debris, trails, sparks | One set | [x] | [ ] joiner draws the host's |
+| Music and stingers | One selection | [x] | [ ] joiner plays the host's |
+| Sound effects | One set of events | [x] | [ ] joiner plays the host's |
+| Fades, letterbox bars | Shared | [x] | [?] bars come with the camera; [ ] fades |
+| Screen shake | Default: both views shake | [x] | [ ] |
+| Messages ("Got X", notices) | Shown to both | [x] | [ ] |
+| Petpet | Follows player 1 | [x] | [ ] joiner draws it |
+| Saving | The host's save only; default: the joiner keeps none, and sees "Saved" | [x] | [ ] notice |
+| Game over and Continue | Only when both are down (or one, with revive off); player 1 chooses | [x] | [ ] joiner follows the reload |
+| Pause, item screen, map | Default: either player opens it and the game pauses for both | [ ] player 2 | [ ] |
+| Game options (text speed, difficulty) | The host's | [x] | [x] |
+| Time, atmosphere, lighting | From the world | [x] | [x] |
+
+### B. Each player's own
+| Thing | Rule | One PC | Online |
+|---|---|---|---|
+| Hero | Player 2: Roberta when the story has her, else a second Tor (Multiplayer page) | [x] | [x] |
+| Place, movement, jumping, collisions | Own | [x] | [x] |
+| Health, magic, poison and other statuses | Own | [x] | [x] |
+| Down and revive | Own (revive or game over, Multiplayer page) | [x] | [x] |
+| Weapon, shield, armour | Own hero's equipment row (a second Tor uses Tor's) | [x] | [x] |
+| Attacks, combos | Own | [x] | [x] |
+| Guard and reflect (shield) | Own | [ ] player 2 | [ ] |
+| Power attacks, spells, magic items | Own magic bar | [ ] player 2 | [ ] |
+| Quick items (D-pad) | Own panel over the shared bag; the item goes to the user | [ ] player 2 | [ ] |
+| Ledges, climbing, ladders, swimming, rope gun | Own | [?] player 2 | [?] |
+| Lock-on and target | Own | [?] | [?] |
+| Camera and its controls | Own follow camera; invert and speed per computer | [x] | [x] |
+| HUD (portrait, health and magic bars) | Own; Neopoints shown on both | [x] | [x] |
+| Talk prompt ("Talk" over an NPC) | Shown to player 1 only (player 1 talks) | [x] | [x] |
+| Rumble | Own controller only | [ ] player 2 | [ ] joiner's pad |
+| Controls and bindings | Per computer; on one PC, player 2 uses the second pad | [x] | [x] |
+| Display, audio volume, graphics | Per computer | [x] | [x] |
+| Sound listener | One PC: player 1. Online: each computer hears from its own player | [x] | [ ] |
+| Pickup and damage flashes | Own | [x] | [x] |
+
+### C. Online plumbing
+- [x] Host, join by address, refusal for a different build or disc, timeout, Bye.
+- [x] Joining from the title screen.
+- [x] A world change sends a new welcome; old-world states wait.
+- [ ] **Joiner as a puppet:** the joiner's tick runs loading, animation, effects and sound
+      playback, but no enemy decisions, triggers, scripts, doors, pickups, deaths or saves.
+- [ ] **Event channel:** numbered events (sound, effect, message, music, shake, fade, rumble)
+      that the host resends until the joiner acknowledges them in its input.
+- [ ] Shots: positions and kinds in each state.
+- [ ] Send flags and items only when they change (acknowledged), to keep states small.
+- [ ] State size check: keep each state below about 1,200 bytes, or split it, for the internet.
+- [ ] In-game notices: "Player 2 joined", "Player 2 left", "Lost the host".
+- [ ] Pause menu: "Leave game" for the joiner, "Stop hosting" for the host. The host going to
+      the title screen sends Bye, and the joiner returns to the title with a message.
+- [ ] Smoothing on the joiner if movement looks jumpy.
+- [ ] Test on two real computers on one home network (needs the user).
+- [ ] Internet play: port forwarding instructions on the Multiplayer page, optional UPnP (later).
+
+### D. Order of work tonight
+1. Joiner as a puppet (stops the drift at the root).
+2. Event channel, with sound effects first (heard from the joiner's own player).
+3. Shots and effects on the joiner.
+4. Music, fades, shake, messages and the monster bar.
+5. Pause, leave and stop-hosting menu rows, host quit, joined and left notices.
+6. Game over and Continue online; movies on both.
+7. Player 2's own actions: doors, chests and switches, guard, quick items, magic, item screen.
+8. Smaller states (flags and items on change).
+Each item is tested with two windows over 127.0.0.1, recorded in docs/STATUS.md, checked with
+Check.cmd and committed on its own. Anything unclear goes in the morning report.
