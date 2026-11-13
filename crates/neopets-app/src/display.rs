@@ -24,13 +24,24 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 25;
+pub const ROWS: usize = 28;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
-/// The rows of the Display page (false) or the Gameplay page (true).
-pub fn page_rows(gameplay: bool) -> Vec<usize> {
-    (0..ROWS).filter(|k| GAMEPLAY_ROWS.contains(k) == gameplay).collect()
+/// The rows on the Multiplayer page (local co-op, docs/MULTIPLAYER.md; this build's feature).
+pub const MULTI_ROWS: [usize; 3] = [25, 26, 27];
+/// Split screen layouts.
+pub const SPLITS: [&str; 2] = ["Top and bottom", "Side by side"];
+
+/// The rows of the Display page (0), the Gameplay page (1) or the Multiplayer page (2).
+pub fn page_rows(page: u8) -> Vec<usize> {
+    (0..ROWS)
+        .filter(|k| match page {
+            1 => GAMEPLAY_ROWS.contains(k),
+            2 => MULTI_ROWS.contains(k),
+            _ => !GAMEPLAY_ROWS.contains(k) && !MULTI_ROWS.contains(k),
+        })
+        .collect()
 }
 /// Character shadows: off, the original volumes as the game draws them (blocky hulls, a drop of
 /// 8 of 255), or this build's detailed ones (each character's own shape, cast by the sun).
@@ -105,11 +116,19 @@ pub struct DisplaySettings {
     pub light_shafts: bool,
     /// Reflections on flat water (water_reflect.rs): this build's option, not in the original.
     pub water_reflections: bool,
+    /// Local co-op: a player at 0 health is knocked down and can be revived (true), or the game is
+    /// over at once (false).
+    pub coop_revive: bool,
+    /// Local co-op: the split screen's layout (`SPLITS`).
+    pub coop_split: usize,
+    /// Local co-op: player 2 is the partner hero when the story has one waiting (true), else
+    /// always a second Tor.
+    pub coop_partner: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true }
     }
 }
 
@@ -154,6 +173,9 @@ impl DisplaySettings {
                 "original neighbour" => s.original_neighbour = v == "true",
                 "light shafts" => s.light_shafts = v == "true",
                 "water reflections" => s.water_reflections = v == "true",
+                "coop revive" => s.coop_revive = v == "true",
+                "coop split" => s.coop_split = v.parse().unwrap_or(0).min(SPLITS.len() - 1),
+                "coop partner" => s.coop_partner = v == "true",
                 "graphics api" => s.graphics_api = GRAPHICS_APIS.iter().position(|a| a.eq_ignore_ascii_case(v)).unwrap_or(s.graphics_api),
                 _ => {}
             }
@@ -163,7 +185,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -188,7 +210,10 @@ impl DisplaySettings {
             self.original_neighbour,
             GRAPHICS_APIS[self.graphics_api].to_lowercase(),
             self.light_shafts,
-            self.water_reflections
+            self.water_reflections,
+            self.coop_revive,
+            self.coop_split,
+            self.coop_partner
         )
     }
 
@@ -302,6 +327,9 @@ impl DisplaySettings {
             ("Graphics API".into(), GRAPHICS_APIS[self.graphics_api].into()),
             ("Light shafts".into(), if self.light_shafts { "On".into() } else { "Off".into() }),
             ("Water reflections".into(), if self.water_reflections { "On".into() } else { "Off".into() }),
+            ("Knocked out".into(), if self.coop_revive { "Revive".into() } else { "Game over".into() }),
+            ("Split screen".into(), SPLITS[self.coop_split].into()),
+            ("Player 2".into(), if self.coop_partner { "Partner".into() } else { "Second Tor".into() }),
         ]
     }
 
@@ -351,6 +379,9 @@ impl DisplaySettings {
             22 => self.graphics_api = step(self.graphics_api, GRAPHICS_APIS.len()),
             23 => self.light_shafts = !self.light_shafts,
             24 => self.water_reflections = !self.water_reflections,
+            25 => self.coop_revive = !self.coop_revive,
+            26 => self.coop_split = step(self.coop_split, SPLITS.len()),
+            27 => self.coop_partner = !self.coop_partner,
             _ => {}
         }
     }
@@ -619,6 +650,9 @@ const HELP: [&str; ROWS + 1] = [
     "Vulkan runs fastest on most computers. DX12 can be faster on a laptop whose screen is wired to its built-in graphics (for example a gaming laptop in its hybrid or battery GPU mode). Takes effect after a restart.",
     "Beams of sunlight through trees and a soft haze toward the sun. Shafts need World shadows on. Not in the original game.",
     "Flat water mirrors the scenery and sky around it, more at low angles. Not in the original game.",
+    "Revive: a fallen player gets up when the other stands beside them. Game over: any fall ends the game.",
+    "How two players share the screen: one above the other, or side by side.",
+    "Start on a second controller joins in play, Select leaves. Partner: Roberta when the story has her waiting.",
     "Back to Options.",
 ];
 
@@ -738,7 +772,7 @@ pub fn show_window(
     let Some(flow) = flow.filter(|_| open) else { return };
     let focus = flow.display_focus.min(ROWS);
     let shown = settings.rows();
-    let page = page_rows(flow.display_gameplay);
+    let page = page_rows(flow.display_page);
     for (i, r, mut bg, mut node) in &mut rows {
         bg.0 = if r.0 == focus { ROW_CURSOR } else if *i == Interaction::Hovered { ROW_HOVER } else { ROW };
         let d = if r.0 == ROWS || page.contains(&r.0) { Display::Flex } else { Display::None };
@@ -746,7 +780,7 @@ pub fn show_window(
             node.display = d;
         }
     }
-    let title = if flow.display_gameplay { "Gameplay" } else { "Display" };
+    let title = ["Display", "Gameplay", "Multiplayer"][flow.display_page.min(2) as usize];
     for mut t in &mut titles {
         if t.0 != title {
             t.0 = title.to_string();
@@ -783,8 +817,9 @@ mod tests {
     fn viewport_fits_the_aspect() {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
-        assert_eq!(page_rows(true), [17, 18, 19, 20]);
-        assert_eq!(page_rows(false), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
+        assert_eq!(page_rows(1), [17, 18, 19, 20]);
+        assert_eq!(page_rows(2), [25, 26, 27]);
+        assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));
         // 21:9 in a 16:9 window: letterbox 823 high.

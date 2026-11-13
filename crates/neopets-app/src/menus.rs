@@ -329,7 +329,8 @@ pub struct Flow {
     /// the (row, step) changes for the host to apply.
     pub display_focus: usize,
     /// The window shows the Gameplay page's rows rather than the Display page's.
-    pub display_gameplay: bool,
+    /// The page the Display window shows: 0 Display, 1 Gameplay, 2 Multiplayer.
+    pub display_page: u8,
     pub display_requests: Vec<(usize, i32)>,
     /// The Options page's "Keyboard & Gamepad" row was chosen: the host opens the bindings page
     /// (this build; controls_page.rs).
@@ -406,7 +407,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, style_masks: Vec::new(), display_focus: 0, display_gameplay: false, display_requests: Vec::new(), controls_request: false, display_back: false };
+        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, style_masks: Vec::new(), display_focus: 0, display_page: 0, display_requests: Vec::new(), controls_request: false, display_back: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -636,11 +637,15 @@ impl Flow {
             self.open_save(fe);
         } else if page == "keys" || page == "pad" {
             self.enter(fe, OPTIONS, &ctx);
-            self.focus = items(fe, OPTIONS).len() + 2;
+            self.focus = items(fe, OPTIONS).len() + 3;
             self.controls_request = true;
-        } else if page == "display" || page == "gameplay" {
+        } else if page == "display" || page == "gameplay" || page == "multiplayer" {
             self.enter(fe, OPTIONS, &ctx);
-            self.open_display(page == "gameplay");
+            self.open_display(match page {
+                "gameplay" => 1,
+                "multiplayer" => 2,
+                _ => 0,
+            });
         } else if let Some(tab) = page.strip_prefix("items") {
             // "items", "items1" or "items2": the item page's tab.
             self.item_tab = tab.parse::<usize>().unwrap_or(0).min(2);
@@ -653,16 +658,16 @@ impl Flow {
         }
     }
 
-    /// Open the Display or Gameplay page from its row on the Options page.
-    fn open_display(&mut self, gameplay: bool) {
+    /// Open the Display, Gameplay or Multiplayer page from its row on the Options page.
+    fn open_display(&mut self, page: u8) {
         self.came_from = Some(self.current);
         if self.stack.len() < 32 {
             self.stack.push(DISPLAY);
         }
         self.current = DISPLAY;
         self.pass = 0;
-        self.display_gameplay = gameplay;
-        self.display_focus = crate::display::page_rows(gameplay)[0];
+        self.display_page = page;
+        self.display_focus = crate::display::page_rows(page)[0];
     }
 
     /// One pass of the Display page: Up and Down move between the rows, Left and Right (or
@@ -670,7 +675,7 @@ impl Flow {
     /// row. Changes are silent, as the option rows' are (SPEC-0035 Behavior 3).
     fn display_tick(&mut self, fe: &Frontend, edge: u16, ctx: &Ctx) {
         // The page's settings rows, then Back.
-        let mut page = crate::display::page_rows(self.display_gameplay);
+        let mut page = crate::display::page_rows(self.display_page);
         page.push(crate::display::ROWS);
         let at = page.iter().position(|&r| r == self.display_focus).unwrap_or(0);
         if self.pass >= 2 {
@@ -683,7 +688,7 @@ impl Flow {
                 self.current = OPTIONS;
                 self.pass = 0;
                 self.default_focus(fe, ctx);
-                self.focus = items(fe, OPTIONS).len() + usize::from(self.display_gameplay);
+                self.focus = items(fe, OPTIONS).len() + self.display_page as usize;
                 return;
             }
             if edge & DOWN != 0 {
@@ -1215,7 +1220,7 @@ impl Flow {
         // The focused item: refocus to the first passing item when it fails; its focus state.
         let list = items(fe, self.current);
         // The Options page's added rows sit after its items: Display (index = item count), then
-        // Gameplay and Keyboard & Gamepad.
+        // Gameplay, Multiplayer and Keyboard & Gamepad.
         let on_display_row = self.current == OPTIONS && self.focus >= list.len();
         if !on_display_row && list.get(self.focus).is_none_or(|&i| !item_ok(fe, i, self.current, ctx, self)) {
             self.focus = list.iter().position(|&i| item_ok(fe, i, self.current, ctx, self)).unwrap_or(0);
@@ -1225,14 +1230,14 @@ impl Flow {
         if result.is_none() && generic && self.pass >= 2 && self.current == OPTIONS {
             let passing: Vec<usize> = (0..list.len()).filter(|&k| item_ok(fe, list[k], self.current, ctx, self)).collect();
             let (first, last) = (passing.first().copied(), passing.last().copied());
-            let (display_row, gameplay_row, keys_row) = (list.len(), list.len() + 1, list.len() + 2);
+            let (display_row, keys_row) = (list.len(), list.len() + 3);
             if on_display_row {
                 if edge & CROSS != 0 {
                     self.sounds.push(0x98);
                     if self.focus == keys_row {
                         self.controls_request = true;
                     } else {
-                        self.open_display(self.focus == gameplay_row);
+                        self.open_display((self.focus - display_row) as u8);
                     }
                     return command;
                 } else if edge & DOWN != 0 {
@@ -1577,7 +1582,14 @@ pub fn display_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
         let n = items(fe, OPTIONS).len();
         let colour = |k: usize| if flow.focus == k { focused } else { plain.colour };
         let keys = drawable(&["Keyboard & Gamepad".to_string(), "Keyboard and Gamepad".to_string()]);
-        return vec![text("Display", ly + pitch, colour(n)), text("Gameplay", ly + pitch * 2.0, colour(n + 1)), text(&keys, ly + pitch * 3.0, colour(n + 2))];
+        // Four added rows at 0.8 of the item pitch, so the last stays clear of the button prompts.
+        let pitch = pitch * 0.8;
+        return vec![
+            text("Display", ly + pitch, colour(n)),
+            text("Gameplay", ly + pitch * 2.0, colour(n + 1)),
+            text("Multiplayer", ly + pitch * 3.0, colour(n + 2)),
+            text(&keys, ly + pitch * 4.0, colour(n + 3)),
+        ];
     }
     // The Display page: the Options page without its item labels; the page's window is the
     // host's (display.rs).

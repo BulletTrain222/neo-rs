@@ -1490,6 +1490,12 @@ pub struct Play {
     pub others: Vec<Player>,
     /// Another player is swapped in (co-op), not player 1.
     coop_running: bool,
+    /// The Multiplayer page's options (coop.rs sets them each frame): knocked-out players are
+    /// revived (else a fall is game over at once), and player 2 is the partner hero when one waits.
+    pub coop_revive: bool,
+    pub coop_partner: bool,
+    /// Another player fell with revive off: game over on the next co-op step.
+    coop_lost: bool,
     /// The world the co-op step last saw (a change puts the other players beside player 1).
     coop_pack: u32,
     /// SPEC-0028 section 11: the atmosphere zone selection and this frame's output (the blend
@@ -2481,6 +2487,9 @@ impl Play {
             },
             others: Vec::new(),
             coop_running: false,
+            coop_revive: true,
+            coop_partner: true,
+            coop_lost: false,
             coop_pack: 0,
             atmos_sel: Default::default(),
             atmos_out: Default::default(),
@@ -14682,9 +14691,13 @@ impl Play {
         self.sound.play(neopets_sim::sound::VOICE, if big { 1 } else { 0 }, neopets_sim::sound::Play::default());
         // Local co-op: another player at 0 HP goes down (its death clip; revived in `coop_step`),
         // with no game over.
-        let partner_up = !self.coop_running && self.others.iter().any(|o| o.down.is_none());
+        let partner_up = self.coop_revive && !self.coop_running && self.others.iter().any(|o| o.down.is_none());
         if self.player.hero_hp <= 0 && (self.coop_running || partner_up) {
             self.player.hero_hp = 0;
+            // Revive off (Multiplayer page): another player's fall ends the game.
+            if self.coop_running && !self.coop_revive {
+                self.coop_lost = true;
+            }
             if self.player.down.is_none() {
                 self.player.down = Some(0);
                 self.player.revive = 0;
@@ -19104,7 +19117,7 @@ impl Play {
         p.hud = self.hud.clone();
         p.hud.rearm_all();
         p.who = self.hero_index;
-        if let Some(r) = self.parked.as_ref() {
+        if let Some(r) = self.parked.as_ref().filter(|_| self.coop_partner) {
             p.who = 1 - self.hero_index.min(1);
             p.hero = r.anim.clone();
             p.model = r.model.clone();
@@ -19159,6 +19172,13 @@ impl Play {
     /// contacts and its animation. Pickups, doors, triggers, talking and the item panels are
     /// player 1's alone.
     pub fn coop_step(&mut self, inputs: &[(HeroInput, CameraPad)]) {
+        // Revive off: another player fell, so player 1 falls too and the game is over (the
+        // single-player death).
+        if std::mem::take(&mut self.coop_lost) && self.player.loco.state != hero_states::DEAD {
+            self.player.hero_hp = 0;
+            self.player.down = None;
+            self.default_death();
+        }
         // Player 1 down: another player standing within 3 units for 2 seconds revives it at
         // half health; else it gets up after 10 seconds. With every player down, the game is over
         // (the single-player death: its clip, the death camera and the game-over page).

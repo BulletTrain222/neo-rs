@@ -431,11 +431,21 @@ fn hud_pass<const VIEW: u8>(
     // In split screen (local co-op) each player's HUD fits its own half of the window: player
     // 1's the top half, player 2's the bottom half.
     let split = !p.others.is_empty();
-    let area = if split { window.height() / 2.0 } else { window.height() };
-    let s = (window.width() / 512.0).min(area / 448.0);
-    let (ox, oy) = ((window.width() - 512.0 * s) / 2.0, (area - 448.0 * s) / 2.0);
-    // Player 2's canvas root is moved down by the top half; its pieces are placed in it as player 1's.
-    let root_dy = if VIEW == 1 { area } else { 0.0 };
+    let side = split && settings.coop_split == 1;
+    let (area_w, area) = match (split, side) {
+        (true, true) => (window.width() / 2.0, window.height()),
+        (true, false) => (window.width(), window.height() / 2.0),
+        _ => (window.width(), window.height()),
+    };
+    let s = (area_w / 512.0).min(area / 448.0);
+    let (ox, oy) = ((area_w - 512.0 * s) / 2.0, (area - 448.0 * s) / 2.0);
+    // Player 2's canvas root is moved into the second half; its pieces are placed in it as
+    // player 1's.
+    let (root_dx, root_dy) = match (VIEW, side) {
+        (1, true) => (area_w, 0.0),
+        (1, false) => (0.0, area),
+        _ => (0.0, 0.0),
+    };
     let Some(bars) = f.key(BARS) else { return };
     let monster = f.key(MONSTER);
     // The button-prompt group: the parent of the HUD page's node gated by predicate slot 25.
@@ -533,7 +543,7 @@ fn hud_pass<const VIEW: u8>(
     };
     let _ = root;
     // Written only on change: a changed node makes Bevy lay out the whole UI again.
-    let root_place = (Val::Px(ox), Val::Px(oy + root_dy), Val::Px(512.0 * s), Val::Px(448.0 * s));
+    let root_place = (Val::Px(ox + root_dx), Val::Px(oy + root_dy), Val::Px(512.0 * s), Val::Px(448.0 * s));
     if (root_node.left, root_node.top, root_node.width, root_node.height) != root_place {
         (root_node.left, root_node.top, root_node.width, root_node.height) = root_place;
     }

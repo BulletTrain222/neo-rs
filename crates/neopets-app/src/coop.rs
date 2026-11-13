@@ -39,12 +39,17 @@ impl Coop {
 }
 
 /// Each frame: joining and leaving, and player 2's input from its controller.
-pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindings>, mute: Res<bindings::PadMute>, mut coop: ResMut<Coop>, mut exclude: ResMut<bindings::PadExclude>, play: Option<ResMut<PlayState>>) {
+#[allow(clippy::too_many_arguments)]
+pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindings>, mute: Res<bindings::PadMute>, mut coop: ResMut<Coop>, mut exclude: ResMut<bindings::PadExclude>, play: Option<ResMut<PlayState>>, settings: Res<crate::display::DisplaySettings>) {
     let Some(mut play) = play else {
         coop.pad = None;
         exclude.0 = None;
         return;
     };
+    // The Multiplayer page's options.
+    if (play.play.coop_revive, play.play.coop_partner) != (settings.coop_revive, settings.coop_partner) {
+        (play.play.coop_revive, play.play.coop_partner) = (settings.coop_revive, settings.coop_partner);
+    }
     let first = gamepads.iter().map(|(e, _)| e).min();
     if play.play.others.is_empty() {
         coop.pad = None;
@@ -251,8 +256,11 @@ pub fn split_cameras(
     mut images: ResMut<Assets<Image>>,
     mut grades: ResMut<Assets<crate::graphics::SceneGrade>>,
     mut pic: Local<Picture>,
+    settings: Res<crate::display::DisplaySettings>,
 ) {
     let other = play.as_ref().and_then(|p| p.play.others.first());
+    // The Multiplayer page's layout: one above the other, or side by side.
+    let side = settings.coop_split == 1;
     let (w, h) = target.size;
     let Some(o) = other.filter(|_| w > 0 && h > 1) else {
         for (e, _) in &seconds {
@@ -268,9 +276,9 @@ pub fn split_cameras(
         }
         return;
     };
-    let half = (w, h - h / 2);
+    let half = if side { (w - w / 2, h) } else { (w, h - h / 2) };
     for mut c in &mut mains {
-        let top = (UVec2::ZERO, UVec2::new(w, h / 2));
+        let top = (UVec2::ZERO, if side { UVec2::new(w / 2, h) } else { UVec2::new(w, h / 2) });
         if c.viewport.as_ref().map(|v| (v.physical_position, v.physical_size)) != Some(top) {
             c.viewport = Some(Viewport { physical_position: top.0, physical_size: top.1, ..default() });
         }
@@ -329,8 +337,12 @@ pub fn split_cameras(
     }
     // The screen node: the bottom half of the game picture (the scene view's rectangle).
     let Some(scene) = scene_views.iter().next() else { return };
-    let (Val::Px(top), Val::Px(height)) = (scene.top, scene.height) else { return };
-    let want = (scene.left, Val::Px(top + height / 2.0), scene.width, Val::Px(height / 2.0));
+    let (Val::Px(left), Val::Px(top), Val::Px(width), Val::Px(height)) = (scene.left, scene.top, scene.width, scene.height) else { return };
+    let want = if side {
+        (Val::Px(left + width / 2.0), Val::Px(top), Val::Px(width / 2.0), Val::Px(height))
+    } else {
+        (Val::Px(left), Val::Px(top + height / 2.0), Val::Px(width), Val::Px(height / 2.0))
+    };
     match views.single_mut() {
         Ok((_, mut n)) => {
             if (n.left, n.top, n.width, n.height) != want {
