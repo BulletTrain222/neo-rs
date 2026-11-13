@@ -230,6 +230,15 @@ impl Built {
                 opaque.entry(t).or_insert_with(|| crate::opaque_twin(materials, &textures[t]));
             }
         }
+        // The ground's baked brightness, for characters (ground_shade.rs): the vertex colours of
+        // its ground parts, opaque, not scrolling.
+        crate::ground_shade::record(
+            pack,
+            model.parts.iter().filter(|p| is_ground(p) && p.scroll.is_none() && !p.env_map).flat_map(|p| {
+                let g = crate::gs_unit(p);
+                p.positions.iter().zip(&p.colors).map(move |(q, c)| (*q, (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) * g))
+            }),
+        );
         Self { model: Arc::new(model), sigs, shared, textures, opaque, blend, soft, cut, untextured }
     }
 

@@ -18819,6 +18819,15 @@ impl Play {
 
     /// The colour-slot vector of the hero (None) or a character (SPEC-0034 5.4 and section 21):
     /// its colour-override slot 0's stored colour, None while it is white.
+    /// A character's draw tint at `at`: its status colour times the ground's baked shade near its
+    /// feet (ground_shade.rs; this build's choice), or None when both are 1.
+    pub fn draw_tint(&self, id: Option<u64>, at: [f32; 3]) -> Option<[f32; 3]> {
+        let packs: Vec<u32> = [Some(self.world.pack), self.other.as_ref().map(|w| w.pack)].into_iter().flatten().collect();
+        let k = crate::ground_shade::factor(&packs, at);
+        let t = self.status_tint(id).unwrap_or([1.0; 3]).map(|v| v * k);
+        (t != [1.0; 3]).then_some(t)
+    }
+
     pub fn status_tint(&self, id: Option<u64>) -> Option<[f32; 3]> {
         let o = self.overrides.get(&id.unwrap_or(Self::HERO_DISPLAY))?;
         (o.colour != [1.0; 3]).then_some(o.colour)

@@ -15,6 +15,7 @@ mod ui_fit;
 mod display;
 mod draw_order;
 mod perf;
+mod ground_shade;
 mod prepass_normals;
 mod scene_merge;
 mod debris_view;
@@ -4519,7 +4520,7 @@ fn sync_characters(
             let look = gpu_skin::Look {
                 light_rotation: rotation,
                 lights: &lights,
-                tint: p.status_tint(Some(c.id)).unwrap_or([1.0; 3]),
+                tint: p.draw_tint(Some(c.id), c.position).unwrap_or([1.0; 3]),
                 slots: if c.flash > 0 { &play::FLASH_COLOUR } else { &c.slots },
                 // SPEC-0029 Behavior 33 (R-0202): a ghost blends at its level / 128.
                 ghost: c.ghost.as_ref().map_or(1.0, |g| ((g.opacity * 128.0) as i32).clamp(0, 128) as f32 / 128.0),
@@ -4537,7 +4538,7 @@ fn sync_characters(
         }
         *stamp = Some(now);
         let matrices = c.anim.skin_matrices();
-        let tint = p.status_tint(Some(c.id));
+        let tint = p.draw_tint(Some(c.id), c.position);
         let lights = p.lights(Some(c.id), c.position);
         for (handle, i) in &skinned[&c.id] {
             let part = &c.model.parts[*i];
@@ -7124,7 +7125,7 @@ fn play_frame(
     let stamp = (state.play.ticks, state.play.hero_flash > 0, state.play.hero_index, state.skinned.len());
     let fresh = std::mem::replace(&mut *hero_stamp, Some(stamp)) != Some(stamp);
     let matrices = if fresh { state.play.hero.skin_matrices() } else { Vec::new() };
-    let tint = state.play.status_tint(None);
+    let tint = state.play.draw_tint(None, p);
     let lights = state.play.lights(None, p);
     if fresh && !hero_joints.is_empty() {
         let look = gpu_skin::Look { light_rotation: rotation, lights: &lights, tint: tint.unwrap_or([1.0; 3]), slots: if state.play.hero_flash > 0 { &play::FLASH_COLOUR } else { &[[1.0; 3]; 15] }, ghost: 1.0 };
