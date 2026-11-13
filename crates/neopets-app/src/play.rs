@@ -1351,7 +1351,13 @@ enum Wait {
 /// run; the other players wait in `Play::others` and are swapped in for their turn. The
 /// script-driven and world-wide state (held, scripted walks, dialogue, the rope manager) stays
 /// in `Play`.
+#[derive(Clone)]
 pub struct Player {
+    /// Which hero this player is (0 Tor, 1 Roberta). Player 1 follows `Play::hero_index`; this is
+    /// read for the other players.
+    pub who: usize,
+    /// The hero animation's root step this tick (its walk, applied by the motion record).
+    pub root_step: [f32; 3],
     pub loco: Locomotion,
     pub camera: FollowCamera,
     pub hero: HeroAnim,
@@ -1426,7 +1432,6 @@ pub struct Player {
 pub struct Play {
     /// The player being run, and the other players (docs/MULTIPLAYER.md).
     pub player: Player,
-    #[allow(dead_code)] // Filled by local co-op (docs/MULTIPLAYER.md step 2).
     pub others: Vec<Player>,
     /// SPEC-0028 section 11: the atmosphere zone selection and this frame's output (the blend
     /// factor b is the sky dome's role-10 opacity).
@@ -1440,7 +1445,6 @@ pub struct Play {
     /// loaded: serviced by the app between ticks (`stream`).
     pub wanted: Option<u32>,
     kinds: HashMap<u32, Kind>,
-    pub root_step: [f32; 3],
     /// Diagnostic block slides (block, target x and z) for traces.
     pub diag_slides: Vec<(usize, [f32; 2])>,
     /// A Cross press waiting for the next tick.
@@ -2379,6 +2383,8 @@ impl Play {
         }
         let mut play = Self {
             player: Player {
+                who: 0,
+                root_step: [0.0; 3],
                 loco,
                 camera,
                 hero,
@@ -2429,7 +2435,6 @@ impl Play {
             other,
             wanted: None,
             kinds,
-            root_step: [0.0; 3],
             diag_slides: Vec::new(),
             jump_latch: false,
             r3_latch: false,
@@ -5663,6 +5668,11 @@ impl Play {
     /// SPEC-0053 3.2: a switch request to the other hero. Refused by the mode, a dead partner
     /// (a parked hero with no hit points) or a running task. Returns whether it was accepted.
     pub fn request_switch(&mut self, extra: bool, effects: bool, flash: bool) -> bool {
+        // Local co-op (docs/MULTIPLAYER.md): no hero switch while player 2 is in (player 2 may be
+        // the parked hero itself).
+        if !self.others.is_empty() {
+            return false;
+        }
         let Some(parked) = self.parked.as_ref() else { return false };
         // SPEC-0023 section 12: every request starts the portrait swing (a forced, script request
         // is always accepted and never blocked); the gate is the in-play controls gate.
@@ -6122,7 +6132,7 @@ impl Play {
             let b = &self.world.blocks[k];
             (k, (d * 10.0).round() / 10.0, r(b.position), b.moving, neopets_sim::block::face(b, d, hero, self.player.loco.facing))
         });
-        format!("state {} touch {} clip {} prompt {:?} hold {:?} hero {:?} facing {:?} root {:?} block {:?}", self.player.loco.state, self.player.side_touch, self.player.hero.clip_state().action, self.prompt_shown, self.player.hold.map(|h| (h.block, h.face, h.latched)), r(hero), r(self.player.loco.facing), self.root_step, near)
+        format!("state {} touch {} clip {} prompt {:?} hold {:?} hero {:?} facing {:?} root {:?} block {:?}", self.player.loco.state, self.player.side_touch, self.player.hero.clip_state().action, self.prompt_shown, self.player.hold.map(|h| (h.block, h.face, h.latched)), r(hero), r(self.player.loco.facing), self.player.root_step, near)
     }
 
     /// Diagnostic: the full stick (forward, side) that points the hero straight at a point.
@@ -11373,62 +11383,7 @@ impl Play {
             self.player.hero_hp -= neopets_sim::death::respawn_penalty(self.player.hero_hp);
         }
         // SPEC-0027 Update order: the camera runs first, from the hero's previous pose.
-        let w = &self.world;
-        self.player.camera.negate_elevation = self.player.loco.state == hero_states::PANEL && self.player.panel.is_some_and(|c| c.sub == 4);
-        // The hero's target, the nearest noticed enemy: the lock's head record.
-        self.player.camera.target_point = self.player.lock.and_then(|id| self.characters.iter().find(|c| c.id == id && c.pack == w.pack)).map(|c| c.position);
-        // SPEC-0027 Death camera: once timer E runs, mode 8 on the dying hero; it ends with the page.
-        if self.death.timer_e.running() && self.player.camera.blend.is_none() {
-            self.player.camera.start_blend(15.0, 0.0, 1.5, 0.01);
-        }
-        if self.player.camera.blend.is_some() && !self.death.timer_e.running() && !self.death.flag_e {
-            self.player.camera.blend = None;
-        }
-        if self.player.camera.blend.is_some() {
-            let f = self.player.loco.facing;
-            self.player.camera.blend_step(f, |e| push_eye(w, e));
-        } else {
-        let trunks = self.near_trunks(self.player.camera.eye);
-        let fol = followed(&self.player.loco, w);
-        // The camera's ground world (SPEC-0027 Ground clearance step 2, Two worlds at an
-        // exterior and interior door): the current world when it has ground under the eye
-        // (probed from 2.5 above), else the other resident world when it has, else the current
-        // one. The eye pass and the clip read that world's geometry; the sight line keeps the
-        // current world. The near trunks belong to the current world only.
-        let other = self.other.as_ref();
-        let ground_world = |e: [f32; 3]| -> &World {
-            if w.probe(e[0], e[2], e[1] + 2.5).found {
-                return w;
-            }
-            match other {
-                Some(o) if o.probe(e[0], e[2], e[1] + 2.5).found => o,
-                _ => w,
-            }
-        };
-        let no_trunks: Vec<([f32; 3], f32)> = Vec::new();
-        let trunks_of = |g: &World| if std::ptr::eq(g, w) { &trunks } else { &no_trunks };
-        self.player.camera.update(
-            &fol,
-            pad,
-            |x, z, c| w.probe(x, z, c).height,
-            |x, z, c| {
-                let h = w.probe(x, z, c);
-                if h.found {
-                    return h.height;
-                }
-                other.map(|o| o.probe(x, z, c)).filter(|o| o.found).map_or(h.height, |o| o.height)
-            },
-            |e| {
-                let g = ground_world(*e);
-                clip_eye(g, trunks_of(g), fol.focus(), e)
-            },
-            |e| {
-                let g = ground_world(e);
-                eye_prims(g, trunks_of(g), e, false)
-            },
-            |a, c| eye_line_clear(w, a, c),
-        );
-        }
+        self.camera_step(pad);
         // SPEC-0028 section 11: the atmosphere zones of the current world, picked from the eye.
         {
             let flags = &self.state.flags;
@@ -11822,269 +11777,7 @@ impl Play {
         if !self.cheats.noclip {
             self.ride_step();
         }
-        let (world, other) = (&self.world, self.other.as_ref());
-        let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
-        // A script's ride (R-0259) moves the hero with its object: no wall, box or ceiling push
-        // takes him off it (pack 956's lift shaft held him at 46.6 while the platform went on).
-        let noclip = self.cheats.noclip || self.player.ride_lock.is_some();
-        let hero_state = self.player.loco.state;
-        let block_contact = !noclip && !matches!(self.player.loco.state, 18 | 19 | 30 | 41 | 58);
-        let wall_contact = !noclip && !matches!(self.player.loco.state, 21 | 23 | 30 | 35 | 37 | 38 | 41 | 47);
-        let side_touch = Cell::new(false);
-        // The motion record's touched flag (+0x238; SPEC-0018 Slide response step 6): cleared
-        // by the hero branch each step and set by any contact that writes a normal; here any
-        // push out of a wall, box, block or sphere, or a block top's floor contact.
-        let touched = Cell::new(false);
-        let swap = Cell::new(false);
-        // SPEC-0040 Behavior 11, character-to-character push: the hero (not in action state 33
-        // or 53) against each active, living character of a drawn world within 20 units whose
-        // vertical body cylinder (its row's radius and height) overlaps the hero's, pushed out
-        // along the horizontal overlap direction, and the candidate's touch latch set. The hero is
-        // moved, unless he is in state 50, 52, 21 or 41 or already touched something earlier in
-        // this driver: then the candidate takes the same full overlap (SPEC-0040, A boss and the
-        // hero in the character push; R-0154). The collidable word (+0x284) and the class
-        // callback (a common enemy's attack mode 2) are not built.
-        let hero_at = self.player.loco.position();
-        let touch_ids = RefCell::new(Vec::new());
-        let shoved = RefCell::new(Vec::new());
-        let breakable_hits = RefCell::new(Vec::new());
-        // SPEC-0036 Leap, step 1: in the leap Roberta is left out of the character body contacts.
-        let leaping = self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| a.sub == 8);
-        let bodies: Vec<([f32; 3], f32, f32, u64)> = if noclip || leaping || matches!(hero_state, 33 | 53) {
-            Vec::new()
-        } else {
-            self.characters
-                .iter()
-                // The carried Miamouse sits in his hands: its body pushing him made him wander (user's report 18).
-                .filter(|c| self.pack_drawn(c.pack) && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && Some(c.id) != self.pet_char && Some(c.id) != self.player.carried)
-                .filter_map(|c| c.row.map(|r| (c.position, r.radius, r.height, c.id)))
-                .filter(|(q, ..)| (q[0] - hero_at[0]).powi(2) + (q[1] - hero_at[1]).powi(2) + (q[2] - hero_at[2]).powi(2) < 400.0)
-                .collect()
-        };
-        // SPEC-0018 Breakable cylinders against characters (the list B walk; a cell's list only
-        // narrows the same set): each state 1 or 3 breakable with an upright cylinder volume.
-        let breakable_cylinders = if noclip { Vec::new() } else { self.world.breakable_cylinders(hero_at, 40.0) };
-        // SPEC-0018 Cylinders (kind 3) against the hero (R-0238): bit 1 skips the record, bit 0
-        // makes it solid (the trigger group's bits 3, 8 and 6 push only with bit 0, which no
-        // record on disc has with them). Bit 2's world-surface test is not built (no record has
-        // it). The hero body is radius 1.175 and height 3.5 from the feet.
-        let mask = self.world.collis_mask;
-        let static_cylinders: Vec<([f32; 3], f32, f32)> = if noclip {
-            Vec::new()
-        } else {
-            self.world
-                .solids
-                .iter()
-                .filter(|v| v.kind == 3 && v.solid(mask) && v.flags & 2 == 0)
-                .filter_map(|v| match v.shape {
-                    neopets_sim::trigger::Shape::Cylinder { base, axis, length, radius } if axis[1].abs() >= 0.99 && (base[0] - hero_at[0]).hypot(base[2] - hero_at[2]) < 40.0 => {
-                        let low = if axis[1] * length < 0.0 { base[1] - length.abs() } else { base[1] };
-                        Some(([base[0], low, base[2]], length.abs(), radius))
-                    }
-                    _ => None,
-                })
-                .collect()
-        };
-        // SPEC-0033 Behavior 43 for the placed objects' solid upright cylinders (the sealed
-        // chests' object 0), with the hero's own body radius. The other primitives of an
-        // object's header and the double turn of a rotated object are not built.
-        let object_cylinders: Vec<([f32; 3], f32, f32)> = if noclip { Vec::new() } else { self.object_cylinders(hero_at) };
-        let object_solids = if noclip || matches!(self.player.loco.state, 21 | 38 | 41) { Vec::new() } else { self.object_solids(hero_at) };
-        self.player.loco.record_tick(
-            self.root_step,
-            |x, z, c| {
-                let mut hit = world.probe(x, z, c);
-                // SPEC-0018 World and fallbacks of the attach probe: with no entry the selected
-                // hero retries at eight points 0.2 away, in the spec's order; the first that
-                // answers gives the height and entry.
-                if !hit.found {
-                    const AROUND: [(f32, f32); 8] = [(0.2, 0.0), (-0.2, 0.0), (0.0, -0.2), (0.0, 0.2), (0.2, 0.2), (-0.2, -0.2), (-0.2, 0.2), (0.2, -0.2)];
-                    if let Some(h) = AROUND.iter().map(|&(dx, dz)| world.probe(x + dx, z + dz, c)).find(|h| h.found) {
-                        hit = h;
-                    }
-                }
-                if !hit.found && search_other {
-                    if let Some(o) = other {
-                        let there = o.probe(x, z, c);
-                        if there.found {
-                            swap.set(true);
-                            return (there.height, there.normal);
-                        }
-                    }
-                }
-                (hit.height, hit.normal)
-            },
-            |p, vel| {
-                let entry = *p;
-                // SPEC-0040 Behavior 14A driver branch 0, in order: the cell's frame records
-                // (walls), then the box primitives, spheres and breakable and object cylinders,
-                // each with the hero radius. Not implemented: cell lists A and B as such, the
-                // shared contact response's other primitives and recovery.
-                if let (Some(g), true) = (&world.ground, wall_contact) {
-                    let walls_at = |x: f32, z: f32| -> Vec<WallEdge> { g.frames_at(x, z).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind }).collect() };
-                    // A long horizontal step this tick (a knockback: the Black Knight's swing
-                    // moves Tor 2.35 in one tick) is walked in sub-steps of at most 0.5 with the
-                    // walls tested at each, so it cannot pass through a wall (this build's
-                    // guard; the walls are otherwise tested only at the end point).
-                    let (dx, dz) = (p[0] - hero_at[0], p[2] - hero_at[2]);
-                    let n = ((dx.hypot(dz) / 0.5).ceil() as usize).clamp(1, 16);
-                    if n > 1 {
-                        let mut q = [hero_at[0], p[1], hero_at[2]];
-                        for _ in 0..n {
-                            let from = q;
-                            q[0] += dx / n as f32;
-                            q[2] += dz / n as f32;
-                            let w = walls_at(q[0], q[2]);
-                            contact::resolve_hero_walls(&mut q, vel, &w, contact::HERO_RADIUS, from);
-                        }
-                        p[0] = q[0];
-                        p[2] = q[2];
-                    }
-                    let w = walls_at(p[0], p[2]);
-                    contact::resolve_hero_walls(p, vel, &w, contact::HERO_RADIUS, hero_at);
-                    // A drawn placed object's own walls: the position is taken into the
-                    // object's rest frame, pushed there and the push taken back to world space.
-                    for (pose, walls) in if std::env::var_os("NEOPETS_NO_OBJ_WALLS").is_some() { Vec::new() } else { world.object_walls(p[0], p[2]) } {
-                        let local = rest_point(&pose, *p);
-                        let mut q = local;
-                        if contact::resolve_walls(&mut q, &walls, contact::HERO_RADIUS) {
-                            let d = world_vector(&pose, [q[0] - local[0], q[1] - local[1], q[2] - local[2]]);
-                            for k in 0..3 {
-                                p[k] += d[k];
-                            }
-                        }
-                    }
-                }
-                // SPEC-0033 Behavior 13: the box push does nothing for a hero in state 21, 38 or 41.
-                let before = *p;
-                let mut box_floor = false;
-                if !noclip && !matches!(hero_state, 21 | 38 | 41) {
-                    // SPEC-0018 Pack 1056 stairs: the plain push; with the true tilted ramp normal
-                    // the feet never enter the top gate (the build's R-0244 rule is gone). A top
-                    // face sets the floor flag, so a box top holds the hero (user report 100).
-                    box_floor = contact::resolve_floor(p, &world.boxes, contact::HERO_RADIUS).1;
-                }
-                // SPEC-0028 Character versus moving placed objects: into each object's rest frame,
-                // its boxes and spheres, the push back to world space.
-                for (pose, boxes, spheres) in &object_solids {
-                    let local = rest_point(pose, *p);
-                    let mut q = local;
-                    let (hit, top) = contact::resolve_floor(&mut q, boxes, contact::HERO_RADIUS);
-                    box_floor |= top && world_vector(pose, [0.0, 1.0, 0.0])[1] > 0.9;
-                    let hit = hit | contact::resolve_spheres(&mut q, spheres);
-                    if hit {
-                        let d = world_vector(pose, [q[0] - local[0], q[1] - local[1], q[2] - local[2]]);
-                        for k in 0..3 {
-                            p[k] += d[k];
-                        }
-                    }
-                }
-                // SPEC-0048 Solid for characters: the movable blocks' boxes; a top face sets the
-                // floor-contact flag and a side face of a block 1 to 5 taller the side-touch latch.
-                let c = if block_contact { neopets_sim::block::contact(&world.blocks, p) } else { Default::default() };
-                side_touch.set(c.side_touch);
-                // SPEC-0018 Sphere contact: out of the pushing spheres to r + 1.25.
-                if !noclip {
-                    contact::resolve_spheres(p, &world.push_spheres);
-                }
-                // SPEC-0018 Cylinders (kind 3) against the hero, Response direction: the normal
-                // points toward the axis, so only motion away from it is clipped.
-                let slide = contact::cylinder_slide;
-                for &(base, length, radius, number) in &breakable_cylinders {
-                    let Some(hit) = contact::upright_cylinder_push(*p, 1.0, HERO_HEIGHT, base, length, radius) else { continue };
-                    breakable_hits.borrow_mut().push(number);
-                    // SPEC-0036 Hero collision-kind contact tests: a falling hero in a jump state
-                    // within 1.5 of the top is handled by the landing break and not pushed that
-                    // tick (`landing_break`).
-                    if matches!(hero_state, 7..=11 | 43..=46) && vel[1] < 0.0 && base[1] + length - 1.5 < p[1] {
-                        continue;
-                    }
-                    slide(p, vel, hit);
-                }
-                for &(base, length, radius) in object_cylinders.iter().chain(&static_cylinders) {
-                    if let Some(hit) = contact::upright_cylinder_push(*p, contact::HERO_RADIUS, HERO_HEIGHT, base, length, radius) {
-                        slide(p, vel, hit);
-                    }
-                }
-                let mut pushed = false;
-                let mut on_top = false;
-                let mut latch = (0..3).any(|k| (p[k] - entry[k]).abs() > 1e-5) || matches!(hero_state, 50 | 52 | 21 | 41);
-                for &(q, r, h, id) in &bodies {
-                    // The flat-ended cylinder overlap's parallel branch (both bodies upright):
-                    // the height ranges and the radius sum compare inclusively (SPEC-0040
-                    // Behavior 11, corrected 2026-11-09).
-                    if p[1] > q[1] + h || q[1] > p[1] + HERO_HEIGHT {
-                        continue;
-                    }
-                    let (dx, dz) = (p[0] - q[0], p[2] - q[2]);
-                    let d = dx.hypot(dz);
-                    // SPEC-0040 the character push rule (R-0245): with the hero's axis upright and
-                    // the axes closer than the hero radius, feet 3.1 to 3.5 over the body's origin
-                    // are pulled down onto 3.1 (the cap normal points into the body) with a
-                    // floor-flag landing; a head 3.1 to 3.5 under it is pushed up the same way.
-                    // Otherwise the push is horizontal, so nothing stands on a body (the class 20
-                    // shell included: its launch needs no standing, SPEC-0047).
-                    let hh = p[1] - q[1];
-                    if d < contact::HERO_RADIUS && hh.abs() > 3.1 && hh.abs() <= 3.5 {
-                        touch_ids.borrow_mut().push(id);
-                        if hh > 0.0 {
-                            p[1] = q[1] + 3.1;
-                            on_top = true;
-                            if vel[1] < 0.1 {
-                                vel[1] = 0.0;
-                            }
-                        } else {
-                            p[1] = q[1] - 3.1;
-                            vel[1] = vel[1].min(0.0);
-                        }
-                        continue;
-                    }
-                    let min = contact::HERO_RADIUS + r;
-                    if d <= min {
-                        let (ux, uz) = if d > 1e-4 { (dx / d, dz / d) } else { (1.0, 0.0) };
-                        touch_ids.borrow_mut().push(id);
-                        if latch {
-                            shoved.borrow_mut().push((id, [-ux * (min - d), -uz * (min - d)]));
-                        } else {
-                            p[0] = q[0] + ux * min;
-                            p[2] = q[2] + uz * min;
-                            pushed = true;
-                            latch = true;
-                        }
-                    }
-                }
-                // A body push is followed by the walls again, so a character cannot shove the
-                // hero through a wall (this build's order; the Black Knight pushed Tor off the
-                // edge of the 989 balcony, past the wall at its end, into the void).
-                if let (true, Some(g), true) = (pushed, &world.ground, wall_contact) {
-                    let walls: Vec<WallEdge> = g.frames_at(p[0], p[2]).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind }).collect();
-                    contact::resolve_hero_walls(p, vel, &walls, contact::HERO_RADIUS, hero_at);
-                }
-                let moved = (0..3).any(|k| (p[k] - before[k]).abs() > 1e-5);
-                if moved || c.floor || c.side_touch {
-                    touched.set(true);
-                }
-                c.floor || on_top || box_floor
-            },
-        );
-        self.player.touched = touched.get();
-        if let Some(at) = self.player.held_at.filter(|_| self.player.loco.state == hero_states::HELD) {
-            self.player.loco.body.position = at;
-            self.player.loco.body.velocity = [0.0; 3];
-        }
-        self.breakable_hits = breakable_hits.into_inner();
-        self.player.hero_touch = (touch_ids.into_inner(), std::mem::take(&mut self.player.hero_touch.0));
-        for (id, d) in shoved.into_inner() {
-            if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
-                c.position[0] += d[0];
-                c.position[2] += d[1];
-                if let Some(wk) = c.walker.as_mut() {
-                    wk.body.position = c.position;
-                }
-            }
-        }
-        // The side-touch latch the next hero update reads (SPEC-0033 Behavior 15A).
-        self.player.side_touch = side_touch.get();
+        let swap_hit = self.hero_contacts(true);
         // SPEC-0055 8A: the deadly-ground kill (kind 2, gap 0.085 or less; no health change),
         // then the death-state handler of state 16.
         let hp = {
@@ -12125,7 +11818,7 @@ impl Play {
         }
         // World swap: a hit in the other buffer makes it current (the original waits for the
         // next frame; here it takes effect before the next tick).
-        if swap.get() {
+        if swap_hit {
             if let Some(o) = self.other.take() {
                 self.other = Some(std::mem::replace(&mut self.world, o));
                 self.swaps += 1;
@@ -12305,9 +11998,9 @@ impl Play {
             }
         }
         self.prompt_shown = self.door_prompt.take();
-        self.root_step = self.player.hero.tick();
+        self.player.root_step = self.player.hero.tick();
         if self.player.loco.state == hero_states::HELD {
-            self.root_step = [0.0; 3];
+            self.player.root_step = [0.0; 3];
         }
         self.head_look_step();
         let (at, facing) = (self.player.loco.position(), self.player.loco.facing);
@@ -18844,9 +18537,402 @@ impl Play {
         (t != [1.0; 3]).then_some(t)
     }
 
+    /// The running player's motion record tick and its contacts (walls, boxes, blocks, spheres,
+    /// cylinders, breakables and character bodies; SPEC-0018 and SPEC-0040 Behavior 11), run by
+    /// each player in turn (docs/MULTIPLAYER.md). Returns whether the ground was found in the
+    /// other resident world (a world swap). `primary`: player 1, whose breakable hits are kept.
+    fn hero_contacts(&mut self, primary: bool) -> bool {
+        let (world, other) = (&self.world, self.other.as_ref());
+        let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
+        // A script's ride (R-0259) moves the hero with its object: no wall, box or ceiling push
+        // takes him off it (pack 956's lift shaft held him at 46.6 while the platform went on).
+        let noclip = self.cheats.noclip || self.player.ride_lock.is_some();
+        let hero_state = self.player.loco.state;
+        let block_contact = !noclip && !matches!(self.player.loco.state, 18 | 19 | 30 | 41 | 58);
+        let wall_contact = !noclip && !matches!(self.player.loco.state, 21 | 23 | 30 | 35 | 37 | 38 | 41 | 47);
+        let side_touch = Cell::new(false);
+        // The motion record's touched flag (+0x238; SPEC-0018 Slide response step 6): cleared
+        // by the hero branch each step and set by any contact that writes a normal; here any
+        // push out of a wall, box, block or sphere, or a block top's floor contact.
+        let touched = Cell::new(false);
+        let swap = Cell::new(false);
+        // SPEC-0040 Behavior 11, character-to-character push: the hero (not in action state 33
+        // or 53) against each active, living character of a drawn world within 20 units whose
+        // vertical body cylinder (its row's radius and height) overlaps the hero's, pushed out
+        // along the horizontal overlap direction, and the candidate's touch latch set. The hero is
+        // moved, unless he is in state 50, 52, 21 or 41 or already touched something earlier in
+        // this driver: then the candidate takes the same full overlap (SPEC-0040, A boss and the
+        // hero in the character push; R-0154). The collidable word (+0x284) and the class
+        // callback (a common enemy's attack mode 2) are not built.
+        let hero_at = self.player.loco.position();
+        let touch_ids = RefCell::new(Vec::new());
+        let shoved = RefCell::new(Vec::new());
+        let breakable_hits = RefCell::new(Vec::new());
+        // SPEC-0036 Leap, step 1: in the leap Roberta is left out of the character body contacts.
+        let leaping = self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| a.sub == 8);
+        let bodies: Vec<([f32; 3], f32, f32, u64)> = if noclip || leaping || matches!(hero_state, 33 | 53) {
+            Vec::new()
+        } else {
+            self.characters
+                .iter()
+                // The carried Miamouse sits in his hands: its body pushing him made him wander (user's report 18).
+                .filter(|c| self.pack_drawn(c.pack) && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && Some(c.id) != self.pet_char && Some(c.id) != self.player.carried)
+                .filter_map(|c| c.row.map(|r| (c.position, r.radius, r.height, c.id)))
+                .filter(|(q, ..)| (q[0] - hero_at[0]).powi(2) + (q[1] - hero_at[1]).powi(2) + (q[2] - hero_at[2]).powi(2) < 400.0)
+                .collect()
+        };
+        // SPEC-0018 Breakable cylinders against characters (the list B walk; a cell's list only
+        // narrows the same set): each state 1 or 3 breakable with an upright cylinder volume.
+        let breakable_cylinders = if noclip { Vec::new() } else { self.world.breakable_cylinders(hero_at, 40.0) };
+        // SPEC-0018 Cylinders (kind 3) against the hero (R-0238): bit 1 skips the record, bit 0
+        // makes it solid (the trigger group's bits 3, 8 and 6 push only with bit 0, which no
+        // record on disc has with them). Bit 2's world-surface test is not built (no record has
+        // it). The hero body is radius 1.175 and height 3.5 from the feet.
+        let mask = self.world.collis_mask;
+        let static_cylinders: Vec<([f32; 3], f32, f32)> = if noclip {
+            Vec::new()
+        } else {
+            self.world
+                .solids
+                .iter()
+                .filter(|v| v.kind == 3 && v.solid(mask) && v.flags & 2 == 0)
+                .filter_map(|v| match v.shape {
+                    neopets_sim::trigger::Shape::Cylinder { base, axis, length, radius } if axis[1].abs() >= 0.99 && (base[0] - hero_at[0]).hypot(base[2] - hero_at[2]) < 40.0 => {
+                        let low = if axis[1] * length < 0.0 { base[1] - length.abs() } else { base[1] };
+                        Some(([base[0], low, base[2]], length.abs(), radius))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // SPEC-0033 Behavior 43 for the placed objects' solid upright cylinders (the sealed
+        // chests' object 0), with the hero's own body radius. The other primitives of an
+        // object's header and the double turn of a rotated object are not built.
+        let object_cylinders: Vec<([f32; 3], f32, f32)> = if noclip { Vec::new() } else { self.object_cylinders(hero_at) };
+        let object_solids = if noclip || matches!(self.player.loco.state, 21 | 38 | 41) { Vec::new() } else { self.object_solids(hero_at) };
+        self.player.loco.record_tick(
+            self.player.root_step,
+            |x, z, c| {
+                let mut hit = world.probe(x, z, c);
+                // SPEC-0018 World and fallbacks of the attach probe: with no entry the selected
+                // hero retries at eight points 0.2 away, in the spec's order; the first that
+                // answers gives the height and entry.
+                if !hit.found {
+                    const AROUND: [(f32, f32); 8] = [(0.2, 0.0), (-0.2, 0.0), (0.0, -0.2), (0.0, 0.2), (0.2, 0.2), (-0.2, -0.2), (-0.2, 0.2), (0.2, -0.2)];
+                    if let Some(h) = AROUND.iter().map(|&(dx, dz)| world.probe(x + dx, z + dz, c)).find(|h| h.found) {
+                        hit = h;
+                    }
+                }
+                if !hit.found && search_other {
+                    if let Some(o) = other {
+                        let there = o.probe(x, z, c);
+                        if there.found {
+                            swap.set(true);
+                            return (there.height, there.normal);
+                        }
+                    }
+                }
+                (hit.height, hit.normal)
+            },
+            |p, vel| {
+                let entry = *p;
+                // SPEC-0040 Behavior 14A driver branch 0, in order: the cell's frame records
+                // (walls), then the box primitives, spheres and breakable and object cylinders,
+                // each with the hero radius. Not implemented: cell lists A and B as such, the
+                // shared contact response's other primitives and recovery.
+                if let (Some(g), true) = (&world.ground, wall_contact) {
+                    let walls_at = |x: f32, z: f32| -> Vec<WallEdge> { g.frames_at(x, z).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind }).collect() };
+                    // A long horizontal step this tick (a knockback: the Black Knight's swing
+                    // moves Tor 2.35 in one tick) is walked in sub-steps of at most 0.5 with the
+                    // walls tested at each, so it cannot pass through a wall (this build's
+                    // guard; the walls are otherwise tested only at the end point).
+                    let (dx, dz) = (p[0] - hero_at[0], p[2] - hero_at[2]);
+                    let n = ((dx.hypot(dz) / 0.5).ceil() as usize).clamp(1, 16);
+                    if n > 1 {
+                        let mut q = [hero_at[0], p[1], hero_at[2]];
+                        for _ in 0..n {
+                            let from = q;
+                            q[0] += dx / n as f32;
+                            q[2] += dz / n as f32;
+                            let w = walls_at(q[0], q[2]);
+                            contact::resolve_hero_walls(&mut q, vel, &w, contact::HERO_RADIUS, from);
+                        }
+                        p[0] = q[0];
+                        p[2] = q[2];
+                    }
+                    let w = walls_at(p[0], p[2]);
+                    contact::resolve_hero_walls(p, vel, &w, contact::HERO_RADIUS, hero_at);
+                    // A drawn placed object's own walls: the position is taken into the
+                    // object's rest frame, pushed there and the push taken back to world space.
+                    for (pose, walls) in if std::env::var_os("NEOPETS_NO_OBJ_WALLS").is_some() { Vec::new() } else { world.object_walls(p[0], p[2]) } {
+                        let local = rest_point(&pose, *p);
+                        let mut q = local;
+                        if contact::resolve_walls(&mut q, &walls, contact::HERO_RADIUS) {
+                            let d = world_vector(&pose, [q[0] - local[0], q[1] - local[1], q[2] - local[2]]);
+                            for k in 0..3 {
+                                p[k] += d[k];
+                            }
+                        }
+                    }
+                }
+                // SPEC-0033 Behavior 13: the box push does nothing for a hero in state 21, 38 or 41.
+                let before = *p;
+                let mut box_floor = false;
+                if !noclip && !matches!(hero_state, 21 | 38 | 41) {
+                    // SPEC-0018 Pack 1056 stairs: the plain push; with the true tilted ramp normal
+                    // the feet never enter the top gate (the build's R-0244 rule is gone). A top
+                    // face sets the floor flag, so a box top holds the hero (user report 100).
+                    box_floor = contact::resolve_floor(p, &world.boxes, contact::HERO_RADIUS).1;
+                }
+                // SPEC-0028 Character versus moving placed objects: into each object's rest frame,
+                // its boxes and spheres, the push back to world space.
+                for (pose, boxes, spheres) in &object_solids {
+                    let local = rest_point(pose, *p);
+                    let mut q = local;
+                    let (hit, top) = contact::resolve_floor(&mut q, boxes, contact::HERO_RADIUS);
+                    box_floor |= top && world_vector(pose, [0.0, 1.0, 0.0])[1] > 0.9;
+                    let hit = hit | contact::resolve_spheres(&mut q, spheres);
+                    if hit {
+                        let d = world_vector(pose, [q[0] - local[0], q[1] - local[1], q[2] - local[2]]);
+                        for k in 0..3 {
+                            p[k] += d[k];
+                        }
+                    }
+                }
+                // SPEC-0048 Solid for characters: the movable blocks' boxes; a top face sets the
+                // floor-contact flag and a side face of a block 1 to 5 taller the side-touch latch.
+                let c = if block_contact { neopets_sim::block::contact(&world.blocks, p) } else { Default::default() };
+                side_touch.set(c.side_touch);
+                // SPEC-0018 Sphere contact: out of the pushing spheres to r + 1.25.
+                if !noclip {
+                    contact::resolve_spheres(p, &world.push_spheres);
+                }
+                // SPEC-0018 Cylinders (kind 3) against the hero, Response direction: the normal
+                // points toward the axis, so only motion away from it is clipped.
+                let slide = contact::cylinder_slide;
+                for &(base, length, radius, number) in &breakable_cylinders {
+                    let Some(hit) = contact::upright_cylinder_push(*p, 1.0, HERO_HEIGHT, base, length, radius) else { continue };
+                    breakable_hits.borrow_mut().push(number);
+                    // SPEC-0036 Hero collision-kind contact tests: a falling hero in a jump state
+                    // within 1.5 of the top is handled by the landing break and not pushed that
+                    // tick (`landing_break`).
+                    if matches!(hero_state, 7..=11 | 43..=46) && vel[1] < 0.0 && base[1] + length - 1.5 < p[1] {
+                        continue;
+                    }
+                    slide(p, vel, hit);
+                }
+                for &(base, length, radius) in object_cylinders.iter().chain(&static_cylinders) {
+                    if let Some(hit) = contact::upright_cylinder_push(*p, contact::HERO_RADIUS, HERO_HEIGHT, base, length, radius) {
+                        slide(p, vel, hit);
+                    }
+                }
+                let mut pushed = false;
+                let mut on_top = false;
+                let mut latch = (0..3).any(|k| (p[k] - entry[k]).abs() > 1e-5) || matches!(hero_state, 50 | 52 | 21 | 41);
+                for &(q, r, h, id) in &bodies {
+                    // The flat-ended cylinder overlap's parallel branch (both bodies upright):
+                    // the height ranges and the radius sum compare inclusively (SPEC-0040
+                    // Behavior 11, corrected 2026-11-09).
+                    if p[1] > q[1] + h || q[1] > p[1] + HERO_HEIGHT {
+                        continue;
+                    }
+                    let (dx, dz) = (p[0] - q[0], p[2] - q[2]);
+                    let d = dx.hypot(dz);
+                    // SPEC-0040 the character push rule (R-0245): with the hero's axis upright and
+                    // the axes closer than the hero radius, feet 3.1 to 3.5 over the body's origin
+                    // are pulled down onto 3.1 (the cap normal points into the body) with a
+                    // floor-flag landing; a head 3.1 to 3.5 under it is pushed up the same way.
+                    // Otherwise the push is horizontal, so nothing stands on a body (the class 20
+                    // shell included: its launch needs no standing, SPEC-0047).
+                    let hh = p[1] - q[1];
+                    if d < contact::HERO_RADIUS && hh.abs() > 3.1 && hh.abs() <= 3.5 {
+                        touch_ids.borrow_mut().push(id);
+                        if hh > 0.0 {
+                            p[1] = q[1] + 3.1;
+                            on_top = true;
+                            if vel[1] < 0.1 {
+                                vel[1] = 0.0;
+                            }
+                        } else {
+                            p[1] = q[1] - 3.1;
+                            vel[1] = vel[1].min(0.0);
+                        }
+                        continue;
+                    }
+                    let min = contact::HERO_RADIUS + r;
+                    if d <= min {
+                        let (ux, uz) = if d > 1e-4 { (dx / d, dz / d) } else { (1.0, 0.0) };
+                        touch_ids.borrow_mut().push(id);
+                        if latch {
+                            shoved.borrow_mut().push((id, [-ux * (min - d), -uz * (min - d)]));
+                        } else {
+                            p[0] = q[0] + ux * min;
+                            p[2] = q[2] + uz * min;
+                            pushed = true;
+                            latch = true;
+                        }
+                    }
+                }
+                // A body push is followed by the walls again, so a character cannot shove the
+                // hero through a wall (this build's order; the Black Knight pushed Tor off the
+                // edge of the 989 balcony, past the wall at its end, into the void).
+                if let (true, Some(g), true) = (pushed, &world.ground, wall_contact) {
+                    let walls: Vec<WallEdge> = g.frames_at(p[0], p[2]).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind }).collect();
+                    contact::resolve_hero_walls(p, vel, &walls, contact::HERO_RADIUS, hero_at);
+                }
+                let moved = (0..3).any(|k| (p[k] - before[k]).abs() > 1e-5);
+                if moved || c.floor || c.side_touch {
+                    touched.set(true);
+                }
+                c.floor || on_top || box_floor
+            },
+        );
+        self.player.touched = touched.get();
+        if let Some(at) = self.player.held_at.filter(|_| self.player.loco.state == hero_states::HELD) {
+            self.player.loco.body.position = at;
+            self.player.loco.body.velocity = [0.0; 3];
+        }
+        if primary {
+            self.breakable_hits = breakable_hits.into_inner();
+        }
+        self.player.hero_touch = (touch_ids.into_inner(), std::mem::take(&mut self.player.hero_touch.0));
+        for (id, d) in shoved.into_inner() {
+            if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
+                c.position[0] += d[0];
+                c.position[2] += d[1];
+                if let Some(wk) = c.walker.as_mut() {
+                    wk.body.position = c.position;
+                }
+            }
+        }
+        // The side-touch latch the next hero update reads (SPEC-0033 Behavior 15A).
+        self.player.side_touch = side_touch.get();
+        swap.get()
+    }
+
+    /// The running player's follow camera for this tick (SPEC-0027 Update order: the camera runs
+    /// first, from the hero's previous pose). Each player runs it in turn (docs/MULTIPLAYER.md).
+    fn camera_step(&mut self, pad: CameraPad) {
+        let w = &self.world;
+        self.player.camera.negate_elevation = self.player.loco.state == hero_states::PANEL && self.player.panel.is_some_and(|c| c.sub == 4);
+        // The hero's target, the nearest noticed enemy: the lock's head record.
+        self.player.camera.target_point = self.player.lock.and_then(|id| self.characters.iter().find(|c| c.id == id && c.pack == w.pack)).map(|c| c.position);
+        // SPEC-0027 Death camera: once timer E runs, mode 8 on the dying hero; it ends with the page.
+        if self.death.timer_e.running() && self.player.camera.blend.is_none() {
+            self.player.camera.start_blend(15.0, 0.0, 1.5, 0.01);
+        }
+        if self.player.camera.blend.is_some() && !self.death.timer_e.running() && !self.death.flag_e {
+            self.player.camera.blend = None;
+        }
+        if self.player.camera.blend.is_some() {
+            let f = self.player.loco.facing;
+            self.player.camera.blend_step(f, |e| push_eye(w, e));
+        } else {
+        let trunks = self.near_trunks(self.player.camera.eye);
+        let fol = followed(&self.player.loco, w);
+        // The camera's ground world (SPEC-0027 Ground clearance step 2, Two worlds at an
+        // exterior and interior door): the current world when it has ground under the eye
+        // (probed from 2.5 above), else the other resident world when it has, else the current
+        // one. The eye pass and the clip read that world's geometry; the sight line keeps the
+        // current world. The near trunks belong to the current world only.
+        let other = self.other.as_ref();
+        let ground_world = |e: [f32; 3]| -> &World {
+            if w.probe(e[0], e[2], e[1] + 2.5).found {
+                return w;
+            }
+            match other {
+                Some(o) if o.probe(e[0], e[2], e[1] + 2.5).found => o,
+                _ => w,
+            }
+        };
+        let no_trunks: Vec<([f32; 3], f32)> = Vec::new();
+        let trunks_of = |g: &World| if std::ptr::eq(g, w) { &trunks } else { &no_trunks };
+        self.player.camera.update(
+            &fol,
+            pad,
+            |x, z, c| w.probe(x, z, c).height,
+            |x, z, c| {
+                let h = w.probe(x, z, c);
+                if h.found {
+                    return h.height;
+                }
+                other.map(|o| o.probe(x, z, c)).filter(|o| o.found).map_or(h.height, |o| o.height)
+            },
+            |e| {
+                let g = ground_world(*e);
+                clip_eye(g, trunks_of(g), fol.focus(), e)
+            },
+            |e| {
+                let g = ground_world(e);
+                eye_prims(g, trunks_of(g), e, false)
+            },
+            |a, c| eye_line_clear(w, a, c),
+        );
+        }
+    }
+
+    /// Local co-op (docs/MULTIPLAYER.md step 2): player 2 joins two units to player 1's right, as
+    /// the parked hero when there is one (Roberta while Tor plays), else as a second Tor (a copy
+    /// of player 1's hero). False when player 2 is already in.
+    pub fn add_player(&mut self) -> bool {
+        if !self.others.is_empty() {
+            return false;
+        }
+        let mut p = self.player.clone();
+        p.who = self.hero_index;
+        if let Some(r) = self.parked.as_ref() {
+            p.who = 1 - self.hero_index.min(1);
+            p.hero = r.anim.clone();
+            p.model = r.model.clone();
+            (p.hero_hp, p.hero_max, p.hero_mp, p.hero_mp_max) = (r.hp, r.hp_max, r.mp, r.mp_max);
+        }
+        (p.hold, p.hang, p.line_hang, p.ledge, p.ledge_record, p.climb, p.ladder, p.panel) = (None, None, None, None, None, None, None, None);
+        (p.ride, p.ride_lock, p.rope_hero, p.r_attack, p.carried, p.lock, p.held_at) = (None, None, None, None, None, None, None);
+        p.hero_shots.clear();
+        p.hero_flash = 0;
+        p.hero_trail = None;
+        let at = self.player.loco.position();
+        let f = self.player.loco.facing;
+        let (rx, rz) = (-f[2], f[0]);
+        let (x, z) = (at[0] + 2.0 * rx, at[2] + 2.0 * rz);
+        let y = self.world.ground_at(x, z, at[1] + 2.5).unwrap_or(at[1]);
+        p.loco.teleport([x, y, z], f);
+        self.others.push(p);
+        true
+    }
+
+    /// Player 2 leaves (local co-op).
+    pub fn remove_player(&mut self) {
+        self.others.clear();
+    }
+
+    /// Local co-op (docs/MULTIPLAYER.md step 2a): each other player's tick, after player 1's:
+    /// its follow camera, its movement from its own input (relative to its own camera), the
+    /// motion record's contacts and its animation. Attacks, hits, triggers, pickups and doors are
+    /// player 1's alone for now (step 2b and 3).
+    pub fn coop_step(&mut self, inputs: &[(HeroInput, CameraPad)]) {
+        for i in 0..self.others.len() {
+            let (input, pad) = inputs.get(i).copied().unwrap_or_default();
+            self.swap_player(i);
+            self.camera_step(pad);
+            let (forward, left) = self.player.camera.rows();
+            let who = self.player.who;
+            self.player.loco.roberta = who == 1;
+            self.player.loco.air_ok = who == 0;
+            self.player.loco.stick_step = neopets_sim::hero::StickStep::Off;
+            let clip = self.player.hero.clip_state();
+            self.player.loco.update(&input, forward, left, clip);
+            let id = self.player.loco.action();
+            self.player.hero.request(id, false);
+            self.player.hero.set_rate(self.player.loco.rate);
+            self.hero_contacts(false);
+            self.player.root_step = self.player.hero.tick();
+            self.swap_player(i);
+        }
+    }
+
     /// Swaps player `i` of `others` into `player` (and the running player out to its place), so
     /// that the hero code runs for it; swapping again restores the order (docs/MULTIPLAYER.md).
-    #[allow(dead_code)] // Used by local co-op (docs/MULTIPLAYER.md step 2).
     pub fn swap_player(&mut self, i: usize) {
         if let Some(p) = self.others.get_mut(i) {
             std::mem::swap(&mut self.player, p);

@@ -405,8 +405,8 @@ pub fn viewport(w: f32, h: f32, aspect: Option<f32>) -> (f32, f32, f32, f32) {
 /// The 3D camera's offscreen image and the UI node that shows it.
 #[derive(Resource, Default)]
 pub struct SceneTarget {
-    image: Option<Handle<Image>>,
-    size: (u32, u32),
+    pub(crate) image: Option<Handle<Image>>,
+    pub(crate) size: (u32, u32),
     smooth: bool,
 }
 

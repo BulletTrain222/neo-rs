@@ -1,5 +1,6 @@
 mod archive_view;
 mod bindings;
+mod coop;
 mod button_style;
 mod controls_page;
 mod character;
@@ -1010,6 +1011,8 @@ fn main() {
         .insert_resource(bindings::Bindings::load())
         .init_resource::<bindings::Pad>()
         .init_resource::<bindings::PadMute>()
+        .init_resource::<bindings::PadExclude>()
+        .init_resource::<coop::Coop>()
         .init_resource::<bindings::MouseLook>()
         .init_resource::<controls_page::ControlsPage>()
         .init_resource::<perf::PerfOverlay>()
@@ -1034,10 +1037,10 @@ fn main() {
         .add_systems(
             Update,
             (
-                (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
+                (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, coop::read_coop, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot, sync_haze, sync_atmos_overlay),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_aim_marker, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, coop::draw_others, coop::split_cameras, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_aim_marker, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -1315,12 +1318,14 @@ fn setup_hud(mut commands: Commands, status: Res<DiscStatus>, hidden: Res<HudHid
 fn read_input(
     pad: Res<bindings::Pad>,
     mute: Res<bindings::PadMute>,
-    gamepads: Query<&Gamepad>,
+    gamepads: Query<(Entity, &Gamepad)>,
+    exclude: Res<bindings::PadExclude>,
     mut driver: ResMut<SimDriver>,
 ) {
     let _span = crate::perf::span("read_input");
     // The bound movement keys, and the gamepads' left sticks (not while the bindings page is up).
-    let sticks: Vec<Vec2> = if mute.0 { Vec::new() } else { gamepads.iter().map(|g| g.left_stick()).collect() };
+    // Player 2's controller (local co-op) moves only player 2.
+    let sticks: Vec<Vec2> = if mute.0 { Vec::new() } else { gamepads.iter().filter(|(e, _)| Some(*e) != exclude.0).map(|(_, g)| g.left_stick()).collect() };
     driver.input = movement(pad.movement, sticks);
 }
 
@@ -1328,7 +1333,7 @@ fn step_sim(
     time: Res<Time>,
     vpad: Res<bindings::Pad>,
     mute: Res<bindings::PadMute>,
-    gamepads: Query<&Gamepad>,
+    gamepads: Query<(Entity, &Gamepad)>,
     mut driver: ResMut<SimDriver>,
     mut models: ResMut<ModelView>,
     mut play: Option<ResMut<PlayState>>,
@@ -1339,6 +1344,7 @@ fn step_sim(
     mut commands: Commands,
     mut dev: ResMut<dev_menu::DevMenu>,
     mut movies: Option<ResMut<movie_view::Movies>>,
+    (exclude, mut coop, menu_pads): (Res<bindings::PadExclude>, ResMut<coop::Coop>, Query<&Gamepad>),
 ) {
     let _span = crate::perf::span("step_sim");
     let mut elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
@@ -1507,7 +1513,7 @@ fn step_sim(
         }
         // The right stick as PS2 pad bytes (X right 255, Y up 0); the bound camera keys and the
         // mouse (bindings.rs) add to it.
-        let mut right = if mute.0 { Vec2::ZERO } else { gamepads.iter().map(|g| g.right_stick()).find(|v| v.length() > 0.2).unwrap_or(Vec2::ZERO) };
+        let mut right = if mute.0 { Vec2::ZERO } else { gamepads.iter().filter(|(e, _)| Some(*e) != exclude.0).map(|(_, g)| g.right_stick()).find(|v| v.length() > 0.2).unwrap_or(Vec2::ZERO) };
         right += vpad.look;
         let byte = |v: f32| (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round() as u8;
         let r3_held = vpad.held(bindings::R3);
@@ -1522,7 +1528,7 @@ fn step_sim(
         // button-only word). Edges seen on a frame that runs no tick are kept for the next
         // tick, so no press is lost when the frame rate is above the 60 Hz tick rate.
         if let Some(m) = menu.as_deref_mut() {
-            let stick = if mute.0 { 0 } else { menu_view::stick_bits(&gamepads) };
+            let stick = if mute.0 { 0 } else { menu_view::stick_bits(&menu_pads) };
             edge |= stick & !m.stick;
             held |= stick;
             m.stick = stick;
@@ -1745,6 +1751,11 @@ fn step_sim(
             }
             debug_tools::window_replay(&mut play.play, &mut input);
             play.play.tick(&input, pad);
+            // Local co-op (coop.rs): player 2's tick after player 1's.
+            if !play.play.others.is_empty() {
+                let p2 = coop.take();
+                play.play.coop_step(&[p2]);
+            }
             // A save point's Square press opens the save screen (a direct set of record 18).
             if std::mem::take(&mut play.play.save_open) {
                 if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
@@ -6621,6 +6632,22 @@ fn play_trace(
             r.apply(&mut play, &mut input);
         }
         play.tick(&input, pad);
+        // NEOPETS_COOP=1 (diagnostic): player 2 joins on tick 1 and walks ahead, jumping every 90
+        // ticks; its position is printed every 30 ticks (docs/MULTIPLAYER.md step 2).
+        if std::env::var_os("NEOPETS_COOP").is_some() {
+            if play.ticks == 1 {
+                println!("COOP player 2 joined: {}", play.add_player());
+            }
+            let p2 = neopets_sim::hero::HeroInput { forward: 1.0, jump: play.ticks % 90 == 45, ..Default::default() };
+            play.coop_step(&[(p2, neopets_sim::camera::CameraPad::default())]);
+            if play.ticks % 30 == 0 {
+                if let Some(o) = play.others.first() {
+                    let q = o.loco.position();
+                    let a = play.player.loco.position();
+                    println!("COOP {} p2 ({:.1}, {:.1}, {:.1}) state {} clip {} | p1 ({:.1}, {:.1}, {:.1}) | p2 eye ({:.1}, {:.1}, {:.1})", play.ticks, q[0], q[1], q[2], o.loco.state, o.hero.clip_state().action, a[0], a[1], a[2], o.camera.eye[0], o.camera.eye[1], o.camera.eye[2]);
+                }
+            }
+        }
         // NEOPETS_TRACE_CHECKSUM: the state checksum after each tick (docs/MULTIPLAYER.md step 1).
         if std::env::var_os("NEOPETS_TRACE_CHECKSUM").is_some() {
             println!("CHECKSUM {} {:016x}", play.ticks, play.checksum());
@@ -6745,7 +6772,7 @@ fn play_trace(
         );
         // NEOPETS_TRACE_FACING: the facing, the stick target and the body velocity too.
         if std::env::var_os("NEOPETS_TRACE_FACING").is_some() {
-            println!("      facing {:?} target {:?} velocity {:?} root {:?} camera rows {:?}", play.player.loco.facing, play.player.loco.target, b.velocity, play.root_step, play.player.camera.rows()); println!("      eye {:?} focus {:?}", play.player.camera.eye, play.player.camera.focus);
+            println!("      facing {:?} target {:?} velocity {:?} root {:?} camera rows {:?}", play.player.loco.facing, play.player.loco.target, b.velocity, play.player.root_step, play.player.camera.rows()); println!("      eye {:?} focus {:?}", play.player.camera.eye, play.player.camera.focus);
         }
         if play.ticks % 60 == 0 {
             println!("      {}", play.status_camera());

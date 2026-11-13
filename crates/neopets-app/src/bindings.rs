@@ -341,6 +341,10 @@ impl Pad {
 #[derive(Resource, Default)]
 pub struct PadMute(pub bool);
 
+/// The controller player 2 has in local co-op (coop.rs): left out of player 1's pad.
+#[derive(Resource, Default)]
+pub struct PadExclude(pub Option<Entity>);
+
 /// Whether the mouse turns the camera this frame (the cursor is grabbed in play).
 #[derive(Resource, Default)]
 pub struct MouseLook(pub bool);
@@ -353,7 +357,9 @@ pub fn mouse_stick(delta: f32, sensitivity: u32) -> f32 {
 }
 
 /// Read the virtual pad from the keyboard, mouse and gamepads.
-pub fn read_pad(keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, motion: Res<AccumulatedMouseMotion>, gamepads: Query<&Gamepad>, bindings: Res<Bindings>, mute: Res<PadMute>, look: Res<MouseLook>, mut pad: ResMut<Pad>) {
+#[allow(clippy::too_many_arguments)]
+pub fn read_pad(keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, motion: Res<AccumulatedMouseMotion>, all_pads: Query<(Entity, &Gamepad)>, exclude: Res<PadExclude>, bindings: Res<Bindings>, mute: Res<PadMute>, look: Res<MouseLook>, mut pad: ResMut<Pad>) {
+    let gamepads: Vec<&Gamepad> = all_pads.iter().filter(|(e, _)| Some(*e) != exclude.0).map(|(_, g)| g).collect();
     let _span = crate::perf::span("read_pad");
     *pad = Pad::default();
     if mute.0 {
