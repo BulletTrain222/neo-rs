@@ -718,8 +718,15 @@ impl Net {
                 o.loco.teleport(self.other_pos, f);
             }
         }
-        // A new welcome on the next tick (the joiner loads this game again).
+        // A new welcome (the joiner loads this game again), even when the host walked into this
+        // world this tick: the walk-through rule would skip the welcome (a following joiner
+        // makes the same move), but this joiner is not following (user report 147).
         self.welcome_pack = u32::MAX;
+        self.resync = true;
+        // The joiner's input from before it went apart is not played again (player 2 ran on
+        // into a wall with it); player 2 stands until the joiner's next input.
+        self.remote = None;
+        self.seen = Input::default();
         self.notice = Some(format!("{} is back.", if self.peer_name.is_empty() { "Player 2" } else { self.peer_name.as_str() }));
         info!("net: player 2 back ({why}); a new welcome");
     }
