@@ -20,13 +20,19 @@ order the controllers were plugged in. Auto: player 1 has the keyboard and every
 other player has; players 2 to 4 take the next free controllers in order. Player 1 always keeps
 the keyboard. In the menus every controller works.
 
-**On two computers (home network).** Both computers need their own copy of the game disc and
-the same build of this game.
+**On two to four computers (home network).** Up to three friends can join one host (players 2,
+3 and 4), each on their own computer with their own copy of the game disc and the same build of
+this game. The first to join is player 2 (Roberta when they chose Partner and the story has
+her); players 3 and 4 play player 1's hero. If a player leaves, the ones after them move up
+(player 4 becomes player 3). Doors take **Only you** (separate worlds) works only while one
+friend is in; with more, a door takes everyone, and nobody new can join while two players are
+in separate worlds.
 1. The host starts or loads a game, then opens Options, Multiplayer and chooses **Host a game**.
    The help line shows the address to give your friend (for example 192.168.1.20).
 2. The friend opens Options, Multiplayer (from the title screen is fine), types that address
    on **Join address** with the number keys and the dot (Backspace deletes), and chooses
-   **Join a game**. They go straight into the host's game as player 2, full screen.
+   **Join a game**. They go straight into the host's game as the next player, full screen.
+   More friends join the same way.
 3. The first time the host does this, Windows asks whether to let the game through the
    firewall: allow it on **Private networks**.
 4. To stop, either player can Quit from the pause page. If the host quits, the friend goes back
@@ -34,8 +40,8 @@ the same build of this game.
    message takes there and back) and the traffic each way.
 5. If the connection drops, the friend's game goes back to the title screen and joins the same
    host again by itself for up to a minute (press **Join a game** to stop it). Player 2 comes
-   back with the health and magic it had. The host can send player 2 away with **Remove
-   player 2**.
+   back with the health and magic it had. The host can send the last player who joined away
+   with **Remove a player**.
 6. If the host's computer says the port is in use, another copy of the game is hosting there.
    Change the **Port** row (for example to 47818). The address to give your friend then ends in
    `:47818`, or the friend sets the same port on their Port row and types the address alone.
@@ -67,7 +73,7 @@ out lost messages and uneven delays.
 | Host a game | | Host the game you are playing (press again to stop) |
 | Join address | | The host's address |
 | Join a game | | Join that host (press again to leave) |
-| Remove player 2 | | Host only: send player 2 back to their title screen and keep hosting |
+| Remove a player | | Host only: send the last player who joined back to their title screen and keep hosting |
 | Password | None | Optional: the host types one before hosting, and the friend the same before joining |
 | Open the port (UPnP) | Off, On | While hosting, ask the router to let a friend on the internet in |
 | Port | 47817 (default) | The UDP port to host on, and to join on when the address has none; type it or step it with Left and Right |

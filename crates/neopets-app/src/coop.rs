@@ -43,8 +43,9 @@ pub struct Coop {
     pub seats: [Seat; MAX_PLAYERS - 1],
     /// A player's Start in play (its seat): the pause page opens for it (step_sim).
     pub pause: Option<usize>,
-    /// Online (net.rs): player 2's input from the joiner's controller, in place of a local pad.
-    pub remote: Option<(HeroInput, CameraPad)>,
+    /// Online (net.rs): each joiner's input from its controller (by seat), in place of a local
+    /// pad.
+    pub remote: [Option<(HeroInput, CameraPad)>; MAX_PLAYERS - 1],
     /// The Local co-op row's press: start (true) or stop (false).
     pub request: Option<bool>,
     /// Local co-op is on: the other players are kept in play (added again after a load).
@@ -55,10 +56,8 @@ pub struct Coop {
 impl Coop {
     /// Seat `i`'s input for one tick (the jump, attack and Square presses are taken).
     pub fn take(&mut self, i: usize) -> (HeroInput, CameraPad) {
-        if i == 0 {
-            if let Some(r) = self.remote.take() {
-                return r;
-            }
+        if let Some(r) = self.remote.get_mut(i).and_then(Option::take) {
+            return r;
         }
         let Some(s) = self.seats.get_mut(i) else { return Default::default() };
         let mut input = s.input;
@@ -283,6 +282,7 @@ pub struct Drawn {
     root: Entity,
     joints: Vec<Entity>,
     who: usize,
+    outfit: u32,
 }
 
 #[derive(Component)]
@@ -305,7 +305,7 @@ pub fn draw_others(
 ) {
     let others = play.as_ref().map_or(&[][..], |p| &p.play.others[..]);
     // Gone or changed: despawned.
-    while drawn.len() > others.len() || drawn.iter().zip(others).any(|(d, o)| d.who != o.who) {
+    while drawn.len() > others.len() || drawn.iter().zip(others).any(|(d, o)| d.who != o.who || d.outfit != o.outfit) {
         if let Some(d) = drawn.pop() {
             commands.entity(d.root).despawn();
         }
@@ -359,7 +359,7 @@ pub fn draw_others(
                     }
                 })
                 .id();
-            drawn.push(Drawn { root, joints, who: o.who });
+            drawn.push(Drawn { root, joints, who: o.who, outfit: o.outfit });
         }
         let d = &drawn[i];
         if let Ok(mut t) = roots.get_mut(d.root) {

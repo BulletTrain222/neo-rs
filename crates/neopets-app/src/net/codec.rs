@@ -167,6 +167,9 @@ pub struct State {
     pub generation: u32,
     pub pack: u32,
     pub heroes: [HeroState; 2],
+    /// Online with more than one joiner: the other joiners' heroes (players 3 and 4 as this
+    /// joiner sees them; `heroes[1]` is always the receiving joiner's own).
+    pub more: Vec<HeroState>,
     /// Player 2's follow camera: its eye and focus.
     pub eye: [f32; 3],
     pub focus: [f32; 3],
@@ -754,6 +757,10 @@ impl State {
         for h in &self.heroes {
             write_hero(&mut w, h);
         }
+        w.u8(self.more.len().min(2) as u8);
+        for h in self.more.iter().take(2) {
+            write_hero(&mut w, h);
+        }
         w.v3(self.eye);
         w.v3(self.focus);
         // The characters: the worlds they belong to once, then each by its world's index.
@@ -891,6 +898,8 @@ impl State {
         let generation = r.u32()?;
         let pack = r.u32()?;
         let heroes = [read_hero(r)?, read_hero(r)?];
+        let n = r.u8()?.min(2);
+        let more = (0..n).map(|_| read_hero(r)).collect::<Option<Vec<_>>>()?;
         let (eye, focus) = (r.v3()?, r.v3()?);
         let np = r.u8()? as usize;
         let mut packs = Vec::with_capacity(np);
@@ -983,7 +992,7 @@ impl State {
             0 => None,
             _ => Some((r.i32()?, r.i32()?, r.i32()?)),
         };
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, rtt, cmd_ack, equip, pet })
+        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, rtt, cmd_ack, equip, pet })
     }
 }
 

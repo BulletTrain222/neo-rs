@@ -1396,6 +1396,9 @@ pub struct Player {
     /// Co-op: this player's caption while down (how long until it gets up, or the revive's
     /// progress), shown in the Square caption's place on its own view (this build's).
     pub down_line: Option<Vec<u8>>,
+    /// Another player of player 1's hero: the outfit model it was given (`Play::outfits`), so a
+    /// change of player 1's outfit reaches it (`same_hero_outfits`).
+    pub outfit: u32,
     /// Ticks until a landed shot's area may hurt this player again (co-op, not player 1).
     pub area_cool: u32,
     /// The held items drawn for this player when it is not player 1 (`hero_items`, taken in
@@ -1520,6 +1523,8 @@ pub struct Play {
     /// through a door alone, into a world of its own (`apart_door`; docs/MULTIPLAYER.md, Plan:
     /// players in separate worlds, phase 1).
     pub coop_doors_alone: bool,
+    /// Online, hosting: separate worlds are possible (one joiner, in the first session).
+    pub net_apart_ok: bool,
     /// Host: the door an online player 2 is taking alone this tick (net.rs sends it apart).
     pub apart_door: Option<usize>,
     /// Joiner: apart from the host, this side runs its own world with its hero as player 1
@@ -2492,6 +2497,7 @@ impl Play {
                 revive: 0,
                 area_cool: 0,
                 down_line: None,
+                outfit: 0,
                 items_drawn: Vec::new(),
                 attack: None,
                 attack_repeat: false,
@@ -2556,6 +2562,7 @@ impl Play {
             coop_partner: true,
             coop_together: true,
             coop_doors_alone: false,
+            net_apart_ok: false,
             apart_door: None,
             net_apart: false,
             diag_p2_square: 0,
@@ -19629,6 +19636,35 @@ impl Play {
         self.keep_players(0);
     }
 
+    /// Online, hosting: the joiner of seat `k` left: its player goes, and the later ones move up
+    /// a seat.
+    pub fn remove_seat(&mut self, k: usize) {
+        if k < self.others.len() {
+            self.others.remove(k);
+        }
+        if self.others.is_empty() {
+            self.keep_players(0);
+        }
+        if self.menu_player > self.others.len() {
+            self.menu_player = 0;
+        }
+    }
+
+    /// Other players of player 1's hero (players 3 and 4, a second Tor) wear player 1's outfit:
+    /// when it changed (a body item, the cloak, or a joiner's first outfit after its welcome),
+    /// they take its model and rig again, their clip kept. Before, they kept the outfit of when
+    /// they joined (a joiner's player 3 showed the new game's rags).
+    pub fn same_hero_outfits(&mut self) {
+        let h = self.hero_index.min(1);
+        let outfit = self.outfits[h];
+        for o in self.others.iter_mut().filter(|o| o.who.min(1) == h && o.outfit != outfit) {
+            let action = o.hero.clip_state().action;
+            (o.hero, o.model) = (self.player.hero.clone(), self.player.model.clone());
+            o.hero.play(action);
+            o.outfit = outfit;
+        }
+    }
+
     /// The first `n` other players stay; the rest leave (local co-op).
     pub fn keep_players(&mut self, n: usize) {
         self.others.truncate(n);
@@ -19648,6 +19684,7 @@ impl Play {
     /// contacts and its animation. Pickups, doors, triggers, talking and the item panels are
     /// player 1's alone.
     pub fn coop_step(&mut self, inputs: &[(HeroInput, CameraPad)]) {
+        self.same_hero_outfits();
         // Revive off: another player fell, so player 1 falls too and the game is over (the
         // single-player death).
         if std::mem::take(&mut self.coop_lost) && self.player.loco.state != hero_states::DEAD {
@@ -19900,7 +19937,7 @@ impl Play {
             // player 2, and past it nothing is loaded: player 2 fell and was put back again and
             // again; user report 142).
             if self.hero_contacts(false) {
-                if self.coop_remote && self.coop_doors_alone {
+                if self.coop_remote && self.coop_doors_alone && self.net_apart_ok {
                     if self.apart_door.is_none() {
                         self.apart_door = Some(WALKED_APART);
                     }
@@ -19919,7 +19956,7 @@ impl Play {
             if free {
                 // Doors take Only you, online: a door player 2 is about to take is not taken
                 // here; the joiner's own game takes it (net.rs, apart).
-                if self.coop_remote && self.coop_doors_alone {
+                if self.coop_remote && self.coop_doors_alone && self.net_apart_ok {
                     let fired = self.door_fires();
                     if std::env::var_os("NEOPETS_TRACE_APART").is_some() && (self.diag_p2_square > 0 || fired.is_some()) {
                         let p = self.player.loco.position();

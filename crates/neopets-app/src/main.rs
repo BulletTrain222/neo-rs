@@ -1652,7 +1652,7 @@ fn step_sim(
                         }
                         m.flow.written(ok.is_ok());
                         // Online, hosting: the joiner is told (it keeps no save of its own).
-                        if ok.is_ok() && netr.role == net::Role::Host && netr.peer.is_some() {
+                        if ok.is_ok() && netr.role == net::Role::Host && netr.any_peer() {
                             netr.push_event(net::Event::Notice(net::NOTICE_SAVED));
                         }
                     }
@@ -1820,6 +1820,12 @@ fn step_sim(
                     println!("NETCHAR {} tick {}: {} ({}, {}) d {:.1} clip {} progress {:.3} rate {:.2}", if p.net_follow { "joiner" } else { "host" }, p.ticks, c.name, c.slot, c.ordinal, d(c).sqrt(), k.action, k.progress, c.anim.rate());
                 }
             }
+            // NEOPETS_NET_LEAVEAT=T (diagnostic, hosting or joining): this side leaves the online
+            // game on play tick T, as the Join or Host row's press would.
+            if std::env::var("NEOPETS_NET_LEAVEAT").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) && netr.role != net::Role::Off {
+                netr.request = Some(net::Request::Leave);
+                info!("net: leaving on tick {} (diagnostic)", play.play.ticks);
+            }
             // NEOPETS_TRACE_COOPPOS (diagnostic): every player's position, hero and camera eye
             // every 60 ticks (local co-op).
             if std::env::var_os("NEOPETS_TRACE_COOPPOS").is_some() && play.play.ticks % 60 == 0 && !play.play.others.is_empty() {
@@ -1852,7 +1858,7 @@ fn step_sim(
                     if t == play.play.ticks {
                         // Queued before this tick's count of new movies: sent here.
                         play.play.state.movie_queue.push(m);
-                        if netr.peer.is_some() {
+                        if netr.any_peer() {
                             netr.push_event(net::Event::Movie(m));
                         }
                     }
@@ -1895,11 +1901,11 @@ fn step_sim(
                     netr.request = Some(net::Request::Leave);
                 }
                 // NEOPETS_NET_REMOVE=T: the Multiplayer page's Remove player 2 on play tick T.
-                if std::env::var("NEOPETS_NET_REMOVE").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) && netr.peer.is_some() {
+                if std::env::var("NEOPETS_NET_REMOVE").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) && netr.any_peer() {
                     netr.request = Some(net::Request::Remove);
                 }
                 // NEOPETS_NET_NOTICE=T: the saved notice sent on play tick T, as a save would.
-                if std::env::var("NEOPETS_NET_NOTICE").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) && netr.peer.is_some() {
+                if std::env::var("NEOPETS_NET_NOTICE").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) && netr.any_peer() {
                     netr.push_event(net::Event::Notice(net::NOTICE_SAVED));
                 }
                 if std::env::var_os("NEOPETS_NET_CONTINUE").is_some() && play.play.death.page.is_some() && play.play.ticks % 60 == 0 {
@@ -2160,7 +2166,7 @@ fn step_sim(
                 let movies = play.play.state.movie_queue.len();
                 let swaps_before = play.play.swaps;
                 // Online, hosting: the gameplay effects are logged for the joiner (net.rs).
-                let hosting = netr.role == net::Role::Host && netr.peer.is_some();
+                let hosting = netr.role == net::Role::Host && netr.any_peer();
                 play.play.effects.share.mute = false;
                 if hosting {
                     play.play.effects.share.log.get_or_insert_with(Vec::new);
@@ -2170,10 +2176,14 @@ fn step_sim(
                 play.play.tick(&input, pad);
                 // Local co-op (coop.rs): player 2's tick after player 1's; online, player 2's input
                 // comes from the joiner (net.rs).
-                play.play.coop_remote = netr.role == net::Role::Host && netr.peer.is_some() && !netr.apart;
-                // A game started afresh while hosting (a developer warp) brings player 2 back.
-                if play.play.coop_remote && play.play.others.is_empty() {
-                    play.play.add_player();
+                play.play.coop_remote = netr.role == net::Role::Host && netr.any_peer() && !netr.apart;
+                // Separate worlds online only with one joiner, in the first session.
+                play.play.net_apart_ok = netr.peer.is_some() && netr.peers() == 1;
+                // A game started afresh while hosting (a developer warp) brings the joiners'
+                // players back.
+                if play.play.coop_remote {
+                    let want = netr.peers();
+                    while play.play.others.len() < want && play.play.add_player() {}
                 }
                 if !play.play.others.is_empty() {
                     let n = play.play.others.len();
@@ -2215,21 +2225,7 @@ fn step_sim(
                     // A world change, or a new game or load here (Continue after a game over): a
                     // new welcome. Walking into the loaded neighbour needs none (the joiner's own
                     // game makes the same move; it asks for a welcome if it ends up elsewhere).
-                    let walked = play.play.swaps != swaps_before && play.play.job.is_none() && play.play.generation == netr.welcome_game;
-                    if walked && play.play.world.pack != netr.welcome_pack && !netr.resync {
-                        netr.welcome_pack = play.play.world.pack;
-                        info!("net: world {} by walking; the joiner follows without a welcome", play.play.world.pack);
-                    }
-                    if std::mem::take(&mut netr.resync) {
-                        netr.welcome_pack = u32::MAX;
-                    }
-                    if play.play.world.pack != netr.welcome_pack || play.play.generation != netr.welcome_game {
-                        let mut slot = neopets_sim::save::Slot::empty();
-                        play.play.write_slot(&mut slot, b"NETPLAY");
-                        let (pack, game) = (play.play.world.pack, play.play.generation);
-                        let fx = play.play.effects.snapshot();
-                        netr.rewelcome(&slot, pack, game, &fx, play.play.interior_pack());
-                    }
+                    let walked = play.play.swaps != swaps_before && play.play.job.is_none();
                     for r in play.play.sound.requests[sounds.min(play.play.sound.requests.len())..].to_vec() {
                         // A voice with a place: where, so the joiner hears it from its own player
                         // (and works out its volume and pan each tick itself: the host's changes
@@ -2261,13 +2257,8 @@ fn step_sim(
                     for m in play.play.state.movie_queue[movies.min(play.play.state.movie_queue.len())..].to_vec() {
                         netr.push_event(net::Event::Movie(m));
                     }
-                    if let Some(s) = play.play.others.first_mut().and_then(|o| o.motor.take()) {
-                        netr.push_event(net::Event::Rumble(s.level, s.count));
-                    }
-                    let started = std::time::Instant::now();
-                    let s = play.play.net_state(netr.generation);
-                    netr.send_state(&s);
-                    netr.cpu_us = netr.cpu_us.saturating_add(started.elapsed().as_micros() as u64);
+                    // Each joiner's welcome (after a world change), rumble and state.
+                    netr.host_tick(&mut play.play, walked);
                     if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                         let p = &play.play;
                         if let Some(o) = p.others.first() {

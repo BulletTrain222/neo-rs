@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 28;
+const PROTOCOL: u16 = 29;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -270,7 +270,16 @@ pub struct Net {
     /// Host: the voices sent with a place (the joiner works out their volume and pan itself
     /// each tick, so their volume and pan changes are not sent).
     pub placed: std::collections::HashSet<usize>,
+    /// Host: this session's joiner plays `others[seat]` (seat 0 is player 2).
+    pub seat: usize,
+    /// Host: the sessions of the other joiners (players 3 and 4), sharing this one's socket.
+    pub extra: Vec<Net>,
+    /// Host: the Multiplayer page's Remove row was pressed (the last joiner goes).
+    remove_wanted: bool,
 }
+
+/// The most joiners a host takes (players 2 to 4).
+pub const MAX_JOINERS: usize = crate::coop::MAX_PLAYERS - 1;
 
 /// An event's kind for the trace: sound play, set, stop; effect add, one-shot, update, other;
 /// voice; music and movies; rumble and notices.
@@ -345,6 +354,9 @@ impl Net {
     }
 
     fn stop(&mut self, status: &str) {
+        for e in &mut self.extra {
+            e.stop("");
+        }
         if self.socket.is_some() && self.peer.is_some() {
             let w = Writer::new(BYE);
             self.send(&w.0);
@@ -612,9 +624,27 @@ impl Net {
         }
     }
 
-    /// Host: an event for the joiner (kept while a joiner is in; at most 4,000 waiting, the
-    /// oldest dropped).
+    /// Whether any joiner is in (host).
+    pub fn any_peer(&self) -> bool {
+        self.peer.is_some() || self.extra.iter().any(|e| e.peer.is_some())
+    }
+
+    /// How many joiners are in (host).
+    pub fn peers(&self) -> usize {
+        self.peer.is_some() as usize + self.extra.iter().filter(|e| e.peer.is_some()).count()
+    }
+
+    /// Host: an event for every joiner.
     pub fn push_event(&mut self, e: Event) {
+        for x in &mut self.extra {
+            x.push_own(e.clone());
+        }
+        self.push_own(e);
+    }
+
+    /// Host: an event for this session's joiner only (kept while it is in; at most 4,000
+    /// waiting, then a new welcome).
+    pub fn push_own(&mut self, e: Event) {
         if self.role != Role::Host || self.peer.is_none() || self.apart {
             return;
         }
@@ -747,6 +777,50 @@ impl Net {
     /// The last event a welcome made now covers: the joiner plays the events after it.
     fn event_base(&self) -> u32 {
         self.events.front().map_or(self.next_event, |e| e.0 - 1)
+    }
+
+    /// Host, each tick: every session's welcome (after a world change, a new game or a joiner's
+    /// request) and its state, built for its joiner's seat. `walked`: the host walked into the
+    /// loaded neighbour (a following joiner makes the same move: no welcome).
+    pub fn host_tick(&mut self, play: &mut crate::play::Play, walked: bool) {
+        let mut slot: Option<neopets_sim::save::Slot> = None;
+        let mut extra = std::mem::take(&mut self.extra);
+        for n in std::iter::once(&mut *self).chain(extra.iter_mut()) {
+            if n.peer.is_none() {
+                continue;
+            }
+            if walked && play.generation == n.welcome_game && play.world.pack != n.welcome_pack && !n.resync {
+                n.welcome_pack = play.world.pack;
+                info!("net: world {} by walking; the joiner follows without a welcome", play.world.pack);
+            }
+            if std::mem::take(&mut n.resync) {
+                n.welcome_pack = u32::MAX;
+            }
+            if play.world.pack != n.welcome_pack || play.generation != n.welcome_game {
+                let slot = slot.get_or_insert_with(|| {
+                    let mut s = neopets_sim::save::Slot::empty();
+                    play.write_slot(&mut s, b"NETPLAY");
+                    s
+                });
+                let fx = play.effects.snapshot();
+                n.rewelcome(slot, play.world.pack, play.generation, &fx, play.interior_pack());
+            }
+            // Each joiner's rumble goes to it alone.
+            if let Some(s) = play.others.get_mut(n.seat).and_then(|o| o.motor.take()) {
+                n.push_own(Event::Rumble(s.level, s.count));
+            }
+            let started = std::time::Instant::now();
+            let s = play.net_state(n.generation, n.seat);
+            n.send_state(&s);
+            n.cpu_us = n.cpu_us.saturating_add(started.elapsed().as_micros() as u64);
+        }
+        self.extra = extra;
+    }
+
+    /// The Multiplayer page's line: the session's status, and the other joiners' round trips.
+    pub fn status_line(&self) -> String {
+        let more: Vec<String> = self.extra.iter().filter(|e| e.peer.is_some()).map(|e| format!("{} (round trip about {} ms)", e.peer_name, e.rtt_ms.round())).collect();
+        if more.is_empty() { self.status.clone() } else { format!("{} Also in: {}.", self.status, more.join(", ")) }
     }
 
     pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32, game: u32, fx: &[neopets_sim::effect::Op], interior: u32) {
@@ -925,9 +999,9 @@ fn read_apart(net: &mut Net, r: &mut Reader, host: bool) {
     }
 }
 
-/// Host: player 2's health and magic kept as it goes (`Net::kept`).
+/// Host: the joiner's player's health and magic kept as it goes (`Net::kept`).
 fn keep_p2(net: &mut Net, play: &crate::play::Play) {
-    if let Some(o) = play.others.first() {
+    if let Some(o) = play.others.get(net.seat) {
         net.kept = Some((play.generation, o.hero_hp, o.hero_mp));
     }
 }
@@ -1033,23 +1107,8 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             }
         }
         Some(Request::Remove) => {
-            if net.role == Role::Host && net.peer.is_some() {
-                // Sent three times (no acknowledgement; the joiner's timeout covers a loss).
-                let w = Writer::new(REMOVED);
-                for _ in 0..3 {
-                    net.send(&w.0);
-                }
-                if let Some(p) = play.as_deref_mut() {
-                    keep_p2(&mut net, &p.play);
-                    p.play.remove_player();
-                }
-                net.peer = None;
-                net.remote = None;
-                net.welcome = None;
-                net.last_heard = None;
-                net.status = "Player 2 removed. Still hosting.".into();
-                net.notice = Some("Player 2 was removed.".into());
-                info!("net: player 2 removed by the host");
+            if net.role == Role::Host && net.any_peer() {
+                net.remove_wanted = true;
             }
         }
         Some(Request::Leave) => {
@@ -1145,6 +1204,118 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     });
     due.sort_by_key(|m| m.0);
     ready.extend(due.into_iter().map(|(_, b, from)| (b, from)));
+    if net.role != Role::Host {
+        session_step(&mut net, ready, now, &mut play, &mut coop, &menu, &password, &settings, 0);
+        return;
+    }
+    host_route(&mut net, ready, now, &mut play, &mut coop, &menu, &password, &settings);
+}
+
+/// Host: each message to its joiner's session (a newcomer's hello to a free one: a new session
+/// while fewer than three joiners are in), then each session's step; a seat freed moves the
+/// later joiners up one (player 4 becomes player 3).
+#[allow(clippy::too_many_arguments)]
+fn host_route(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, play: &mut Option<ResMut<PlayState>>, coop: &mut crate::coop::Coop, menu: &Option<Res<crate::menu_view::Menu>>, password: &NetPassword, settings: &crate::display::DisplaySettings) {
+    let mut extra = std::mem::take(&mut net.extra);
+    let mut inbox: Vec<Vec<(Vec<u8>, SocketAddr)>> = vec![Vec::new(); 1 + extra.len()];
+    for (bytes, from) in ready {
+        let known = if net.peer == Some(from) { Some(0) } else { extra.iter().position(|e| e.peer == Some(from)).map(|k| k + 1) };
+        let k = match known {
+            Some(k) => k,
+            None => {
+                let hello = bytes.len() >= 7 && bytes[..4] == MAGIC && bytes[6] == HELLO && u16::from_le_bytes([bytes[4], bytes[5]]) == PROTOCOL;
+                // Players apart (separate worlds) take no third player until they meet.
+                if hello && net.apart {
+                    let mut w = Writer::new(REFUSE);
+                    w.text("the players are in separate worlds just now; join when they meet again");
+                    if let Some(s) = net.socket.as_ref() {
+                        let _ = s.send_to(&w.0, from);
+                    }
+                    continue;
+                }
+                if !hello || net.peer.is_none() {
+                    0
+                } else if let Some(k) = extra.iter().position(|e| e.peer.is_none()) {
+                    k + 1
+                } else if extra.len() + 1 < MAX_JOINERS {
+                    extra.push(Net { role: Role::Host, socket: net.socket.as_ref().and_then(|s| s.try_clone().ok()), disc: net.disc, host_line: net.host_line.clone(), ..Default::default() });
+                    inbox.push(Vec::new());
+                    extra.len()
+                } else {
+                    // Full: the first session refuses it.
+                    0
+                }
+            }
+        };
+        inbox[k].push((bytes, from));
+    }
+    // The Remove row: the last joiner goes.
+    if std::mem::take(&mut net.remove_wanted) {
+        let last = std::iter::once(&*net).chain(extra.iter()).enumerate().filter(|(_, e)| e.peer.is_some()).max_by_key(|(_, e)| e.seat).map(|(k, _)| k);
+        if let Some(k) = last {
+            let n = if k == 0 { &mut *net } else { &mut extra[k - 1] };
+            // Sent three times (no acknowledgement; the joiner's timeout covers a loss).
+            let w = Writer::new(REMOVED);
+            for _ in 0..3 {
+                n.send(&w.0);
+            }
+            let seat = n.seat;
+            if let Some(p) = play.as_deref_mut() {
+                keep_p2(n, &p.play);
+                p.play.remove_seat(seat);
+            }
+            let name = n.peer_name.clone();
+            n.peer = None;
+            n.remote = None;
+            n.welcome = None;
+            n.last_heard = None;
+            net.status = format!("{name} removed. Still hosting.");
+            net.notice = Some(format!("{name} was removed."));
+            info!("net: {name} removed by the host");
+            renumber(net, &mut extra, Some(seat));
+        }
+    }
+    for c in coop.remote.iter_mut() {
+        *c = None;
+    }
+    let linked = |n: &Net| n.peer.is_some() as usize;
+    let others = extra.iter().map(linked).sum();
+    let mine = std::mem::take(&mut inbox[0]);
+    let freed = session_step(net, mine, now, play, coop, menu, password, settings, others);
+    renumber(net, &mut extra, freed);
+    for k in 0..extra.len() {
+        let others = linked(net) + extra.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, e)| linked(e)).sum::<usize>();
+        let mine = std::mem::take(&mut inbox[k + 1]);
+        let freed = session_step(&mut extra[k], mine, now, play, coop, menu, password, settings, others);
+        renumber(net, &mut extra, freed);
+        if let Some(n) = extra[k].notice.take() {
+            net.notice = Some(match net.notice.take() {
+                Some(o) => format!("{o} {n}"),
+                None => n,
+            });
+        }
+    }
+    // Sessions whose joiner is gone close (their socket is a copy of this one's).
+    extra.retain(|e| e.peer.is_some());
+    net.extra = extra;
+}
+
+/// Host: seat `freed` is empty now (its player left the game): the joiners after it move up one.
+fn renumber(net: &mut Net, extra: &mut [Net], freed: Option<usize>) {
+    let Some(k) = freed else { return };
+    for n in std::iter::once(net).chain(extra.iter_mut()) {
+        if n.peer.is_some() && n.seat > k {
+            n.seat -= 1;
+            n.peer_name = format!("Player {}", n.seat + 2);
+        }
+    }
+}
+
+/// One session's step: its messages, its sending and its timeouts. Returns the seat freed when
+/// a host's joiner left. `others`: how many other joiners are in (host).
+#[allow(clippy::too_many_arguments)]
+fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, play: &mut Option<ResMut<PlayState>>, coop: &mut crate::coop::Coop, menu: &Option<Res<crate::menu_view::Menu>>, password: &NetPassword, settings: &crate::display::DisplaySettings, others: usize) -> Option<usize> {
+    let mut freed = None;
     for (bytes, from) in ready {
         // Another version of this game (its messages cannot be read here): a joiner is told; a
         // host answers a hello with a refusal the joiner can tell apart by its version.
@@ -1174,7 +1345,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 } else if disc != net.disc {
                     Some("different discs".to_string())
                 } else if net.peer.is_some_and(|p| p != from) {
-                    Some("a player has already joined".to_string())
+                    Some("the game is full (4 players)".to_string())
                 } else if play.as_ref().is_none_or(|p| !p.play.spawned) {
                     Some("the host is not in a game yet".to_string())
                 } else {
@@ -1195,16 +1366,22 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.last_heard = Some(now);
                     // Player 2 is the joiner's (a local second controller lets go of it), the hero
                     // the joiner chose on its Multiplayer page.
-                    p.play.coop_partner_remote = partner;
+                    // The first joiner is player 2 (local players beyond player 2 go; player 2's
+                    // hero is the one the joiner chose); later ones are players 3 and 4.
+                    if others == 0 {
+                        p.play.coop_partner_remote = partner;
+                        p.play.keep_players(1);
+                        net.seat = 0;
+                    } else {
+                        net.seat = p.play.others.len();
+                    }
                     p.play.coop_remote = true;
-                    // Local players beyond player 2 go (player 2 is the joiner's now).
-                    p.play.keep_players(1);
-                    if p.play.others.is_empty() {
+                    if p.play.others.len() <= net.seat {
                         p.play.add_player();
                     }
-                    info!("net: player 2 is hero {:?} (the joiner chose {})", p.play.others.first().map(|o| o.who), match partner { Some(true) => "the partner", Some(false) => "a second Tor", None => "nothing" });
-                    // The same game's player 2 back: its health and magic as it left them.
-                    if let (Some((g, hp, mp)), Some(o)) = (net.kept, p.play.others.first_mut()) {
+                    info!("net: player {} is hero {:?} (the joiner chose {})", net.seat + 2, p.play.others.get(net.seat).map(|o| o.who), match partner { Some(true) => "the partner", Some(false) => "a second Tor", None => "nothing" });
+                    // The same game's player back: its health and magic as it left them.
+                    if let (Some((g, hp, mp)), Some(o)) = (net.kept, p.play.others.get_mut(net.seat)) {
                         if g == p.play.generation && hp > 0 {
                             (o.hero_hp, o.hero_mp) = (hp.min(o.hero_max), mp.min(o.hero_mp_max));
                             info!("net: player 2 back with {hp} health and {mp} magic");
@@ -1221,7 +1398,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.welcome_mask = 0;
                     // Players are called by number (Player 2), not by the computer's name.
                     let _ = name;
-                    net.peer_name = "Player 2".into();
+                    net.peer_name = format!("Player {}", net.seat + 2);
                     net.status = format!("{} joined from {from}.", net.peer_name);
                     net.notice = Some(format!("{} joined.", net.peer_name));
                     info!("net: {from} joined ({})", net.peer_name);
@@ -1245,10 +1422,10 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     if i.cmd.0 == net.cmd_done.wrapping_add(1) {
                         net.cmd_done = i.cmd.0;
                         if let (Some(c), Some(p)) = (command_of(i.cmd.1, i.cmd.2, i.cmd.3), play.as_deref_mut()) {
-                            let was = std::mem::replace(&mut p.play.menu_player, 1);
+                            let was = std::mem::replace(&mut p.play.menu_player, net.seat + 1);
                             p.play.as_menu_player(|q| q.item_command(&c));
                             p.play.menu_player = was;
-                            info!("net: player 2's item screen: {c:?}");
+                            info!("net: player {}'s item screen: {c:?}", net.seat + 2);
                         }
                     }
                     if std::mem::take(&mut net.reseed) {
@@ -1264,10 +1441,13 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 let host = net.role == Role::Host;
                 if let Some(p) = play.as_deref_mut() {
                     if host {
-                        keep_p2(&mut net, &p.play);
+                        keep_p2(net, &p.play);
+                        p.play.remove_seat(net.seat);
+                        freed = Some(net.seat);
+                    } else {
+                        p.play.remove_player();
+                        p.play.net_follow = false;
                     }
-                    p.play.remove_player();
-                    p.play.net_follow = false;
                 }
                 if host {
                     // The host keeps hosting for the next joiner.
@@ -1276,7 +1456,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.welcome = None;
                     // No timeout for a joiner that said goodbye.
                     net.last_heard = None;
-                    net.status = "Your friend left. Still hosting.".into();
+                    net.status = format!("{} left. Still hosting.", net.peer_name);
                     net.notice = Some(format!("{} left.", if net.peer_name.is_empty() { "Player 2" } else { net.peer_name.as_str() }));
                     info!("net: the joiner left");
                 } else {
@@ -1290,11 +1470,11 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             }
             (Role::Host, APART) if net.peer == Some(from) => {
                 net.last_heard = Some(now);
-                read_apart(&mut net, &mut r, true);
+                read_apart(net, &mut r, true);
             }
             (Role::Join, APART) if net.target == Some(from) => {
                 net.last_heard = Some(now);
-                read_apart(&mut net, &mut r, false);
+                read_apart(net, &mut r, false);
             }
             (Role::Join, REMOVED) if net.target == Some(from) => {
                 if let Some(p) = play.as_deref_mut() {
@@ -1328,7 +1508,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             (Role::Join, WELCOME) if net.target == Some(from) => {
                 net.last_heard = Some(now);
                 net.peer = Some(from);
-                take_welcome(&mut net, &mut r, from);
+                take_welcome(net, &mut r, from);
             }
             (Role::Join, WELCOME_PART) if net.target == Some(from) => {
                 net.last_heard = Some(now);
@@ -1350,7 +1530,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                             let whole: Vec<u8> = parts.iter().flatten().flatten().copied().collect();
                             net.parts = None;
                             if let Some((WELCOME, mut wr)) = Reader::open(&whole) {
-                                take_welcome(&mut net, &mut wr, from);
+                                take_welcome(net, &mut wr, from);
                             }
                         }
                     }
@@ -1603,7 +1783,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             let (out, inn) = (net.rate.0 / 1024.0, net.rate.1 / 1024.0);
             let rtt = net.rtt_ms.round();
             net.status = if net.role == Role::Host {
-                format!("{} Player 2 is in: round trip about {rtt} ms; sending {out:.0} KB/s, receiving {inn:.0} KB/s.", net.host_line)
+                format!("{} {} is in: round trip about {rtt} ms; sending {out:.0} KB/s, receiving {inn:.0} KB/s.", net.host_line, net.peer_name)
             } else {
                 format!("Joined. Round trip about {rtt} ms; receiving {inn:.0} KB/s, sending {out:.0} KB/s.")
             };
@@ -1626,9 +1806,10 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         let bytes = w.0;
         net.send(&bytes);
     }
-    // The host's player 2 input from the joiner's controller (its presses since the last frame).
-    if net.role == Role::Host {
-        coop.remote = net.remote.map(|i| {
+    // The host's input for the joiner's player from its controller (its presses since the last
+    // frame).
+    if net.role == Role::Host && net.peer.is_some() && net.seat < coop.remote.len() {
+        coop.remote[net.seat] = net.remote.map(|i| {
             let (h, c) = i.to_hero(&net.seen);
             // NEOPETS_TRACE_NETINPUT (diagnostic): each jump press as it reaches the host.
             if h.jump && std::env::var_os("NEOPETS_TRACE_NETINPUT").is_some() {
@@ -1638,7 +1819,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         });
         if let Some(i) = net.remote {
             let pl = i.to_panel(&net.seen);
-            let q = &mut coop.seats[0].panel;
+            let q = &mut coop.seats[net.seat].panel;
             (q.up, q.left, q.right, q.down, q.triangle) = (q.up | pl.up, q.left | pl.left, q.right | pl.right, q.down | pl.down, q.triangle | pl.triangle);
             net.seen = i;
         }
@@ -1647,18 +1828,21 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     if net.last_heard.is_some_and(|t| now.duration_since(t) > TIMEOUT) {
         if let Some(p) = play.as_deref_mut() {
             if net.role == Role::Host {
-                keep_p2(&mut net, &p.play);
+                keep_p2(net, &p.play);
+                p.play.remove_seat(net.seat);
+                freed = Some(net.seat);
+            } else {
+                p.play.remove_player();
+                p.play.net_follow = false;
             }
-            p.play.remove_player();
-            p.play.net_follow = false;
         }
         if net.role == Role::Host {
             net.peer = None;
             net.remote = None;
             net.welcome = None;
             net.last_heard = None;
-            net.status = "Lost your friend. Still hosting.".into();
-            net.notice = Some("Lost player 2.".into());
+            net.status = format!("Lost {}. Still hosting.", net.peer_name);
+            net.notice = Some(format!("Lost {}.", net.peer_name));
             info!("net: the joiner timed out");
         } else {
             info!("net: the host timed out");
@@ -1686,6 +1870,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     } else if net.role == Role::Join && net.loaded == 0 && net.last_heard.is_none() {
         // Still waiting for an answer.
     }
+    freed
 }
 
 /// This computer's player name as sent: none (players are called Player 1, Player 2 and so on

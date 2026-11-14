@@ -386,7 +386,7 @@ impl DisplaySettings {
             ("Host a game".into(), String::new()),
             ("Join address".into(), String::new()),
             ("Join a game".into(), String::new()),
-            ("Remove player 2".into(), String::new()),
+            ("Remove a player".into(), String::new()),
             ("Password".into(), String::new()),
             ("Open the port (UPnP)".into(), if self.upnp { "On".into() } else { "Off".into() }),
             ("Port".into(), if self.net_port == crate::net::PORT { format!("{} (default)", self.net_port) } else { self.net_port.to_string() }),
@@ -591,7 +591,7 @@ pub fn take_requests(
             // Local co-op: Cross (or Left and Right) starts it, or stops it while on.
             COOP_ROW => coop.request = Some(!coop.wanted),
             REMOVE_ROW => {
-                if net.role == crate::net::Role::Host && net.peer.is_some() {
+                if net.role == crate::net::Role::Host && net.any_peer() {
                     net.request = Some(crate::net::Request::Remove);
                 }
             }
@@ -761,7 +761,7 @@ const HELP: [&str; ROWS + 1] = [
     "Play with a friend on your home network. Start a game first, then host; your friend joins with the address shown.",
     "The host's address (shown on their Host row). Type it with the number keys; Backspace deletes.",
     "Join the host's game. Each player needs their own copy of the game disc.",
-    "Hosting: sends player 2 back to their title screen. You keep hosting, and they can join again.",
+    "Hosting: sends the last player who joined back to their title screen. You keep hosting, and they can join again.",
     "Optional. The host types one before hosting; a friend must type the same before joining. Letters and digits; Backspace deletes.",
     "On: while you host, your router is asked to let a friend on the internet in (UPnP). The way in closes when you stop hosting, or by itself after two hours. Some routers have UPnP turned off.",
     "The UDP port the game hosts on, and joins on when the address names none. 47817 unless you change it; both computers should match. Type it with the number keys (Backspace deletes) or step it with Left and Right.",
@@ -907,7 +907,7 @@ pub fn show_window(
             Role::Join => "Joining...".into(),
             _ => "Press to join".into(),
         };
-        shown[REMOVE_ROW].1 = if net.role == Role::Host && net.peer.is_some() { "Press to remove".into() } else { "No player 2 online".into() };
+        shown[REMOVE_ROW].1 = if net.role == Role::Host && net.any_peer() { format!("Press to remove Player {}", net.peers() + 1) } else { "No one online".into() };
         if focus == PORT_ROW {
             shown[PORT_ROW].1 = format!("{}_", if settings.net_port == 0 { String::new() } else { settings.net_port.to_string() });
         }
@@ -974,7 +974,7 @@ pub fn show_window(
         }
     }
     // On the Multiplayer page the session's status follows the help line.
-    let line = if flow.display_page == 2 && !net.status.is_empty() { format!("{}\n{}", HELP[focus], net.status) } else { HELP[focus].to_string() };
+    let line = if flow.display_page == 2 && !net.status.is_empty() { format!("{}\n{}", HELP[focus], net.status_line()) } else { HELP[focus].to_string() };
     for mut t in &mut help {
         if t.0 != line {
             t.0 = line.clone();

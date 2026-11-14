@@ -4,8 +4,9 @@
 use super::*;
 
 impl crate::play::Play {
-    /// Host: what the joiner draws after this tick.
-    pub fn net_state(&self, generation: u32) -> State {
+    /// Host: what the joiner in `seat` (its hero is `others[seat]`) draws after this tick: player
+    /// 1, its own hero, then the other joiners'.
+    pub fn net_state(&self, generation: u32, seat: usize) -> State {
         let hero = |p: &crate::play::Player, who: usize| HeroState {
             who: who as u8,
             position: p.loco.position(),
@@ -20,7 +21,7 @@ impl crate::play::Play {
             down: p.down.is_some(),
             rate: p.loco.rate * p.loco.haste_rate(),
         };
-        let p2 = self.others.first();
+        let p2 = self.others.get(seat);
         let mut items: Vec<(u16, u32)> = self.state.items.iter().map(|(&k, &v)| (k, v)).collect();
         items.sort_unstable();
         State {
@@ -28,6 +29,7 @@ impl crate::play::Play {
             generation,
             pack: self.world.pack,
             heroes: [hero(&self.player, self.hero_index), p2.map(|o| hero(o, o.who)).unwrap_or_default()],
+            more: self.others.iter().enumerate().filter(|(k, _)| *k != seat).map(|(_, o)| hero(o, o.who)).take(2).collect(),
             eye: p2.map_or([0.0; 3], |o| o.camera.eye),
             focus: p2.map_or([0.0; 3], |o| o.camera.focus),
             characters: self
@@ -108,6 +110,24 @@ impl crate::play::Play {
         }
     }
 
+    /// Joiner: another player's hero is `who` as the host has it: its model and animation are
+    /// player 1's when the same hero, else the waiting partner's. (This side's own choice made
+    /// player 3's hero Roberta while the host had Tor; a copy of player 1 drew Tor's model for
+    /// Roberta.)
+    fn net_who(&mut self, k: usize, who: usize) {
+        let Some(o) = self.others.get_mut(k) else { return };
+        if o.who == who {
+            return;
+        }
+        if who == self.hero_index.min(1) {
+            (o.hero, o.model) = (self.player.hero.clone(), self.player.model.clone());
+            o.outfit = self.outfits[who];
+        } else if let Some(r) = self.parked.as_ref() {
+            (o.hero, o.model) = (r.anim.clone(), r.model.clone());
+        }
+        o.who = who;
+    }
+
     /// Joiner: the host's state after this side's tick. Player 1 is the host's hero; player 2
     /// (`others[0]`) is this side's, followed by the camera.
     pub fn apply_net_state(&mut self, s: &State) {
@@ -127,8 +147,8 @@ impl crate::play::Play {
         if self.others.is_empty() {
             self.add_player();
         }
+        self.net_who(0, s.heroes[1].who as usize);
         if let Some(o) = self.others.first_mut() {
-            o.who = s.heroes[1].who as usize;
             put(o, &s.heroes[1]);
             o.camera.eye = s.eye;
             o.camera.focus = s.focus;
@@ -139,6 +159,17 @@ impl crate::play::Play {
             (o.quick.open, o.quick.entries, o.quick.selection, o.quick.marker) = (pn.0, pn.1, pn.2 as usize, pn.3);
             (o.mote_panel.open, o.mote_panel.selection) = (pn.4, pn.5);
             o.captions.0 = s.p2_prompt;
+        }
+        self.same_hero_outfits();
+        // The other joiners' heroes (players 3 and 4), drawn and animated as the host has them.
+        let want = 1 + s.more.len();
+        while self.others.len() < want && self.add_player() {}
+        self.others.truncate(want);
+        for (k, h) in s.more.iter().enumerate() {
+            self.net_who(k + 1, h.who as usize);
+            let Some(o) = self.others.get_mut(k + 1) else { break };
+            put(o, h);
+            let _ = o.hero.tick();
         }
         for c in self.characters.iter_mut() {
             // States carry only the characters that changed (and a few in turn); a character the
