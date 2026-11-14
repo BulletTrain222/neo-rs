@@ -1375,6 +1375,11 @@ pub struct Player {
     /// This player's HUD record (co-op, not player 1, whose record is `Play::hud`): its bars
     /// group's timers and bar layouts from its own health and magic (SPEC-0023).
     pub hud: neopets_sim::hud::Hud,
+    /// This player's quick-item and Mote panels and its D-pad and Triangle presses waiting for
+    /// a tick (co-op, not player 1, whose are `Play::quick`, `mote_panel` and `panel_latch`).
+    pub quick: neopets_sim::quick::QuickPanel,
+    pub mote_panel: neopets_sim::quick::MotePanel,
+    pub dpad: neopets_sim::quick::PanelInput,
     /// Down (co-op, not player 1): the ticks since this player went down, and the ticks player 1
     /// has stood close by reviving it.
     pub down: Option<u32>,
@@ -2435,6 +2440,9 @@ impl Play {
         let mut play = Self {
             player: Player {
                 hud: Default::default(),
+                quick: Default::default(),
+                mote_panel: Default::default(),
+                dpad: Default::default(),
                 down: None,
                 revive: 0,
                 area_cool: 0,
@@ -7329,6 +7337,83 @@ impl Play {
 
     /// The weapon-drawn flag; a change plays the weapon slot's unsheathe (cue 0) or sheathe
     /// (cue 1) sound (SPEC-0040 Behavior 29; SPEC-0031 Weapon slot uses).
+    /// SPEC-0021 the quick-item and Mote panels for one tick of the running player (player 1's
+    /// tick, and each other player's in co-op with its panels swapped in): the D-pad and Triangle
+    /// presses `panel`, with Cross and Circle (and Square) from `input`. Returns whether the quick
+    /// panel took the presses (it was open or consumed them), whether the Mote panel did, and the
+    /// item to use.
+    fn panels_step(&mut self, mut panel: neopets_sim::quick::PanelInput, input: &HeroInput) -> (bool, bool, Option<i32>) {
+        if self.quick.open {
+            panel.cross |= input.jump;
+            panel.circle |= input.attack;
+        }
+        let was_open = self.quick.open;
+        let marker = self.quick.marker;
+        // SPEC-0021 Second quick panel: a Down edge opens it when both panels are closed and the
+        // in-play gate passes (cue 0x9A); while it is open (the first closed) its handler runs,
+        // takes Cross, Square and Circle, and re-arms the equipment panels each call.
+        let mote_was_open = self.mote_panel.open;
+        if !self.quick.open && !self.mote_panel.open && panel.down && self.player.loco.state != 0x19 && !self.dialogue_open {
+            self.mote_panel.open = true;
+            panel.down = false;
+            self.cue_fixed(0x9A);
+        } else if self.mote_panel.open && !self.quick.open {
+            let mi = neopets_sim::quick::MoteInput {
+                left: panel.left,
+                right: panel.right,
+                up: panel.up,
+                down: panel.down,
+                cross: input.jump,
+                square: input.square,
+                circle: input.attack,
+                triangle: panel.triangle,
+            };
+            let h = self.hero_index.min(1);
+            let words = self.equipment.motes[h];
+            let items = self.state.items.clone();
+            let held = |id: u16| items.get(&id).is_some_and(|&n| n > 0);
+            let r = self.mote_panel.tick(&mi, &self.mote_table, self.shield.is_some(), self.weapon.is_some(), &held, words);
+            if std::env::var_os("NEOPETS_TRACE_MOTE_PANEL").is_some() && (mi.circle || mi.cross || mi.square || mi.left || mi.right || mi.up || mi.down) {
+                println!("mote panel tick {}: {mi:?} -> {r:?}, selection {}", self.ticks, self.mote_panel.selection);
+            }
+            panel = neopets_sim::quick::PanelInput::default();
+            if r.moved {
+                self.cue_fixed(0x9A);
+            }
+            match r.word {
+                Some((k, Some(id))) => {
+                    self.item_command(&crate::menus::Command::EquipMote { word: k, id });
+                    self.hud.tween_requests.push(neopets_sim::hud::TweenRequest::Mote { selection: self.mote_panel.selection, word: k });
+                }
+                Some((k, None)) => {
+                    if self.equipment.clear_mote(h, k) {
+                        self.cue_fixed(0xA4);
+                    }
+                }
+                None => {}
+            }
+            for w in 0..3 {
+                self.hud.rearm_word(w);
+            }
+        }
+        let inv = &self.state.items;
+        let owns = |id: i32| id >= 0 && inv.get(&(id as u16)).is_some_and(|&n| n > 0);
+        let out = self.quick.tick(panel, self.player.loco.state != 0x19 && !self.mote_panel.open, &self.quick_rows, &owns);
+        if self.quick.open {
+            self.mote_panel.open = false;
+        }
+        // SPEC-0023 section 4: selecting or using a quick item re-arms G0, G1 and C; L3 re-arms
+        // every group.
+        // SPEC-0023 section 11.1: the marker moved to a chosen entry: its icon flies in.
+        if self.quick.marker != marker && self.quick.marker >= 0 && self.quick.selection < 4 {
+            self.hud.tween_requests.push(neopets_sim::hud::TweenRequest::Quick { entry: self.quick.selection });
+        }
+        if out.use_item.is_some() || self.quick.marker != marker {
+            self.hud.rearm_quick();
+        }
+        (out.consumed || was_open, mote_was_open || self.mote_panel.open, out.use_item)
+    }
+
     /// SPEC-0036 Guard timer: the timer counts down in the hero update; then, only in the idle
     /// state with weapons drawn and a shield equipped, the threat sense sets it to 40 for a live
     /// enemy projectile in front of the hero, or an attack-active character (event bits 0x1 to
@@ -11558,75 +11643,8 @@ impl Play {
         // then runs every tick and decides the clip.
         // SPEC-0021 Quick-item panel: it opens on an Up edge (not in action state 0x19) and,
         // while open, takes Cross and Circle; Triangle with it closed uses the marker.
-        let mut panel = std::mem::take(&mut self.panel_latch);
-        if self.quick.open {
-            panel.cross |= input.jump;
-            panel.circle |= input.attack;
-        }
-        let was_open = self.quick.open;
-        let marker = self.quick.marker;
-        // SPEC-0021 Second quick panel: a Down edge opens it when both panels are closed and the
-        // in-play gate passes (cue 0x9A); while it is open (the first closed) its handler runs,
-        // takes Cross, Square and Circle, and re-arms the equipment panels each call.
-        let mote_was_open = self.mote_panel.open;
-        if !self.quick.open && !self.mote_panel.open && panel.down && self.player.loco.state != 0x19 && !self.dialogue_open {
-            self.mote_panel.open = true;
-            panel.down = false;
-            self.cue_fixed(0x9A);
-        } else if self.mote_panel.open && !self.quick.open {
-            let mi = neopets_sim::quick::MoteInput {
-                left: panel.left,
-                right: panel.right,
-                up: panel.up,
-                down: panel.down,
-                cross: input.jump,
-                square: input.square,
-                circle: input.attack,
-                triangle: panel.triangle,
-            };
-            let h = self.hero_index.min(1);
-            let words = self.equipment.motes[h];
-            let items = self.state.items.clone();
-            let held = |id: u16| items.get(&id).is_some_and(|&n| n > 0);
-            let r = self.mote_panel.tick(&mi, &self.mote_table, self.shield.is_some(), self.weapon.is_some(), &held, words);
-            if std::env::var_os("NEOPETS_TRACE_MOTE_PANEL").is_some() && (mi.circle || mi.cross || mi.square || mi.left || mi.right || mi.up || mi.down) {
-                println!("mote panel tick {}: {mi:?} -> {r:?}, selection {}", self.ticks, self.mote_panel.selection);
-            }
-            panel = neopets_sim::quick::PanelInput::default();
-            if r.moved {
-                self.cue_fixed(0x9A);
-            }
-            match r.word {
-                Some((k, Some(id))) => {
-                    self.item_command(&crate::menus::Command::EquipMote { word: k, id });
-                    self.hud.tween_requests.push(neopets_sim::hud::TweenRequest::Mote { selection: self.mote_panel.selection, word: k });
-                }
-                Some((k, None)) => {
-                    if self.equipment.clear_mote(h, k) {
-                        self.cue_fixed(0xA4);
-                    }
-                }
-                None => {}
-            }
-            for w in 0..3 {
-                self.hud.rearm_word(w);
-            }
-        }
-        let inv = &self.state.items;
-        let owns = |id: i32| id >= 0 && inv.get(&(id as u16)).is_some_and(|&n| n > 0);
-        let out = self.quick.tick(panel, self.player.loco.state != 0x19 && !self.mote_panel.open, &self.quick_rows, &owns);
-        if self.quick.open {
-            self.mote_panel.open = false;
-        }
-        // SPEC-0023 section 4: selecting or using a quick item re-arms G0, G1 and C; L3 re-arms
-        // every group.
-        // SPEC-0023 section 11.1: the marker moved to a chosen entry: its icon flies in.
-        if self.quick.marker != marker && self.quick.marker >= 0 && self.quick.selection < 4 {
-            self.hud.tween_requests.push(neopets_sim::hud::TweenRequest::Quick { entry: self.quick.selection });
-        }
-        if out.use_item.is_some() || self.quick.marker != marker {
-            self.hud.rearm_quick();
-        }
+        let panel = std::mem::take(&mut self.panel_latch);
+        let (quick_busy, mote_busy, used) = self.panels_step(panel, &input);
         if std::mem::take(&mut self.l3_latch) {
             self.hud.rearm_all();
             // Section 9: L3 also sets the D-pad hint's timer.
@@ -11636,19 +11654,19 @@ impl Play {
         // SPEC-0022 chooser step 3: with the weapon out, a held attack button with no press edge
         // and no Square press enters the attack state again (holding the button repeats it).
         let mut repeat = input.attack_held && !input.attack && !input.square && self.player.weapon_drawn;
-        if out.consumed || was_open || self.player.statuses.active(neopets_sim::status::STUN) {
+        if quick_busy || self.player.statuses.active(neopets_sim::status::STUN) {
             input.jump = false;
             input.attack = false;
             repeat = false;
         }
         // The Mote panel takes Cross, Square and Circle while it is open.
-        if mote_was_open || self.mote_panel.open {
+        if mote_busy {
             input.jump = false;
             input.attack = false;
             input.square = false;
             repeat = false;
         }
-        if let Some(id) = out.use_item {
+        if let Some(id) = used {
             self.use_item(id as u16);
         }
         // No attack without a weapon (the user's report and this build's rule, pending R-0132:
@@ -19159,6 +19177,7 @@ impl Play {
         p.hero_shots.clear();
         p.hero_flash = 0;
         p.hero_trail = None;
+        (p.quick, p.mote_panel, p.dpad) = Default::default();
         self.place_beside(&mut p);
         self.others.push(p);
         true
@@ -19186,6 +19205,8 @@ impl Play {
         }
         std::mem::swap(&mut self.hud, &mut self.player.hud);
         std::mem::swap(&mut self.hero_index, &mut self.player.who);
+        std::mem::swap(&mut self.quick, &mut self.player.quick);
+        std::mem::swap(&mut self.mote_panel, &mut self.player.mote_panel);
         if !entering {
             self.swap_player(0);
         }
@@ -19281,6 +19302,32 @@ impl Play {
             self.shield = self.equipment.entries[1][who];
             self.camera_step(pad);
             let (forward, left) = self.player.camera.rows();
+            // Player 2's own quick-item and Mote panels (its D-pad and Triangle), with its HUD
+            // record swapped in for their tweens and re-arms; an item goes to player 2.
+            let panel = std::mem::take(&mut self.player.dpad);
+            let (mut quick_busy, mut mote_busy) = (false, false);
+            if self.player.down.is_none() {
+                std::mem::swap(&mut self.quick, &mut self.player.quick);
+                std::mem::swap(&mut self.mote_panel, &mut self.player.mote_panel);
+                std::mem::swap(&mut self.hud, &mut self.player.hud);
+                let used;
+                (quick_busy, mote_busy, used) = self.panels_step(panel, &input);
+                if let Some(id) = used {
+                    self.use_item(id as u16);
+                }
+                std::mem::swap(&mut self.quick, &mut self.player.quick);
+                std::mem::swap(&mut self.mote_panel, &mut self.player.mote_panel);
+                std::mem::swap(&mut self.hud, &mut self.player.hud);
+            }
+            if quick_busy {
+                input.jump = false;
+                input.attack = false;
+            }
+            if mote_busy {
+                input.jump = false;
+                input.attack = false;
+                input.square = false;
+            }
             // The attack press, its repeat while held with the weapon out (SPEC-0022 chooser
             // step 3), none without a weapon or while stunned, dead, hurt or falling.
             let mut repeat = input.attack_held && !input.attack && !input.square && self.player.weapon_drawn;

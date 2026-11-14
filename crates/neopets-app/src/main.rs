@@ -1789,6 +1789,12 @@ fn step_sim(
                     input.forward = 1.0;
                     input.jump = play.play.ticks % 90 == 45;
                 }
+                // This side's D-pad and Triangle go to the host for player 2's panels (this side's
+                // own game opens none).
+                let pl = std::mem::take(&mut play.play.panel_latch);
+                for (k, on) in [pl.up, pl.left, pl.right, pl.down, pl.triangle].into_iter().enumerate() {
+                    netr.dpad[k] = netr.dpad[k].wrapping_add(on as u8);
+                }
                 let c = &mut netr.counts;
                 c.0 = c.0.wrapping_add(input.jump as u8);
                 c.1 = c.1.wrapping_add(input.attack as u8);
@@ -1796,7 +1802,9 @@ fn step_sim(
                 let counts = netr.counts;
                 let generation = netr.loaded;
                 let ack = (netr.applied, netr.story_held.as_ref().map_or(0, |h| h.0));
-                netr.outgoing = Some(net::Input::from_hero(&input, &pad, generation, counts, ack));
+                let mut out = net::Input::from_hero(&input, &pad, generation, counts, ack);
+                out.dpad = netr.dpad;
+                netr.outgoing = Some(out);
                 let sounds = play.play.sound.requests.len();
                 let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());
                 let movies = play.play.state.movie_queue.len();
@@ -1855,6 +1863,11 @@ fn step_sim(
                 }
                 if !play.play.others.is_empty() {
                     let p2 = coop.take();
+                    let pl = std::mem::take(&mut coop.panel);
+                    if let Some(o) = play.play.others.first_mut() {
+                        let q = &mut o.dpad;
+                        (q.up, q.left, q.right, q.down, q.triangle) = (q.up | pl.up, q.left | pl.left, q.right | pl.right, q.down | pl.down, q.triangle | pl.triangle);
+                    }
                     play.play.coop_step(&[p2]);
                 }
                 // Online, hosting: the state after this tick, and a new welcome after a world change.
@@ -1885,6 +1898,9 @@ fn step_sim(
                     netr.send_state(&s);
                     if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                         let p = &play.play;
+                        if let Some(o) = p.others.first() {
+                            println!("NETP2 host tick {}: p2 quick open {} mote open {} selection {}", p.ticks, o.quick.open, o.mote_panel.open, o.mote_panel.selection);
+                        }
                         println!("NETFX host tick {}: {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints);
                     }
                 }
@@ -6848,6 +6864,34 @@ fn play_trace(
             } else {
                 neopets_sim::hero::HeroInput { forward: 1.0, jump: play.ticks % 90 == 45, ..Default::default() }
             };
+            // NEOPETS_COOP_DRINK: below half health player 2 opens its own quick panel, moves to
+            // the first entry it owns and presses Cross (as the trace's own drink above).
+            let mut p2 = p2;
+            if std::env::var_os("NEOPETS_COOP_DRINK").is_some() {
+                if let Some(o) = play.others.first_mut() {
+                    if o.hero_hp > 0 && o.hero_hp < o.hero_max / 2 {
+                        let owned = (0..4).find(|&k| {
+                            let id = o.quick.entries[k];
+                            id >= 0 && play.state.items.get(&(id as u16)).is_some_and(|&n| n > 0)
+                        });
+                        if !o.quick.open {
+                            o.dpad.up |= play.ticks % 20 == 0;
+                        } else {
+                            match owned {
+                                Some(k) if o.quick.selection == k => p2.jump = true,
+                                Some(0) => o.dpad.right = true,
+                                Some(1) => o.dpad.up = true,
+                                Some(2) => o.dpad.left = true,
+                                Some(_) => o.dpad.down = true,
+                                None => o.dpad.triangle = true,
+                            }
+                        }
+                        if play.ticks % 10 == 0 {
+                            println!("COOP {} drink: p2 hp {} panel open {} entries {:?} selection {} owned {:?}; p1 panel open {}", play.ticks, o.hero_hp, o.quick.open, o.quick.entries, o.quick.selection, owned, play.quick.open);
+                        }
+                    }
+                }
+            }
             play.coop_step(&[(p2, neopets_sim::camera::CameraPad::default())]);
             if play.ticks % 30 == 0 {
                 if let Some(o) = play.others.first() {

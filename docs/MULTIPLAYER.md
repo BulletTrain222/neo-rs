@@ -155,8 +155,8 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Weapon, shield, armour | Own hero's equipment row (a second Tor uses Tor's) | [x] | [x] |
 | Attacks, combos | Own | [x] | [x] |
 | Guard and reflect (shield) | Own | [x] guard (reflect unchecked) | [x] (the host runs player 2) |
-| Power attacks, spells, magic items | Own magic bar | [ ] player 2 needs its own Mote panel | [ ] |
-| Quick items (D-pad) | Own panel over the shared bag; the item goes to the user | [ ] player 2 needs its own panel and the second pad's D-pad | [ ] |
+| Power attacks, spells, magic items | Own magic bar; own Mote panel | [x] Mote panel; [?] casting unchecked | [x] Mote panel |
+| Quick items (D-pad) | Own panel over the shared bag; the item goes to the user | [x] | [x] |
 | Ledges, climbing, ladders, swimming, rope gun | Own | [?] player 2 | [?] |
 | Lock-on and target | Own | [?] | [?] |
 | Camera and its controls | Own follow camera; invert and speed per computer | [x] | [x] |

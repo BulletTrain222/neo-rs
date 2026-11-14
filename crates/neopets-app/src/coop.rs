@@ -25,6 +25,8 @@ pub struct Coop {
     pub cam: CameraPad,
     pub jump: bool,
     pub attack: bool,
+    /// Player 2's D-pad and Triangle presses for its quick-item and Mote panels.
+    pub panel: neopets_sim::quick::PanelInput,
     /// Online (net.rs): player 2's input from the joiner's controller, in place of a local pad.
     pub remote: Option<(HeroInput, CameraPad)>,
     started: bool,
@@ -114,6 +116,11 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
     };
     coop.jump |= pressed(bindings::CROSS);
     coop.attack |= pressed(bindings::CIRCLE) || pressed(bindings::R2);
+    coop.panel.up |= pressed(bindings::UP);
+    coop.panel.left |= pressed(bindings::LEFT);
+    coop.panel.right |= pressed(bindings::RIGHT);
+    coop.panel.down |= pressed(bindings::DOWN);
+    coop.panel.triangle |= pressed(bindings::TRIANGLE);
     let r = g.right_stick();
     let byte = |v: f32| (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round() as u8;
     let invert = play.play.options.invert;

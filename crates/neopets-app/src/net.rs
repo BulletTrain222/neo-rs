@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 6;
+const PROTOCOL: u16 = 7;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -193,6 +193,9 @@ pub struct State {
     /// this state carries them (only until the joiner acknowledges the revision).
     pub story: u32,
     pub has_story: bool,
+    /// Player 2's quick-item panel (open, entries, selection, marker) and Mote panel (open,
+    /// selection), for the joiner's HUD.
+    pub panels: (bool, [i32; 4], u8, i32, bool, u8),
     /// What the host's screen and music show that the joiner shows too.
     pub show: Show,
 }
@@ -643,6 +646,14 @@ impl State {
             write_shot(&mut w, *i, sh);
         }
         self.show.write(&mut w);
+        let pn = &self.panels;
+        w.u8(pn.0 as u8 | (pn.4 as u8) << 1);
+        for e in pn.1 {
+            w.i32(e);
+        }
+        w.u8(pn.2);
+        w.i32(pn.3);
+        w.u8(pn.5);
         w.0
     }
 
@@ -696,7 +707,10 @@ impl State {
             shots.push(read_shot(r)?);
         }
         let show = Show::read(r)?;
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story })
+        let bits = r.u8()?;
+        let entries = [r.i32()?, r.i32()?, r.i32()?, r.i32()?];
+        let panels = (bits & 1 != 0, entries, r.u8()?, r.i32()?, bits & 2 != 0, r.u8()?);
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels })
     }
 }
 
@@ -716,6 +730,8 @@ pub struct Input {
     pub jumps: u8,
     pub attacks: u8,
     pub squares: u8,
+    /// Press counters of the D-pad (up, left, right, down) and Triangle, for player 2's panels.
+    pub dpad: [u8; 5],
 }
 
 const RUN: u16 = 1;
@@ -741,7 +757,14 @@ impl Input {
             jumps: counts.0,
             attacks: counts.1,
             squares: counts.2,
+            dpad: [0; 5],
         }
+    }
+
+    /// The D-pad and Triangle presses since `last` (the counters last seen).
+    pub fn to_panel(&self, last: &Input) -> neopets_sim::quick::PanelInput {
+        let p = |k: usize| self.dpad[k] != last.dpad[k];
+        neopets_sim::quick::PanelInput { up: p(0), left: p(1), right: p(2), down: p(3), triangle: p(4), ..Default::default() }
     }
 
     /// The hero input and camera pad, with the presses since `last` (the counters last seen).
@@ -778,11 +801,12 @@ impl Input {
         w.u8(self.jumps);
         w.u8(self.attacks);
         w.u8(self.squares);
+        w.0.extend_from_slice(&self.dpad);
         w.0
     }
 
     fn decode(r: &mut Reader) -> Option<Self> {
-        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()? })
+        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?] })
     }
 }
 
@@ -826,6 +850,7 @@ pub struct Net {
     pub state: Option<State>,
     pub loaded: u32,
     pub counts: (u8, u8, u8),
+    pub dpad: [u8; 5],
     pub outgoing: Option<Input>,
     /// Host: events waiting for the joiner's acknowledgement, the next event's number and the
     /// last number acknowledged. Joiner: the last event played, and the events received but not
@@ -1233,6 +1258,9 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             (h, c)
         });
         if let Some(i) = net.remote {
+            let pl = i.to_panel(&net.seen);
+            let q = &mut coop.panel;
+            (q.up, q.left, q.right, q.down, q.triangle) = (q.up | pl.up, q.left | pl.left, q.right | pl.right, q.down | pl.down, q.triangle | pl.triangle);
             net.seen = i;
         }
     }
@@ -1313,6 +1341,7 @@ impl crate::play::Play {
             shots: self.shots.slots.iter().enumerate().filter_map(|(i, s)| Some((i as u8, (*s)?))).collect(),
             story: 0,
             has_story: true,
+            panels: p2.map_or((false, [-1; 4], 4, -1, false, 255), |o| (o.quick.open, o.quick.entries, o.quick.selection as u8, o.quick.marker, o.mote_panel.open, o.mote_panel.selection)),
             show: Show {
                 music: self.music.channels.map(|c| (c.stream, c.volume)),
                 bank: (self.bank_music.playing, self.bank_music.volume, self.bank_music.started),
@@ -1352,6 +1381,10 @@ impl crate::play::Play {
             o.camera.focus = s.focus;
             // Player 2 is not run on this side: its animation steps here (player 1's in the tick).
             let _ = o.hero.tick();
+            // Player 2's panels as the host has them (the joiner's HUD shows them).
+            let pn = &s.panels;
+            (o.quick.open, o.quick.entries, o.quick.selection, o.quick.marker) = (pn.0, pn.1, pn.2 as usize, pn.3);
+            (o.mote_panel.open, o.mote_panel.selection) = (pn.4, pn.5);
         }
         for c in self.characters.iter_mut() {
             let Some(h) = s.characters.iter().find(|h| h.pack == c.pack && h.slot == c.slot && h.ordinal as usize == c.ordinal) else { continue };
@@ -1478,6 +1511,7 @@ mod tests {
             pack: 1,
             story: 3,
             has_story: true,
+            panels: (true, [57, -1, 3, 9], 1, 57, false, 255),
             flags: vec![1, 500],
             items: vec![(57, 2)],
             neopoints: 40,
@@ -1513,7 +1547,7 @@ mod tests {
 
     #[test]
     fn input_round_trips_with_ack() {
-        let i = Input { generation: 4, ack: 99, story: 6, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5 };
+        let i = Input { generation: 4, ack: 99, story: 6, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5] };
         let bytes = i.encode();
         let (kind, mut r) = Reader::open(&bytes).expect("header");
         assert_eq!(kind, INPUT);
