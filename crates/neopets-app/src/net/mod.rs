@@ -124,6 +124,9 @@ pub struct Net {
     pub smooth: (Option<[f32; 3]>, f32, u32, f32),
     /// Joiner, for the trace: the most states waiting in the buffer since the last line.
     pub queue_most: usize,
+    /// For the trace: microseconds spent on the online work since the last trace line (the
+    /// host's state made and sent, the joiner's state applied).
+    pub cpu_us: u64,
     /// Joiner: the recent ticks with no new state (fading), and the states kept in hand.
     jitter: f32,
     pub hold: usize,
@@ -485,7 +488,7 @@ impl Net {
                 self.send(&m);
             }
             if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && s.tick % 300 == 0 {
-                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting; state {} bytes ({} characters, {} flags, {} items, {} events, {} moving, {} shots, talk {}); sent {} received {} bytes; round trip {:.1} ms; {}; made by kind (play set stop add oneshot update fx voice clip other) {:?}", s.tick, self.next_event, self.acked, self.events.len(), bytes.len(), s.characters.len(), s.flags.len(), s.items.len(), s.events.len(), s.moving.len(), s.shots.len(), s.talk.is_some(), self.bytes_out, self.bytes_in, self.rtt_ms, self.status, std::mem::take(&mut self.kinds));
+                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting; state {} bytes ({} characters, {} flags, {} items, {} events, {} moving, {} shots, talk {}); sent {} received {} bytes; round trip {:.1} ms; {}; made by kind (play set stop add oneshot update fx voice clip other) {:?}; state work {:.1} us a tick", s.tick, self.next_event, self.acked, self.events.len(), bytes.len(), s.characters.len(), s.flags.len(), s.items.len(), s.events.len(), s.moving.len(), s.shots.len(), s.talk.is_some(), self.bytes_out, self.bytes_in, self.rtt_ms, self.status, std::mem::take(&mut self.kinds), std::mem::take(&mut self.cpu_us) as f32 / 300.0);
             }
             self.send(&bytes);
         }

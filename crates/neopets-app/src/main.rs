@@ -1946,7 +1946,8 @@ fn step_sim(
                 // The joiner hears the host's sounds, not its own game's (net.rs events).
                 // NEOPETS_TRACE_NETEV: the events played so far, every 300 ticks (diagnostic).
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
-                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state; the host's hero stalled {} times, largest step {:.2}; buffer {} (most {}, holding {})", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats, netr.smooth.2, netr.smooth.3, netr.queue.len(), netr.queue_most, netr.hold);
+                    let cpu = std::mem::take(&mut netr.cpu_us);
+                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state; the host's hero stalled {} times, largest step {:.2}; buffer {} (most {}, holding {}); apply {:.1} us a tick", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats, netr.smooth.2, netr.smooth.3, netr.queue.len(), netr.queue_most, netr.hold, cpu as f32 / 300.0);
                     netr.queue_most = 0;
                     (netr.gap_states, netr.gap_max, netr.repeats) = (0, 0, 0);
                     (netr.smooth.2, netr.smooth.3) = (0, 0.0);
@@ -1996,7 +1997,9 @@ fn step_sim(
                 // Only a state of the world loaded here (one from before a world change waits).
                 netr.queue_most = netr.queue_most.max(netr.queue.len());
                 if let Some(s) = netr.next_state().filter(|s| s.generation == netr.loaded) {
+                    let started = std::time::Instant::now();
                     play.play.apply_net_state(&s);
+                    netr.cpu_us = netr.cpu_us.saturating_add(started.elapsed().as_micros() as u64);
                     // NEOPETS_TRACE_NETEV: the host's hero here, a tick with no movement after one
                     // with (a stall) and the largest one-tick step, counted for the trace line.
                     {
@@ -2123,8 +2126,10 @@ fn step_sim(
                     if let Some(s) = play.play.others.first_mut().and_then(|o| o.motor.take()) {
                         netr.push_event(net::Event::Rumble(s.level, s.count));
                     }
+                    let started = std::time::Instant::now();
                     let s = play.play.net_state(netr.generation);
                     netr.send_state(&s);
+                    netr.cpu_us = netr.cpu_us.saturating_add(started.elapsed().as_micros() as u64);
                     if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                         let p = &play.play;
                         if let Some(o) = p.others.first() {

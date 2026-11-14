@@ -170,6 +170,10 @@ def main():
     miss = re.findall(r'NETFX joiner tick \d+ \(missing Some\((\d+)\)\)', j)
     if miss:
         report.append(f'characters missing on the joiner at the end: {miss[-1]}')
+    hw = [float(x) for x in re.findall(r'state work ([\d.]+) us a tick', h)]
+    jw = [float(x) for x in re.findall(r'apply ([\d.]+) us a tick', j)]
+    if hw and jw:
+        report.append(f'online work per tick: host {sum(hw) / len(hw):.0f} us (most {max(hw):.0f}), joiner {sum(jw) / len(jw):.0f} us (most {max(jw):.0f})')
     if len(memory) >= 2:
         report.append('memory (seconds, host MB, joiner MB): ' + ', '.join(f'{t}: {hm}/{jm}' for t, hm, jm in memory))
     buf = [(int(x), int(y)) for x, y in re.findall(r'buffer (\d+) \(most (\d+)\)', j)]
