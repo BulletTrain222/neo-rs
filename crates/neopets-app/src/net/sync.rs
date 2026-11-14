@@ -103,6 +103,7 @@ impl crate::play::Play {
             rtt: 0,
             cmd_ack: 0,
             equip: (self.equipment.entries, self.equipment.motes, self.cloak_worn),
+            pet: self.petpet.as_ref().map(|p| (p.type_id, p.t, p.f)),
         }
     }
 
@@ -117,6 +118,8 @@ impl crate::play::Play {
             }
             (p.hero_hp, p.hero_max, p.hero_mp, p.hero_mp_max, p.hero_flash) = (h.hp, h.hp_max, h.mp, h.mp_max, h.flash);
             p.down = h.down.then_some(0);
+            // The joiner is not sent the timer: "Down" alone.
+            p.down_line = h.down.then(|| b"Down".to_vec());
         };
         put(&mut self.player, &s.heroes[0]);
         if self.others.is_empty() {
@@ -296,6 +299,15 @@ impl crate::play::Play {
             if let Some(slot) = self.shots.slots.get_mut(*i as usize) {
                 *slot = Some(*sh);
             }
+        }
+        // The host's petpet: the same type here (its package loads and its character is then
+        // placed by the host's), its times kept to the host's so it leaves only with the host's;
+        // none when the host has none.
+        match (s.pet, self.petpet.as_mut()) {
+            (Some((ty, t, f)), Some(p)) if p.type_id == ty => (p.t, p.f) = (t, f),
+            (Some((ty, t, f)), _) => self.activate_pet(ty, t, f),
+            (None, Some(_)) => self.deactivate_pet(),
+            (None, None) => {}
         }
         // The party's equipment and cloak (the joiner's item screen shows them).
         (self.equipment.entries, self.equipment.motes, self.cloak_worn) = s.equip;

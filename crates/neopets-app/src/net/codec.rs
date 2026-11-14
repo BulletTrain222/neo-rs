@@ -207,6 +207,8 @@ pub struct State {
     /// The party's equipment (each hero's weapon, shield and armour, each hero's Motes) and the
     /// cloak, for the joiner's item screen.
     pub equip: ([[Option<u16>; 2]; 3], [[Option<u16>; 3]; 2], bool),
+    /// The host's live petpet (type, time left T, full time F): the joiner keeps the same one.
+    pub pet: Option<(i32, i32, i32)>,
 }
 
 /// The breakables of the current world (their states) and the live items of each resident world
@@ -866,6 +868,15 @@ impl State {
             }
         }
         w.u8(self.equip.2 as u8);
+        match self.pet {
+            Some((ty, t, f)) => {
+                w.u8(1);
+                w.i32(ty);
+                w.i32(t);
+                w.i32(f);
+            }
+            None => w.u8(0),
+        }
         w.0
     }
 
@@ -962,7 +973,11 @@ impl State {
             }
         }
         let equip = (entries, motes, r.u8()? != 0);
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, rtt, cmd_ack, equip })
+        let pet = match r.u8()? {
+            0 => None,
+            _ => Some((r.i32()?, r.i32()?, r.i32()?)),
+        };
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, rtt, cmd_ack, equip, pet })
     }
 }
 

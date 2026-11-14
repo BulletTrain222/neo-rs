@@ -1845,6 +1845,26 @@ fn step_sim(
                         }
                     }
                 }
+                // NEOPETS_NET_PET="T:type": a petpet of that type activated on play tick T (after
+                // any fresh game the start makes).
+                if let Some((t, ty)) = std::env::var("NEOPETS_NET_PET").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<i32>().ok()?))) {
+                    if t == play.play.ticks {
+                        play.play.activate_pet(ty, 30000, 30000);
+                        info!("net: petpet {ty} activated on tick {t}");
+                    }
+                    if play.play.ticks > t && (play.play.ticks - t) % 300 == 0 {
+                        let p = &play.play;
+                        info!("net: petpet {} ({}) character {:?} found {} at {:?}", ty, p.last_pet, p.pet_char, p.pet_char.is_some_and(|id| p.characters.iter().any(|c| c.id == id)), p.pet_char.and_then(|id| p.characters.iter().find(|c| c.id == id)).map(|c| (c.pack, c.slot, c.ordinal, c.inactive)));
+                    }
+                }
+                // NEOPETS_NET_BOSSHP="T:hp[;T:hp...]": every boss of the world set to hp on tick T
+                // (as hits would; the monster bar follows).
+                for (t, hp) in std::env::var("NEOPETS_NET_BOSSHP").unwrap_or_default().split(';').filter_map(|e| e.split_once(':')).filter_map(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<i32>().ok()?))) {
+                    if t == play.play.ticks {
+                        play.play.diag_gelert_hp(hp);
+                        info!("net: bosses set to {hp} on tick {t}");
+                    }
+                }
                 // NEOPETS_NET_STOPAT=T: hosting (or joining) stopped on play tick T.
                 if std::env::var("NEOPETS_NET_STOPAT").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
                     netr.request = Some(net::Request::Leave);
@@ -7306,7 +7326,7 @@ fn play_trace(
                 if let Some(o) = play.others.first() {
                     let q = o.loco.position();
                     let a = play.player.loco.position();
-                    println!("COOP {} p2 ({:.1}, {:.1}, {:.1}) state {} clip {} hp {} down {:?} | p1 ({:.1}, {:.1}, {:.1}) hp {} down {:?} state {} | p2 eye ({:.1}, {:.1}, {:.1})", play.ticks, q[0], q[1], q[2], o.loco.state, o.hero.clip_state().action, o.hero_hp, o.down, a[0], a[1], a[2], play.player.hero_hp, play.player.down, play.player.loco.state, o.camera.eye[0], o.camera.eye[1], o.camera.eye[2]);
+                    println!("COOP {} p2 ({:.1}, {:.1}, {:.1}) state {} clip {} hp {} down {:?} | p1 ({:.1}, {:.1}, {:.1}) hp {} down {:?} state {} | p2 eye ({:.1}, {:.1}, {:.1}) | p2 line {:?}", play.ticks, q[0], q[1], q[2], o.loco.state, o.hero.clip_state().action, o.hero_hp, o.down, a[0], a[1], a[2], play.player.hero_hp, play.player.down, play.player.loco.state, o.camera.eye[0], o.camera.eye[1], o.camera.eye[2], o.down_line.as_deref().map(String::from_utf8_lossy));
                     let near: Vec<String> = play.characters.iter().filter(|c| c.enemy.is_some() && (c.position[0] - q[0]).hypot(c.position[2] - q[2]) < 15.0).map(|c| format!("{} hp {} at {:.1}", c.name, c.hp, (c.position[0] - q[0]).hypot(c.position[2] - q[2]))).collect();
                     println!("COOP {} enemies near p2: {} | p2 lock {:?} targets {} p1 lock {:?} targets {}", play.ticks, near.join(", "), o.lock, o.targets.records.len(), play.player.lock, play.player.targets.records.len());
                     println!("COOP {} p2 hud c {} g0 {} health {:?} | p1 hud c {} g0 {} health {:?}", play.ticks, o.hud.c, o.hud.g0, o.hud.health, play.hud.c, play.hud.g0, play.hud.health);

@@ -1393,6 +1393,9 @@ pub struct Player {
     /// has stood close by reviving it.
     pub down: Option<u32>,
     pub revive: u32,
+    /// Co-op: this player's caption while down (how long until it gets up, or the revive's
+    /// progress), shown in the Square caption's place on its own view (this build's).
+    pub down_line: Option<Vec<u8>>,
     /// Ticks until a landed shot's area may hurt this player again (co-op, not player 1).
     pub area_cool: u32,
     /// The held items drawn for this player when it is not player 1 (`hero_items`, taken in
@@ -2465,6 +2468,7 @@ impl Play {
                 down: None,
                 revive: 0,
                 area_cool: 0,
+                down_line: None,
                 items_drawn: Vec::new(),
                 attack: None,
                 attack_repeat: false,
@@ -14262,6 +14266,10 @@ impl Play {
         if let Some(c) = self.buy_caption.as_deref() {
             return Some(c);
         }
+        // Co-op: a down player's line takes the caption's place on its own view.
+        if let Some(c) = self.player.down_line.as_deref().filter(|_| !self.others.is_empty()) {
+            return Some(c);
+        }
         let id = if self.talk_prompt {
             Some(8)
         } else if self.prompt_shown.is_some() {
@@ -19731,6 +19739,16 @@ impl Play {
                 self.last_door = format!("player 2's door: player 1 brought to ({:.1}, {:.1}, {:.1}) in {}", at[0], at[1], at[2], self.world.pack);
             }
             self.coop_use_step(i);
+        }
+        // Each player's down line for its caption (Default: the revive's progress while the
+        // other stands beside, else the seconds until it gets up by itself).
+        let line = |down: Option<u32>, revive: u32| {
+            let t = down?;
+            Some(if revive > 0 { format!("Reviving {}%", (revive * 100 / 120).min(100)) } else { format!("Down: up in {} s", (600u32.saturating_sub(t) + 59) / 60) }.into_bytes())
+        };
+        self.player.down_line = line(self.player.down, self.player.revive);
+        for o in self.others.iter_mut() {
+            o.down_line = line(o.down, o.revive);
         }
     }
 

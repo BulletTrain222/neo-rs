@@ -35,7 +35,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 22;
+const PROTOCOL: u16 = 23;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -1550,6 +1550,7 @@ mod tests {
             page: 2,
             rtt: 31,
             cmd_ack: 3,
+            pet: Some((450, 30, 40)),
             equip: ([[Some(1), None], [None, Some(2)], [None, None]], [[Some(160), None, Some(161)], [None; 3]], true),
             moving: vec![(909, 4, [0.0, 1.0, 0.0], 0.25)],
             flags: vec![1, 500],

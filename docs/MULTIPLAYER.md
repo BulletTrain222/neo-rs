@@ -206,7 +206,7 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Fades, letterbox bars | Shared | [x] | [x] |
 | Screen shake | Default: both views shake | [x] | [x] (twice in a host cutscene) |
 | Messages ("Got X", notices) | Shown to both | [x] | [x] the level message line |
-| Petpet | Follows player 1 | [x] | [?] travels as a character (not seen) |
+| Petpet | Follows player 1 | [x] | [x] the host's petpet sent with each state |
 | Saving | The host's save only; default: the joiner keeps none, and sees "The host saved the game." | [x] | [x] notice |
 | Game over and Continue | Only when both are down (or one, with revive off); player 1 chooses | [x] | [x] the game-over line on the joiner; Continue reloads both (plan 4) |
 | Pause, item screen, map | Default: either player opens it; on one PC the game pauses for both and the item screen is the opener's; online the host's pause pauses both, the joiner's pauses only the joiner (player 2 lets go) | [x] | [x] pause; the joiner's item screen commands go to the host |
@@ -619,7 +619,7 @@ stand-in on this computer, and left for the user to switch on.
 24. [x] "How to play together" gets an internet section (port forwarding by hand, or UPnP).
 
 ### Co-op extras
-25. [ ] A down player shows how long until they get up, and a revive bar while the other
+25. [x] (in the Square caption's place; the joiner shows "Down") A down player shows how long until they get up, and a revive bar while the other
     stands beside (HUD, both views).
 26. [x] (they did not move: the Square rows were player 1's; fixed) Player 2's push blocks: traced, and fixed if they do not move.
 27. [~] (the same swap as the healing traced; statuses not traced) Player 2's magic items' statuses (buffs, cures) traced.
@@ -633,11 +633,11 @@ stand-in on this computer, and left for the user to switch on.
     talks" line instead of nothing.
 
 ### The joiner's world, last pieces
-34. [ ] The petpet online: given by a host diagnostic after the welcome, compared.
+34. [x] (it was missing on the joiner; now sent) The petpet online: given by a host diagnostic after the welcome, compared.
 35. [ ] Weapon trails and debris compared on both sides.
 36. [ ] Cutscene fades compared frame by frame in a scripted scene.
 37. [ ] The host's camera shake and rumble in a boss fight compared.
-38. [ ] The monster health bar compared during a fight with hits (a host diagnostic hurts
+38. [~] (boss health matched; the bar shows only after a hit, not compared) The monster health bar compared during a fight with hits (a host diagnostic hurts
     the boss).
 
 ### Tests and tools
