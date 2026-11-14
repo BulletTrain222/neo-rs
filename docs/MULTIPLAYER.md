@@ -28,8 +28,8 @@ the same build of this game.
    back with the health and magic it had. The host can send player 2 away with **Remove
    player 2**.
 6. If the host's computer says the port is in use, another copy of the game is hosting there.
-   Put `port=47818` (or another number) in `private/net.txt`; the address to give your friend
-   then ends in `:47818`.
+   Change the **Port** row (for example to 47818). The address to give your friend then ends in
+   `:47818`, or the friend sets the same port on their Port row and types the address alone.
 
 **Over the internet (not tried yet).** The friend needs a way in to the host's computer
 through the host's router:
@@ -37,7 +37,7 @@ through the host's router:
    the router to let your friend in, and the help line shows the internet address to give them.
    The way in closes when you stop hosting, or by itself after two hours. Some routers have
    UPnP turned off; then the help line says the router could not open the port.
-2. By hand: in the router's settings, forward **UDP port 47817** to the host's computer (the
+2. By hand: in the router's settings, forward **UDP port 47817** (or the Port row's) to the host's computer (the
    address the help line shows, for example 192.168.1.20). The friend then joins with the
    host's internet address (search "what is my IP" on the host's computer).
 3. Setting a **Password** keeps strangers out.
@@ -58,6 +58,7 @@ out lost messages and uneven delays.
 | Remove player 2 | | Host only: send player 2 back to their title screen and keep hosting |
 | Password | None | Optional: the host types one before hosting, and the friend the same before joining |
 | Open the port (UPnP) | Off, On | While hosting, ask the router to let a friend on the internet in |
+| Port | 47817 (default) | The UDP port to host on, and to join on when the address has none; type it or step it with Left and Right |
 
 **What the two players share.** One world and story, one bag of items and Neopoints, the
 enemies, talk boxes (either player's Square moves a box on; only player 1 answers questions,

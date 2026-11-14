@@ -681,15 +681,16 @@ fn take_welcome(net: &mut Net, r: &mut Reader, from: SocketAddr) {
     info!("net: welcome {generation} from {from}");
 }
 
-/// The port to host on: NEOPETS_NET_PORT, else a line `port=N` in private/net.txt, else `PORT`.
-pub fn host_port() -> u16 {
+/// The port to host on: NEOPETS_NET_PORT, else a line `port=N` in private/net.txt (the older
+/// way), else the Multiplayer page's Port row (`setting`; 47817 by default).
+pub fn host_port(setting: u16) -> u16 {
     if let Some(p) = std::env::var("NEOPETS_NET_PORT").ok().and_then(|v| v.trim().parse().ok()) {
         return p;
     }
     std::fs::read_to_string("private/net.txt")
         .ok()
         .and_then(|t| t.lines().find_map(|l| l.trim().strip_prefix("port=").and_then(|v| v.trim().parse().ok())))
-        .unwrap_or(PORT)
+        .unwrap_or(if setting > 0 { setting } else { PORT })
 }
 
 /// NEOPETS_NET_OUTAGE="from:seconds" (diagnostic): nothing sent or received from `from`
@@ -782,7 +783,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     match net.request.take() {
         Some(Request::Host) => {
             net.stop("");
-            let port = host_port();
+            let port = host_port(settings.net_port);
             match UdpSocket::bind(("0.0.0.0", port)).and_then(|s| s.set_nonblocking(true).map(|_| s)) {
                 Ok(s) => {
                     net.socket = Some(s);
@@ -818,7 +819,9 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         }
         Some(Request::Join(text)) => {
             net.stop("");
-            let addr = if text.contains(':') { text.parse::<SocketAddr>().ok() } else { format!("{text}:{PORT}").parse::<SocketAddr>().ok() };
+            // An address with no port joins on the Port row's (47817 by default).
+            let port = host_port(settings.net_port);
+            let addr = if text.contains(':') { text.parse::<SocketAddr>().ok() } else { format!("{text}:{port}").parse::<SocketAddr>().ok() };
             match (addr, UdpSocket::bind("0.0.0.0:0").and_then(|s| s.set_nonblocking(true).map(|_| s))) {
                 (Some(a), Ok(s)) => {
                     net.socket = Some(s);
@@ -887,7 +890,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     // The router's answer (UPnP).
     if let Some(r) = net.upnp_rx.as_ref().and_then(|rx| rx.lock().ok()?.try_recv().ok()) {
         net.upnp_rx = None;
-        let port = host_port();
+        let port = host_port(settings.net_port);
         match r {
             upnp::Outcome::Opened(ip) => {
                 net.upnp_port = Some(port);
@@ -1477,7 +1480,7 @@ impl Default for JoinAddress {
 
 /// Each frame: with the Multiplayer page's address row focused, the number keys, the dot and the
 /// colon type into the address, Backspace deletes.
-pub fn type_address(menu: Option<Res<crate::menu_view::Menu>>, keys: Res<ButtonInput<KeyCode>>, mut address: ResMut<JoinAddress>, mut password: ResMut<NetPassword>) {
+pub fn type_address(menu: Option<Res<crate::menu_view::Menu>>, keys: Res<ButtonInput<KeyCode>>, mut address: ResMut<JoinAddress>, mut password: ResMut<NetPassword>, mut settings: ResMut<crate::display::DisplaySettings>) {
     let Some(menu) = menu else { return };
     if menu.flow.current != crate::menus::DISPLAY || menu.flow.display_page != 2 {
         return;
@@ -1503,6 +1506,24 @@ pub fn type_address(menu: Option<Res<crate::menu_view::Menu>>, keys: Res<ButtonI
         }
         if password.0 != before {
             let _ = std::fs::write("private/password.txt", &password.0);
+        }
+        return;
+    }
+    // The port row: digits type (at most 65535), Backspace deletes the last; an empty or
+    // too small port is kept as typed while typing and taken as the default when used.
+    if menu.flow.display_focus == crate::display::PORT_ROW {
+        let mut p = settings.net_port as u32;
+        for (d, (a, b)) in [(KeyCode::Digit0, KeyCode::Numpad0), (KeyCode::Digit1, KeyCode::Numpad1), (KeyCode::Digit2, KeyCode::Numpad2), (KeyCode::Digit3, KeyCode::Numpad3), (KeyCode::Digit4, KeyCode::Numpad4), (KeyCode::Digit5, KeyCode::Numpad5), (KeyCode::Digit6, KeyCode::Numpad6), (KeyCode::Digit7, KeyCode::Numpad7), (KeyCode::Digit8, KeyCode::Numpad8), (KeyCode::Digit9, KeyCode::Numpad9)].into_iter().enumerate() {
+            if (keys.just_pressed(a) || keys.just_pressed(b)) && p * 10 + d as u32 <= 65535 {
+                p = p * 10 + d as u32;
+            }
+        }
+        if keys.just_pressed(KeyCode::Backspace) {
+            p /= 10;
+        }
+        if p != settings.net_port as u32 {
+            settings.net_port = p as u16;
+            settings.save();
         }
         return;
     }

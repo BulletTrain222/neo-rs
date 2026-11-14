@@ -371,7 +371,7 @@ pub fn read_pad(keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseBut
     // back a page; the number pad's 8, 2, 4 and 6 moved the cursor), except the arrows, Enter,
     // Tab and Esc, which still move off the row and leave the page.
     let typing = menu.as_ref().is_some_and(|m| {
-        m.flow.current == crate::menus::DISPLAY && m.flow.display_page == 2 && matches!(m.flow.display_focus, crate::display::ADDRESS_ROW | crate::display::PASSWORD_ROW)
+        m.flow.current == crate::menus::DISPLAY && m.flow.display_page == 2 && matches!(m.flow.display_focus, crate::display::ADDRESS_ROW | crate::display::PASSWORD_ROW | crate::display::PORT_ROW)
     });
     let kept = |k: KeyCode| !typing || matches!(k, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Enter | KeyCode::Tab | KeyCode::Escape);
     for a in 0..ACTIONS {

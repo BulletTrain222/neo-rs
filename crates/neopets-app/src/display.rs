@@ -24,12 +24,12 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 34;
+pub const ROWS: usize = 35;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
 /// The rows on the Multiplayer page (local co-op, docs/MULTIPLAYER.md; this build's feature).
-pub const MULTI_ROWS: [usize; 9] = [25, 26, 27, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW];
+pub const MULTI_ROWS: [usize; 10] = [25, 26, 27, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW];
 /// The Multiplayer page's online rows (net.rs): host, the join address, join.
 pub const HOST_ROW: usize = 28;
 pub const ADDRESS_ROW: usize = 29;
@@ -40,6 +40,8 @@ pub const REMOVE_ROW: usize = 31;
 pub const PASSWORD_ROW: usize = 32;
 /// Ask the router to forward the port while hosting (UPnP).
 pub const UPNP_ROW: usize = 33;
+/// The port to host and join on (default 47817), typed with the number keys.
+pub const PORT_ROW: usize = 34;
 /// Split screen layouts.
 pub const SPLITS: [&str; 2] = ["Top and bottom", "Side by side"];
 
@@ -136,11 +138,13 @@ pub struct DisplaySettings {
     pub coop_partner: bool,
     /// Ask the router to forward the hosting port (UPnP; this build's option, off by default).
     pub upnp: bool,
+    /// The UDP port to host on, and to join on when an address names none (default 47817).
+    pub net_port: u16,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT }
     }
 }
 
@@ -189,6 +193,7 @@ impl DisplaySettings {
                 "coop split" => s.coop_split = v.parse().unwrap_or(0).min(SPLITS.len() - 1),
                 "coop partner" => s.coop_partner = v == "true",
                 "upnp" => s.upnp = v == "true",
+                "net port" => s.net_port = v.parse().ok().filter(|&p: &u16| p > 0).unwrap_or(crate::net::PORT),
                 "graphics api" => s.graphics_api = GRAPHICS_APIS.iter().position(|a| a.eq_ignore_ascii_case(v)).unwrap_or(s.graphics_api),
                 _ => {}
             }
@@ -198,7 +203,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\nnet port = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -227,7 +232,8 @@ impl DisplaySettings {
             self.coop_revive,
             self.coop_split,
             self.coop_partner,
-            self.upnp
+            self.upnp,
+            self.net_port
         )
     }
 
@@ -351,6 +357,7 @@ impl DisplaySettings {
             ("Remove player 2".into(), String::new()),
             ("Password".into(), String::new()),
             ("Open the port (UPnP)".into(), if self.upnp { "On".into() } else { "Off".into() }),
+            ("Port".into(), if self.net_port == crate::net::PORT { format!("{} (default)", self.net_port) } else { self.net_port.to_string() }),
         ]
     }
 
@@ -404,6 +411,8 @@ impl DisplaySettings {
             26 => self.coop_split = step(self.coop_split, SPLITS.len()),
             27 => self.coop_partner = !self.coop_partner,
             UPNP_ROW => self.upnp = !self.upnp,
+            // Left and Right step the port by one (1024 to 65535).
+            PORT_ROW => self.net_port = (self.net_port as i32 + delta).clamp(1024, 65535) as u16,
             _ => {}
         }
     }
@@ -699,6 +708,7 @@ const HELP: [&str; ROWS + 1] = [
     "Hosting: sends player 2 back to their title screen. You keep hosting, and they can join again.",
     "Optional. The host types one before hosting; a friend must type the same before joining. Letters and digits; Backspace deletes.",
     "On: while you host, your router is asked to let a friend on the internet in (UPnP). The way in closes when you stop hosting, or by itself after two hours. Some routers have UPnP turned off.",
+    "The UDP port the game hosts on, and joins on when the address names none. 47817 unless you change it; both computers should match. Type it with the number keys (Backspace deletes) or step it with Left and Right.",
     "Back to Options.",
 ];
 
@@ -832,6 +842,9 @@ pub fn show_window(
             _ => "Press to join".into(),
         };
         shown[REMOVE_ROW].1 = if net.role == Role::Host && net.peer.is_some() { "Press to remove".into() } else { "No player 2 online".into() };
+        if focus == PORT_ROW {
+            shown[PORT_ROW].1 = format!("{}_", if settings.net_port == 0 { String::new() } else { settings.net_port.to_string() });
+        }
         shown[PASSWORD_ROW].1 = match (password.0.is_empty(), focus == PASSWORD_ROW) {
             (true, false) => "None".into(),
             (true, true) => "_".into(),
@@ -886,7 +899,7 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(1), [17, 18, 19, 20]);
-        assert_eq!(page_rows(2), [25, 26, 27, 28, 29, 30, 31, 32, 33]);
+        assert_eq!(page_rows(2), [25, 26, 27, 28, 29, 30, 31, 32, 33, 34]);
         assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));
