@@ -369,4 +369,35 @@ chosen without the user.
 19. [x] net_check.py checks more by itself: world revisions equal on both sides, object lists
     equal, events all played.
 20. [x] A short multiplayer summary entry in docs/STATUS.md pointing at each increment.
-21. [ ] The morning report.
+21. [x] The morning report.
+
+### Night plan 3 report (2026-11-14, morning)
+Done and committed, each with Check passing (and the 45 scenarios where single-player code
+moved):
+- Internet-ready messages: every message stays under 1,150 bytes (the welcome, the story and the
+  world sync go in acknowledged parts; states carry only changed characters and falling items;
+  extra event messages when they back up). Normal play is about 34 KB/s from host to joiner (was
+  58), a busy moment about 53 KB/s (was 116). Hosting on another port works.
+- A smoother joiner: no reload when the host walks into the next area (the joiner asks for a
+  welcome only if it ends up elsewhere), a one-state jitter buffer (no repeated frames on a clean
+  network), reloads measured at 35 ms.
+- Co-op that keeps going: player 2 comes back after a load, Continue or warp on one PC; saves are
+  the same with or without player 2; story hero switches go ahead (the partner becomes the other
+  hero); player 2's Start opens the pause page.
+- Fights: bosses turn on the nearest standing player; a boss fight online matched on both sides
+  (31 effect objects, the boss's health); player 2's Mote power attack works; the joiner was
+  missing no characters.
+- The joiner's world: gates, lifts and platforms come from the host.
+- Tidy: net.rs is now net/mod.rs, codec.rs and sync.rs; net_check compares world revisions,
+  objects and missing characters by itself; a multiplayer summary heads docs/STATUS.md's
+  multiplayer entries.
+
+Defaults chosen without the user (say if any should change):
+- The second controller's Start opens the pause page once player 2 is in; in menus both
+  controllers drive them.
+- A story's hero switch goes ahead with player 2 in; a partner player 2 becomes the other hero.
+- Bosses go after whichever standing player is nearer.
+
+Left for later: the petpet was not seen online (a test petpet did not take in the window);
+the second-controller pause and re-join were not tried with a real second controller; nothing
+was seen on screen; two real computers and the internet need the user.
