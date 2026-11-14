@@ -436,7 +436,7 @@ second controller or a second computer are marked and left for the morning.
 5. [x] (queued on the joiner; movies were off in the test) Movies online: a host movie reaches the joiner as an event and plays (traced).
 6. [~] (the fade comes with every state; not compared frame by frame) Cutscene fades on the joiner: compared with the host's, frame for frame, in a scripted scene.
 7. [x] (matched at the same ticks in the Plague Serpent fight) Shots on the joiner: the host's and the joiner's shot lists compared in a fight.
-8. [ ] Weapon trails and debris on the joiner: counts compared; sent if they differ.
+8. [ ] (not tried tonight) Weapon trails and debris on the joiner: counts compared; sent if they differ.
 9. [ ] (not tried again tonight) The petpet online: tried again with a petpet set by the save, compared on both sides.
 
 ### Player 2 does more
@@ -485,6 +485,68 @@ second controller or a second computer are marked and left for the morning.
 37. [x] (`--seconds 1200`, `--outage`, `--join-delay`) net_check.py modes: `--long`, `--outage`, `--late`.
 38. [x] Tests for the co-op rules that need no window (synthetic).
 39. [x] The shared/own checklist above brought up to date (many rows are done).
-40. [ ] docs/STATUS.md entries and the multiplayer summary updated.
+40. [x] docs/STATUS.md entries and the multiplayer summary updated.
 41. [x] "How to play together" updated for the new rows and options.
-42. [ ] The morning report.
+42. [x] The morning report.
+
+### Night plan 4 report (2026-11-14, morning)
+Done and committed, each with Check passing (and the scenarios, now 51, where single-player code
+moved). 36 of the 42 items are done, 3 partly (cutscene fades not compared frame by frame, magic
+items' statuses not traced, the pause page keeps its original rows), 3 left (weapon trails and
+debris compared on both sides, the petpet online, and split-screen frame times, which need the
+screen on).
+
+**The joiner only watches.** Its scripts no longer load worlds (the host's load comes as a new
+welcome); a trace found its own game changing nothing of the story. Online now: the game-over
+line and Continue (traced with a forced fall), "The host saved the game.", the host's movies,
+shots matching in a fight, and joining late into a boss fight.
+
+**Player 2 does more.** Chests and levers (player 1 is brought over for the scene), its own item
+screen (one PC, and online its commands now go to the host), shield blocks and reflections, its
+own target list, coming back from lava, and coming beside player 1 when a scene ends. Six new
+co-op scenarios.
+
+**The Multiplayer page.** The round trip and traffic while online, a Remove player 2 row, a
+joiner that joins again by itself after the host is lost (player 2 keeps its health), a clear
+line when the port is taken or a join gets no answer.
+
+**Smoother and sturdier.** Movement carries on over a missing state (stalls at 20% loss: 492 down
+to 167 a minute). A press reaches the host in about 12 ms on one computer. An outage of 8
+seconds recovers by itself.
+
+**Bugs found and fixed tonight:**
+- The game-over line never showed on the joiner, and "The host paused the game." stayed up after
+  the host carried on.
+- A joiner coming back to the same host waited for an event that never came (events piled up).
+- After a joiner left or was removed, the host still said "Lost player 2." six seconds later.
+- The event channel stopped for good once 4,000 events backed up (now a fresh welcome).
+- Script launchers' shots passed straight through player 2, and player 2 never blocked or
+  reflected; player 2's target list never updated.
+- A join with no answer waited for ever.
+- **Single player too:** sounds the audio side never started were kept for good, each sent a
+  volume and pan every tick (they piled up to about 40 a tick in world 947).
+- **Single player too:** the game's memory grew about 45 MB a minute for as long as it ran (the
+  never-ending sound sources were played as looping, which keeps every sample). It now stays
+  level (445 MB in play).
+
+Defaults chosen without the user (say if any should change):
+- When player 2 opens a chest or pulls a lever, player 1 is brought to player 2's place to play
+  the scene, with player 2 beside (as at doors).
+- The pause page opened by player 2's Start has player 2's item screen.
+- Player 2 in lava or water comes back beside player 1, losing up to 5 health.
+- When a scripted scene ends, player 2 more than 8 units away is put beside player 1.
+- After "Lost the host" the joiner joins again by itself for up to a minute; a player 2 back in
+  the same game gets its health and magic back.
+- A join with no answer gives up after 20 seconds.
+- More than 4,000 events waiting sends a fresh welcome; a joiner sitting in its own pause menu
+  catches up when it returns.
+
+Not checked: anything on screen or heard (the display and speakers were off), a real second
+controller, two computers, the internet, the petpet online, split-screen frame times.
+
+The 20-minute session again, after the fixes: it passed every comparison (120 of 120 world
+revisions equal, music, objects and characters matching). The host made 388,107 events, against
+2.4 million before, with 8 waiting at the end. Traffic finished at 33 KB/s, against 137. Memory
+levelled off at about 600 MB for the host and 550 MB for the joiner (before: past 1.4 GB and
+still climbing). A state of 1,201 bytes there also showed that a large state could pass the
+1,150-byte limit; it now leaves its events to the events messages.

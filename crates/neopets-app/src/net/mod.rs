@@ -416,15 +416,17 @@ impl Net {
                 }
             }
             // The events not yet acknowledged, oldest first, up to 96 and in the room the state
-            // leaves under the limit (at least one; the rest go with the next states).
-            let room = STATE_LIMIT.saturating_sub(s.encode().len()).max(64);
+            // leaves under the limit; with no room left (a large state) none, and the events
+            // messages below carry them (before, at least one went in and a state could pass the
+            // limit: 1,201 bytes in a 20-minute session).
+            let room = STATE_LIMIT.saturating_sub(s.encode().len());
             let mut size = 0;
             s.events = Vec::new();
             for e in self.events.iter().take(96) {
                 let mut w = Writer(Vec::new());
                 e.1.write(&mut w);
                 size += w.0.len() + 4;
-                if size > room && !s.events.is_empty() {
+                if size > room {
                     break;
                 }
                 s.events.push(e.clone());
