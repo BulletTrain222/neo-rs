@@ -711,3 +711,73 @@ Questions for the original game: R-0284 (part way up a ladder, Stop Climbing tak
 once, for either player).
 
 Not checked: anything on screen or heard, UPnP with a real router, two computers, the internet.
+
+## Plan: players in separate worlds (2026-11-14, not built)
+
+**Today.** There is one game. It runs the current world and the neighbour it streams in, with
+their scripts, triggers, characters, enemies, items and effects. The play code uses "the current
+world" in about 720 places, and 71 systems read the one game to draw it, play its sounds and show
+its HUD. So both players are always in the same world: a door or a load takes both. With
+**Stay together** Off they can already roam the current area and its neighbour.
+
+### Three ways to do it
+1. **Many worlds in one game.** The game would keep a list of running worlds and each player
+   would be in one of them. Every piece of code that means "the current world" (those ~720
+   places) would have to ask "which world?". It is one simulation, so it would suit one PC and
+   online alike, but it is the biggest change and the likeliest to break single-player play.
+2. **Two games side by side, sharing one story** (recommended). While the players are apart,
+   player 2 has a game of its own: the same story, bag and purse, but its own world, with that
+   world's scripts and enemies. The two games pass each other the story changes they make, as
+   small operations (a flag set or cleared, an item gained or used, Neopoints spent). When the
+   players meet in one world again, player 2's game is dropped and it joins player 1's as today.
+   Online this is most of the way there already: the joiner's computer runs a full game of its
+   own, which today only follows the host. While apart, it would run its own world instead.
+3. **Stay as today.** Both players in one world, roaming it freely with Stay together Off.
+
+### Phase 1: online (way 2), about one or two nights
+1. A **Doors take** row on the Multiplayer page: Both (as today) or Only you. With Only you and
+   Stay together Off, a door player 2 takes leads only player 2 out.
+2. **Apart:** the joiner's game takes charge of its own world. Its scripts, doors, triggers,
+   enemies and pickups run, where today they are turned off. The host stops sending that world's
+   characters and objects, and each side shows a line such as "Player 2 is in the Meridell
+   market".
+3. **One story, two games:** each side sends the story changes it makes as numbered operations
+   (flags, items, Neopoints, collected rows, treasure maps, kill memory). The host puts them in
+   one order and sends the result back, so both games hold the same story. A clash, such as
+   both spending the last Neopoints, is settled in the host's order (rare).
+4. **Meeting again:** when one player's door leads into the other's world, player 2 is welcomed
+   into the host's game as it is today, beside player 1.
+5. **Story moments while apart** (act starts, hero switches, movies, game over): Default, player
+   2 is brought back to player 1 first, so the story runs only once.
+6. **Down while apart:** revive on, player 2 gets up by itself after 10 seconds. The game is over
+   only when player 1 falls.
+7. **Saving while apart:** the host saves its own world; on loading, player 2 starts beside
+   player 1.
+8. **Traffic while apart:** only story operations and each player's whereabouts, so very little.
+9. **Tests:** two windows with player 2 walking into another world, then flags and items
+   changed on both sides and compared, then the two meeting again; a 10-minute run.
+
+### Phase 2: one PC, split screen, several nights
+10. A second game held next to the first when the players part, made from the first's save as it
+    stands, and dropped when they meet.
+11. **Drawing:** each half of the screen shows its own game's world, characters, effects and HUD,
+    each world on its own render layer, so two worlds that use the same coordinates do not draw
+    over each other. The 71 systems that read the game would learn which game a view shows.
+12. **Sound:** each game's sounds, heard from its own half's camera.
+13. **Cost:** two worlds running and drawn at once, roughly double the work while apart. It would
+    be measured on this laptop.
+
+### Decisions for you
+- **Which way:** 2, two games sharing one story (recommended), or 1, many worlds in one game.
+- **Story moments while apart:** bring player 2 back first (recommended), or let each player's
+  world run its own.
+- **Player 2's say while apart:** player 2 talks to people, shops and opens chests in its own
+  world (recommended; today only player 1 talks and shops).
+- **Order:** online first (recommended; most of it is already there), or one PC first.
+
+### Risks
+- **The story in two places:** two scripts setting flags in different orders. Kept to a minimum
+  by bringing player 2 back for story moments.
+- **Original scripts that assume one current world** (worlds replaced or left by scripts) only
+  work in the game that runs them, which is the reason for two games and not one.
+- **One PC:** memory and frame time with two worlds drawn at once.
