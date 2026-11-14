@@ -2206,7 +2206,7 @@ fn step_sim(
                         play.play.write_slot(&mut slot, b"NETPLAY");
                         let (pack, game) = (play.play.world.pack, play.play.generation);
                         let fx = play.play.effects.snapshot();
-                        netr.rewelcome(&slot, pack, game, &fx);
+                        netr.rewelcome(&slot, pack, game, &fx, play.play.interior_pack());
                     }
                     for r in play.play.sound.requests[sounds.min(play.play.sound.requests.len())..].to_vec() {
                         // A voice with a place: where, so the joiner hears it from its own player
@@ -2430,6 +2430,12 @@ fn step_sim(
                     // Online (net.rs): the joiner follows the host's game from here, in play.
                     if net_load.is_some() {
                         play.play.net_follow = true;
+                        // The host is in an interior: enter it (the slot loaded the outdoor world;
+                        // user report 148).
+                        if let Some(p) = netr.load_interior.take() {
+                            play.play.enter_interior(p);
+                            info!("net: the host is in interior {p}; entering it");
+                        }
                         // The host's effects running at the welcome.
                         let table = play.play.effect_table.clone();
                         for op in std::mem::take(&mut netr.load_fx) {

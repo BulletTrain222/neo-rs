@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 26;
+const PROTOCOL: u16 = 27;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -231,6 +231,9 @@ pub struct Net {
     cmd_done: u8,
     /// The other side's player name (the joiner's on the host, the host's on the joiner).
     pub peer_name: String,
+    /// Joiner: the host's interior named by the welcome just received (entered once its game
+    /// has loaded).
+    pub load_interior: Option<u32>,
     /// Host: the router's answer being waited for (UPnP), and the port it forwards.
     upnp_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<upnp::Outcome>>>,
     pub upnp_port: Option<u16>,
@@ -251,6 +254,8 @@ pub struct Net {
     ops_in_last: u32,
     pub ops_in: Vec<apart::StoryOp>,
     pub other_pack: u32,
+    /// Host: the next input from the joiner is the new starting point of its press counters.
+    reseed: bool,
     /// Host: the joiner has been in another world since going apart (only then can they meet).
     pub other_left: bool,
     other_vitals: (i32, i32),
@@ -724,9 +729,12 @@ impl Net {
         self.welcome_pack = u32::MAX;
         self.resync = true;
         // The joiner's input from before it went apart is not played again (player 2 ran on
-        // into a wall with it); player 2 stands until the joiner's next input.
+        // into a wall with it); player 2 stands until the joiner's next input, which is taken
+        // as the new starting point of its press counters (they kept counting while apart, and
+        // read against the old ones they made a Square press that took player 2 back through
+        // the barn door it had just left; user report 149).
         self.remote = None;
-        self.seen = Input::default();
+        self.reseed = true;
         self.notice = Some(format!("{} is back.", if self.peer_name.is_empty() { "Player 2" } else { self.peer_name.as_str() }));
         info!("net: player 2 back ({why}); a new welcome");
     }
@@ -741,14 +749,14 @@ impl Net {
         self.events.front().map_or(self.next_event, |e| e.0 - 1)
     }
 
-    pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32, game: u32, fx: &[neopets_sim::effect::Op]) {
+    pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32, game: u32, fx: &[neopets_sim::effect::Op], interior: u32) {
         if self.role != Role::Host || self.peer.is_none() || self.apart || (pack == self.welcome_pack && game == self.welcome_game) {
             return;
         }
         self.welcome_pack = pack;
         self.welcome_game = game;
         self.generation += 1;
-        self.welcome = Some(welcome(self.generation, slot, fx, self.event_base()));
+        self.welcome = Some(welcome(self.generation, slot, fx, self.event_base(), interior));
         self.welcome_mask = 0;
         self.last_sent = None;
         info!("net: world {pack}, welcome {}", self.generation);
@@ -757,7 +765,7 @@ impl Net {
 
 /// A welcome: the generation, the host's game as a save slot, and its gameplay effects running
 /// now (effect operations, applied after the load).
-fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::effect::Op], base: u32) -> Vec<u8> {
+fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::effect::Op], base: u32, interior: u32) -> Vec<u8> {
     let host = my_name();
     let mut w = Writer::new(WELCOME);
     w.u32(generation);
@@ -768,6 +776,8 @@ fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::e
     }
     w.u32(base);
     w.text(&host);
+    // The interior the host is in (0 outdoors): a slot loads the outdoor world.
+    w.u32(interior);
     w.0
 }
 
@@ -802,6 +812,7 @@ fn take_welcome(net: &mut Net, r: &mut Reader, from: SocketAddr) {
     if let Some(host) = r.text() {
         net.peer_name = host.chars().filter(|c| !c.is_control()).take(12).collect();
     }
+    net.load_interior = r.u32().filter(|&p| p != 0);
     net.loaded = generation;
     net.state = None;
     net.queue.clear();
@@ -1204,7 +1215,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     let mut slot = neopets_sim::save::Slot::empty();
                     p.play.write_slot(&mut slot, b"NETPLAY");
                     let base = net.event_base();
-                    net.welcome = Some(welcome(net.generation, &slot, &p.play.effects.snapshot(), base));
+                    net.welcome = Some(welcome(net.generation, &slot, &p.play.effects.snapshot(), base, p.play.interior_pack()));
                     net.welcome_mask = 0;
                     let who: String = name.chars().filter(|c| !c.is_control()).take(12).collect();
                     net.peer_name = if who.trim().is_empty() { "Player 2".into() } else { who };
@@ -1236,6 +1247,9 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                             p.play.menu_player = was;
                             info!("net: player 2's item screen: {c:?}");
                         }
+                    }
+                    if std::mem::take(&mut net.reseed) {
+                        net.seen = i;
                     }
                     net.acked = net.acked.max(i.ack);
                     net.story_acked = net.story_acked.max(i.story);

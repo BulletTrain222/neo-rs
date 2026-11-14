@@ -11568,6 +11568,21 @@ impl Play {
         }
     }
 
+    /// The interior this game is in (its pack), or 0 outdoors: a save slot keeps the outdoor
+    /// world, so a welcome names the interior too (net.rs).
+    pub fn interior_pack(&self) -> u32 {
+        if self.world.buffer == Buffer::Interior { self.world.pack } else { 0 }
+    }
+
+    /// Joiner, after a welcome's game loaded outdoors: enter the host's interior `pack` as a
+    /// script's StartEnterInterior does (entry record 0; the host's states then place everyone).
+    pub fn enter_interior(&mut self, pack: u32) {
+        if pack != 0 && self.world.pack != pack && self.job.is_none() {
+            self.job = Some(Job::EnterInterior(pack));
+            self.last_door = format!("welcome: entering interior {pack} as the host is in it");
+        }
+    }
+
     /// Joiner, going apart (net.rs): this side's own hero (player 2) becomes player 1 with its
     /// HUD and panels, the host's hero leaves this game, and this side runs its world itself.
     pub fn go_apart(&mut self) {
@@ -19592,6 +19607,8 @@ impl Play {
     /// Player 2 leaves (local co-op).
     pub fn remove_player(&mut self) {
         self.others.clear();
+        self.diag_p2_square = 0;
+        self.coop_crossed = false;
     }
 
     /// Local co-op (docs/MULTIPLAYER.md step 2): each other player's tick, after player 1's, with

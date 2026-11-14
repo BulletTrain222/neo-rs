@@ -62,8 +62,9 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
         return;
     };
     // The Multiplayer page's options.
-    // NEOPETS_NET_ALONE (diagnostic): Doors take Only you without the settings file.
-    let alone = settings.coop_doors_alone || std::env::var_os("NEOPETS_NET_ALONE").is_some();
+    // NEOPETS_NET_ALONE=1 or 0 (diagnostic): Doors take Only you or Both, whatever the settings
+    // file says.
+    let alone = std::env::var("NEOPETS_NET_ALONE").ok().map_or(settings.coop_doors_alone, |v| v.trim() != "0");
     if (play.play.coop_revive, play.play.coop_partner, play.play.coop_together, play.play.coop_doors_alone) != (settings.coop_revive, settings.coop_partner, settings.coop_together, alone) {
         (play.play.coop_revive, play.play.coop_partner, play.play.coop_together, play.play.coop_doors_alone) = (settings.coop_revive, settings.coop_partner, settings.coop_together, alone);
     }
