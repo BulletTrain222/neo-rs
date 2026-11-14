@@ -1513,6 +1513,9 @@ pub struct Play {
     /// revived (else a fall is game over at once), and player 2 is the partner hero when one waits.
     pub coop_revive: bool,
     pub coop_partner: bool,
+    /// Online, hosting: the joiner's own Player 2 choice (partner or second Tor), which decides
+    /// its player 2 in place of this side's.
+    pub coop_partner_remote: Option<bool>,
     /// Another player fell with revive off: game over on the next co-op step.
     coop_lost: bool,
     /// Online co-op (net.rs): this side is a joiner following the host's game (its camera and
@@ -2531,6 +2534,7 @@ impl Play {
             coop_running: false,
             coop_revive: true,
             coop_partner: true,
+            coop_partner_remote: None,
             coop_lost: false,
             net_follow: false,
             coop_remote: false,
@@ -5993,7 +5997,7 @@ impl Play {
         self.last_swap = format!("hero {} selected on tick {}", self.hero_index, self.ticks);
         // Co-op: a partner player 2 that is now the same hero as player 1 becomes the other one
         // (the one just parked); a second Tor stays Tor.
-        if self.coop_partner {
+        if self.p2_partner() {
             if let Some(pk) = self.parked.as_ref() {
                 let (anim, model, stats) = (pk.anim.clone(), pk.model.clone(), (pk.hp, pk.hp_max, pk.mp, pk.mp_max));
                 let other = 1 - self.hero_index.min(1);
@@ -11914,14 +11918,20 @@ impl Play {
         self.held_step();
         self.hold_step(&input);
         self.pending_step();
-        // While a conversation runs the emote consumer owns the hero's main id.
-        if !self.dialogue_open {
+        // While a conversation runs the emote consumer owns the hero's main id. A joiner's
+        // player 1 is the host's hero: its clip comes only with the host's state (this side's
+        // tick, with no input, set it standing each tick, so the host's walk restarted every
+        // tick and never played).
+        if !self.dialogue_open && !self.net_follow {
             // While the guard timer runs the idle hero holds the shield up (animation 63).
             let id = if self.player.loco.state == hero_states::STANCE && self.player.guard_timer > 0 { 63 } else { self.player.loco.action() };
             self.player.hero.request(id, force);
         }
         self.player.loco.haste = self.cheats.haste_factor();
-        self.player.hero.set_rate(self.player.loco.rate * self.player.loco.haste_rate());
+        // A joiner's player 1 plays at the host's rate (set with the host's state).
+        if !self.net_follow {
+            self.player.hero.set_rate(self.player.loco.rate * self.player.loco.haste_rate());
+        }
         if !self.cheats.noclip {
             self.ride_step();
         }
@@ -19384,7 +19394,7 @@ impl Play {
         p.hud = self.hud.clone();
         p.hud.rearm_all();
         p.who = self.hero_index;
-        if let Some(r) = self.parked.as_ref().filter(|_| self.coop_partner) {
+        if let Some(r) = self.parked.as_ref().filter(|_| self.p2_partner()) {
             p.who = 1 - self.hero_index.min(1);
             p.hero = r.anim.clone();
             p.model = r.model.clone();
@@ -19827,6 +19837,15 @@ impl Play {
 
     /// Swaps player `i` of `others` into `player` (and the running player out to its place), so
     /// that the hero code runs for it; swapping again restores the order (docs/MULTIPLAYER.md).
+    /// Whether player 2 is the partner hero (else a second Tor): the joiner's choice online,
+    /// else the Multiplayer page's here.
+    pub fn p2_partner(&self) -> bool {
+        match self.coop_partner_remote {
+            Some(p) if self.coop_remote => p,
+            _ => self.coop_partner,
+        }
+    }
+
     pub fn swap_player(&mut self, i: usize) {
         if let Some(p) = self.others.get_mut(i) {
             std::mem::swap(&mut self.player, p);

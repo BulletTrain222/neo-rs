@@ -140,6 +140,8 @@ pub struct HeroState {
     pub mp_max: i32,
     pub flash: u8,
     pub down: bool,
+    /// The clip's playback rate (its walk or run speed), so the joiner plays it as fast.
+    pub rate: f32,
 }
 
 /// One character in a state message, matched on the joiner by world, slot and ordinal.
@@ -733,11 +735,12 @@ pub(super) fn write_hero(w: &mut Writer, h: &HeroState) {
     w.small(h.mp);
     w.small(h.mp_max);
     w.u8(h.flash);
+    w.u16((h.rate * 1000.0).round().clamp(0.0, 65535.0) as u16);
 }
 
 pub(super) fn read_hero(r: &mut Reader) -> Option<HeroState> {
     let who = r.u8()?;
-    Some(HeroState { who: who & 0x7F, down: who & 0x80 != 0, position: r.v3()?, facing: r.dir()?, state: r.u8()?, clip: r.id()?, hp: r.small()?, hp_max: r.small()?, mp: r.small()?, mp_max: r.small()?, flash: r.u8()? })
+    Some(HeroState { who: who & 0x7F, down: who & 0x80 != 0, position: r.v3()?, facing: r.dir()?, state: r.u8()?, clip: r.id()?, hp: r.small()?, hp_max: r.small()?, mp: r.small()?, mp_max: r.small()?, flash: r.u8()?, rate: r.u16()? as f32 / 1000.0 })
 }
 
 impl State {

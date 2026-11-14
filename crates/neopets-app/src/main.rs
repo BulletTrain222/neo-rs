@@ -1865,6 +1865,10 @@ fn step_sim(
                         info!("net: bosses set to {hp} on tick {t}");
                     }
                 }
+                // NEOPETS_TRACE_NETCLIP: the host's own hero's clip every 30 ticks (to compare).
+                if std::env::var_os("NEOPETS_TRACE_NETCLIP").is_some() && play.play.ticks % 30 == 0 {
+                    println!("NETCLIP host tick {}: hero state {} clip {:?} rate {:.2}", play.play.ticks, play.play.player.loco.state, play.play.player.hero.clip_state(), play.play.player.loco.rate);
+                }
                 // NEOPETS_NET_STOPAT=T: hosting (or joining) stopped on play tick T.
                 if std::env::var("NEOPETS_NET_STOPAT").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
                     netr.request = Some(net::Request::Leave);
@@ -2019,6 +2023,10 @@ fn step_sim(
                 if let Some(s) = netr.next_state().filter(|s| s.generation == netr.loaded) {
                     let started = std::time::Instant::now();
                     play.play.apply_net_state(&s);
+                    // NEOPETS_TRACE_NETCLIP (diagnostic): the host's hero's clip here every 30 ticks.
+                    if std::env::var_os("NEOPETS_TRACE_NETCLIP").is_some() && play.play.ticks % 30 == 0 {
+                        println!("NETCLIP joiner tick {}: host hero state {} clip {:?}", play.play.ticks, play.play.player.loco.state, play.play.player.hero.clip_state());
+                    }
                     netr.cpu_us = netr.cpu_us.saturating_add(started.elapsed().as_micros() as u64);
                     // NEOPETS_TRACE_NETEV: the host's hero here, a tick with no movement after one
                     // with (a stall) and the largest one-tick step, counted for the trace line.

@@ -35,7 +35,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 23;
+const PROTOCOL: u16 = 24;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -970,6 +970,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             (Role::Host, HELLO) => {
                 let (build, disc) = (r.text(), r.u64());
                 let (name, pass) = (r.text().unwrap_or_default(), r.u64().unwrap_or(0));
+                let partner = r.u8().map(|v| v != 0);
                 let refuse = if build.as_deref() != Some(build_id().as_str()) {
                     Some(format!("your game is a different build ({} there, {} here); use the same build on both computers", build.unwrap_or_default(), build_id()))
                 } else if pass != password_hash(&password.0) {
@@ -996,10 +997,14 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.reset_peer();
                     net.peer = Some(from);
                     net.last_heard = Some(now);
-                    // Player 2 is the joiner's (a local second controller lets go of it).
+                    // Player 2 is the joiner's (a local second controller lets go of it), the hero
+                    // the joiner chose on its Multiplayer page.
+                    p.play.coop_partner_remote = partner;
+                    p.play.coop_remote = true;
                     if p.play.others.is_empty() {
                         p.play.add_player();
                     }
+                    info!("net: player 2 is hero {:?} (the joiner chose {})", p.play.others.first().map(|o| o.who), match partner { Some(true) => "the partner", Some(false) => "a second Tor", None => "nothing" });
                     // The same game's player 2 back: its health and magic as it left them.
                     if let (Some((g, hp, mp)), Some(o)) = (net.kept, p.play.others.first_mut()) {
                         if g == p.play.generation && hp > 0 {
@@ -1306,6 +1311,10 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         w.u64(net.disc.unwrap_or(0));
         w.text(&my_name());
         w.u64(password_hash(&password.0));
+        // This side's Player 2 choice: player 2 is this side's player.
+        // NEOPETS_NET_PARTNER=0/1 (diagnostic) in place of the setting (two windows share it).
+        let partner = std::env::var("NEOPETS_NET_PARTNER").ok().map_or(settings.coop_partner, |v| v.trim() == "1");
+        w.u8(partner as u8);
         let bytes = w.0;
         net.send(&bytes);
         net.last_sent = Some(now);
@@ -1697,7 +1706,7 @@ mod tests {
     #[test]
     fn packed_records_round_trip() {
         let mut s = State::default();
-        s.heroes[1] = HeroState { who: 1, position: [1234.5, -3.25, 99.0], facing: [0.6, 0.0, -0.8], state: 7, clip: 70_000, hp: 150, hp_max: 40_000, mp: -3, mp_max: 9, flash: 2, down: true };
+        s.heroes[1] = HeroState { who: 1, position: [1234.5, -3.25, 99.0], facing: [0.6, 0.0, -0.8], state: 7, clip: 70_000, hp: 150, hp_max: 40_000, mp: -3, mp_max: 9, flash: 2, down: true, rate: 1.25 };
         s.characters = vec![
             CharState { pack: 909, slot: 3, ordinal: 70_000, position: [1.0, 2.0, 3.0], facing: [0.0, 1.0, 0.0], clip: 162, hp: 35, dead: true, inactive: false },
             CharState { pack: 1066, slot: 0, ordinal: 2, position: [-1.5, 0.0, 8.0], facing: [-0.70710678, 0.0, 0.70710678], clip: 0xFFFF, hp: -5, dead: false, inactive: true },

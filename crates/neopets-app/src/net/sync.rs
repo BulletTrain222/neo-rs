@@ -18,6 +18,7 @@ impl crate::play::Play {
             mp_max: p.hero_mp_max,
             flash: p.hero_flash,
             down: p.down.is_some(),
+            rate: p.loco.rate * p.loco.haste_rate(),
         };
         let p2 = self.others.first();
         let mut items: Vec<(u16, u32)> = self.state.items.iter().map(|(&k, &v)| (k, v)).collect();
@@ -117,6 +118,7 @@ impl crate::play::Play {
                 p.hero.request(h.clip, true);
             }
             (p.hero_hp, p.hero_max, p.hero_mp, p.hero_mp_max, p.hero_flash) = (h.hp, h.hp_max, h.mp, h.mp_max, h.flash);
+            p.hero.set_rate(h.rate);
             p.down = h.down.then_some(0);
             // The joiner is not sent the timer: "Down" alone.
             p.down_line = h.down.then(|| b"Down".to_vec());
