@@ -121,7 +121,7 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Story triggers | Fired by player 1 only (keeps story order) | [x] | [ ] joiner's own triggers must not fire |
 | Doors and world exits | Either player; both go; player 2 placed beside | [x] (barn traced both ways) | [x] (the host runs player 2's) |
 | Talk boxes | Player 1 opens and answers; both see the box | [x] | [x] shown on the joiner |
-| Talk box advance | Default: either player can press Cross to go on (not choose) | [ ] | [ ] |
+| Talk box advance | Default: either player's Square goes on (held Cross speeds the text); only player 1 answers | [x] | [x] |
 | Cutscenes (scripted camera, bars, fades) | Both watch; player 2 holds still | [x] | [x] camera and bars; [ ] fades |
 | Movies (FMV) | Both watch; one PC: player 1 skips; online each side skips its own | [x] | [?] the host's movies are events (not seen in play) |
 | Shops | Player 1 drives; shared purse | [x] | [ ] joiner sees the shop page |
@@ -224,7 +224,7 @@ them all.
 5. [x] Doors: player 2 walking through a door or exit takes both players. Player 1 arrives
    with player 2 beside. Doors that need Square show the prompt on player 2's half, and player
    2's Square uses them. **Default:** either player's door moves both.
-6. [ ] Talk boxes: either player's Cross moves a box on (Default); only player 1 chooses an
+6. [x] Talk boxes: either player's Cross moves a box on (Default); only player 1 chooses an
    answer.
 7. [ ] Player 2's Mote magic and power attacks: traced on one PC.
 8. [ ] Player 2 on ledges, ladders, climbing and swimming: traced where the scenarios go, and

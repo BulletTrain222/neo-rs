@@ -19298,6 +19298,24 @@ impl Play {
                     }
                 }
             }
+            // Talk boxes (docs/MULTIPLAYER.md, Default: either player moves a box on): player 2's
+            // Square (Next, Finish) and held Cross (faster text) work the box as player 1's do;
+            // only player 1 answers a question.
+            if self.dialogue_open && self.others[i].down.is_none() && (input.square || input.cross_held) && !self.textbox.asking() {
+                match self.textbox.update(input.cross_held, input.square) {
+                    Some(neopets_sim::textbox::BoxEvent::Closed) => {
+                        self.cue(0x97);
+                        self.dialogue_open = false;
+                        self.message = None;
+                        self.talk_with = None;
+                    }
+                    Some(neopets_sim::textbox::BoxEvent::Advanced) => self.cue(0x98),
+                    None => {}
+                }
+                if std::env::var_os("NEOPETS_TRACE_COOPBOX").is_some() && input.square {
+                    println!("COOPBOX tick {}: player 2's Square on the box (open {}, page {}..{}, dialogue {})", self.ticks, self.textbox.open, self.textbox.start, self.textbox.end, self.dialogue_open);
+                }
+            }
             // A downed player takes no input, nor does any player under player 1's control locks
             // (SPEC-0052: the script hold, a running camera play, a moving fade) or talking.
             if std::env::var_os("NEOPETS_TRACE_COOPLOCK").is_some() && self.ticks % 60 == 0 {

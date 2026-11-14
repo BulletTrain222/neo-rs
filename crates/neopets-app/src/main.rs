@@ -6718,7 +6718,7 @@ fn play_trace(
             // NEOPETS_TRACE_NOAUTO: prompts are not pressed (only NEOPETS_TRACE_SQUARE presses).
             square: (std::env::var_os("NEOPETS_TRACE_NOAUTO").is_none() && !story_order.quiet && play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()) && !(play.player.loco.state == neopets_sim::hero::BLOCK && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some()))
                 || (stalk.is_some() && !matches!(play.player.loco.state, 22 | 40))
-                || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
+                || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0 && std::env::var_os("NEOPETS_COOP_BOX").is_none()),
             // NEOPETS_TRACE_GUARD=n (or "n-m"): the guard is held on every tick from tick n (up to
             // tick m) (diagnostic).
             // NEOPETS_TRACE_GUARD_ORB: the guard is held while one of the Darkest Faerie's
@@ -6865,6 +6865,11 @@ fn play_trace(
                 neopets_sim::hero::HeroInput { forward: 1.0, jump: play.ticks % 90 == 45, ..Default::default() }
             };
             let mut p2 = p2;
+            // NEOPETS_COOP_BOX: player 2 presses Square in talk boxes every 10 ticks instead of
+            // player 1 (player 2 moves the boxes on).
+            if std::env::var_os("NEOPETS_COOP_BOX").is_some() && play.dialogue_open && play.ticks % 10 == 5 {
+                p2.square = true;
+            }
             // NEOPETS_COOP_DOOR="n@t[;n@t...]": on tick t player 2 is put in door plane n of the
             // world then current (player 1 fifteen units back; the planes are listed then) and
             // presses Square every 20 ticks after the first; player 2's caption, the door line and
