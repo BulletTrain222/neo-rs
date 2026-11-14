@@ -27,6 +27,10 @@ pub struct Coop {
     pub attack: bool,
     /// Player 2's Square press (doors), kept for the next tick.
     pub square: bool,
+    /// Player 2's Start in play: the pause page opens (step_sim).
+    pub pause: bool,
+    /// The game (`Play::generation`) player 2 was last in (a new one brings player 2 back).
+    pub game: u32,
     /// Player 2's D-pad and Triangle presses for its quick-item and Mote panels.
     pub panel: neopets_sim::quick::PanelInput,
     /// Online (net.rs): player 2's input from the joiner's controller, in place of a local pad.
@@ -50,7 +54,8 @@ impl Coop {
 
 /// Each frame: joining and leaving, and player 2's input from its controller.
 #[allow(clippy::too_many_arguments)]
-pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindings>, mute: Res<bindings::PadMute>, mut coop: ResMut<Coop>, mut exclude: ResMut<bindings::PadExclude>, play: Option<ResMut<PlayState>>, settings: Res<crate::display::DisplaySettings>, mut dev: ResMut<crate::dev_menu::DevMenu>) {
+pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindings>, mute: Res<bindings::PadMute>, mut coop: ResMut<Coop>, mut exclude: ResMut<bindings::PadExclude>, play: Option<ResMut<PlayState>>, settings: Res<crate::display::DisplaySettings>, mut dev: ResMut<crate::dev_menu::DevMenu>, menu: Option<Res<crate::menu_view::Menu>>) {
+    let in_play = menu.as_ref().is_none_or(|m| m.flow.current == crate::menus::PLAY);
     let Some(mut play) = play else {
         coop.pad = None;
         exclude.0 = None;
@@ -61,8 +66,21 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
         (play.play.coop_revive, play.play.coop_partner) = (settings.coop_revive, settings.coop_partner);
     }
     let first = gamepads.iter().map(|(e, _)| e).min();
+    // A new game or a load replaced the play (and its players): player 2 comes back while its
+    // controller is still there (or, with NEOPETS_COOP, always), beside player 1.
     if play.play.others.is_empty() {
-        coop.pad = None;
+        let pad_here = coop.pad.is_some_and(|e| gamepads.get(e).is_ok());
+        let online = play.play.net_follow || play.play.coop_remote;
+        if (pad_here || (coop.started && std::env::var_os("NEOPETS_COOP").is_some())) && play.play.ticks > 0 && !online && play.play.generation != coop.game {
+            if play.play.add_player() {
+                info!("co-op: player 2 kept after a new game or load (game {})", play.play.generation);
+            }
+        } else if !pad_here {
+            coop.pad = None;
+        }
+    }
+    if !play.play.others.is_empty() {
+        coop.game = play.play.generation;
     }
     if !coop.started && play.play.ticks > 0 {
         coop.started = true;
@@ -71,7 +89,7 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
             info!("co-op: player 2 added at start (NEOPETS_COOP), on controller {:?} of {}", coop.pad, gamepads.iter().count());
         }
     }
-    if coop.pad.is_none() && !mute.0 {
+    if coop.pad.is_none() && !mute.0 && in_play {
         if let Some((e, _)) = gamepads.iter().find(|(e, g)| Some(*e) != first && g.just_pressed(GamepadButton::Start)) {
             if play.play.add_player() {
                 coop.pad = Some(e);
@@ -80,14 +98,19 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
             }
         }
     } else if let Some(g) = coop.pad.and_then(|e| gamepads.get(e).ok()).map(|(_, g)| g) {
-        if g.just_pressed(GamepadButton::Select) {
+        // In play: Select takes player 2 out; Start opens the pause page (Default: the item
+        // screen of player 1's Start would hold player 1's items).
+        if in_play && g.just_pressed(GamepadButton::Select) {
             play.play.remove_player();
             coop.pad = None;
             info!("co-op: player 2 left");
             dev.toast = Some(("Player 2 left.".into(), 240));
+        } else if in_play && g.just_pressed(GamepadButton::Start) {
+            coop.pause = true;
         }
     }
-    exclude.0 = coop.pad;
+    // In a menu both controllers drive it; in play the second one is player 2's alone.
+    exclude.0 = coop.pad.filter(|_| in_play);
     let Some(g) = coop.pad.and_then(|e| gamepads.get(e).ok()).map(|(_, g)| g) else {
         coop.input = HeroInput::default();
         coop.cam = CameraPad::default();

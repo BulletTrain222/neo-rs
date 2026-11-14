@@ -339,13 +339,13 @@ chosen without the user.
 6. [x] (35 ms, scenes 120 ms more) How long a joiner's reload takes, measured.
 
 ### Co-op that keeps going
-7. [ ] One PC: player 2 stays in through a load, a Continue after game over and a developer
+7. [x] One PC: player 2 stays in through a load, a Continue after game over and a developer
    warp (today player 2 has to press Start again).
-8. [ ] Saving with player 2 in writes the same slot as without (player 2 never ends up saved
+8. [x] (byte for byte the same) Saving with player 2 in writes the same slot as without (player 2 never ends up saved
    as player 1, or as the parked hero).
-9. [ ] Story hero switches (Tor to Roberta and back) with player 2 in: traced, and player 2
+9. [x] Story hero switches (Tor to Roberta and back) with player 2 in: traced, and player 2
    kept sensible (Partner becomes the other hero).
-10. [ ] One PC: the second controller's Start opens the pause page once player 2 is in
+10. [x] (not tried with a real second controller) One PC: the second controller's Start opens the pause page once player 2 is in
     (Select still takes player 2 out). **Default.**
 
 ### Fights

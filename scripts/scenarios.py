@@ -119,6 +119,7 @@ SCENARIOS = [
     ('co-op: player 2 takes both players into the barn and out', 'this build (co-op doors)', 330, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_STILL': '1', 'NEOPETS_COOP_DOOR': '0@60;0@250', 'NEOPETS_TRACE_STAND': '1'}, both(has(r'COOP 70 door: world 909 .*Some\(13\)'), both(has(r'COOP 2[0-4]0 door: world 951'), has(r'COOP (2[6-9]|3[0-2])0 door: world 909')))),
     ('co-op: player 2 moves talk boxes on', 'this build (co-op talk boxes)', 60, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_STILL': '1', 'NEOPETS_COOP_BOX': '1', 'NEOPETS_TRACE_COOPBOX': '1'}, has(r'COOPBOX tick \d+: .*dialogue false')),
     ('co-op: player 2 mounts the 1171 ladder and climbs', 'this build (co-op climbing; SPEC-0033 Behavior 13)', 200, 1171, ['--start', '-370,3.12,-9.79'], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_CLIMB': '1', 'NEOPETS_COOP_AT': '-374.98,3.12,-9.79@100', 'NEOPETS_TRACE_STAND': '1'}, both(has(r'COOP 110 p2 at .* state 41 ladder true'), has(r'COOP 180 p2 at \(-374\.98, -[0-7]\.\d+, 3\.12\) state 41'))),
+    ('co-op: a story switch makes the partner the other hero', 'this build (co-op hero switch; SPEC-0053 3.2)', 200, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_STILL': '1', 'NEOPETS_COOP_SWITCH': '100'}, has(r'COOP 180 heroes: player 1 hero 1, player 2 hero Some\(0\) hp Some\(\(150, 150\)\)')),
     ('co-op: a second Tor guards with a shield', 'this build (co-op guard)', 100, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_TOR': '1', 'NEOPETS_COOP_GUARD': '1', 'NEOPETS_TRACE_GIVE': '2:106:1'}, has(r'COOP 90 p2 .* state 20 clip 63')),
 ]
 

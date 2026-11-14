@@ -5762,9 +5762,10 @@ impl Play {
     /// SPEC-0053 3.2: a switch request to the other hero. Refused by the mode, a dead partner
     /// (a parked hero with no hit points) or a running task. Returns whether it was accepted.
     pub fn request_switch(&mut self, extra: bool, effects: bool, flash: bool) -> bool {
-        // Local co-op (docs/MULTIPLAYER.md): no hero switch while player 2 is in (player 2 may be
-        // the parked hero itself).
-        if !self.others.is_empty() {
+        // Local co-op (docs/MULTIPLAYER.md): no switch of the player's own while player 2 is in
+        // (player 2 may be the parked hero itself); a story's switch (forced) goes ahead, and
+        // player 2 as the partner then becomes the other hero (`exchange_heroes`).
+        if !self.others.is_empty() && !self.forced_switch {
             return false;
         }
         let Some(parked) = self.parked.as_ref() else { return false };
@@ -5969,6 +5970,32 @@ impl Play {
         self.shield = self.equipment.entries[1][self.hero_index];
         self.spawned = false;
         self.last_swap = format!("hero {} selected on tick {}", self.hero_index, self.ticks);
+        // Co-op: a partner player 2 that is now the same hero as player 1 becomes the other one
+        // (the one just parked); a second Tor stays Tor.
+        if self.coop_partner {
+            if let Some(pk) = self.parked.as_ref() {
+                let (anim, model, stats) = (pk.anim.clone(), pk.model.clone(), (pk.hp, pk.hp_max, pk.mp, pk.mp_max));
+                let other = 1 - self.hero_index.min(1);
+                for o in self.others.iter_mut().filter(|o| o.who.min(1) != other) {
+                    o.who = other;
+                    o.hero = anim.clone();
+                    o.model = model.clone();
+                    (o.hero_hp, o.hero_max, o.hero_mp, o.hero_mp_max) = stats;
+                    o.attack = None;
+                    o.r_attack = None;
+                }
+            }
+        }
+    }
+
+    /// Diagnostic (NEOPETS_COOP_SWITCH): the story's switch to the other hero (a forced request).
+    pub fn diag_story_switch(&mut self) {
+        let other = 1 - self.hero_index.min(1);
+        // A story that switches has the switch mode open (mode 2: either hero may be selected).
+        if !neopets_sim::swap::allowed(self.swap_mode, self.hero_index) {
+            self.swap_mode = 2;
+        }
+        self.script_switch(other as i32, true, false);
     }
 
     /// SPEC-0053 3.8 c and 3.12: the L1 and R1 chord with the switch-ready gate, then the swap

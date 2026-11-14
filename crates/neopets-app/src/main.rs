@@ -2014,6 +2014,15 @@ fn step_sim(
                     }
                 }
             }
+            // Co-op on one PC: player 2's Start opens the pause page.
+            if std::mem::take(&mut coop.pause) {
+                if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                    if m.flow.current == menus::PLAY {
+                        m.flow.set(&a.f, menus::PAUSE);
+                        info!("co-op: player 2 opened the pause page");
+                    }
+                }
+            }
             // NEOPETS_TRACE_QUITBOX=n: the pause page with its quit box open on play tick n
             // (diagnostic, for a screenshot).
             if std::env::var("NEOPETS_TRACE_QUITBOX").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
@@ -6945,6 +6954,17 @@ fn play_trace(
                 neopets_sim::hero::HeroInput { forward: 1.0, jump: play.ticks % 90 == 45, ..Default::default() }
             };
             let mut p2 = p2;
+            // NEOPETS_COOP_SWITCH=t: on tick t the story switches player 1 to the other hero; the
+            // heroes of both players are printed every 30 ticks after.
+            if let Some(t) = std::env::var("NEOPETS_COOP_SWITCH").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+                if play.ticks == t {
+                    play.diag_story_switch();
+                    println!("COOP switch requested on tick {t}: {}", play.last_swap);
+                }
+                if play.ticks > t && play.ticks % 30 == 0 {
+                    println!("COOP {} heroes: player 1 hero {}, player 2 hero {:?} hp {:?}, swap running {}", play.ticks, play.hero_index, play.others.first().map(|o| o.who), play.others.first().map(|o| (o.hero_hp, o.hero_max)), play.swap.is_some());
+                }
+            }
             // NEOPETS_COOP_AT="x,z,y@t": player 2 put there on tick t, facing as player 1, and its
             // state printed every 10 ticks after.
             if let Some((at, t)) = std::env::var("NEOPETS_COOP_AT").ok().and_then(|v| {
