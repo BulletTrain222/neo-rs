@@ -667,6 +667,19 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             }
         }
     }
+    // NEOPETS_DEV_WARPLOOP="T:a,b,...": once play reaches tick T in each world, a developer warp
+    // to the next pack of the list in turn, 30 times (diagnostic, for leaks across loads; the
+    // memory comes from the ASSETS trace and the test's sampling).
+    if let Some((t, packs)) = std::env::var("NEOPETS_DEV_WARPLOOP").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.trim().parse::<u64>().unwrap_or(600), b.split(',').filter_map(|p| p.trim().parse::<u32>().ok()).collect::<Vec<_>>())) {
+        static DONE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
+        let n = DONE.load(std::sync::atomic::Ordering::Relaxed);
+        if !packs.is_empty() && n < 30 && play.play.ticks >= t && dev.warp.is_none() && LAST.swap(play.play.generation, std::sync::atomic::Ordering::Relaxed) != play.play.generation {
+            DONE.store(n + 1, std::sync::atomic::Ordering::Relaxed);
+            dev.warp = Some(packs[n % packs.len()]);
+            info!("warp loop {}: to {}", n + 1, packs[n % packs.len()]);
+        }
+    }
     // NEOPETS_DEV_BOSS=n: the boss fight request for boss n, once, a second in (diagnostic).
     if *frames == 60 {
         if let Some(n) = std::env::var("NEOPETS_DEV_BOSS").ok().and_then(|v| v.parse::<usize>().ok()).filter(|&n| n < crate::play::BOSSES.len()) {

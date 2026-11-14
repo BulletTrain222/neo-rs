@@ -577,15 +577,15 @@ folder: features that would (opening a port with UPnP) are built but tried only 
 stand-in on this computer, and left for the user to switch on.
 
 ### Stress and leaks (plan 4's long session found three bugs; look for more)
-1. [ ] A one-hour online session on the autopilot: memory, buffer, events, every comparison.
-2. [ ] A 20-minute online session at 10% loss and 80 ms delay.
-3. [ ] A one-hour single-player session: memory and the asset and entity counts level.
-4. [ ] 30 world loads in a row (developer warps) in one window: memory and counts after each.
-5. [ ] The same 30 loads online: a welcome each, no stall, no stray characters.
-6. [ ] A joiner that joins and leaves 20 times: the host's memory and channels stay clean.
-7. [ ] Many sounds at once (a busy fight) for 10 minutes: the voice count stays bounded.
-8. [ ] The joiner's apply step fed random states (synthetic): no panic.
-9. [ ] Each window's CPU time per tick for the online work (host's state, joiner's apply),
+1. [x] (passed; memory level; moving items now capped) A one-hour online session on the autopilot: memory, buffer, events, every comparison.
+2. [ ] (left at the user's word) A 20-minute online session at 10% loss and 80 ms delay.
+3. [x] (565 MB, level) A one-hour single-player session: memory and the asset and entity counts level.
+4. [ ] (left at the user's word; the switch is built) 30 world loads in a row (developer warps) in one window: memory and counts after each.
+5. [ ] (left at the user's word) The same 30 loads online: a welcome each, no stall, no stray characters.
+6. [ ] (left at the user's word) A joiner that joins and leaves 20 times: the host's memory and channels stay clean.
+7. [ ] (left at the user's word; the voice count is now traced) Many sounds at once (a busy fight) for 10 minutes: the voice count stays bounded.
+8. [ ] (needs a game loaded from the disc; decoding is fuzzed) The joiner's apply step fed random states (synthetic): no panic.
+9. [x] (host about 80 us, joiner 12 us) Each window's CPU time per tick for the online work (host's state, joiner's apply),
    from the perf spans (CPU spans are real with the display off; frame times are not).
 
 ### Smaller, faster messages (for the internet)
@@ -641,14 +641,14 @@ stand-in on this computer, and left for the user to switch on.
     the boss).
 
 ### Tests and tools
-39. [ ] net_check.py `--long` (an hour) and `--soak` (joins and leaves) modes.
+39. [~] (`--seconds 3600` and the joins script; no new flags) net_check.py `--long` (an hour) and `--soak` (joins and leaves) modes.
 40. [x] (four new: block, ladder, platform, both down) A scenario per new co-op rule.
 41. [x] Synthetic tests for the packing (round trip within its step), the password, names.
 42. [x] (and at most 18 characters a state) A test that a state with every field at its largest stays under the limit.
-43. [ ] scripts/net_check.py reports CPU per tick.
+43. [x] scripts/net_check.py reports CPU per tick.
 
 ### Single player, found along the way
-44. [ ] Any leak or growth the stress items find in single play, fixed and traced.
+44. [x] (the looping streams, item 45) Any leak or growth the stress items find in single play, fixed and traced.
 45. [x] (the title screen stays at 411 MB) The looping disc streams: one copy of a stream instead of two (the loop keeps a
     second copy as floats); memory measured.
 
@@ -656,3 +656,19 @@ stand-in on this computer, and left for the user to switch on.
 46. [ ] docs/STATUS.md entries and the multiplayer summary.
 47. [ ] The checklists brought up to date.
 48. [ ] The morning report.
+
+### Design note: prediction for the joiner (items 15 and 17, not built)
+Today the joiner's own player 2 moves only when the host's state comes back: about 30 to 45 ms
+on a home network (the press reaches the host in about 12 ms, the host's next tick, the state's
+way back, one state held), and the round trip plus about two frames over the internet. A
+prediction would run player 2's movement on the joiner from its own controller at once (the
+movement update, ledges, ladders and contacts of player 2's co-op step, without attacks, doors
+or Square things), and keep each tick's input numbered. The host would send, with each state,
+the number of the last input it used for player 2 and player 2's full movement record (not only
+its place). On each state the joiner would put player 2 back to the host's record and run the
+inputs the host has not used yet again (rewind and replay), then ease the drawn player 2 toward
+the result over a few frames when the two differ by under a unit, and snap when more. The camera
+would follow the drawn player 2. The risks are visible only on screen: rubber-banding when the
+two sides disagree (pushes by enemies, moving platforms, scripted holds), and the camera
+swinging. It is best built with the screen on, behind a Multiplayer page row (Default off), and
+compared with today's at 50 and 150 ms.

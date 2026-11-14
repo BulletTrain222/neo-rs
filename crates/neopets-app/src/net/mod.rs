@@ -389,18 +389,22 @@ impl Net {
                 let n = s.moving.len().max(1);
                 let start = self.cursor.1 % n;
                 let last = &mut self.moving_last;
-                let keep: Vec<bool> = s
-                    .moving
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &(pack, k, at, _))| {
-                        let changed = last.get(&(pack, k)).is_none_or(|p| (0..3).any(|j| (p[j] - at[j]).abs() > 1e-3));
+                // At most 8 a state, from the turning start (a burst of drops cannot take a
+                // state past the limit; one left out stays changed for a following state).
+                let mut keep = vec![false; s.moving.len()];
+                let mut sent = 0;
+                for k in 0..s.moving.len() {
+                    let i = (start + k) % n;
+                    let (pack, slot, at, _) = s.moving[i];
+                    let changed = last.get(&(pack, slot)).is_none_or(|p| (0..3).any(|j| (p[j] - at[j]).abs() > 1e-3));
+                    if (changed || k < 4) && sent < 8 {
                         if changed {
-                            last.insert((pack, k), at);
+                            last.insert((pack, slot), at);
                         }
-                        changed || (i + n - start) % n < 4
-                    })
-                    .collect();
+                        keep[i] = true;
+                        sent += 1;
+                    }
+                }
                 let mut it = keep.iter();
                 s.moving.retain(|_| *it.next().unwrap_or(&false));
                 self.cursor.1 = start + 4;
