@@ -1371,6 +1371,17 @@ fn take_welcome(net: &mut Net, r: &mut Reader, from: SocketAddr) {
     info!("net: welcome {generation} from {from}");
 }
 
+/// The port to host on: NEOPETS_NET_PORT, else a line `port=N` in private/net.txt, else `PORT`.
+pub fn host_port() -> u16 {
+    if let Some(p) = std::env::var("NEOPETS_NET_PORT").ok().and_then(|v| v.trim().parse().ok()) {
+        return p;
+    }
+    std::fs::read_to_string("private/net.txt")
+        .ok()
+        .and_then(|t| t.lines().find_map(|l| l.trim().strip_prefix("port=").and_then(|v| v.trim().parse().ok())))
+        .unwrap_or(PORT)
+}
+
 /// The local addresses of this computer (for the Host line), from the route a UDP socket would
 /// take; none when there is no network.
 pub fn local_address() -> Option<std::net::IpAddr> {
@@ -1412,15 +1423,18 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     match net.request.take() {
         Some(Request::Host) => {
             net.stop("");
-            match UdpSocket::bind(("0.0.0.0", PORT)).and_then(|s| s.set_nonblocking(true).map(|_| s)) {
+            let port = host_port();
+            match UdpSocket::bind(("0.0.0.0", port)).and_then(|s| s.set_nonblocking(true).map(|_| s)) {
                 Ok(s) => {
                     net.socket = Some(s);
                     net.role = Role::Host;
+                    // Another port than the usual one goes in the address the friend types.
+                    let shown = |ip: std::net::IpAddr| if port == PORT { ip.to_string() } else { format!("{ip}:{port}") };
                     net.status = match local_address() {
-                        Some(ip) => format!("Hosting. Your friend joins with {ip}."),
-                        None => format!("Hosting on port {PORT}."),
+                        Some(ip) => format!("Hosting. Your friend joins with {}.", shown(ip)),
+                        None => format!("Hosting on port {port}."),
                     };
-                    info!("net: hosting on port {PORT}");
+                    info!("net: hosting on port {port}");
                 }
                 Err(e) => net.status = format!("Could not host: {e}"),
             }
