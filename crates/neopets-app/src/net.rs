@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 11;
+const PROTOCOL: u16 = 12;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -992,6 +992,8 @@ pub struct Net {
     /// and the press counters of this side's controller.
     target: Option<SocketAddr>,
     pub load: Option<neopets_sim::save::Slot>,
+    /// The welcome's running effects, applied once its game is loaded.
+    pub load_fx: Vec<neopets_sim::effect::Op>,
     pub state: Option<State>,
     pub loaded: u32,
     pub counts: (u8, u8, u8),
@@ -1142,23 +1144,29 @@ impl Net {
     }
 
     /// Host: a new welcome (the joiner reloads) when the host's world changed.
-    pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32, game: u32) {
+    pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32, game: u32, fx: &[neopets_sim::effect::Op]) {
         if self.role != Role::Host || self.peer.is_none() || (pack == self.welcome_pack && game == self.welcome_game) {
             return;
         }
         self.welcome_pack = pack;
         self.welcome_game = game;
         self.generation += 1;
-        self.welcome = Some(welcome(self.generation, slot));
+        self.welcome = Some(welcome(self.generation, slot, fx));
         self.last_sent = None;
         info!("net: world {pack}, welcome {}", self.generation);
     }
 }
 
-fn welcome(generation: u32, slot: &neopets_sim::save::Slot) -> Vec<u8> {
+/// A welcome: the generation, the host's game as a save slot, and its gameplay effects running
+/// now (effect operations, applied after the load).
+fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::effect::Op]) -> Vec<u8> {
     let mut w = Writer::new(WELCOME);
     w.u32(generation);
     w.bytes(&slot.0);
+    w.u16(fx.len().min(512) as u16);
+    for op in fx.iter().take(512) {
+        write_op(&mut w, op);
+    }
     w.0
 }
 
@@ -1311,7 +1319,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.welcome_game = p.play.generation;
                     let mut slot = neopets_sim::save::Slot::empty();
                     p.play.write_slot(&mut slot, b"NETPLAY");
-                    net.welcome = Some(welcome(net.generation, &slot));
+                    net.welcome = Some(welcome(net.generation, &slot, &p.play.effects.snapshot()));
                     net.status = format!("{from} joined.");
                     net.notice = Some("Player 2 joined.".into());
                     info!("net: {from} joined");
@@ -1373,6 +1381,10 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 if generation != net.loaded && bytes.len() == neopets_sim::save::SLOT_SIZE {
                     let first = net.loaded == 0;
                     net.load = Some(neopets_sim::save::Slot(bytes.to_vec()));
+                    net.load_fx = match r.u16() {
+                        Some(n) => (0..n).map_while(|_| read_op(r.u8()?, &mut r)).collect(),
+                        None => Vec::new(),
+                    };
                     net.loaded = generation;
                     net.state = None;
                     net.status = format!("Joined {from}.");

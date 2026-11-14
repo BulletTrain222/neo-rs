@@ -1903,7 +1903,8 @@ fn step_sim(
                         let mut slot = neopets_sim::save::Slot::empty();
                         play.play.write_slot(&mut slot, b"NETPLAY");
                         let (pack, game) = (play.play.world.pack, play.play.generation);
-                        netr.rewelcome(&slot, pack, game);
+                        let fx = play.play.effects.snapshot();
+                        netr.rewelcome(&slot, pack, game, &fx);
                     }
                     for r in play.play.sound.requests[sounds.min(play.play.sound.requests.len())..].to_vec() {
                         // A voice with a place: where, so the joiner hears it from its own player.
@@ -2105,6 +2106,13 @@ fn step_sim(
                     // Online (net.rs): the joiner follows the host's game from here, in play.
                     if net_load.is_some() {
                         play.play.net_follow = true;
+                        // The host's effects running at the welcome.
+                        let table = play.play.effect_table.clone();
+                        for op in std::mem::take(&mut netr.load_fx) {
+                            let p = &mut play.play;
+                            p.effects.apply(&table, &op, &mut p.net_fx, &mut p.rng);
+                        }
+                        info!("net: the welcome's game loaded with {} running effects", play.play.net_fx.len());
                         if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                             m.flow.set(&a.f, menus::PLAY);
                             m.flow.title_seen = true;

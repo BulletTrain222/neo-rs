@@ -597,6 +597,18 @@ impl Effects {
         self.set_position_raw(handle, p)
     }
 
+    /// The host's live gameplay effect objects as operations (an add and an update each), for a
+    /// joiner arriving while they run (the world's placed effects are each side's own).
+    pub fn snapshot(&self) -> Vec<Op> {
+        let mut ops = Vec::new();
+        for (h, o) in self.objects.iter().enumerate() {
+            let Some(o) = o.as_ref().filter(|o| o.live() && !self.share.local_handles.contains(&h)) else { continue };
+            ops.push(Op::Add { handle: h, def: o.def, position: o.position, frame: o.frame, state: o.state, cull: o.cull, scale: o.scale });
+            ops.push(Op::Update { handle: h, listener: None });
+        }
+        ops
+    }
+
     /// The joiner: one of the host's operations, its handles mapped to this side's through `map`
     /// (an add records its new handle; a release forgets it).
     pub fn apply(&mut self, table: &EffectTable, op: &Op, map: &mut std::collections::HashMap<usize, usize>, r: &mut impl Uniform) {
@@ -1308,6 +1320,30 @@ mod tests {
         assert_eq!(joiner.spawners.iter().flatten().count(), host.spawners.iter().flatten().count());
         joiner.apply(&t, &Op::Release { handle: h }, &mut map, &mut Midpoint);
         assert!(joiner.objects[mine].is_none() && map.is_empty());
+    }
+
+    /// Online play: the host's snapshot of running effects has its gameplay objects and not its
+    /// placed ones, and replayed on a fresh joiner starts the same spawners.
+    #[test]
+    fn snapshot_of_running_effects() {
+        let t = table(record_a(0.1, 1, 0.05, false), [1.0; 4]);
+        let mut host = Effects::new();
+        host.share.local = true;
+        let placed = host.add_object(EffectObject::new(&t, 500, [0.0; 3], IDENTITY));
+        host.update(&t, placed, None, &mut Midpoint);
+        host.share.local = false;
+        let h = host.add_object(EffectObject::new(&t, 500, [5.0, 0.0, 0.0], IDENTITY));
+        host.update(&t, h, None, &mut Midpoint);
+        let ops = host.snapshot();
+        assert_eq!(ops.len(), 2, "one add and one update, for the gameplay object only");
+        let mut joiner = Effects::new();
+        joiner.share.mute = true;
+        let mut map = std::collections::HashMap::new();
+        for op in &ops {
+            joiner.apply(&t, op, &mut map, &mut Midpoint);
+        }
+        assert_eq!(joiner.objects[map[&h]].as_ref().unwrap().position, [5.0, 0.0, 0.0]);
+        assert_eq!(joiner.spawners.iter().flatten().count(), 1);
     }
 
     /// Test vector 8: life 0.5 s, row 0 x = 0.8; with truncating adds the accumulator after 15

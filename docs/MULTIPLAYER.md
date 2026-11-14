@@ -240,11 +240,11 @@ them all.
     as on the host.
 13. [x] Sounds heard from the joiner's own player: the host sends where a sound is, and the
     joiner works out volume and pan from its own camera.
-14. [ ] Effects already running when the joiner arrives are sent at the welcome.
-15. [ ] Characters only when they change (states smaller in busy places), and a state-size
+14. [x] Effects already running when the joiner arrives are sent at the welcome.
+15. [~] (measured: 667 bytes in Meridell, 970 at the farm; delta left until needed) Characters only when they change (states smaller in busy places), and a state-size
     reading in a busy town.
 16. [x] (no change needed: no cursor in question boxes; shop prompts are player 1's) Talk box choice cursor, shop prices and the buy prompt on the joiner.
-17. [ ] Prompts on the joiner are player 2's own (door and talk prompts where player 2 stands).
+17. [x] (player 2's door prompt is sent; talk prompts are player 1's) Prompts on the joiner are player 2's own (door and talk prompts where player 2 stands).
 18. [x] The double shake in host cutscenes on the joiner.
 
 ### Guards against breaking it later
