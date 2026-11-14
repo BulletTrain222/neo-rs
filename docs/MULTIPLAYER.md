@@ -550,3 +550,92 @@ revisions equal, music, objects and characters matching). The host made 388,107 
 levelled off at about 600 MB for the host and 550 MB for the joiner (before: past 1.4 GB and
 still climbing). A state of 1,201 bytes there also showed that a large state could pass the
 1,150-byte limit; it now leaves its events to the events messages.
+
+## Night plan 5 (2026-11-14, after plan 4)
+
+Same rules as plans 2 to 4: tested from logs and traces, recorded in docs/STATUS.md, Check.cmd
+(and the scenarios when single-player code moves) before each commit, **Default** for every
+rule chosen without the user. Nothing here changes the user's router or anything outside this
+folder: features that would (opening a port with UPnP) are built but tried only against a
+stand-in on this computer, and left for the user to switch on.
+
+### Stress and leaks (plan 4's long session found three bugs; look for more)
+1. [ ] A one-hour online session on the autopilot: memory, buffer, events, every comparison.
+2. [ ] A 20-minute online session at 10% loss and 80 ms delay.
+3. [ ] A one-hour single-player session: memory and the asset and entity counts level.
+4. [ ] 30 world loads in a row (developer warps) in one window: memory and counts after each.
+5. [ ] The same 30 loads online: a welcome each, no stall, no stray characters.
+6. [ ] A joiner that joins and leaves 20 times: the host's memory and channels stay clean.
+7. [ ] Many sounds at once (a busy fight) for 10 minutes: the voice count stays bounded.
+8. [ ] The joiner's apply step fed random states (synthetic): no panic.
+9. [ ] Each window's CPU time per tick for the online work (host's state, joiner's apply),
+   from the perf spans (CPU spans are real with the display off; frame times are not).
+
+### Smaller, faster messages (for the internet)
+10. [ ] Positions and facings packed into 16 bits each where the loss is under a hundredth of
+    a unit; traffic measured before and after.
+11. [ ] Heroes sent only when they change, as characters are.
+12. [ ] Sound volume and pan changes (the most common event) sent only when they change by
+    more than a step a listener would hear.
+13. [ ] The welcome's save slot packed (runs of zeros), and the join time measured.
+14. [ ] Bandwidth at rest, walking and in a fight, written in "How to play together".
+
+### How the joiner feels
+15. [ ] Player 2 moved at once on the joiner from its own controller (prediction), drawn
+    toward the host's place as states arrive; the gap measured with 50 and 100 ms delay.
+16. [ ] The jitter buffer that grows a state when states come unevenly and shrinks when they
+    are even; the delay and stalls measured.
+17. [ ] The joiner's camera follows the predicted player 2 (no jump when the state arrives).
+18. [ ] Sounds of player 2's own swings and jumps played at once on the joiner (Default),
+    not after the round trip.
+
+### Joining
+19. [ ] An optional password on the Multiplayer page (Default: none); a wrong one is refused
+    with a line.
+20. [ ] Player names (Default: the computer's name, shortened): "Sam joined.".
+21. [ ] The joiner's title screen says "Joining..." and why a join failed (a refusal shows
+    on the title screen, not only on the Multiplayer page).
+22. [ ] A friendly refusal for a different build ("The host has a newer build").
+23. [ ] UPnP (Default: off): a Multiplayer page row that asks the router to forward the port
+    for the session and removes it at the end; tried only against a stand-in router on this
+    computer.
+24. [ ] "How to play together" gets an internet section (port forwarding by hand, or UPnP).
+
+### Co-op extras
+25. [ ] A down player shows how long until they get up, and a revive bar while the other
+    stands beside (HUD, both views).
+26. [ ] Player 2's push blocks: traced, and fixed if they do not move.
+27. [ ] Player 2's magic items' statuses (buffs, cures) traced.
+28. [ ] Player 2's quick panel and Mote panel on the joiner: a quick item used from the
+    joiner's D-pad traced end to end.
+29. [ ] Player 2 in a boss grab (a boss that holds the hero): traced, freed as player 1 is.
+30. [ ] Player 2 riding a moving platform (822) traced.
+31. [ ] Player 2's ledges online traced.
+32. [ ] Both players down at once with revive on: game over, as the rules say (traced).
+33. [ ] Player 2 talking to an NPC: Default stays player 1's; player 2 gets a "Player 1
+    talks" line instead of nothing.
+
+### The joiner's world, last pieces
+34. [ ] The petpet online: given by a host diagnostic after the welcome, compared.
+35. [ ] Weapon trails and debris compared on both sides.
+36. [ ] Cutscene fades compared frame by frame in a scripted scene.
+37. [ ] The host's camera shake and rumble in a boss fight compared.
+38. [ ] The monster health bar compared during a fight with hits (a host diagnostic hurts
+    the boss).
+
+### Tests and tools
+39. [ ] net_check.py `--long` (an hour) and `--soak` (joins and leaves) modes.
+40. [ ] A scenario per new co-op rule.
+41. [ ] Synthetic tests for the packing (round trip within its step), the password, names.
+42. [ ] A test that a state with every field at its largest stays under the limit.
+43. [ ] scripts/net_check.py reports CPU per tick.
+
+### Single player, found along the way
+44. [ ] Any leak or growth the stress items find in single play, fixed and traced.
+45. [ ] The looping disc streams: one copy of a stream instead of two (the loop keeps a
+    second copy as floats); memory measured.
+
+### Words
+46. [ ] docs/STATUS.md entries and the multiplayer summary.
+47. [ ] The checklists brought up to date.
+48. [ ] The morning report.
