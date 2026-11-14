@@ -581,12 +581,12 @@ stand-in on this computer, and left for the user to switch on.
 14. [ ] Bandwidth at rest, walking and in a fight, written in "How to play together".
 
 ### How the joiner feels
-15. [ ] Player 2 moved at once on the joiner from its own controller (prediction), drawn
+15. [ ] (not built: needs the screen to judge; see the design note in the report) Player 2 moved at once on the joiner from its own controller (prediction), drawn
     toward the host's place as states arrive; the gap measured with 50 and 100 ms delay.
-16. [ ] The jitter buffer that grows a state when states come unevenly and shrinks when they
+16. [x] (stalls at 40 ms jitter 142 to 87) The jitter buffer that grows a state when states come unevenly and shrinks when they
     are even; the delay and stalls measured.
-17. [ ] The joiner's camera follows the predicted player 2 (no jump when the state arrives).
-18. [ ] Sounds of player 2's own swings and jumps played at once on the joiner (Default),
+17. [ ] (with item 15) The joiner's camera follows the predicted player 2 (no jump when the state arrives).
+18. [ ] (not built: a sound heard twice cannot be checked without the speakers) Sounds of player 2's own swings and jumps played at once on the joiner (Default),
     not after the round trip.
 
 ### Joining

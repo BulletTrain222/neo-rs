@@ -1941,7 +1941,7 @@ fn step_sim(
                 // The joiner hears the host's sounds, not its own game's (net.rs events).
                 // NEOPETS_TRACE_NETEV: the events played so far, every 300 ticks (diagnostic).
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
-                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state; the host's hero stalled {} times, largest step {:.2}; buffer {} (most {})", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats, netr.smooth.2, netr.smooth.3, netr.queue.len(), netr.queue_most);
+                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state; the host's hero stalled {} times, largest step {:.2}; buffer {} (most {}, holding {})", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats, netr.smooth.2, netr.smooth.3, netr.queue.len(), netr.queue_most, netr.hold);
                     netr.queue_most = 0;
                     (netr.gap_states, netr.gap_max, netr.repeats) = (0, 0, 0);
                     (netr.smooth.2, netr.smooth.3) = (0, 0.0);

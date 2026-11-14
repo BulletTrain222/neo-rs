@@ -123,6 +123,9 @@ pub struct Net {
     pub smooth: (Option<[f32; 3]>, f32, u32, f32),
     /// Joiner, for the trace: the most states waiting in the buffer since the last line.
     pub queue_most: usize,
+    /// Joiner: the recent ticks with no new state (fading), and the states kept in hand.
+    jitter: f32,
+    pub hold: usize,
     pub loaded: u32,
     pub counts: (u8, u8, u8),
     pub dpad: [u8; 5],
@@ -487,19 +490,37 @@ impl Net {
     /// the last one again when none came.
     pub fn next_state(&mut self) -> Option<State> {
         let loaded = self.loaded;
+        // About the ticks with nothing new over the last few seconds (it fades by 1% a tick).
+        self.jitter *= 0.99;
         while self.queue.front().is_some_and(|s| s.generation != loaded) && self.queue.iter().any(|s| s.generation == loaded) {
             self.queue.pop_front();
         }
         while self.queue.len() > 3 {
             self.queue.pop_front();
         }
-        if self.queue.len() >= 2 || (!self.queue.is_empty() && self.starve >= 1) {
+        // The states kept in hand follow how unevenly they arrive (Default): one, two after
+        // repeated ticks with nothing new, three when that goes on; back down when they come
+        // evenly. NEOPETS_NET_HOLD=n (diagnostic) fixes it.
+        let hold = std::env::var("NEOPETS_NET_HOLD").ok().and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(if self.jitter > 6.0 {
+            3
+        } else if self.jitter > 2.0 {
+            2
+        } else {
+            1
+        });
+        self.hold = hold;
+        if self.queue.len() > hold || (!self.queue.is_empty() && self.starve >= 1) {
             let next = self.queue.pop_front();
             self.prev_state = std::mem::replace(&mut self.state, next);
             self.starve = 0;
         } else {
             self.starve += 1;
             self.repeats += 1;
+            // Only a tick with nothing at all waiting counts as uneven arrival (not a tick held
+            // on purpose to build the buffer up).
+            if self.queue.is_empty() {
+                self.jitter += 1.0;
+            }
             // No state for this tick: the heroes and characters carry on by their last tick's
             // movement (at most 4 ticks, and only movement under 2 units a tick), and the next
             // state puts them right. NEOPETS_NET_NOSMOOTH (diagnostic) holds them instead.
@@ -831,6 +852,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     let mut buf = vec![0u8; 65536];
     let drop = std::env::var("NEOPETS_NET_DROP").ok().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
     let delay = Duration::from_millis(std::env::var("NEOPETS_NET_DELAY").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0));
+    let jitter_ms = std::env::var("NEOPETS_NET_JITTER").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
     while let Some(s) = net.socket.as_ref() {
         let Ok((n, from)) = s.recv_from(&mut buf) else { break };
         net.bytes_in += n as u64 + 28;
@@ -843,14 +865,29 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 continue;
             }
         }
-        net.held.push_back((now + delay, buf[..n].to_vec(), from));
+        // NEOPETS_NET_JITTER=ms (diagnostic): each message held a further 0 to ms, at random
+        // (messages may then arrive out of order, as on the internet).
+        let extra = if jitter_ms > 0 {
+            net.lossy = net.lossy.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            Duration::from_millis((net.lossy >> 33) % (jitter_ms + 1))
+        } else {
+            Duration::ZERO
+        };
+        net.held.push_back((now + delay + extra, buf[..n].to_vec(), from));
     }
     let mut ready = Vec::new();
-    while net.held.front().is_some_and(|m| m.0 <= now) {
-        if let Some((_, b, from)) = net.held.pop_front() {
-            ready.push((b, from));
+    // Every held message now due, in the order they fall due.
+    let mut due: Vec<(Instant, Vec<u8>, SocketAddr)> = Vec::new();
+    net.held.retain(|m| {
+        if m.0 <= now {
+            due.push(m.clone());
+            false
+        } else {
+            true
         }
-    }
+    });
+    due.sort_by_key(|m| m.0);
+    ready.extend(due.into_iter().map(|(_, b, from)| (b, from)));
     for (bytes, from) in ready {
         let Some((kind, mut r)) = Reader::open(&bytes) else { continue };
         match (net.role, kind) {
@@ -1155,23 +1192,24 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     }
                     // Characters and moving items come only when changed: each state's go into
                     // running copies (cleared at a welcome), and the stored state carries them all.
-                    if net.acc_gen != s.generation {
+                    if s.generation > net.acc_gen {
                         net.acc_gen = s.generation;
                         net.chars_acc.clear();
                         net.moving_acc.clear();
                     }
-                    for c in &s.characters {
-                        net.chars_acc.insert((c.pack, c.slot, c.ordinal), *c);
-                    }
-                    for m in &s.moving {
-                        net.moving_acc.insert((m.0, m.1), *m);
-                    }
-                    s.characters = net.chars_acc.values().copied().collect();
-                    s.moving = net.moving_acc.values().copied().collect();
-                    // A newer world (a later welcome) restarts the host's ticks.
-                    // Into the jitter buffer, in order (an older or repeated state is dropped).
+                    // Into the jitter buffer, in order: an older or repeated state (one that
+                    // arrived late, out of order) is dropped before its characters go into the
+                    // running copies. A newer world (a later welcome) restarts the host's ticks.
                     let newest = net.queue.back().or(net.state.as_ref()).map(|o| (o.generation, o.tick));
                     if newest.is_none_or(|n| (s.generation, s.tick) > n) {
+                        for c in &s.characters {
+                            net.chars_acc.insert((c.pack, c.slot, c.ordinal), *c);
+                        }
+                        for m in &s.moving {
+                            net.moving_acc.insert((m.0, m.1), *m);
+                        }
+                        s.characters = net.chars_acc.values().copied().collect();
+                        s.moving = net.moving_acc.values().copied().collect();
                         net.queue.push_back(s);
                     }
                 }
