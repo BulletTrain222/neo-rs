@@ -1523,6 +1523,8 @@ pub struct Play {
     /// through a door alone, into a world of its own (`apart_door`; docs/MULTIPLAYER.md, Plan:
     /// players in separate worlds, phase 1).
     pub coop_doors_alone: bool,
+    /// Online, joining: this side's seat on the host (0: player 2).
+    pub net_seat: usize,
     /// Online, hosting: separate worlds are possible (a joiner is in).
     pub net_apart_ok: bool,
     /// Host: the door an online player 2 is taking alone this tick (net.rs sends it apart).
@@ -1887,7 +1889,7 @@ pub struct Play {
     /// The in-play HUD's bar rules (SPEC-0023) and their boot words; the monster bar, its words,
     /// and the font and letter spacing of its name text (the value text of key 0x32).
     pub hud: neopets_sim::hud::Hud,
-    hud_words: neopets_sim::hud::Words,
+    pub(crate) hud_words: neopets_sim::hud::Words,
     pub monster_bar: neopets_sim::hud::MonsterBar,
     monster_words: neopets_sim::hud::MonsterWords,
     name_font: Option<(neopets_data::frontend::Font, i32)>,
@@ -2563,6 +2565,7 @@ impl Play {
             coop_together: true,
             coop_doors_alone: false,
             net_apart_ok: false,
+            net_seat: 0,
             apart_door: None,
             net_apart: false,
             diag_p2_square: 0,
@@ -19634,6 +19637,40 @@ impl Play {
     /// Every other player leaves (local co-op).
     pub fn remove_player(&mut self) {
         self.keep_players(0);
+    }
+
+    /// The number shown for other player `i` (`others[i]`): players 2 to 4 by seat; on a joiner
+    /// its own player is its seat's number and the others follow the host's order around it.
+    pub fn player_number(&self, i: usize) -> usize {
+        if !self.net_follow {
+            return i + 2;
+        }
+        match i {
+            0 => self.net_seat + 2,
+            j if j - 1 < self.net_seat => j + 1,
+            j => j + 2,
+        }
+    }
+
+    /// Player `k` (`others[k]`) plays the partner (Roberta when the story has her waiting) when
+    /// no other player has her: a joiner after player 2 that chose Partner, or a partner coming
+    /// back from a world of its own as a later player (it came back as Tor).
+    pub fn seat_partner(&mut self, k: usize) -> bool {
+        let other = 1 - self.hero_index.min(1);
+        if self.others.iter().enumerate().any(|(j, o)| j != k && o.who.min(1) == other) {
+            return false;
+        }
+        let Some(pk) = self.parked.as_ref() else { return false };
+        let (anim, model, stats) = (pk.anim.clone(), pk.model.clone(), (pk.hp, pk.hp_max, pk.mp, pk.mp_max));
+        let Some(o) = self.others.get_mut(k) else { return false };
+        o.who = other;
+        o.hero = anim;
+        o.model = model;
+        (o.hero_hp, o.hero_max, o.hero_mp, o.hero_mp_max) = stats;
+        o.attack = None;
+        o.r_attack = None;
+        o.outfit = 0;
+        true
     }
 
     /// Online, hosting: the joiner of seat `k` left: its player goes, and the later ones move up

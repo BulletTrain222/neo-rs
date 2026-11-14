@@ -22,8 +22,9 @@ the keyboard. In the menus every controller works.
 
 **On two to four computers (home network).** Up to three friends can join one host (players 2,
 3 and 4), each on their own computer with their own copy of the game disc and the same build of
-this game. The first to join is player 2 (Roberta when they chose Partner and the story has
-her); players 3 and 4 play player 1's hero. If a player leaves, the ones after them move up
+this game. A friend who chose Partner on their Player 2 row plays Roberta when the story has
+her and no other player does; everyone else plays player 1's hero. A coloured tag (P1 to P4)
+over each other player shows who is who (the Player tags row turns it off). If a player leaves, the ones after them move up
 (player 4 becomes player 3). With Doors take **Only you**, any friend can go off into their own
 world; each one comes back when they walk into the host's world (they come back as the next
 player number). Two friends who are both away from the host do not see each other.
@@ -67,6 +68,7 @@ out lost messages and uneven delays.
 | Local co-op | | Start or stop play on this computer (press again to stop) |
 | Players | 2, 3, 4 | How many play on this computer |
 | Player 1 to 4 controller | Auto, Controller 1 to 4 | Each player's controller (shown with the one it has now) |
+| Player tags | On, Off | A coloured tag (P1 to P4) over each other player |
 | Knocked out | Revive, Game over | Revive: a fallen player gets up when the other stands beside them for 2 seconds, or by themselves after 10. Game over: any fall ends the game |
 | Split screen | Top and bottom, Side by side | How two players share one computer's screen (three or four always have quarters) |
 | Player 2 | Partner, Second Tor | Partner: Roberta when the story has her; Second Tor: always Tor (players 3 and 4 are always Tor) |

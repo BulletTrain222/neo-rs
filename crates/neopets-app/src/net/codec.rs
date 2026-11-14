@@ -210,6 +210,8 @@ pub struct State {
     /// The host's page while its states run: 0 play, 2 the game-over page (a paused host
     /// sends pings instead).
     pub page: u8,
+    /// The receiving joiner's seat (0: player 2), for the players' numbers it shows.
+    pub seat: u8,
     /// The round trip the host measures, in milliseconds (shown on both sides).
     pub rtt: u16,
     /// The last joiner item-screen command the host carried out (its number).
@@ -870,6 +872,7 @@ impl State {
             w.f32(t);
         }
         w.u8(self.page);
+        w.u8(self.seat);
         w.u16(self.rtt);
         w.u8(self.cmd_ack);
         let opt = |w: &mut Writer, v: Option<u16>| w.u16(v.unwrap_or(u16::MAX));
@@ -975,6 +978,7 @@ impl State {
             anim_times.push((r.u16()?, r.f32()?));
         }
         let page = r.u8()?;
+        let seat = r.u8()?;
         let rtt = r.u16()?;
         let cmd_ack = r.u8()?;
         let mut opt = || r.u16().map(|v| (v != u16::MAX).then_some(v));
@@ -995,7 +999,7 @@ impl State {
             0 => None,
             _ => Some((r.i32()?, r.i32()?, r.i32()?)),
         };
-        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, rtt, cmd_ack, equip, pet })
+        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, seat, rtt, cmd_ack, equip, pet })
     }
 }
 

@@ -30,6 +30,7 @@ impl crate::play::Play {
             tick: self.ticks,
             generation,
             pack: self.world.pack,
+            seat: seat.min(255) as u8,
             heroes: [hero(&self.player, self.hero_index), p2.map(|o| hero(o, o.who)).unwrap_or_default()],
             more: self.others.iter().enumerate().filter(|(k, _)| *k != seat).map(|(_, o)| hero(o, o.who)).take(2).collect(),
             eye: p2.map_or([0.0; 3], |o| o.camera.eye),
@@ -162,6 +163,17 @@ impl crate::play::Play {
             (o.quick.open, o.quick.entries, o.quick.selection, o.quick.marker) = (pn.0, pn.1, pn.2 as usize, pn.3);
             (o.mote_panel.open, o.mote_panel.selection) = (pn.4, pn.5);
             o.captions.0 = s.p2_prompt;
+        }
+        self.net_seat = s.seat as usize;
+        // This side's player's HUD timers run down as the host's do in its co-op step (before,
+        // the panels a new player shows for 4 seconds stayed up for good on the joiner: the
+        // equipment icons in the middle of the screen).
+        if !self.dialogue_open {
+            if let Some(o) = self.others.first_mut() {
+                let v = neopets_sim::hud::Values { hp: o.hero_hp, hp_max: o.hero_max, mp: o.hero_mp, mp_max: o.hero_mp_max, poisoned: o.statuses.active(neopets_sim::status::POISON) };
+                o.hud.tick(v, o.quick.open, &self.hud_words);
+                o.hud.tick_icons();
+            }
         }
         self.same_hero_outfits();
         // The other joiners' heroes (players 3 and 4), drawn and animated as the host has them.

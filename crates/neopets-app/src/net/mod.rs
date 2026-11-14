@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 30;
+const PROTOCOL: u16 = 31;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -279,6 +279,8 @@ pub struct Net {
     pub extra: Vec<Net>,
     /// Host: the Multiplayer page's Remove row was pressed (the last joiner goes).
     remove_wanted: bool,
+    /// Host: the hero this joiner's player had when it went apart (it comes back with it).
+    apart_who: usize,
 }
 
 /// The most joiners a host takes (players 2 to 4).
@@ -715,6 +717,7 @@ impl Net {
         // The player's place goes with the door (the host's last state did not have it there
         // yet); a walk into the next area travels as door 0xFFFF.
         let at = play.others.get(self.seat).map_or([0.0; 3], |o| o.loco.position());
+        self.apart_who = play.others.get(self.seat).map_or(0, |o| o.who.min(1));
         play.remove_seat(self.seat);
         self.remote = None;
         self.apart = true;
@@ -797,6 +800,10 @@ impl Net {
         self.seat = play.others.len();
         self.peer_name = format!("Player {}", self.seat + 2);
         play.add_player();
+        // Back with the hero it left with (the partner came back as Tor when it was not player 2).
+        if self.apart_who != play.hero_index.min(1) && play.others.get(self.seat).is_some_and(|o| o.who.min(1) != self.apart_who) {
+            play.seat_partner(self.seat);
+        }
         let (hp, mp) = self.other_vitals;
         if let Some(o) = play.others.get_mut(self.seat).filter(|_| hp > 0) {
             (o.hero_hp, o.hero_mp) = (hp.min(o.hero_max), mp.max(0).min(o.hero_mp_max));
@@ -1429,6 +1436,10 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                     p.play.coop_remote = true;
                     if p.play.others.len() <= net.seat {
                         p.play.add_player();
+                    }
+                    // A later joiner that chose Partner plays her when no one else does.
+                    if net.seat > 0 && partner == Some(true) && p.play.seat_partner(net.seat) {
+                        info!("net: player {} plays the partner (no one else does)", net.seat + 2);
                     }
                     info!("net: player {} is hero {:?} (the joiner chose {})", net.seat + 2, p.play.others.get(net.seat).map(|o| o.who), match partner { Some(true) => "the partner", Some(false) => "a second Tor", None => "nothing" });
                     // The same game's player back: its health and magic as it left them.

@@ -561,3 +561,99 @@ mod tests {
         assert_eq!(rect_pixels([1, 1, 1, 1], 1001, 601), (500, 300, 501, 301));
     }
 }
+
+/// A player tag (P1 to P4) drawn over another player, from a pool.
+#[derive(Component)]
+pub struct PlayerTag;
+
+/// The tag colours of players 1 to 4.
+const TAG_COLOURS: [Color; 4] = [Color::srgb(0.45, 0.75, 1.0), Color::srgb(1.0, 0.5, 0.65), Color::srgb(0.55, 1.0, 0.55), Color::srgb(1.0, 0.9, 0.4)];
+
+/// Each frame (the Player tags row on, in play, no cutscene): over each other player in each
+/// player's part of the screen, a tag with its number in its colour (this build's feature).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn player_tags(
+    mut commands: Commands,
+    play: Option<Res<PlayState>>,
+    menu: Option<Res<crate::menu_view::Menu>>,
+    settings: Res<crate::display::DisplaySettings>,
+    mains: Query<(&Camera, &GlobalTransform), (With<Camera3d>, With<crate::orbit::Orbit>, Without<PlayerCam>)>,
+    seconds: Query<(&Camera, &GlobalTransform, &PlayerCam)>,
+    scene_views: Query<&Node, (With<crate::display::SceneView>, Without<PlayerTag>)>,
+    mut tags: Query<(&mut Node, &mut Text, &mut TextColor, &mut Visibility), (With<PlayerTag>, Without<crate::display::SceneView>)>,
+) {
+    let mut want: Vec<(f32, f32, usize)> = Vec::new();
+    let in_play = menu.as_ref().is_none_or(|m| m.flow.current == crate::menus::PLAY);
+    let scene = scene_views.iter().next().and_then(|n| match (n.left, n.top, n.width, n.height) {
+        (Val::Px(l), Val::Px(t), Val::Px(w), Val::Px(h)) => Some((l, t, w, h)),
+        _ => None,
+    });
+    if let (Some(play), Some((left, top, width, height)), true) = (play.as_ref(), scene, in_play && settings.coop_tags) {
+        let p = &play.play;
+        let scene_on = p.cut.is_some_and(|c| c.state != 0) || (p.net_follow && p.net_cut.is_some());
+        if !p.others.is_empty() && !scene_on {
+            // Every player: (its place, its number).
+            let mut players = vec![(p.player.loco.position(), 1)];
+            players.extend(p.others.iter().enumerate().map(|(i, o)| (o.loco.position(), p.player_number(i))));
+            let n = on_screen(p);
+            let side = settings.coop_split == 1;
+            for v in 0..n {
+                // This part's camera and its own player (online: this side's player alone).
+                let own = if n == 1 { if p.net_follow { 1 } else { 0 } } else { v };
+                let cam = if v == 0 { mains.iter().next() } else { seconds.iter().find(|(_, _, c)| c.0 == v - 1).map(|(c, g, _)| (c, g)) };
+                let (Some((cam, at)), Some(r)) = (cam, view_rect(n, side, v)) else { continue };
+                let (rx, ry, rw, rh) = (left + width * r[0] as f32 / 2.0, top + height * r[1] as f32 / 2.0, width * r[2] as f32 / 2.0, height * r[3] as f32 / 2.0);
+                let me = players[own].0;
+                for (k, &(pos, number)) in players.iter().enumerate() {
+                    let far = (pos[0] - me[0]).hypot(pos[2] - me[2]) > 80.0;
+                    if k == own || far {
+                        continue;
+                    }
+                    let head = Vec3::new(pos[0], pos[1] + neopets_sim::motion::HERO_HEIGHT + 0.6, pos[2]);
+                    let Some(ndc) = cam.world_to_ndc(at, head) else { continue };
+                    if ndc.z <= 0.0 || ndc.z > 1.0 || ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
+                        continue;
+                    }
+                    want.push((rx + (ndc.x + 1.0) * 0.5 * rw, ry + (1.0 - ndc.y) * 0.5 * rh, number));
+                }
+            }
+        }
+    }
+    // The pool: as many tags as wanted, the rest hidden.
+    let have = tags.iter().count();
+    for _ in have..want.len() {
+        commands.spawn((
+            Text::new(""),
+            TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() },
+            TextColor(Color::WHITE),
+            Node { position_type: PositionType::Absolute, padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)), ..default() },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+            GlobalZIndex(5),
+            Visibility::Hidden,
+            PlayerTag,
+        ));
+    }
+    for (k, (mut node, mut text, mut colour, mut vis)) in tags.iter_mut().enumerate() {
+        match want.get(k) {
+            Some(&(x, y, number)) => {
+                let label = format!("P{number}");
+                if text.0 != label {
+                    text.0 = label;
+                }
+                colour.0 = TAG_COLOURS[(number - 1).min(3)];
+                let (l, t) = (Val::Px(x - 14.0), Val::Px(y - 22.0));
+                if node.left != l || node.top != t {
+                    (node.left, node.top) = (l, t);
+                }
+                if *vis != Visibility::Visible {
+                    *vis = Visibility::Visible;
+                }
+            }
+            None => {
+                if *vis != Visibility::Hidden {
+                    *vis = Visibility::Hidden;
+                }
+            }
+        }
+    }
+}
