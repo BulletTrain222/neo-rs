@@ -105,6 +105,11 @@ def main():
             failures.append(f'{waiting} events still waiting')
     elif welcomes:
         failures.append('no event lines from the host')
+    bw = re.findall(r'NETEV host tick (\d+): .*; sent (\d+) received (\d+) bytes', h)
+    if len(bw) >= 2:
+        (t0, o0, i0), (t1, o1, i1) = [tuple(map(int, x)) for x in (bw[-2], bw[-1])]
+        secs = max(t1 - t0, 1) / 60
+        report.append(f'bandwidth (host, last {secs:.0f} s, with UDP and IP headers): out {(o1 - o0) / secs / 1024:.1f} KB/s, in {(i1 - i0) / secs / 1024:.1f} KB/s')
     played = re.findall(r'NETEV joiner tick \d+: (\d+) host events played', j)
     if played:
         report.append(f'joiner played {played[-1]} events')

@@ -325,9 +325,9 @@ the scenarios when single-player code moves) before each commit, **Default** for
 chosen without the user.
 
 ### Ready for the internet
-1. [ ] The welcome (a 12.5 KB save slot) goes in parts of about 1,000 bytes, each acknowledged,
+1. [x] The welcome (a 12.5 KB save slot) goes in parts of about 1,000 bytes, each acknowledged,
    so it never needs IP fragments (which some routers drop). Tested with loss switched on.
-2. [ ] Bandwidth: bytes a second each way, measured on the farm and in a fight; positions
+2. [x] (34 KB/s normal, 53 KB/s in a burst; all messages under 1,150 bytes) Bandwidth: bytes a second each way, measured on the farm and in a fight; positions
    packed smaller if it is over about 60 KB/s.
 3. [ ] A port other than 47817 (private/net.txt, or `host:port` in the join address).
 
@@ -360,7 +360,7 @@ chosen without the user.
 ### The joiner's world, complete
 15. [ ] Moving objects (gates, lifts, platforms): the host's object animations sent when they
     change, the moving ones' times every tick.
-16. [ ] Characters sent only when changed (positions every tick only for those that move).
+16. [x] Characters sent only when changed (positions every tick only for those that move).
 17. [ ] The petpet online: compared on both sides.
 
 ### Keeping it tidy

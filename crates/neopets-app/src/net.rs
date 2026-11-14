@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 12;
+const PROTOCOL: u16 = 16;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -41,6 +41,18 @@ const BYE: u8 = 6;
 /// Sent when nothing else has gone out for 200 ms (a paused game sends no states or inputs), with
 /// whether this side is paused.
 const PING: u8 = 7;
+/// A welcome goes in parts of at most `PART` bytes (the internet splits larger datagrams into IP
+/// fragments, which some routers drop); the joiner acknowledges the parts it holds.
+const WELCOME_PART: u8 = 8;
+const PART_ACK: u8 = 9;
+const PART: usize = 1000;
+/// The story (channel 0) and the world sync (channel 1) go in parts too, outside the states, each
+/// resent every 100 ms until the joiner's input acknowledges its revision.
+const BLOB_PART: u8 = 10;
+/// A state stays under this many bytes (events fill the room left), so it never needs fragments.
+const STATE_LIMIT: usize = 1150;
+/// Events that did not fit in a state, in up to two more messages a tick.
+const EVENTS: u8 = 11;
 
 /// This build's identity, checked at joining: the crate version and the build's own number.
 fn build_id() -> String {
@@ -215,6 +227,8 @@ pub struct WorldSync {
     pub pack: u32,
     pub breakables: Vec<u8>,
     pub items: Vec<(u32, u16, NetItem)>,
+    /// The host's characters (pack, slot, ordinal): the joiner hides any other.
+    pub chars: Vec<(u32, u8, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -226,6 +240,8 @@ pub struct NetItem {
     pub scale: f32,
     pub direction: [f32; 3],
     pub price: i16,
+    /// The ground height a hovering item bobs about (the joiner bobs it itself).
+    pub reference: f32,
 }
 
 impl WorldSync {
@@ -244,6 +260,13 @@ impl WorldSync {
             w.f32(it.scale);
             w.v3(it.direction);
             w.u16(it.price as u16);
+            w.f32(it.reference);
+        }
+        w.u16(self.chars.len() as u16);
+        for &(p, s, o) in &self.chars {
+            w.u32(p);
+            w.u8(s);
+            w.u32(o);
         }
     }
 
@@ -255,9 +278,14 @@ impl WorldSync {
         let mut items = Vec::with_capacity(n.min(512));
         for _ in 0..n {
             let (p, s) = (r.u32()?, r.u16()?);
-            items.push((p, s, NetItem { id: r.u16()?, position: r.v3()?, state: r.u8()?, angle: r.f32()?, scale: r.f32()?, direction: r.v3()?, price: r.u16()? as i16 }));
+            items.push((p, s, NetItem { id: r.u16()?, position: r.v3()?, state: r.u8()?, angle: r.f32()?, scale: r.f32()?, direction: r.v3()?, price: r.u16()? as i16, reference: r.f32()? }));
         }
-        Some(Self { pack, breakables, items })
+        let n = r.u16()? as usize;
+        let mut chars = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            chars.push((r.u32()?, r.u8()?, r.u32()?));
+        }
+        Some(Self { pack, breakables, items, chars })
     }
 }
 
@@ -988,6 +1016,10 @@ pub struct Net {
     pub welcome_game: u32,
     pub generation: u32,
     welcome: Option<Vec<u8>>,
+    /// The parts of the welcome the joiner has acknowledged (bit k for part k).
+    welcome_mask: u64,
+    /// Joiner: the parts of a welcome being received (its generation and each part).
+    parts: Option<(u32, Vec<Option<Vec<u8>>>)>,
     /// Joiner: the host's address, the slot to load, the latest state, the generation loaded,
     /// and the press counters of this side's controller.
     target: Option<SocketAddr>,
@@ -1014,6 +1046,9 @@ pub struct Net {
     /// last went out.
     pub notice: Option<String>,
     pub ended: bool,
+    /// Bytes sent and received so far (for the bandwidth trace).
+    pub bytes_out: u64,
+    pub bytes_in: u64,
     /// Received messages held for NEOPETS_NET_DELAY, and the NEOPETS_NET_DROP generator.
     held: std::collections::VecDeque<(Instant, Vec<u8>, SocketAddr)>,
     lossy: u64,
@@ -1028,9 +1063,24 @@ pub struct Net {
     /// joiner's acknowledgement; the joiner's latest copy.
     world_rev: u32,
     #[allow(clippy::type_complexity)]
-    world_last: Option<(u32, Vec<u8>, Vec<(u32, u16, u16, u8)>)>,
+    world_last: Option<(u32, Vec<u8>, Vec<(u32, u16, u16, u8)>, Vec<(u32, u8, u32)>)>,
+    /// Host: each character's state last sent, and the round-robin cursors of the characters and
+    /// moving items resent unchanged (so a lost state heals).
+    chars_last: std::collections::HashMap<(u32, u8, u32), CharState>,
+    cursor: (usize, usize),
+    /// Joiner: the running copies of the host's characters and moving items, and the welcome
+    /// generation they are for.
+    chars_acc: std::collections::HashMap<(u32, u8, u32), CharState>,
+    moving_acc: std::collections::HashMap<(u32, u16), (u32, u16, [f32; 3], f32)>,
+    acc_gen: u32,
     world_acked: u32,
     pub world_held: Option<(u32, WorldSync)>,
+    /// Host: each channel's revision last sent and when. Joiner: each channel's parts arriving.
+    blob_sent: [(u32, Option<Instant>); 2],
+    #[allow(clippy::type_complexity)]
+    blob_in: [Option<(u32, Vec<Option<Vec<u8>>>)>; 2],
+    /// Host: the moving items' places last sent (a place goes again only when it changes).
+    moving_last: std::collections::HashMap<(u32, u16), [f32; 3]>,
     pub peer_paused: bool,
     /// The other side's page: 0 in play, 1 a menu (paused), 2 game over.
     pub peer_page: u8,
@@ -1053,6 +1103,7 @@ impl Net {
     fn send(&mut self, bytes: &[u8]) {
         if let (Some(s), Some(p)) = (self.socket.as_ref(), self.peer.or(self.target)) {
             let _ = s.send_to(bytes, p);
+            self.bytes_out += bytes.len() as u64 + 28;
             self.last_any = Some(Instant::now());
         }
     }
@@ -1082,7 +1133,7 @@ impl Net {
             s.story = self.story_rev;
             s.has_story = self.story_acked < self.story_rev;
             // The world's breakables and the set of live items (not their bouncing places).
-            let sig = s.world.as_ref().map(|w| (w.pack, w.breakables.clone(), w.items.iter().map(|(p, k, it)| (*p, *k, it.id, it.state)).collect::<Vec<_>>()));
+            let sig = s.world.as_ref().map(|w| (w.pack, w.breakables.clone(), w.items.iter().map(|(p, k, it)| (*p, *k, it.id, it.state)).collect::<Vec<_>>(), w.chars.clone()));
             if sig != self.world_last {
                 self.world_rev += 1;
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() {
@@ -1094,30 +1145,157 @@ impl Net {
             if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && s.tick % 300 == 0 {
                 println!("NETW host tick {}: world rev {} acknowledged {} items {:?}", s.tick, self.world_rev, self.world_acked, s.world.as_ref().map(|w| w.items.len()));
             }
-            if self.world_acked >= self.world_rev {
-                s.world = None;
+            // The story and the world sync go as parts on their own channels (below).
+            let story_bytes = {
+                let mut w = Writer(Vec::new());
+                w.u32(s.flags.len() as u32);
+                for &f in &s.flags {
+                    w.u16(f);
+                }
+                w.u32(s.items.len() as u32);
+                for &(id, n) in &s.items {
+                    w.u16(id);
+                    w.u32(n);
+                }
+                w.i32(s.neopoints);
+                w.0
+            };
+            let world_bytes = s.world.take().map(|ws| {
+                let mut w = Writer(Vec::new());
+                ws.write(&mut w);
+                w.0
+            });
+            s.has_story = false;
+            (s.flags, s.items) = (Vec::new(), Vec::new());
+            if self.story_acked < self.story_rev {
+                self.blob_send(0, self.story_rev, &story_bytes);
             }
-            if !s.has_story {
-                (s.flags, s.items) = (Vec::new(), Vec::new());
+            if let Some(b) = world_bytes.filter(|_| self.world_acked < self.world_rev) {
+                self.blob_send(1, self.world_rev, &b);
             }
-            // The events not yet acknowledged, oldest first, up to 96 and about 900 bytes (the
-            // rest go with the next states).
+            // Moving items and characters: each goes when it changed, and four unchanged ones a
+            // tick in turn (a lost state heals within a few ticks).
+            {
+                let n = s.moving.len().max(1);
+                let start = self.cursor.1 % n;
+                let last = &mut self.moving_last;
+                let keep: Vec<bool> = s
+                    .moving
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(pack, k, at, _))| {
+                        let changed = last.get(&(pack, k)).is_none_or(|p| (0..3).any(|j| (p[j] - at[j]).abs() > 1e-3));
+                        if changed {
+                            last.insert((pack, k), at);
+                        }
+                        changed || (i + n - start) % n < 4
+                    })
+                    .collect();
+                let mut it = keep.iter();
+                s.moving.retain(|_| *it.next().unwrap_or(&false));
+                self.cursor.1 = start + 4;
+                if s.tick % 120 == 0 {
+                    last.clear();
+                }
+            }
+            {
+                let n = s.characters.len().max(1);
+                let start = self.cursor.0 % n;
+                let last = &mut self.chars_last;
+                let keep: Vec<bool> = s
+                    .characters
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let key = (c.pack, c.slot, c.ordinal);
+                        let changed = last.get(&key).is_none_or(|p| {
+                            p.clip != c.clip || p.hp != c.hp || p.dead != c.dead || p.inactive != c.inactive || (0..3).any(|j| (p.position[j] - c.position[j]).abs() > 1e-3 || (p.facing[j] - c.facing[j]).abs() > 1e-3)
+                        });
+                        if changed {
+                            last.insert(key, *c);
+                        }
+                        changed || (i + n - start) % n < 4
+                    })
+                    .collect();
+                let mut it = keep.iter();
+                s.characters.retain(|_| *it.next().unwrap_or(&false));
+                self.cursor.0 = start + 4;
+                if s.tick % 120 == 0 {
+                    last.clear();
+                }
+            }
+            // The events not yet acknowledged, oldest first, up to 96 and in the room the state
+            // leaves under the limit (at least one; the rest go with the next states).
+            let room = STATE_LIMIT.saturating_sub(s.encode().len()).max(64);
             let mut size = 0;
             s.events = Vec::new();
             for e in self.events.iter().take(96) {
                 let mut w = Writer(Vec::new());
                 e.1.write(&mut w);
                 size += w.0.len() + 4;
-                if size > 900 && !s.events.is_empty() {
+                if size > room && !s.events.is_empty() {
                     break;
                 }
                 s.events.push(e.clone());
             }
             let bytes = s.encode();
+            // Events that did not fit: up to two more messages, every other tick (they go again
+            // until acknowledged).
+            let mut rest = self.events.iter().skip(s.events.len()).peekable();
+            let mut extra = Vec::new();
+            for _ in 0..if s.tick % 2 == 0 { 2 } else { 0 } {
+                if rest.peek().is_none() {
+                    break;
+                }
+                let mut m = Writer::new(EVENTS);
+                let mut list = Vec::new();
+                let mut size = 9;
+                while let Some(e) = rest.peek() {
+                    let mut w = Writer(Vec::new());
+                    e.1.write(&mut w);
+                    if size + w.0.len() + 4 > STATE_LIMIT && !list.is_empty() {
+                        break;
+                    }
+                    size += w.0.len() + 4;
+                    list.push((e.0, w.0));
+                    rest.next();
+                }
+                m.u16(list.len() as u16);
+                for (n, b) in list {
+                    m.u32(n);
+                    m.0.extend_from_slice(&b);
+                }
+                extra.push(m.0);
+            }
+            for m in extra {
+                self.send(&m);
+            }
             if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && s.tick % 300 == 0 {
-                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting; state {} bytes ({} characters, {} flags, {} items, {} events)", s.tick, self.next_event, self.acked, self.events.len(), bytes.len(), s.characters.len(), s.flags.len(), s.items.len(), s.events.len());
+                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting; state {} bytes ({} characters, {} flags, {} items, {} events, {} moving, {} shots, talk {}); sent {} received {} bytes", s.tick, self.next_event, self.acked, self.events.len(), bytes.len(), s.characters.len(), s.flags.len(), s.items.len(), s.events.len(), s.moving.len(), s.shots.len(), s.talk.is_some(), self.bytes_out, self.bytes_in);
             }
             self.send(&bytes);
+        }
+    }
+
+    /// Host: a blob channel's revision in parts, at once for a new revision and every 100 ms while
+    /// it is not acknowledged.
+    fn blob_send(&mut self, channel: usize, rev: u32, bytes: &[u8]) {
+        let now = Instant::now();
+        let (sent_rev, at) = self.blob_sent[channel];
+        if sent_rev == rev && at.is_some_and(|t| now.duration_since(t) < Duration::from_millis(100)) {
+            return;
+        }
+        self.blob_sent[channel] = (rev, Some(now));
+        let chunks: Vec<&[u8]> = if bytes.is_empty() { vec![&[][..]] } else { bytes.chunks(PART).collect() };
+        for (k, c) in chunks.iter().enumerate() {
+            let mut m = Writer::new(BLOB_PART);
+            m.u8(channel as u8);
+            m.u32(rev);
+            m.u16(chunks.len() as u16);
+            m.u16(k as u16);
+            m.bytes(c);
+            let b = m.0;
+            self.send(&b);
         }
     }
 
@@ -1152,6 +1330,7 @@ impl Net {
         self.welcome_game = game;
         self.generation += 1;
         self.welcome = Some(welcome(self.generation, slot, fx));
+        self.welcome_mask = 0;
         self.last_sent = None;
         info!("net: world {pack}, welcome {}", self.generation);
     }
@@ -1168,6 +1347,28 @@ fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::e
         write_op(&mut w, op);
     }
     w.0
+}
+
+/// Joiner: a whole welcome (the host's game as a save slot and its running effects), loaded
+/// by step_sim on this frame.
+fn take_welcome(net: &mut Net, r: &mut Reader, from: SocketAddr) {
+    let (Some(generation), Some(bytes)) = (r.u32(), r.bytes()) else { return };
+    if generation == net.loaded || bytes.len() != neopets_sim::save::SLOT_SIZE {
+        return;
+    }
+    let first = net.loaded == 0;
+    net.load = Some(neopets_sim::save::Slot(bytes.to_vec()));
+    net.load_fx = match r.u16() {
+        Some(n) => (0..n).map_while(|_| read_op(r.u8()?, r)).collect(),
+        None => Vec::new(),
+    };
+    net.loaded = generation;
+    net.state = None;
+    net.status = format!("Joined {from}.");
+    if first {
+        net.notice = Some("Joined the host's game.".into());
+    }
+    info!("net: welcome {generation} from {from}");
 }
 
 /// The local addresses of this computer (for the Host line), from the route a UDP socket would
@@ -1267,6 +1468,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     let delay = Duration::from_millis(std::env::var("NEOPETS_NET_DELAY").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0));
     while let Some(s) = net.socket.as_ref() {
         let Ok((n, from)) = s.recv_from(&mut buf) else { break };
+        net.bytes_in += n as u64 + 28;
         if drop > 0 {
             net.lossy = net.lossy.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             if ((net.lossy >> 33) % 100) < drop as u64 {
@@ -1320,6 +1522,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     let mut slot = neopets_sim::save::Slot::empty();
                     p.play.write_slot(&mut slot, b"NETPLAY");
                     net.welcome = Some(welcome(net.generation, &slot, &p.play.effects.snapshot()));
+                    net.welcome_mask = 0;
                     net.status = format!("{from} joined.");
                     net.notice = Some("Player 2 joined.".into());
                     info!("net: {from} joined");
@@ -1377,21 +1580,102 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             (Role::Join, WELCOME) if net.target == Some(from) => {
                 net.last_heard = Some(now);
                 net.peer = Some(from);
-                let (Some(generation), Some(bytes)) = (r.u32(), r.bytes()) else { continue };
-                if generation != net.loaded && bytes.len() == neopets_sim::save::SLOT_SIZE {
-                    let first = net.loaded == 0;
-                    net.load = Some(neopets_sim::save::Slot(bytes.to_vec()));
-                    net.load_fx = match r.u16() {
-                        Some(n) => (0..n).map_while(|_| read_op(r.u8()?, &mut r)).collect(),
-                        None => Vec::new(),
-                    };
-                    net.loaded = generation;
-                    net.state = None;
-                    net.status = format!("Joined {from}.");
-                    if first {
-                        net.notice = Some("Joined the host's game.".into());
+                take_welcome(&mut net, &mut r, from);
+            }
+            (Role::Join, WELCOME_PART) if net.target == Some(from) => {
+                net.last_heard = Some(now);
+                net.peer = Some(from);
+                let (Some(generation), Some(total), Some(k), Some(chunk)) = (r.u32(), r.u16(), r.u16(), r.bytes()) else { continue };
+                let (total, k) = (total as usize, k as usize);
+                if total == 0 || total > 64 || k >= total {
+                    continue;
+                }
+                let mut mask = u64::MAX;
+                if generation != net.loaded {
+                    if net.parts.as_ref().is_none_or(|p| p.0 != generation || p.1.len() != total) {
+                        net.parts = Some((generation, vec![None; total]));
                     }
-                    info!("net: welcome {generation} from {from}");
+                    if let Some((_, parts)) = net.parts.as_mut() {
+                        parts[k] = Some(chunk.to_vec());
+                        mask = parts.iter().enumerate().filter(|(_, p)| p.is_some()).fold(0, |m, (i, _)| m | 1 << i);
+                        if parts.iter().all(Option::is_some) {
+                            let whole: Vec<u8> = parts.iter().flatten().flatten().copied().collect();
+                            net.parts = None;
+                            if let Some((WELCOME, mut wr)) = Reader::open(&whole) {
+                                take_welcome(&mut net, &mut wr, from);
+                            }
+                        }
+                    }
+                }
+                let mut w = Writer::new(PART_ACK);
+                w.u32(generation);
+                w.u64(mask);
+                let bytes = w.0;
+                net.send(&bytes);
+            }
+            (Role::Join, EVENTS) if net.target == Some(from) => {
+                net.last_heard = Some(now);
+                let Some(count) = r.u16() else { continue };
+                for _ in 0..count {
+                    let (Some(n), Some(e)) = (r.u32(), Event::read(&mut r)) else { break };
+                    if n == net.applied + 1 {
+                        net.applied = n;
+                        net.incoming.push(e);
+                    }
+                }
+            }
+            (Role::Join, BLOB_PART) if net.target == Some(from) => {
+                net.last_heard = Some(now);
+                let (Some(ch), Some(rev), Some(total), Some(k), Some(chunk)) = (r.u8(), r.u32(), r.u16(), r.u16(), r.bytes()) else { continue };
+                let (ch, total, k) = (ch as usize, total as usize, k as usize);
+                let held = match ch {
+                    0 => net.story_held.as_ref().map(|h| h.0),
+                    1 => net.world_held.as_ref().map(|h| h.0),
+                    _ => continue,
+                };
+                if total == 0 || total > 64 || k >= total || held.is_some_and(|h| rev <= h) {
+                    continue;
+                }
+                if net.blob_in[ch].as_ref().is_none_or(|b| b.0 != rev || b.1.len() != total) {
+                    net.blob_in[ch] = Some((rev, vec![None; total]));
+                }
+                let Some((_, parts)) = net.blob_in[ch].as_mut() else { continue };
+                parts[k] = Some(chunk.to_vec());
+                if !parts.iter().all(Option::is_some) {
+                    continue;
+                }
+                let whole: Vec<u8> = parts.iter().flatten().flatten().copied().collect();
+                net.blob_in[ch] = None;
+                let mut br = Reader { b: &whole, at: 0 };
+                match ch {
+                    0 => {
+                        let story = (|| {
+                            let n = br.u32()? as usize;
+                            let flags = (0..n.min(65536)).map(|_| br.u16()).collect::<Option<Vec<_>>>()?;
+                            let n = br.u32()? as usize;
+                            let items = (0..n.min(65536)).map(|_| Some((br.u16()?, br.u32()?))).collect::<Option<Vec<_>>>()?;
+                            Some((flags, items, br.i32()?))
+                        })();
+                        if let Some((f, i, np)) = story {
+                            net.story_held = Some((rev, f, i, np));
+                        }
+                    }
+                    _ => {
+                        if let Some(ws) = WorldSync::read(&mut br) {
+                            if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() {
+                                println!("NETREV joiner {} items {} broken {}", rev, ws.items.len(), ws.breakables.iter().filter(|&&b| b == 2).count());
+                            }
+                            net.world_held = Some((rev, ws));
+                        }
+                    }
+                }
+            }
+            (Role::Host, PART_ACK) if net.peer == Some(from) => {
+                net.last_heard = Some(now);
+                if let (Some(generation), Some(mask)) = (r.u32(), r.u64()) {
+                    if generation == net.generation {
+                        net.welcome_mask |= mask;
+                    }
                 }
             }
             (Role::Join, REFUSE) if net.target == Some(from) => {
@@ -1430,6 +1714,21 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                         }
                         None => s.world = net.world_held.as_ref().map(|h| h.1.clone()),
                     }
+                    // Characters and moving items come only when changed: each state's go into
+                    // running copies (cleared at a welcome), and the stored state carries them all.
+                    if net.acc_gen != s.generation {
+                        net.acc_gen = s.generation;
+                        net.chars_acc.clear();
+                        net.moving_acc.clear();
+                    }
+                    for c in &s.characters {
+                        net.chars_acc.insert((c.pack, c.slot, c.ordinal), *c);
+                    }
+                    for m in &s.moving {
+                        net.moving_acc.insert((m.0, m.1), *m);
+                    }
+                    s.characters = net.chars_acc.values().copied().collect();
+                    s.moving = net.moving_acc.values().copied().collect();
                     // A newer world (a later welcome) restarts the host's ticks.
                     if net.state.as_ref().is_none_or(|old| (s.generation, s.tick) >= (old.generation, old.tick)) {
                         net.state = Some(s);
@@ -1449,8 +1748,21 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         net.send(&bytes);
         net.last_sent = Some(now);
     }
-    if let Some(w) = net.welcome.clone().filter(|_| due && net.role == Role::Host) {
-        net.send(&w);
+    let part_due = net.last_sent.is_none_or(|t| now.duration_since(t) > Duration::from_millis(200));
+    if let Some(w) = net.welcome.clone().filter(|_| part_due && net.role == Role::Host) {
+        let chunks: Vec<&[u8]> = w.chunks(PART).collect();
+        for (k, c) in chunks.iter().enumerate() {
+            if net.welcome_mask & (1 << k) != 0 {
+                continue;
+            }
+            let mut m = Writer::new(WELCOME_PART);
+            m.u32(net.generation);
+            m.u16(chunks.len() as u16);
+            m.u16(k as u16);
+            m.bytes(c);
+            let bytes = m.0;
+            net.send(&bytes);
+        }
         net.last_sent = Some(now);
     }
     if net.role == Role::Join {
@@ -1575,18 +1887,23 @@ impl crate::play::Play {
                         .flat_map(|(&pack, pool)| {
                             pool.slots.iter().enumerate().filter_map(move |(k, it)| {
                                 let it = it.as_ref()?;
-                                Some((pack, k as u16, NetItem { id: it.id, position: it.position, state: it.state, angle: it.angle, scale: it.drawn_scale(), direction: it.direction, price: it.price }))
+                                Some((pack, k as u16, NetItem { id: it.id, position: it.position, state: it.state, angle: it.angle, scale: it.drawn_scale(), direction: it.direction, price: it.price, reference: it.reference }))
                             })
                         })
                         .collect();
                     v.sort_by_key(|e| (e.0, e.1));
                     v
                 },
+                chars: {
+                    let mut c: Vec<(u32, u8, u32)> = self.characters.iter().map(|c| (c.pack, c.slot, c.ordinal as u32)).collect();
+                    c.sort_unstable();
+                    c
+                },
             }),
             moving: self
                 .pools
                 .iter()
-                .flat_map(|(&pack, pool)| pool.slots.iter().enumerate().filter_map(move |(k, it)| it.as_ref().filter(|it| it.state != 1).map(|it| (pack, k as u16, it.position, it.angle))))
+                .flat_map(|(&pack, pool)| pool.slots.iter().enumerate().filter_map(move |(k, it)| it.as_ref().filter(|it| !matches!(it.state, 1 | 3 | 4)).map(|it| (pack, k as u16, it.position, it.angle))))
                 .collect(),
             show: Show {
                 music: self.music.channels.map(|c| (c.stream, c.volume)),
@@ -1634,9 +1951,11 @@ impl crate::play::Play {
             o.captions.0 = s.p2_prompt;
         }
         for c in self.characters.iter_mut() {
-            // A character the host does not have (made by this side's own game) is hidden.
+            // States carry only the characters that changed (and a few in turn); a character the
+            // host's set lacks (made by this side's own game) is hidden.
             let Some(h) = s.characters.iter().find(|h| h.pack == c.pack && h.slot == c.slot && h.ordinal as usize == c.ordinal) else {
-                if Some(c.id) != self.pet_char {
+                let known = s.world.as_ref().is_none_or(|w| w.chars.binary_search(&(c.pack, c.slot, c.ordinal as u32)).is_ok());
+                if !known && Some(c.id) != self.pet_char {
                     c.inactive = true;
                 }
                 continue;
@@ -1747,7 +2066,7 @@ impl crate::play::Play {
                         life: 0.0,
                         lifetime: 0.0,
                         age: 10.0,
-                        reference: it.position[1],
+                        reference: it.reference,
                         angle: it.angle,
                         direction: it.direction,
                         scale: it.scale,
@@ -1836,7 +2155,7 @@ mod tests {
             panels: (true, [57, -1, 3, 9], 1, 57, false, 255),
             p2_prompt: Some(13),
             world_rev: 4,
-            world: Some(WorldSync { pack: 909, breakables: vec![1, 2, 0], items: vec![(909, 3, NetItem { id: 160, position: [1.0, 2.0, 3.0], state: 1, angle: 0.5, scale: 1.0, direction: [0.0, 0.0, 1.0], price: -2 })] }),
+            world: Some(WorldSync { pack: 909, breakables: vec![1, 2, 0], items: vec![(909, 3, NetItem { id: 160, position: [1.0, 2.0, 3.0], state: 1, angle: 0.5, scale: 1.0, direction: [0.0, 0.0, 1.0], price: -2, reference: 0.2 })], chars: vec![(909, 1, 0), (909, 2, 3)] }),
             moving: vec![(909, 4, [0.0, 1.0, 0.0], 0.25)],
             flags: vec![1, 500],
             items: vec![(57, 2)],
