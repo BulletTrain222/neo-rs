@@ -210,14 +210,14 @@ committed on its own. **Default** marks a rule chosen without the user; the morn
 them all.
 
 ### Tools first
-1. [ ] `scripts/net_check.py`: starts a host and a joiner window over 127.0.0.1 (host on the
+1. [x] `scripts/net_check.py`: starts a host and a joiner window over 127.0.0.1 (host on the
    autopilot), waits, reads both logs and reports: joined, welcomes, events made and
    acknowledged, effect objects on both sides, music on both, state size. Fails loudly.
-2. [ ] Lossy network switches: NEOPETS_NET_DROP=percent (drop that share of received messages)
+2. [x] Lossy network switches: NEOPETS_NET_DROP=percent (drop that share of received messages)
    and NEOPETS_NET_DELAY=ms (hold received messages that long). Test: at 20% loss and 100 ms,
    every event is still played once and in order, and the session holds.
-3. [ ] A decode test: random and truncated bytes never panic any decoder (synthetic bytes).
-4. [ ] Session tests: a second joiner is refused while one is in; a join before the host is in
+3. [x] A decode test: random and truncated bytes never panic any decoder (synthetic bytes).
+4. [x] Session tests: a second joiner is refused while one is in; a join before the host is in
    a game is refused; a joiner can leave and join again; the host keeps hosting after a leave.
 
 ### Player 2 can do more (one PC and online)

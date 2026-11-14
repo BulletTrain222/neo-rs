@@ -201,7 +201,8 @@ impl Movies {
 pub fn collect(mut movies: Option<ResMut<Movies>>, mut play: Option<ResMut<crate::PlayState>>, mut menu: Option<ResMut<crate::menu_view::Menu>>, settings: Res<crate::display::DisplaySettings>) {
     let _span = crate::perf::span("collect");
     let Some(mv) = movies.as_deref_mut() else { return };
-    mv.off = !settings.movies;
+    // NEOPETS_NO_MOVIES (diagnostic): movies are skipped, as with the Display page's option off.
+    mv.off = !settings.movies || std::env::var_os("NEOPETS_NO_MOVIES").is_some();
     if let Some(m) = menu.as_deref_mut() {
         mv.queue.extend(m.flow.movies.drain(..));
     }

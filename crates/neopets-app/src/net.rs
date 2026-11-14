@@ -865,6 +865,9 @@ pub struct Net {
     /// last went out.
     pub notice: Option<String>,
     pub ended: bool,
+    /// Received messages held for NEOPETS_NET_DELAY, and the NEOPETS_NET_DROP generator.
+    held: std::collections::VecDeque<(Instant, Vec<u8>, SocketAddr)>,
+    lossy: u64,
     /// Host: the story revision, the story it stands for, and the revision the joiner holds.
     /// Joiner: the latest story received (revision, flags, items, Neopoints), put into each
     /// state that comes without one.
@@ -1014,7 +1017,9 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     // NEOPETS_NET_HOST=1 / NEOPETS_NET_JOIN=address (diagnostic): host once play has run a
     // second; join then too, or five seconds after start (from the title screen).
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    let started = START.get_or_init(Instant::now).elapsed() > Duration::from_secs(5) && std::env::var_os("NEOPETS_NET_HOST").is_none();
+    // NEOPETS_NET_HOST=title hosts five seconds after start too, before any game.
+    let early = START.get_or_init(Instant::now).elapsed() > Duration::from_secs(5);
+    let started = early && std::env::var("NEOPETS_NET_HOST").map_or(true, |v| v == "title");
     if net.role == Role::Off && net.request.is_none() && (started || play.as_ref().is_some_and(|p| p.play.ticks > 60)) {
         static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if !ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -1076,12 +1081,30 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         return;
     }
     let now = Instant::now();
-    // The messages waiting.
+    // The messages waiting. NEOPETS_NET_DROP=percent and NEOPETS_NET_DELAY=ms (diagnostic): a
+    // lossy, slow network, made here by dropping that share of received messages and holding
+    // the rest that long.
     let mut buf = vec![0u8; 65536];
-    loop {
-        let Some(s) = net.socket.as_ref() else { break };
+    let drop = std::env::var("NEOPETS_NET_DROP").ok().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
+    let delay = Duration::from_millis(std::env::var("NEOPETS_NET_DELAY").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0));
+    while let Some(s) = net.socket.as_ref() {
         let Ok((n, from)) = s.recv_from(&mut buf) else { break };
-        let Some((kind, mut r)) = Reader::open(&buf[..n]) else { continue };
+        if drop > 0 {
+            net.lossy = net.lossy.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            if ((net.lossy >> 33) % 100) < drop as u64 {
+                continue;
+            }
+        }
+        net.held.push_back((now + delay, buf[..n].to_vec(), from));
+    }
+    let mut ready = Vec::new();
+    while net.held.front().is_some_and(|m| m.0 <= now) {
+        if let Some((_, b, from)) = net.held.pop_front() {
+            ready.push((b, from));
+        }
+    }
+    for (bytes, from) in ready {
+        let Some((kind, mut r)) = Reader::open(&bytes) else { continue };
         match (net.role, kind) {
             (Role::Host, HELLO) => {
                 let (build, disc) = (r.text(), r.u64());
@@ -1177,11 +1200,12 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 net.peer = Some(from);
                 let (Some(generation), Some(bytes)) = (r.u32(), r.bytes()) else { continue };
                 if generation != net.loaded && bytes.len() == neopets_sim::save::SLOT_SIZE {
+                    let first = net.loaded == 0;
                     net.load = Some(neopets_sim::save::Slot(bytes.to_vec()));
                     net.loaded = generation;
                     net.state = None;
                     net.status = format!("Joined {from}.");
-                    if generation == 1 {
+                    if first {
                         net.notice = Some("Joined the host's game.".into());
                     }
                     info!("net: welcome {generation} from {from}");
@@ -1189,6 +1213,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             }
             (Role::Join, REFUSE) if net.target == Some(from) => {
                 let why = r.text().unwrap_or_default();
+                info!("net: refused: {why}");
                 net.stop(&format!("The host said no: {why}."));
             }
             (Role::Join, STATE) if net.target == Some(from) => {
@@ -1543,6 +1568,44 @@ mod tests {
         let (kind, mut r) = Reader::open(&bytes).expect("header");
         assert_eq!(kind, STATE);
         assert_eq!(State::decode(&mut r), Some(s));
+    }
+
+    /// Broken messages (every cut of a full state, and random bytes behind a valid header) are
+    /// refused without a panic.
+    #[test]
+    fn broken_messages_never_panic() {
+        let s = State {
+            tick: 9,
+            events: vec![(1, Event::Sound(Request::Play { id: 1, block: 2, cue: 3, volume: 4, pan: Some(5) })), (2, Event::Movie(7)), (3, Event::Stinger(2))],
+            talk: Some(Talk { open: true, text: b"Hello".to_vec(), ..Default::default() }),
+            characters: vec![CharState::default(); 3],
+            has_story: true,
+            flags: vec![1, 2, 3],
+            ..Default::default()
+        };
+        let bytes = s.encode();
+        for cut in 0..bytes.len() {
+            if let Some((_, mut r)) = Reader::open(&bytes[..cut]) {
+                assert!(State::decode(&mut r).is_none(), "a cut at {cut} decoded");
+            }
+        }
+        let mut x: u64 = 0x1234_5678;
+        for len in 0..400 {
+            let mut b = bytes[..7].to_vec();
+            for _ in 0..len {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                b.push((x >> 56) as u8);
+            }
+            for kind in [HELLO, WELCOME, REFUSE, INPUT, STATE, BYE, PING] {
+                b[6] = kind;
+                if let Some((_, mut r)) = Reader::open(&b) {
+                    let _ = State::decode(&mut r);
+                }
+                if let Some((_, mut r)) = Reader::open(&b) {
+                    let _ = Input::decode(&mut r);
+                }
+            }
+        }
     }
 
     #[test]
