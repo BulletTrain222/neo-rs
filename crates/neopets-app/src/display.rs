@@ -30,7 +30,10 @@ pub const ROWS: usize = 44;
 pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
 /// The rows on the Multiplayer page (docs/MULTIPLAYER.md; this build's feature), in the order
 /// shown: local co-op first, then the shared rules, then online.
-pub const MULTI_ROWS: [usize; 19] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], 27, 25, TOGETHER_ROW, TAGS_ROW, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW, DOORS_ROW];
+pub const MULTI_ROWS: [usize; 18] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], 25, TOGETHER_ROW, TAGS_ROW, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW, DOORS_ROW];
+/// Rows no page shows any more (27, the Player 2 partner choice: every player starts as Tor and
+/// switches on its own).
+pub const RETIRED_ROWS: [usize; 1] = [27];
 /// Local co-op on this computer: start or stop it.
 pub const COOP_ROW: usize = 37;
 /// How many players local co-op has (2 to 4).
@@ -66,7 +69,7 @@ pub fn page_rows(page: u8) -> Vec<usize> {
     match page {
         1 => GAMEPLAY_ROWS.to_vec(),
         2 => MULTI_ROWS.to_vec(),
-        _ => (0..ROWS).filter(|k| !GAMEPLAY_ROWS.contains(k) && !MULTI_ROWS.contains(k)).collect(),
+        _ => (0..ROWS).filter(|k| !GAMEPLAY_ROWS.contains(k) && !MULTI_ROWS.contains(k) && !RETIRED_ROWS.contains(k)).collect(),
     }
 }
 /// Character shadows: off, the original volumes as the game draws them (blocky hulls, a drop of
@@ -1000,7 +1003,7 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(1), [17, 18, 19, 20]);
-        assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 27, 25, 35, 43, 28, 29, 30, 31, 32, 33, 34, 36]);
+        assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 25, 35, 43, 28, 29, 30, 31, 32, 33, 34, 36]);
         assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));

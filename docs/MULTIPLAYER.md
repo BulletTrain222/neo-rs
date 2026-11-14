@@ -12,8 +12,9 @@ top half and players 2 and 3 on the bottom quarters, four with a quarter each. C
 co-op again takes them out. A controller press never starts it. Each other player has their own
 health and magic bars, item panel (D-pad up), Mote panel (D-pad down), camera and rumble; their
 Start opens the pause page with their own item screen (their hero's Motes, and an item used goes
-to them). Player 2 is Roberta when the story has her waiting (the Player 2 row); players 3 and 4
-are always Tor. Local co-op is off while you host or join online.
+to them). Every player starts as Tor and switches between Tor and Roberta with L1 and R1
+together, as in a one-player game: whenever the story lets that hero switch, each player on
+their own (two players may be the same hero). Local co-op is off while you host or join online.
 
 **Controllers.** Each player's controller row picks Auto or Controller 1 to 4, numbered in the
 order the controllers were plugged in. Auto: player 1 has the keyboard and every controller no
@@ -22,8 +23,7 @@ the keyboard. In the menus every controller works.
 
 **On two to four computers (home network).** Up to three friends can join one host (players 2,
 3 and 4), each on their own computer with their own copy of the game disc and the same build of
-this game. A friend who chose Partner on their Player 2 row plays Roberta when the story has
-her and no other player does; everyone else plays player 1's hero. A coloured tag (P1 to P4)
+this game. Every friend starts as Tor and switches heroes with L1 and R1, as above. A coloured tag (P1 to P4)
 over each other player shows who is who (the Player tags row turns it off). If a player leaves, the ones after them move up
 (player 4 becomes player 3). With Doors take **Only you**, any friend can go off into their own
 world; each one comes back when they walk into the host's world (they come back as the next
@@ -71,7 +71,6 @@ out lost messages and uneven delays.
 | Player tags | On, Off | A coloured tag (P1 to P4) over each other player |
 | Knocked out | Revive, Game over | Revive: a fallen player gets up when the other stands beside them for 2 seconds, or by themselves after 10. Game over: any fall ends the game |
 | Split screen | Top and bottom, Side by side | How two players share one computer's screen (three or four always have quarters) |
-| Player 2 | Partner, Second Tor | Partner: Roberta when the story has her; Second Tor: always Tor (players 3 and 4 are always Tor) |
 | Host a game | | Host the game you are playing (press again to stop) |
 | Join address | | The host's address |
 | Join a game | | Join that host (press again to leave) |

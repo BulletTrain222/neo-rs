@@ -801,8 +801,8 @@ impl Net {
         self.peer_name = format!("Player {}", self.seat + 2);
         play.add_player();
         // Back with the hero it left with (the partner came back as Tor when it was not player 2).
-        if self.apart_who != play.hero_index.min(1) && play.others.get(self.seat).is_some_and(|o| o.who.min(1) != self.apart_who) {
-            play.seat_partner(self.seat);
+        if play.others.get(self.seat).is_some_and(|o| o.who.min(1) != self.apart_who) {
+            play.set_player_hero(self.seat, self.apart_who);
         }
         let (hp, mp) = self.other_vitals;
         if let Some(o) = play.others.get_mut(self.seat).filter(|_| hp > 0) {
@@ -1437,11 +1437,7 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                     if p.play.others.len() <= net.seat {
                         p.play.add_player();
                     }
-                    // A later joiner that chose Partner plays her when no one else does.
-                    if net.seat > 0 && partner == Some(true) && p.play.seat_partner(net.seat) {
-                        info!("net: player {} plays the partner (no one else does)", net.seat + 2);
-                    }
-                    info!("net: player {} is hero {:?} (the joiner chose {})", net.seat + 2, p.play.others.get(net.seat).map(|o| o.who), match partner { Some(true) => "the partner", Some(false) => "a second Tor", None => "nothing" });
+                    info!("net: player {} is hero {:?}", net.seat + 2, p.play.others.get(net.seat).map(|o| o.who));
                     // The same game's player back: its health and magic as it left them.
                     if let (Some((g, hp, mp)), Some(o)) = (net.kept, p.play.others.get_mut(net.seat)) {
                         if g == p.play.generation && hp > 0 {

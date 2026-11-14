@@ -2016,6 +2016,13 @@ fn step_sim(
                 // NEOPETS_NET_WALK (diagnostic): this side walks ahead, jumping every 1.5 seconds.
                 // NEOPETS_NET_WALK=circle: it also steers to one side, walking round in circles
                 // (it does not end up against a wall).
+                // NEOPETS_NET_SWITCHAT=T (diagnostic): this side holds L1 and R1 (the hero switch)
+                // for play ticks T to T+5.
+                if let Some(t) = std::env::var("NEOPETS_NET_SWITCHAT").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+                    if (t..t + 6).contains(&play.play.ticks) {
+                        (input.guard, input.run) = (true, true);
+                    }
+                }
                 if let Some(v) = std::env::var_os("NEOPETS_NET_WALK") {
                     input.forward = 1.0;
                     if v == "circle" {
@@ -2226,7 +2233,8 @@ fn step_sim(
                 }
                 // Apart: each joiner meets the host again when it reports this world, or a story
                 // moment here (a movie, a hero switch, game over) calls it back.
-                let story = play.play.state.movie_queue.len() > movies || play.play.swap.is_some() || play.play.death.page.is_some() || play.play.death.flag_e;
+                // (Player 1's own hero switch is play now, not a story moment.)
+                let story = play.play.state.movie_queue.len() > movies || play.play.death.page.is_some() || play.play.death.flag_e;
                 netr.host_rejoins(&mut play.play, story);
                 // NEOPETS_NET_BREAK="first:every" (diagnostic, hosting): from that tick, on each
                 // period, the hero breaks the nearest intact breakable and drops coins (so the

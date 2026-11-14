@@ -1396,6 +1396,8 @@ pub struct Player {
     /// Co-op: this player's caption while down (how long until it gets up, or the revive's
     /// progress), shown in the Square caption's place on its own view (this build's).
     pub down_line: Option<Vec<u8>>,
+    /// L1 and R1 both held last tick (another player's hero switch takes a new press of both).
+    pub switch_held: bool,
     /// Another player of player 1's hero: the outfit model it was given (`Play::outfits`), so a
     /// change of player 1's outfit reaches it (`same_hero_outfits`).
     pub outfit: u32,
@@ -2499,6 +2501,7 @@ impl Play {
                 revive: 0,
                 area_cool: 0,
                 down_line: None,
+                switch_held: false,
                 outfit: 0,
                 items_drawn: Vec::new(),
                 attack: None,
@@ -5829,12 +5832,8 @@ impl Play {
         if self.net_apart {
             return false;
         }
-        // Local co-op (docs/MULTIPLAYER.md): no switch of the player's own while player 2 is in
-        // (player 2 may be the parked hero itself); a story's switch (forced) goes ahead, and
-        // player 2 as the partner then becomes the other hero (`exchange_heroes`).
-        if !self.others.is_empty() && !self.forced_switch {
-            return false;
-        }
+        // Co-op (docs/MULTIPLAYER.md): player 1 switches as in a one-player game; the other
+        // players keep their own heroes (two players may play the same hero).
         let Some(parked) = self.parked.as_ref() else { return false };
         // SPEC-0023 section 12: every request starts the portrait swing (a forced, script request
         // is always accepted and never blocked); the gate is the in-play controls gate.
@@ -19575,13 +19574,18 @@ impl Play {
         p.hud = self.hud.clone();
         p.hud.rearm_all();
         p.who = self.hero_index;
-        // Player 2 (only) is the waiting partner when there is one.
-        if let Some(r) = self.parked.as_ref().filter(|_| seat == 0 && self.p2_partner()) {
-            p.who = 1 - self.hero_index.min(1);
-            p.hero = r.anim.clone();
-            p.model = r.model.clone();
-            (p.hero_hp, p.hero_max, p.hero_mp, p.hero_mp_max) = (r.hp, r.hp_max, r.mp, r.mp_max);
+        // Every other player starts as Tor (the user's choice): player 1's hero when it is Tor,
+        // else the waiting Tor's.
+        if self.hero_index.min(1) != 0 {
+            if let Some(r) = self.parked.as_ref() {
+                p.who = 0;
+                p.hero = r.anim.clone();
+                p.model = r.model.clone();
+                (p.hero_hp, p.hero_max, p.hero_mp, p.hero_mp_max) = (r.hp, r.hp_max, r.mp, r.mp_max);
+                p.outfit = 0;
+            }
         }
+        let _ = seat;
         (p.hold, p.hang, p.line_hang, p.ledge, p.ledge_record, p.climb, p.ladder, p.panel) = (None, None, None, None, None, None, None, None);
         (p.ride, p.ride_lock, p.rope_hero, p.r_attack, p.carried, p.lock, p.held_at) = (None, None, None, None, None, None, None);
         p.hero_shots.clear();
@@ -19652,24 +19656,31 @@ impl Play {
         }
     }
 
-    /// Player `k` (`others[k]`) plays the partner (Roberta when the story has her waiting) when
-    /// no other player has her: a joiner after player 2 that chose Partner, or a partner coming
-    /// back from a world of its own as a later player (it came back as Tor).
-    pub fn seat_partner(&mut self, k: usize) -> bool {
-        let other = 1 - self.hero_index.min(1);
-        if self.others.iter().enumerate().any(|(j, o)| j != k && o.who.min(1) == other) {
-            return false;
-        }
-        let Some(pk) = self.parked.as_ref() else { return false };
-        let (anim, model, stats) = (pk.anim.clone(), pk.model.clone(), (pk.hp, pk.hp_max, pk.mp, pk.mp_max));
+    /// Player `k` (`others[k]`) plays hero `who` (0 Tor, 1 Roberta): that hero's model and rig
+    /// (player 1's when it is player 1's hero, else the waiting hero's), its health and magic
+    /// limits, and its health and magic kept in proportion; the clip goes on. False when the
+    /// story has no such hero here.
+    pub fn set_player_hero(&mut self, k: usize, who: usize) -> bool {
+        let who = who.min(1);
+        let (anim, model, hp_max, mp_max, outfit) = if who == self.hero_index.min(1) {
+            (self.player.hero.clone(), self.player.model.clone(), self.player.hero_max, self.player.hero_mp_max, self.outfits[who])
+        } else {
+            let Some(pk) = self.parked.as_ref() else { return false };
+            (pk.anim.clone(), pk.model.clone(), pk.hp_max, pk.mp_max, 0)
+        };
         let Some(o) = self.others.get_mut(k) else { return false };
-        o.who = other;
+        let action = o.hero.clip_state().action;
+        let ratio = |v: i32, max: i32, new: i32| if max > 0 { ((v as i64 * new as i64) / max as i64) as i32 } else { new };
+        o.hero_hp = ratio(o.hero_hp, o.hero_max, hp_max).clamp(1, hp_max.max(1));
+        o.hero_mp = ratio(o.hero_mp, o.hero_mp_max, mp_max).clamp(0, mp_max.max(0));
+        (o.hero_max, o.hero_mp_max) = (hp_max, mp_max);
+        o.who = who;
         o.hero = anim;
+        o.hero.play(action);
         o.model = model;
-        (o.hero_hp, o.hero_max, o.hero_mp, o.hero_mp_max) = stats;
+        o.outfit = outfit;
         o.attack = None;
         o.r_attack = None;
-        o.outfit = 0;
         true
     }
 
@@ -19761,6 +19772,24 @@ impl Play {
         let cut_ended = std::mem::replace(&mut self.coop_cut, cut_now) && !cut_now;
         for i in 0..self.others.len() {
             let (mut input, pad) = inputs.get(i).copied().unwrap_or_default();
+            // The hero switch (L1 and R1 together, as player 1's): this player turns into the
+            // other hero on its own, where the story lets that hero be switched from, standing
+            // on the ground with no box up (the user's choice: every player switches freely).
+            let chord = input.guard && input.run;
+            let switch = chord && !self.others[i].switch_held;
+            self.others[i].switch_held = chord;
+            if switch {
+                let o = &self.others[i];
+                let ready = o.down.is_none() && o.loco.state != hero_states::DEAD && o.loco.state != 25 && o.loco.body.gap <= 0.15 && !self.dialogue_open;
+                let from = o.who.min(1);
+                if ready && neopets_sim::swap::allowed(self.swap_mode, from) && self.set_player_hero(i, 1 - from) {
+                    let at = self.others[i].loco.position();
+                    let table = self.effect_table.clone();
+                    self.effects.one_shot(&table, 4025, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+                    self.last_swap = format!("player {} switched to hero {} on tick {}", i + 2, 1 - from, self.ticks);
+                    bevy::log::info!("co-op: player {} switched to {}", i + 2, if from == 0 { "Roberta" } else { "Tor" });
+                }
+            }
             // Diagnostic (diag_p2_door_at): player 2 presses Square for a few ticks.
             if i == 0 && self.diag_p2_square > 0 {
                 self.diag_p2_square -= 1;
@@ -20155,10 +20184,9 @@ impl Play {
     /// Whether player 2 is the partner hero (else a second Tor): the joiner's choice online,
     /// else the Multiplayer page's here.
     pub fn p2_partner(&self) -> bool {
-        match self.coop_partner_remote {
-            Some(p) if self.coop_remote => p,
-            _ => self.coop_partner,
-        }
+        // Every player starts as Tor and switches on its own (the user's choice): no player is
+        // tied to player 1's other hero.
+        false
     }
 
     pub fn swap_player(&mut self, i: usize) {

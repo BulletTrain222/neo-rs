@@ -236,6 +236,13 @@ pub fn read_coop(
                 s.jump |= ticks % 90 == 45;
                 s.attack |= ticks % 90 == 20;
             }
+            // NEOPETS_COOP_SWITCHAT=T (diagnostic): a player with no controller presses L1 and
+            // R1 (the hero switch) for ticks T to T+5.
+            if let Some(t) = std::env::var("NEOPETS_COOP_SWITCHAT").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+                if i < local && (t..t + 6).contains(&ticks) {
+                    (s.input.guard, s.input.run) = (true, true);
+                }
+            }
             continue;
         };
         // In play: Start opens the pause page for this player.
