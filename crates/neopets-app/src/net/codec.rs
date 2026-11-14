@@ -37,6 +37,25 @@ impl Writer {
             self.f32(x);
         }
     }
+    /// A direction (each part within -1 to 1) in three 16-bit parts (a step of 1/32767).
+    pub(super) fn dir(&mut self, v: [f32; 3]) {
+        for x in v {
+            self.u16((x.clamp(-1.0, 1.0) * 32767.0).round() as i16 as u16);
+        }
+    }
+    /// A clip or other id: 16 bits, or 0xFFFF and 32 bits when larger.
+    pub(super) fn id(&mut self, v: u32) {
+        if v < 0xFFFF {
+            self.u16(v as u16);
+        } else {
+            self.u16(0xFFFF);
+            self.u32(v);
+        }
+    }
+    /// A health or magic number: 16 bits, clamped.
+    pub(super) fn small(&mut self, v: i32) {
+        self.u16(v.clamp(i16::MIN as i32, i16::MAX as i32) as i16 as u16);
+    }
     pub(super) fn bytes(&mut self, b: &[u8]) {
         self.u32(b.len() as u32);
         self.0.extend_from_slice(b);
@@ -84,6 +103,19 @@ impl<'a> Reader<'a> {
     }
     pub(super) fn v3(&mut self) -> Option<[f32; 3]> {
         Some([self.f32()?, self.f32()?, self.f32()?])
+    }
+    pub(super) fn dir(&mut self) -> Option<[f32; 3]> {
+        let mut d = || self.u16().map(|v| v as i16 as f32 / 32767.0);
+        Some([d()?, d()?, d()?])
+    }
+    pub(super) fn id(&mut self) -> Option<u32> {
+        match self.u16()? {
+            0xFFFF => self.u32(),
+            v => Some(v as u32),
+        }
+    }
+    pub(super) fn small(&mut self) -> Option<i32> {
+        Some(self.u16()? as i16 as i32)
     }
     pub(super) fn bytes(&mut self) -> Option<&'a [u8]> {
         let n = self.u32()? as usize;
@@ -689,21 +721,21 @@ pub struct Talk {
 }
 
 pub(super) fn write_hero(w: &mut Writer, h: &HeroState) {
-    w.u8(h.who);
+    w.u8(h.who | (h.down as u8) << 7);
     w.v3(h.position);
-    w.v3(h.facing);
+    w.dir(h.facing);
     w.u8(h.state);
-    w.u32(h.clip);
-    w.i32(h.hp);
-    w.i32(h.hp_max);
-    w.i32(h.mp);
-    w.i32(h.mp_max);
+    w.id(h.clip);
+    w.small(h.hp);
+    w.small(h.hp_max);
+    w.small(h.mp);
+    w.small(h.mp_max);
     w.u8(h.flash);
-    w.u8(h.down as u8);
 }
 
 pub(super) fn read_hero(r: &mut Reader) -> Option<HeroState> {
-    Some(HeroState { who: r.u8()?, position: r.v3()?, facing: r.v3()?, state: r.u8()?, clip: r.u32()?, hp: r.i32()?, hp_max: r.i32()?, mp: r.i32()?, mp_max: r.i32()?, flash: r.u8()?, down: r.u8()? != 0 })
+    let who = r.u8()?;
+    Some(HeroState { who: who & 0x7F, down: who & 0x80 != 0, position: r.v3()?, facing: r.dir()?, state: r.u8()?, clip: r.id()?, hp: r.small()?, hp_max: r.small()?, mp: r.small()?, mp_max: r.small()?, flash: r.u8()? })
 }
 
 impl State {
@@ -717,15 +749,27 @@ impl State {
         }
         w.v3(self.eye);
         w.v3(self.focus);
-        w.u32(self.characters.len() as u32);
+        // The characters: the worlds they belong to once, then each by its world's index.
+        let mut packs: Vec<u32> = Vec::new();
         for c in &self.characters {
-            w.u32(c.pack);
+            if !packs.contains(&c.pack) {
+                packs.push(c.pack);
+            }
+        }
+        w.u8(packs.len().min(255) as u8);
+        for &p in packs.iter().take(255) {
+            w.u32(p);
+        }
+        let shown: Vec<&CharState> = self.characters.iter().filter(|c| packs.iter().take(255).any(|&p| p == c.pack)).collect();
+        w.u16(shown.len() as u16);
+        for c in shown {
+            w.u8(packs.iter().position(|&p| p == c.pack).unwrap_or(0) as u8);
             w.u8(c.slot);
-            w.u32(c.ordinal);
+            w.id(c.ordinal);
             w.v3(c.position);
-            w.v3(c.facing);
-            w.u32(c.clip);
-            w.i32(c.hp);
+            w.dir(c.facing);
+            w.id(c.clip);
+            w.small(c.hp);
             w.u8(c.dead as u8 | (c.inactive as u8) << 1);
         }
         w.u32(self.story);
@@ -831,10 +875,16 @@ impl State {
         let pack = r.u32()?;
         let heroes = [read_hero(r)?, read_hero(r)?];
         let (eye, focus) = (r.v3()?, r.v3()?);
-        let n = r.u32()? as usize;
+        let np = r.u8()? as usize;
+        let mut packs = Vec::with_capacity(np);
+        for _ in 0..np {
+            packs.push(r.u32()?);
+        }
+        let n = r.u16()? as usize;
         let mut characters = Vec::with_capacity(n.min(1024));
         for _ in 0..n {
-            let (pack, slot, ordinal, position, facing, clip, hp, bits) = (r.u32()?, r.u8()?, r.u32()?, r.v3()?, r.v3()?, r.u32()?, r.i32()?, r.u8()?);
+            let pack = *packs.get(r.u8()? as usize)?;
+            let (slot, ordinal, position, facing, clip, hp, bits) = (r.u8()?, r.id()?, r.v3()?, r.dir()?, r.id()?, r.small()?, r.u8()?);
             characters.push(CharState { pack, slot, ordinal, position, facing, clip, hp, dead: bits & 1 != 0, inactive: bits & 2 != 0 });
         }
         let story = r.u32()?;

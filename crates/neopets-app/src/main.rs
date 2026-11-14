@@ -1957,6 +1957,14 @@ fn step_sim(
                     let (eye, forward, _, _) = play.play.view();
                     net::listener_of(eye, forward)
                 };
+                // The placed host voices' volume and pan from this side's view, each tick.
+                {
+                    let ids: Vec<usize> = netr.voices.keys().copied().collect();
+                    for id in ids {
+                        let r = net::hear(neopets_sim::sound::Request::Set { id, volume: 0, pan: None }, &mut netr.voices, &ears);
+                        play.play.sound.requests.push(r);
+                    }
+                }
                 for e in std::mem::take(&mut netr.incoming) {
                     match e {
                         net::Event::Voice { id, emitter, base, r, r0 } => {
@@ -2077,11 +2085,21 @@ fn step_sim(
                         netr.rewelcome(&slot, pack, game, &fx);
                     }
                     for r in play.play.sound.requests[sounds.min(play.play.sound.requests.len())..].to_vec() {
-                        // A voice with a place: where, so the joiner hears it from its own player.
-                        if let neopets_sim::sound::Request::Play { id, .. } = r {
-                            if let Some((emitter, base, rr, r0)) = play.play.sound.source(id) {
-                                netr.push_event(net::Event::Voice { id: id as u32, emitter, base, r: rr, r0 });
+                        // A voice with a place: where, so the joiner hears it from its own player
+                        // (and works out its volume and pan each tick itself: the host's changes
+                        // for it are not sent).
+                        match r {
+                            neopets_sim::sound::Request::Play { id, .. } => {
+                                if let Some((emitter, base, rr, r0)) = play.play.sound.source(id) {
+                                    netr.push_event(net::Event::Voice { id: id as u32, emitter, base, r: rr, r0 });
+                                    netr.placed.insert(id);
+                                }
                             }
+                            neopets_sim::sound::Request::Set { id, .. } if netr.placed.contains(&id) => continue,
+                            neopets_sim::sound::Request::Stop { id } => {
+                                netr.placed.remove(&id);
+                            }
+                            _ => {}
                         }
                         netr.push_event(net::Event::Sound(r));
                     }

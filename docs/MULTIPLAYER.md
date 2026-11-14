@@ -572,12 +572,12 @@ stand-in on this computer, and left for the user to switch on.
    from the perf spans (CPU spans are real with the display off; frame times are not).
 
 ### Smaller, faster messages (for the internet)
-10. [ ] Positions and facings packed into 16 bits each where the loss is under a hundredth of
+10. [x] (facings, clips and health packed; places kept exact; 13 to 32% less traffic) Positions and facings packed into 16 bits each where the loss is under a hundredth of
     a unit; traffic measured before and after.
-11. [ ] Heroes sent only when they change, as characters are.
-12. [ ] Sound volume and pan changes (the most common event) sent only when they change by
+11. [x] (left as is: heroes change nearly every tick) Heroes sent only when they change, as characters are.
+12. [x] (placed voices' changes not sent at all; the joiner works them out) Sound volume and pan changes (the most common event) sent only when they change by
     more than a step a listener would hear.
-13. [ ] The welcome's save slot packed (runs of zeros), and the join time measured.
+13. [x] (not needed: 0.22 s at 100 ms each way) The welcome's save slot packed (runs of zeros), and the join time measured.
 14. [ ] Bandwidth at rest, walking and in a fight, written in "How to play together".
 
 ### How the joiner feels
@@ -626,8 +626,8 @@ stand-in on this computer, and left for the user to switch on.
 ### Tests and tools
 39. [ ] net_check.py `--long` (an hour) and `--soak` (joins and leaves) modes.
 40. [ ] A scenario per new co-op rule.
-41. [ ] Synthetic tests for the packing (round trip within its step), the password, names.
-42. [ ] A test that a state with every field at its largest stays under the limit.
+41. [~] (packing done; password and names to come) Synthetic tests for the packing (round trip within its step), the password, names.
+42. [x] (and at most 18 characters a state) A test that a state with every field at its largest stays under the limit.
 43. [ ] scripts/net_check.py reports CPU per tick.
 
 ### Single player, found along the way

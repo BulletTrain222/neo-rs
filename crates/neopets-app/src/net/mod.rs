@@ -34,7 +34,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 20;
+const PROTOCOL: u16 = 21;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -57,6 +57,9 @@ const PART: usize = 1000;
 const BLOB_PART: u8 = 10;
 /// A state stays under this many bytes (events fill the room left), so it never needs fragments.
 const STATE_LIMIT: usize = 1150;
+/// The most characters in one state (27 bytes each when packed; with a long talk box and the
+/// monster bar a state then stays under the limit).
+const CHARS_A_STATE: usize = 18;
 /// Events that did not fit in a state, in up to two more messages a tick.
 const EVENTS: u8 = 11;
 /// The joiner's world has differed from the host's for a while: a new welcome, please.
@@ -220,6 +223,9 @@ pub struct Net {
     join_started: Option<Instant>,
     /// Host, for the trace: events made since the last trace line, by kind (`kind_of`).
     kinds: [u32; 10],
+    /// Host: the voices sent with a place (the joiner works out their volume and pan itself
+    /// each tick, so their volume and pan changes are not sent).
+    pub placed: std::collections::HashSet<usize>,
 }
 
 /// An event's kind for the trace: sound play, set, stop; effect add, one-shot, update, other;
@@ -291,6 +297,7 @@ impl Net {
         self.resync = false;
         self.rate_at = None;
         self.cmd_done = 0;
+        self.placed.clear();
     }
 
     fn stop(&mut self, status: &str) {
@@ -393,21 +400,26 @@ impl Net {
                 let n = s.characters.len().max(1);
                 let start = self.cursor.0 % n;
                 let last = &mut self.chars_last;
-                let keep: Vec<bool> = s
-                    .characters
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| {
-                        let key = (c.pack, c.slot, c.ordinal);
-                        let changed = last.get(&key).is_none_or(|p| {
-                            p.clip != c.clip || p.hp != c.hp || p.dead != c.dead || p.inactive != c.inactive || (0..3).any(|j| (p.position[j] - c.position[j]).abs() > 1e-3 || (p.facing[j] - c.facing[j]).abs() > 1e-3)
-                        });
+                // At most CHARS_A_STATE a state, taken from the turning start, so a crowd never
+                // takes a state past the limit; a changed character left out stays changed and
+                // goes with a following state.
+                let mut keep = vec![false; s.characters.len()];
+                let mut sent = 0;
+                for k in 0..s.characters.len() {
+                    let i = (start + k) % n;
+                    let c = &s.characters[i];
+                    let key = (c.pack, c.slot, c.ordinal);
+                    let changed = last.get(&key).is_none_or(|p| {
+                        p.clip != c.clip || p.hp != c.hp || p.dead != c.dead || p.inactive != c.inactive || (0..3).any(|j| (p.position[j] - c.position[j]).abs() > 1e-3 || (p.facing[j] - c.facing[j]).abs() > 1e-3)
+                    });
+                    if (changed || k < 4) && sent < CHARS_A_STATE {
                         if changed {
                             last.insert(key, *c);
                         }
-                        changed || (i + n - start) % n < 4
-                    })
-                    .collect();
+                        keep[i] = true;
+                        sent += 1;
+                    }
+                }
                 let mut it = keep.iter();
                 s.characters.retain(|_| *it.next().unwrap_or(&false));
                 self.cursor.0 = start + 4;
@@ -1460,6 +1472,46 @@ mod tests {
         assert_eq!(hear(other, &mut voices, &near), other);
         hear(Request::Stop { id: 7 }, &mut voices, &near);
         assert!(voices.is_empty());
+    }
+
+    /// The packed records come back within their step: a facing within 1/32767, a large clip
+    /// or ordinal exactly, health clamped to 16 bits.
+    #[test]
+    fn packed_records_round_trip() {
+        let mut s = State::default();
+        s.heroes[1] = HeroState { who: 1, position: [1234.5, -3.25, 99.0], facing: [0.6, 0.0, -0.8], state: 7, clip: 70_000, hp: 150, hp_max: 40_000, mp: -3, mp_max: 9, flash: 2, down: true };
+        s.characters = vec![
+            CharState { pack: 909, slot: 3, ordinal: 70_000, position: [1.0, 2.0, 3.0], facing: [0.0, 1.0, 0.0], clip: 162, hp: 35, dead: true, inactive: false },
+            CharState { pack: 1066, slot: 0, ordinal: 2, position: [-1.5, 0.0, 8.0], facing: [-0.70710678, 0.0, 0.70710678], clip: 0xFFFF, hp: -5, dead: false, inactive: true },
+        ];
+        let b = s.encode();
+        let (_, mut r) = Reader::open(&b).unwrap();
+        let d = State::decode(&mut r).unwrap();
+        let h = &d.heroes[1];
+        assert_eq!((h.who, h.down, h.position, h.state, h.clip, h.hp, h.hp_max, h.mp, h.flash), (1, true, [1234.5, -3.25, 99.0], 7, 70_000, 150, 32_767, -3, 2));
+        assert!((0..3).all(|k| (h.facing[k] - s.heroes[1].facing[k]).abs() <= 1.0 / 32767.0));
+        for (a, c) in s.characters.iter().zip(&d.characters) {
+            assert_eq!((a.pack, a.slot, a.ordinal, a.position, a.clip, a.hp, a.dead, a.inactive), (c.pack, c.slot, c.ordinal, c.position, c.clip, c.hp, c.dead, c.inactive));
+            assert!((0..3).all(|k| (a.facing[k] - c.facing[k]).abs() <= 1.0 / 32767.0));
+        }
+    }
+
+    /// A busy state (both heroes, the most characters a state takes, a long talk box, the monster
+    /// bar, shots and moving items) stays under the limit before any events go in.
+    #[test]
+    fn a_busy_state_stays_under_the_limit() {
+        let mut s = State::default();
+        s.characters = (0..CHARS_A_STATE as u32).map(|k| CharState { pack: 909 + k % 2, slot: (k % 7) as u8, ordinal: k, ..Default::default() }).collect();
+        s.talk = Some(Talk { open: true, text: vec![b'x'; 160], speaker: b"Hubert".to_vec(), labels: (b"Next".to_vec(), b"Finish".to_vec()), ..Default::default() });
+        s.show.monster = Some((300, 7, b"Plague Serpent".to_vec(), 90, 1, 2));
+        s.moving = vec![(909, 1, [0.0; 3], 0.0); 4];
+        let size = s.encode().len();
+        let base = State::default().encode().len();
+        let mut no_chars = s.clone();
+        no_chars.characters.clear();
+        let mut no_talk = s.clone();
+        no_talk.talk = None;
+        assert!(size < STATE_LIMIT, "{size} bytes; empty {base}, without characters {}, without talk {}", no_chars.encode().len(), no_talk.encode().len());
     }
 
     /// A missing state carries the heroes and characters on by their last step (k ticks), and
