@@ -1713,7 +1713,7 @@ pub struct Play {
     /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
     /// pending save values, the bonus words and the low-time mark.
     pub petpet: Option<neopets_sim::petpet::Live>,
-    pet_char: Option<u64>,
+    pub(crate) pet_char: Option<u64>,
     pet_spawn: Option<[f32; 3]>,
     pub pet_pending: neopets_sim::petpet::Pending,
     pet_bonus: neopets_sim::petpet::Bonus,
@@ -18281,6 +18281,14 @@ impl Play {
         self.break_one_with(i, true);
         self.break_from = None;
         println!("      debris live {}", self.debris.pieces.len());
+    }
+
+    /// A joiner (net.rs): the host broke breakable i of the current world (debris, drops and
+    /// spawns as a break here; its sounds and effects come from the host).
+    pub fn net_break(&mut self, i: usize) {
+        if self.world.breakables.get(i).is_some_and(|b| b.state != 2) {
+            self.break_one_with(i, false);
+        }
     }
 
     fn break_one_with(&mut self, i: usize, with_cue: bool) {

@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 8;
+const PROTOCOL: u16 = 9;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -164,6 +164,7 @@ pub struct CharState {
     pub clip: u32,
     pub hp: i32,
     pub dead: bool,
+    pub inactive: bool,
 }
 
 /// The host's game after one tick, as the joiner applies it.
@@ -198,8 +199,66 @@ pub struct State {
     pub panels: (bool, [i32; 4], u8, i32, bool, u8),
     /// Player 2's door prompt (its Square caption) for the joiner's HUD.
     pub p2_prompt: Option<u16>,
+    /// The world's breakables and items (revision counted up at each change; carried until the
+    /// joiner acknowledges it), and the moving dropped items' places every tick.
+    pub world_rev: u32,
+    pub world: Option<WorldSync>,
+    pub moving: Vec<(u32, u16, [f32; 3], f32)>,
     /// What the host's screen and music show that the joiner shows too.
     pub show: Show,
+}
+
+/// The breakables of the current world (their states) and the live items of each resident world
+/// (pack, slot, and the item as the joiner draws it: id, place, state, angle, scale, facing).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WorldSync {
+    pub pack: u32,
+    pub breakables: Vec<u8>,
+    pub items: Vec<(u32, u16, NetItem)>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NetItem {
+    pub id: u16,
+    pub position: [f32; 3],
+    pub state: u8,
+    pub angle: f32,
+    pub scale: f32,
+    pub direction: [f32; 3],
+    pub price: i16,
+}
+
+impl WorldSync {
+    fn write(&self, w: &mut Writer) {
+        w.u32(self.pack);
+        w.u16(self.breakables.len() as u16);
+        w.0.extend_from_slice(&self.breakables);
+        w.u16(self.items.len() as u16);
+        for (pack, slot, it) in &self.items {
+            w.u32(*pack);
+            w.u16(*slot);
+            w.u16(it.id);
+            w.v3(it.position);
+            w.u8(it.state);
+            w.f32(it.angle);
+            w.f32(it.scale);
+            w.v3(it.direction);
+            w.u16(it.price as u16);
+        }
+    }
+
+    fn read(r: &mut Reader) -> Option<Self> {
+        let pack = r.u32()?;
+        let n = r.u16()? as usize;
+        let breakables = r.take(n)?.to_vec();
+        let n = r.u16()? as usize;
+        let mut items = Vec::with_capacity(n.min(512));
+        for _ in 0..n {
+            let (p, s) = (r.u32()?, r.u16()?);
+            items.push((p, s, NetItem { id: r.u16()?, position: r.v3()?, state: r.u8()?, angle: r.f32()?, scale: r.f32()?, direction: r.v3()?, price: r.u16()? as i16 }));
+        }
+        Some(Self { pack, breakables, items })
+    }
 }
 
 /// The host's music, fade, letterbox, monster bar, message and camera shake after a tick.
@@ -596,7 +655,7 @@ impl State {
             w.v3(c.facing);
             w.u32(c.clip);
             w.i32(c.hp);
-            w.u8(c.dead as u8);
+            w.u8(c.dead as u8 | (c.inactive as u8) << 1);
         }
         w.u32(self.story);
         w.u8(self.has_story as u8);
@@ -657,6 +716,21 @@ impl State {
         w.i32(pn.3);
         w.u8(pn.5);
         w.u16(self.p2_prompt.map_or(u16::MAX, |p| p));
+        w.u32(self.world_rev);
+        match &self.world {
+            Some(ws) => {
+                w.u8(1);
+                ws.write(&mut w);
+            }
+            None => w.u8(0),
+        }
+        w.u16(self.moving.len() as u16);
+        for (pack, slot, at, angle) in &self.moving {
+            w.u32(*pack);
+            w.u16(*slot);
+            w.v3(*at);
+            w.f32(*angle);
+        }
         w.0
     }
 
@@ -669,7 +743,8 @@ impl State {
         let n = r.u32()? as usize;
         let mut characters = Vec::with_capacity(n.min(1024));
         for _ in 0..n {
-            characters.push(CharState { pack: r.u32()?, slot: r.u8()?, ordinal: r.u32()?, position: r.v3()?, facing: r.v3()?, clip: r.u32()?, hp: r.i32()?, dead: r.u8()? != 0 });
+            let (pack, slot, ordinal, position, facing, clip, hp, bits) = (r.u32()?, r.u8()?, r.u32()?, r.v3()?, r.v3()?, r.u32()?, r.i32()?, r.u8()?);
+            characters.push(CharState { pack, slot, ordinal, position, facing, clip, hp, dead: bits & 1 != 0, inactive: bits & 2 != 0 });
         }
         let story = r.u32()?;
         let has_story = r.u8()? != 0;
@@ -714,7 +789,17 @@ impl State {
         let entries = [r.i32()?, r.i32()?, r.i32()?, r.i32()?];
         let panels = (bits & 1 != 0, entries, r.u8()?, r.i32()?, bits & 2 != 0, r.u8()?);
         let p2_prompt = Some(r.u16()?).filter(|&p| p != u16::MAX);
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt })
+        let world_rev = r.u32()?;
+        let world = match r.u8()? {
+            1 => Some(WorldSync::read(r)?),
+            _ => None,
+        };
+        let n = r.u16()? as usize;
+        let mut moving = Vec::with_capacity(n.min(256));
+        for _ in 0..n {
+            moving.push((r.u32()?, r.u16()?, r.v3()?, r.f32()?));
+        }
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving })
     }
 }
 
@@ -727,6 +812,7 @@ pub struct Input {
     /// story revision held here.
     pub ack: u32,
     pub story: u32,
+    pub world: u32,
     pub side: f32,
     pub forward: f32,
     pub held: u16,
@@ -754,6 +840,7 @@ impl Input {
             generation,
             ack: ack.0,
             story: ack.1,
+            world: 0,
             side: i.side,
             forward: i.forward,
             held: bit(i.run, RUN) | bit(i.square_held, SQUARE_HELD) | bit(i.cross_held, CROSS_HELD) | bit(i.guard, GUARD) | bit(i.attack_held, ATTACK_HELD) | bit(i.r2_held, R2) | bit(i.circle_held, CIRCLE) | bit(i.l2, L2),
@@ -797,6 +884,7 @@ impl Input {
         w.u32(self.generation);
         w.u32(self.ack);
         w.u32(self.story);
+        w.u32(self.world);
         w.f32(self.side);
         w.f32(self.forward);
         w.u16(self.held);
@@ -810,7 +898,7 @@ impl Input {
     }
 
     fn decode(r: &mut Reader) -> Option<Self> {
-        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?] })
+        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?] })
     }
 }
 
@@ -879,6 +967,13 @@ pub struct Net {
     story_last: Option<(Vec<u16>, Vec<(u16, u32)>, i32)>,
     story_acked: u32,
     pub story_held: Option<(u32, Vec<u16>, Vec<(u16, u32)>, i32)>,
+    /// The world sync's revisions, as the story's: the host's count, what it stands for and the
+    /// joiner's acknowledgement; the joiner's latest copy.
+    world_rev: u32,
+    #[allow(clippy::type_complexity)]
+    world_last: Option<(u32, Vec<u8>, Vec<(u32, u16, u16, u8)>)>,
+    world_acked: u32,
+    pub world_held: Option<(u32, WorldSync)>,
     pub peer_paused: bool,
     /// The other side's page: 0 in play, 1 a menu (paused), 2 game over.
     pub peer_page: u8,
@@ -929,6 +1024,22 @@ impl Net {
             }
             s.story = self.story_rev;
             s.has_story = self.story_acked < self.story_rev;
+            // The world's breakables and the set of live items (not their bouncing places).
+            let sig = s.world.as_ref().map(|w| (w.pack, w.breakables.clone(), w.items.iter().map(|(p, k, it)| (*p, *k, it.id, it.state)).collect::<Vec<_>>()));
+            if sig != self.world_last {
+                self.world_rev += 1;
+                if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() {
+                    println!("NETREV host {} items {:?} broken {:?}", self.world_rev, s.world.as_ref().map(|w| w.items.len()), s.world.as_ref().map(|w| w.breakables.iter().filter(|&&b| b == 2).count()));
+                }
+                self.world_last = sig;
+            }
+            s.world_rev = self.world_rev;
+            if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && s.tick % 300 == 0 {
+                println!("NETW host tick {}: world rev {} acknowledged {} items {:?}", s.tick, self.world_rev, self.world_acked, s.world.as_ref().map(|w| w.items.len()));
+            }
+            if self.world_acked >= self.world_rev {
+                s.world = None;
+            }
             if !s.has_story {
                 (s.flags, s.items) = (Vec::new(), Vec::new());
             }
@@ -1159,6 +1270,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     }
                     net.acked = net.acked.max(i.ack);
                     net.story_acked = net.story_acked.max(i.story);
+                    net.world_acked = net.world_acked.max(i.world);
                     net.remote = Some(i);
                 }
             }
@@ -1237,6 +1349,19 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                         }
                     } else if let Some((_, f, i, n)) = net.story_held.as_ref() {
                         (s.flags, s.items, s.neopoints) = (f.clone(), i.clone(), *n);
+                    }
+                    // The world sync, as the story: keep the latest, give it to states without.
+                    match s.world.take() {
+                        Some(ws) => {
+                            if net.world_held.as_ref().is_none_or(|h| s.world_rev >= h.0) {
+                                if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && net.world_held.as_ref().is_none_or(|h| h.0 != s.world_rev) {
+                                    println!("NETREV joiner {} items {} broken {}", s.world_rev, ws.items.len(), ws.breakables.iter().filter(|&&b| b == 2).count());
+                                }
+                                net.world_held = Some((s.world_rev, ws.clone()));
+                            }
+                            s.world = Some(ws);
+                        }
+                        None => s.world = net.world_held.as_ref().map(|h| h.1.clone()),
                     }
                     // A newer world (a later welcome) restarts the host's ticks.
                     if net.state.as_ref().is_none_or(|old| (s.generation, s.tick) >= (old.generation, old.tick)) {
@@ -1349,7 +1474,7 @@ impl crate::play::Play {
             characters: self
                 .characters
                 .iter()
-                .map(|c| CharState { pack: c.pack, slot: c.slot, ordinal: c.ordinal as u32, position: c.position, facing: c.facing, clip: c.anim.clip_state().action, hp: c.hp, dead: c.dying.is_some() || c.enemy.as_ref().is_some_and(|e| e.is_dead()) })
+                .map(|c| CharState { pack: c.pack, slot: c.slot, ordinal: c.ordinal as u32, position: c.position, facing: c.facing, clip: c.anim.clip_state().action, hp: c.hp, dead: c.dying.is_some() || c.enemy.as_ref().is_some_and(|e| e.is_dead()), inactive: c.inactive })
                 .collect(),
             flags: self.state.flags.iter().copied().collect(),
             items,
@@ -1372,6 +1497,30 @@ impl crate::play::Play {
             has_story: true,
             panels: p2.map_or((false, [-1; 4], 4, -1, false, 255), |o| (o.quick.open, o.quick.entries, o.quick.selection as u8, o.quick.marker, o.mote_panel.open, o.mote_panel.selection)),
             p2_prompt: p2.and_then(|o| o.captions.0),
+            world_rev: 0,
+            world: Some(WorldSync {
+                pack: self.world.pack,
+                breakables: self.world.breakables.iter().map(|b| b.state.clamp(0, 255) as u8).collect(),
+                items: {
+                    let mut v: Vec<(u32, u16, NetItem)> = self
+                        .pools
+                        .iter()
+                        .flat_map(|(&pack, pool)| {
+                            pool.slots.iter().enumerate().filter_map(move |(k, it)| {
+                                let it = it.as_ref()?;
+                                Some((pack, k as u16, NetItem { id: it.id, position: it.position, state: it.state, angle: it.angle, scale: it.drawn_scale(), direction: it.direction, price: it.price }))
+                            })
+                        })
+                        .collect();
+                    v.sort_by_key(|e| (e.0, e.1));
+                    v
+                },
+            }),
+            moving: self
+                .pools
+                .iter()
+                .flat_map(|(&pack, pool)| pool.slots.iter().enumerate().filter_map(move |(k, it)| it.as_ref().filter(|it| it.state != 1).map(|it| (pack, k as u16, it.position, it.angle))))
+                .collect(),
             show: Show {
                 music: self.music.channels.map(|c| (c.stream, c.volume)),
                 bank: (self.bank_music.playing, self.bank_music.volume, self.bank_music.started),
@@ -1418,7 +1567,14 @@ impl crate::play::Play {
             o.captions.0 = s.p2_prompt;
         }
         for c in self.characters.iter_mut() {
-            let Some(h) = s.characters.iter().find(|h| h.pack == c.pack && h.slot == c.slot && h.ordinal as usize == c.ordinal) else { continue };
+            // A character the host does not have (made by this side's own game) is hidden.
+            let Some(h) = s.characters.iter().find(|h| h.pack == c.pack && h.slot == c.slot && h.ordinal as usize == c.ordinal) else {
+                if Some(c.id) != self.pet_char {
+                    c.inactive = true;
+                }
+                continue;
+            };
+            c.inactive = h.inactive;
             c.position = h.position;
             c.facing = h.facing;
             if let Some(w) = c.walker.as_mut() {
@@ -1478,6 +1634,74 @@ impl crate::play::Play {
             }
             self.message = sh.message.map(|(line, age)| (line, self.ticks.saturating_sub(age as u64)));
             self.shake_now = sh.shake.map(|(side, up, aim)| neopets_sim::shake::Offset { side, up, aim });
+        }
+        // The host's breakables (a break here as the host's) and world items.
+        if let Some(ws) = s.world.as_ref() {
+            if ws.pack == self.world.pack {
+                for (i, &st) in ws.breakables.iter().enumerate() {
+                    let here = self.world.breakables.get(i).map(|b| b.state);
+                    match (here, st) {
+                        (Some(h), 2) if h != 2 => self.net_break(i),
+                        (Some(h), st) if h != st as i32 && st != 2 => self.world.breakables[i].state = st as i32,
+                        _ => {}
+                    }
+                }
+            }
+            let packs: Vec<u32> = self.pools.keys().copied().collect();
+            for pack in packs {
+                if pack != ws.pack && self.other.as_ref().is_none_or(|o| o.pack != pack) {
+                    continue;
+                }
+                let pool = self.pools.entry(pack).or_default();
+                let mine: Vec<(usize, u16)> = pool.slots.iter().enumerate().filter_map(|(k, it)| it.as_ref().map(|it| (k, it.id))).collect();
+                for (k, id) in mine {
+                    if !ws.items.iter().any(|e| e.0 == pack && e.1 as usize == k && e.2.id == id) {
+                        pool.slots[k] = None;
+                    }
+                }
+            }
+            for (pack, k, it) in &ws.items {
+                if *pack != ws.pack && self.other.as_ref().is_none_or(|o| o.pack != *pack) {
+                    continue;
+                }
+                let pool = self.pools.entry(*pack).or_default();
+                let k = *k as usize;
+                if pool.slots.len() <= k {
+                    continue;
+                }
+                if pool.slots[k].is_none_or(|w| w.id != it.id) {
+                    pool.slots[k] = Some(neopets_sim::items::WorldItem {
+                        id: it.id,
+                        position: it.position,
+                        state: it.state,
+                        spin: 0.0,
+                        vy: 0.0,
+                        hs: 0.0,
+                        life: 0.0,
+                        lifetime: 0.0,
+                        age: 10.0,
+                        reference: it.position[1],
+                        angle: it.angle,
+                        direction: it.direction,
+                        scale: it.scale,
+                        s0: it.scale,
+                        s1: it.scale,
+                        delay: 0.0,
+                        token: 0,
+                        flag: 0,
+                        map: 0,
+                        charm: false,
+                        price: it.price,
+                        reserved: false,
+                    });
+                }
+            }
+        }
+        for &(pack, k, at, angle) in &s.moving {
+            if let Some(Some(it)) = self.pools.get_mut(&pack).and_then(|p| p.slots.get_mut(k as usize)) {
+                it.position = at;
+                it.angle = angle;
+            }
         }
         // The host's shots in place of this side's.
         self.shots.slots = Default::default();
@@ -1544,6 +1768,9 @@ mod tests {
             has_story: true,
             panels: (true, [57, -1, 3, 9], 1, 57, false, 255),
             p2_prompt: Some(13),
+            world_rev: 4,
+            world: Some(WorldSync { pack: 909, breakables: vec![1, 2, 0], items: vec![(909, 3, NetItem { id: 160, position: [1.0, 2.0, 3.0], state: 1, angle: 0.5, scale: 1.0, direction: [0.0, 0.0, 1.0], price: -2 })] }),
+            moving: vec![(909, 4, [0.0, 1.0, 0.0], 0.25)],
             flags: vec![1, 500],
             items: vec![(57, 2)],
             neopoints: 40,
@@ -1617,7 +1844,7 @@ mod tests {
 
     #[test]
     fn input_round_trips_with_ack() {
-        let i = Input { generation: 4, ack: 99, story: 6, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5] };
+        let i = Input { generation: 4, ack: 99, story: 6, world: 2, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5] };
         let bytes = i.encode();
         let (kind, mut r) = Reader::open(&bytes).expect("header");
         assert_eq!(kind, INPUT);

@@ -233,9 +233,9 @@ them all.
 10. [ ] One PC: "Player 2 joined" and "Player 2 left" in game, as online.
 
 ### The joiner sees the same world
-11. [ ] World items: pickups taken (by either player) vanish on the joiner, and dropped ones
+11. [x] World items: pickups taken (by either player) vanish on the joiner, and dropped ones
     appear.
-12. [ ] Breakables and moving objects: broken crates, opened doors and gates, and platforms
+12. [~] Breakables and moving objects (breakables done; gates and platforms still the joiner's own scripts): broken crates, opened doors and gates, and platforms
     as on the host.
 13. [ ] Sounds heard from the joiner's own player: the host sends where a sound is, and the
     joiner works out volume and pan from its own camera.

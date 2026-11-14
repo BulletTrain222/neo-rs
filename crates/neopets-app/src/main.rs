@@ -1804,6 +1804,7 @@ fn step_sim(
                 let ack = (netr.applied, netr.story_held.as_ref().map_or(0, |h| h.0));
                 let mut out = net::Input::from_hero(&input, &pad, generation, counts, ack);
                 out.dpad = netr.dpad;
+                out.world = netr.world_held.as_ref().map_or(0, |h| h.0);
                 netr.outgoing = Some(out);
                 let sounds = play.play.sound.requests.len();
                 let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());
@@ -1839,7 +1840,7 @@ fn step_sim(
                 }
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                     let p = &play.play;
-                    println!("NETFX joiner tick {}: {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints);
+                    println!("NETFX joiner tick {} (told {:?}): {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}, world items {} broken {} hidden {}", p.ticks, netr.world_held.as_ref().map(|h| (h.0, h.1.items.len(), h.1.items.iter().filter(|e| e.0 == p.world.pack || p.other.as_ref().is_some_and(|o| o.pack == e.0)).count(), h.1.pack)), p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints, p.pools.iter().filter(|(k, _)| **k == p.world.pack || p.other.as_ref().is_some_and(|o| o.pack == **k)).map(|(_, pl)| pl.live()).sum::<usize>(), p.world.breakables.iter().filter(|b| b.state == 2).count(), p.characters.iter().filter(|c| c.inactive).count());
                 }
             } else {
                 let sounds = play.play.sound.requests.len();
@@ -1869,6 +1870,18 @@ fn step_sim(
                         (q.up, q.left, q.right, q.down, q.triangle) = (q.up | pl.up, q.left | pl.left, q.right | pl.right, q.down | pl.down, q.triangle | pl.triangle);
                     }
                     play.play.coop_step(&[p2]);
+                }
+                // NEOPETS_NET_BREAK="first:every" (diagnostic, hosting): from that tick, on each
+                // period, the hero breaks the nearest intact breakable and drops coins (so the
+                // joiner's copy can be checked).
+                if play.play.coop_remote {
+                    if let Some((a, b)) = std::env::var("NEOPETS_NET_BREAK").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u64>().ok()?))) {
+                        if play.play.ticks >= a && (play.play.ticks - a) % b.max(1) == 0 {
+                            play.play.diag_break_nearest();
+                            let n = play.play.dev_drop(160, 6.0);
+                            info!("net test: broke the nearest breakable and dropped coins ({n} world items)");
+                        }
+                    }
                 }
                 // Online, hosting: the state after this tick, and a new welcome after a world change.
                 if play.play.coop_remote {
@@ -1901,7 +1914,7 @@ fn step_sim(
                         if let Some(o) = p.others.first() {
                             println!("NETP2 host tick {}: p2 quick open {} mote open {} selection {}", p.ticks, o.quick.open, o.mote_panel.open, o.mote_panel.selection);
                         }
-                        println!("NETFX host tick {}: {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints);
+                        println!("NETFX host tick {}: {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}, world items {} broken {} hidden {}", p.ticks, p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints, p.pools.iter().filter(|(k, _)| **k == p.world.pack || p.other.as_ref().is_some_and(|o| o.pack == **k)).map(|(_, pl)| pl.live()).sum::<usize>(), p.world.breakables.iter().filter(|b| b.state == 2).count(), p.characters.iter().filter(|c| c.inactive).count());
                     }
                 }
             }
