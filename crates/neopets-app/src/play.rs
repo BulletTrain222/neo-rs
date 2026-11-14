@@ -17149,6 +17149,10 @@ impl Play {
     /// then state 27's phases. Returns whether the hero is in state 27.
     fn rope_step(&mut self, input: &HeroInput) -> bool {
         use neopets_sim::rope as rp;
+        // The rope gun is player 1's (one rope per game; docs/MULTIPLAYER.md).
+        if self.coop_running {
+            return false;
+        }
         if self.rope_pack != self.world.pack {
             self.rope_pack = self.world.pack;
             self.rope.reset();
@@ -19435,27 +19439,33 @@ impl Play {
                 self.player.hit_list.clear();
                 self.player.swing_serial = self.player.swing_serial.wrapping_add(1);
             }
+            // Player 2's own prompts and Square (doors, rope lines, grabs) from here to its door
+            // step: player 1's are put aside meanwhile.
+            if self.player.captions.0.is_some() && input.square {
+                self.player.door_confirm = true;
+            }
+            let saved_prompts = (self.door_prompt.take(), self.confirm, self.square_now);
+            (self.confirm, self.square_now) = (self.player.door_confirm, input.square);
+            // Ledges, climbing edges, ladders, panels, rope lines and block holds (SPEC-0033
+            // Behavior 4A), as player 1's after the motion step; the rope gun and the world
+            // loads stay player 1's.
+            self.held_step();
+            self.hold_step(&input);
             let id = self.player.loco.action();
             self.player.hero.request(id, force);
             self.player.hero.set_rate(self.player.loco.rate);
             self.hero_contacts(false);
-            // Player 2's doors (docs/MULTIPLAYER.md: either player's door moves both): its own
-            // prompt and Square confirm, as player 1's door step; a door that moves player 2 (to
-            // another world or across this one) brings player 1 along after this step.
-            if self.player.captions.0.is_some() && input.square {
-                self.player.door_confirm = true;
-            }
+            // Player 2's doors (docs/MULTIPLAYER.md: either player's door moves both), as player
+            // 1's door step; a door that moves player 2 (to another world or across this one)
+            // brings player 1 along after this step.
             let door_from = (self.world.pack, self.player.loco.position());
-            if !self.dialogue_open && self.player.down.is_none() {
-                let saved = (self.door_prompt.take(), self.confirm, self.square_now);
-                (self.confirm, self.square_now) = (self.player.door_confirm, input.square);
+            let free = !self.dialogue_open && self.player.down.is_none();
+            if free {
                 self.door_step();
-                self.player.door_confirm = self.confirm;
-                self.player.captions.0 = self.door_prompt.take();
-                (self.door_prompt, self.confirm, self.square_now) = saved;
-            } else {
-                self.player.captions.0 = None;
             }
+            self.player.door_confirm = self.confirm;
+            self.player.captions.0 = self.door_prompt.take().filter(|_| free);
+            (self.door_prompt, self.confirm, self.square_now) = saved_prompts;
             let door_moved = {
                 let b = self.player.loco.position();
                 self.world.pack != door_from.0 || (b[0] - door_from.1[0]).hypot(b[2] - door_from.1[2]) > 8.0 || (b[1] - door_from.1[1]).abs() > 8.0

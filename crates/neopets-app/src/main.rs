@@ -6896,6 +6896,9 @@ fn play_trace(
             let wait = std::env::var("NEOPETS_COOP_WALKFROM").ok().and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| play.ticks < n);
             let p2 = if wait || std::env::var_os("NEOPETS_COOP_STILL").is_some() {
                 neopets_sim::hero::HeroInput::default()
+            } else if std::env::var_os("NEOPETS_COOP_CLIMB").is_some() {
+                // NEOPETS_COOP_CLIMB: player 2 pushes the stick forward (no jumps).
+                neopets_sim::hero::HeroInput { forward: 1.0, ..Default::default() }
             } else if std::env::var_os("NEOPETS_COOP_GUARD").is_some() {
                 // NEOPETS_COOP_GUARD: player 2 holds the guard button.
                 neopets_sim::hero::HeroInput { guard: true, ..Default::default() }
@@ -6911,6 +6914,24 @@ fn play_trace(
                 neopets_sim::hero::HeroInput { forward: 1.0, jump: play.ticks % 90 == 45, ..Default::default() }
             };
             let mut p2 = p2;
+            // NEOPETS_COOP_AT="x,z,y@t": player 2 put there on tick t, facing as player 1, and its
+            // state printed every 10 ticks after.
+            if let Some((at, t)) = std::env::var("NEOPETS_COOP_AT").ok().and_then(|v| {
+                let (a, t) = v.split_once('@')?;
+                let n: Vec<f32> = a.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                Some(([*n.first()?, *n.get(2)?, *n.get(1)?], t.trim().parse::<u64>().ok()?))
+            }) {
+                let f = play.player.loco.facing;
+                if let Some(o) = play.others.first_mut() {
+                    if play.ticks == t {
+                        o.loco.teleport(at, f);
+                    }
+                    if play.ticks > t && play.ticks % 10 == 0 {
+                        let q = o.loco.position();
+                        println!("COOP {} p2 at ({:.2}, {:.2}, {:.2}) state {} ladder {} ledge {} hang {}", play.ticks, q[0], q[1], q[2], o.loco.state, o.ladder.is_some(), o.ledge.is_some(), o.hang.is_some());
+                    }
+                }
+            }
             // NEOPETS_COOP_BOX: player 2 presses Square in talk boxes every 10 ticks instead of
             // player 1 (player 2 moves the boxes on).
             if std::env::var_os("NEOPETS_COOP_BOX").is_some() && play.dialogue_open && play.ticks % 10 == 5 {

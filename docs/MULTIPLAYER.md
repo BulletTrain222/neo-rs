@@ -157,7 +157,8 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Guard and reflect (shield) | Own | [x] guard (reflect unchecked) | [x] (the host runs player 2) |
 | Power attacks, spells, magic items | Own magic bar; own Mote panel | [x] Mote panel; [?] casting unchecked | [x] Mote panel |
 | Quick items (D-pad) | Own panel over the shared bag; the item goes to the user | [x] | [x] |
-| Ledges, climbing, ladders, swimming, rope gun | Own | [?] player 2 | [?] |
+| Ledges, climbing, ladders, swimming | Own | [x] (ladder traced) | [x] |
+| Rope gun | Player 1's (one rope per game) | [x] | [x] |
 | Lock-on and target | Own | [?] | [?] |
 | Camera and its controls | Own follow camera; invert and speed per computer | [x] | [x] |
 | HUD (portrait, health and magic bars) | Own; Neopoints shown on both | [x] | [x] |
@@ -226,8 +227,8 @@ them all.
    2's Square uses them. **Default:** either player's door moves both.
 6. [x] Talk boxes: either player's Cross moves a box on (Default); only player 1 chooses an
    answer.
-7. [ ] Player 2's Mote magic and power attacks: traced on one PC.
-8. [ ] Player 2 on ledges, ladders, climbing and swimming: traced where the scenarios go, and
+7. [~] (audited: no shared state clashes; not traced) Player 2's Mote magic and power attacks: traced on one PC.
+8. [x] (ladder traced; ledges and edges run the same steps) Player 2 on ledges, ladders, climbing and swimming: traced where the scenarios go, and
    gaps recorded.
 9. [x] Rumble: each player's own controller; the joiner's comes as an event.
 10. [x] One PC: "Player 2 joined" and "Player 2 left" in game, as online.
