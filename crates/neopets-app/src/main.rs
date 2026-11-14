@@ -1822,9 +1822,20 @@ fn step_sim(
                 play.play.emote_requests.truncate(clips.1);
                 play.play.state.movie_queue.truncate(movies);
                 let table = play.play.effect_table.clone();
+                // The joiner hears from its own view (player 2's camera, or the host's cutscene).
+                let ears = {
+                    let (eye, forward, _, _) = play.play.view();
+                    net::listener_of(eye, forward)
+                };
                 for e in std::mem::take(&mut netr.incoming) {
                     match e {
-                        net::Event::Sound(r) => play.play.sound.requests.push(r),
+                        net::Event::Voice { id, emitter, base, r, r0 } => {
+                            netr.voices.insert(id as usize, (emitter, base, r, r0));
+                        }
+                        net::Event::Sound(r) => {
+                            let r = net::hear(r, &mut netr.voices, &ears);
+                            play.play.sound.requests.push(r);
+                        }
                         net::Event::Fx(op) => {
                             let p = &mut play.play;
                             p.effects.apply(&table, &op, &mut p.net_fx, &mut p.rng);
@@ -1893,6 +1904,12 @@ fn step_sim(
                         netr.rewelcome(&slot, pack, game);
                     }
                     for r in play.play.sound.requests[sounds.min(play.play.sound.requests.len())..].to_vec() {
+                        // A voice with a place: where, so the joiner hears it from its own player.
+                        if let neopets_sim::sound::Request::Play { id, .. } = r {
+                            if let Some((emitter, base, rr, r0)) = play.play.sound.source(id) {
+                                netr.push_event(net::Event::Voice { id: id as u32, emitter, base, r: rr, r0 });
+                            }
+                        }
                         netr.push_event(net::Event::Sound(r));
                     }
                     for op in play.play.effects.share.log.as_mut().map(std::mem::take).unwrap_or_default() {

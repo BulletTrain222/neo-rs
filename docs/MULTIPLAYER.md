@@ -165,7 +165,7 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Rumble | Own controller only | [ ] player 2 | [ ] joiner's pad |
 | Controls and bindings | Per computer; on one PC, player 2 uses the second pad | [x] | [x] |
 | Display, audio volume, graphics | Per computer | [x] | [x] |
-| Sound listener | One PC: player 1. Online: each computer hears from its own player | [x] | [ ] joiner hears from the host's camera for now |
+| Sound listener | One PC: player 1. Online: each computer hears from its own player | [x] | [x] |
 | Pickup and damage flashes | Own | [x] | [x] |
 
 ### C. Online plumbing
@@ -237,7 +237,7 @@ them all.
     appear.
 12. [~] Breakables and moving objects (breakables done; gates and platforms still the joiner's own scripts): broken crates, opened doors and gates, and platforms
     as on the host.
-13. [ ] Sounds heard from the joiner's own player: the host sends where a sound is, and the
+13. [x] Sounds heard from the joiner's own player: the host sends where a sound is, and the
     joiner works out volume and pan from its own camera.
 14. [ ] Effects already running when the joiner arrives are sent at the welcome.
 15. [ ] Characters only when they change (states smaller in busy places), and a state-size

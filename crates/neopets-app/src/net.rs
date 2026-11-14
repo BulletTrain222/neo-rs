@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 9;
+const PROTOCOL: u16 = 10;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -367,6 +367,42 @@ pub enum Event {
     Emote(u32, u32, u32),
     /// A movie the host's scripts queued.
     Movie(u16),
+    /// Where the host's voice `id` sounds from (emitter, base volume, radii), sent just before its
+    /// start: the joiner works out the volume and pan from its own listener.
+    Voice { id: u32, emitter: [f32; 3], base: i32, r: f32, r0: f32 },
+}
+
+/// The joiner's listener (sound.rs): its view's eye with the rows right, up and forward.
+pub fn listener_of(eye: [f32; 3], forward: [f32; 3]) -> neopets_sim::sound::Listener {
+    let n = (forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]).sqrt().max(1e-6);
+    let f = forward.map(|v| v / n);
+    let up = [0.0, 1.0, 0.0];
+    let r = [f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2], f[0] * up[1] - f[1] * up[0]];
+    let rn = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt().max(1e-6);
+    let r = r.map(|v| v / rn);
+    let u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+    neopets_sim::sound::Listener::from_camera(eye, [r, u, f])
+}
+
+/// The joiner: a host sound request with the volume and pan worked out again from this side's
+/// listener, for a voice whose source is known (`voices`; a stop forgets it).
+pub fn hear(r: neopets_sim::sound::Request, voices: &mut std::collections::HashMap<usize, ([f32; 3], i32, f32, f32)>, l: &neopets_sim::sound::Listener) -> neopets_sim::sound::Request {
+    use neopets_sim::sound::Request;
+    let here = |id: usize| voices.get(&id).map(|&(e, base, r, r0)| (l.volume(e, base, r, r0).unwrap_or(0).max(0), Some(l.pan(e))));
+    match r {
+        Request::Play { id, block, cue, volume, pan } => {
+            let (volume, pan) = here(id).unwrap_or((volume, pan));
+            Request::Play { id, block, cue, volume, pan }
+        }
+        Request::Set { id, volume, pan } => {
+            let (volume, pan) = here(id).unwrap_or((volume, pan));
+            Request::Set { id, volume, pan }
+        }
+        Request::Stop { id } => {
+            voices.remove(&id);
+            r
+        }
+    }
 }
 
 fn write_frame(w: &mut Writer, f: &[[f32; 3]; 3]) {
@@ -580,6 +616,14 @@ impl Event {
                 w.u8(22);
                 w.u16(*m);
             }
+            Event::Voice { id, emitter, base, r, r0 } => {
+                w.u8(4);
+                w.u32(*id);
+                w.v3(*emitter);
+                w.i32(*base);
+                w.f32(*r);
+                w.f32(*r0);
+            }
             Event::Emote(bank, start, len) => {
                 w.u8(21);
                 w.u32(*bank);
@@ -599,6 +643,7 @@ impl Event {
             20 => Event::Stinger(r.i32()?),
             21 => Event::Emote(r.u32()?, r.u32()?, r.u32()?),
             22 => Event::Movie(r.u16()?),
+            4 => Event::Voice { id: r.u32()?, emitter: r.v3()?, base: r.i32()?, r: r.f32()?, r0: r.f32()? },
             _ => return None,
         })
     }
@@ -952,6 +997,8 @@ pub struct Net {
     acked: u32,
     pub applied: u32,
     pub incoming: Vec<Event>,
+    /// Joiner: the sources of the host's voices playing here (id: emitter, base, radii).
+    pub voices: std::collections::HashMap<usize, ([f32; 3], i32, f32, f32)>,
     /// A line for the player (joined, left, lost), shown once in play; whether a joiner's game
     /// ended (it goes back to the title screen); whether the other side is paused; when anything
     /// last went out.
@@ -1781,6 +1828,7 @@ mod tests {
                 (8, Event::Fx(neopets_sim::effect::Op::Add { handle: 4, def: Some(2), position: [1.0, 2.0, 3.0], frame: neopets_sim::effect::IDENTITY, state: 1, cull: None, scale: Some(0.5) })),
                 (9, Event::Fx(neopets_sim::effect::Op::Update { handle: 4, listener: Some(([0.0; 3], [0.0, 0.0, 1.0])) })),
                 (10, Event::Fx(neopets_sim::effect::Op::Release { handle: 4 })),
+                (11, Event::Voice { id: 3, emitter: [1.0, 2.0, 3.0], base: 1024, r: 200.0, r0: 10.0 }),
             ],
             shots: vec![(3, neopets_sim::projectile::Shot::remote(
                 neopets_sim::projectile::Setup { kind: 2, visual: 23, element: 1, owner: Some(77), start: [0.0; 3], velocity: [0.0, 0.0, 1.0], lifetime: 9, damage: 3.0, radius: 1.0, spin: 0.0, area_radius: 0.0, area_duration: 0, key: -1, ignore_world: false, status: (-1, 0, 0), effects: [-1; 6], trail: -1 },
@@ -1840,6 +1888,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The joiner hears a host voice from its own listener: a near source loud, the same source
+    /// heard from far away quiet; a voice with no known source keeps the host's numbers; a stop
+    /// forgets the source.
+    #[test]
+    fn joiner_hears_from_its_own_listener() {
+        let mut voices = std::collections::HashMap::new();
+        voices.insert(7, ([0.0, 0.0, 10.0], 1000, 200.0, 0.0));
+        let near = listener_of([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let far = listener_of([0.0, 0.0, -150.0], [0.0, 0.0, 1.0]);
+        let host = Request::Play { id: 7, block: 1, cue: 2, volume: 5, pan: None };
+        let (Request::Play { volume: a, pan: pa, .. }, Request::Play { volume: b, .. }) = (hear(host, &mut voices, &near), hear(host, &mut voices, &far)) else { panic!() };
+        assert!(a > b && b > 0 && pa.is_some(), "near {a}, far {b}");
+        let other = Request::Set { id: 8, volume: 33, pan: Some(4) };
+        assert_eq!(hear(other, &mut voices, &near), other);
+        hear(Request::Stop { id: 7 }, &mut voices, &near);
+        assert!(voices.is_empty());
     }
 
     #[test]

@@ -241,6 +241,13 @@ impl SoundManager {
     /// The per-pass voice update: drop voices the driver finished, count keep-alive voices down
     /// (stopped below 1), and resend each positioned voice's volume and pan (stopped out of
     /// range unless it loops).
+    /// Online play (this build's feature): where voice `id` sounds from, with its base volume and
+    /// radii (None for a voice with no emitter), so a second computer can hear it from its own
+    /// listener.
+    pub fn source(&self, id: usize) -> Option<([f32; 3], i32, f32, f32)> {
+        self.voices.iter().find(|v| v.id == id).and_then(|v| Some((v.emitter?, v.base, v.r, v.r0)))
+    }
+
     pub fn update(&mut self, finished: &[usize]) {
         self.voices.retain(|v| !finished.contains(&v.id) || v.mode == Mode::Loop);
         let listener = self.listener;
