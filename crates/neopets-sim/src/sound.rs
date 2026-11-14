@@ -238,9 +238,6 @@ impl SoundManager {
         }
     }
 
-    /// The per-pass voice update: drop voices the driver finished, count keep-alive voices down
-    /// (stopped below 1), and resend each positioned voice's volume and pan (stopped out of
-    /// range unless it loops).
     /// Online play (this build's feature): where voice `id` sounds from, with its base volume and
     /// radii (None for a voice with no emitter), so a second computer can hear it from its own
     /// listener.
@@ -248,6 +245,19 @@ impl SoundManager {
         self.voices.iter().find(|v| v.id == id).and_then(|v| Some((v.emitter?, v.base, v.r, v.r0)))
     }
 
+    /// Voices the driver never started (its block not loaded yet, or the cue refused): forgotten
+    /// whatever their mode. This build's glue: before, such a voice, never started and so never
+    /// finished, was kept and sent a volume and pan every pass for good (20 minutes of play piled
+    /// up about 40 of them).
+    pub fn not_started(&mut self, ids: &[usize]) {
+        if !ids.is_empty() {
+            self.voices.retain(|v| !ids.contains(&v.id));
+        }
+    }
+
+    /// The per-pass voice update: drop voices the driver finished, count keep-alive voices down
+    /// (stopped below 1), and resend each positioned voice's volume and pan (stopped out of
+    /// range unless it loops).
     pub fn update(&mut self, finished: &[usize]) {
         self.voices.retain(|v| !finished.contains(&v.id) || v.mode == Mode::Loop);
         let listener = self.listener;
@@ -286,6 +296,25 @@ mod tests {
     fn level() -> Listener {
         // A camera at the origin facing +z (rows right, up, forward) puts the listener 5 ahead.
         Listener::from_camera([0.0, 0.0, -5.0], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    }
+
+    /// A looping voice the driver never started is forgotten (no volume and pan sent for it
+    /// again); a finished loop alone is kept.
+    #[test]
+    fn a_voice_never_started_is_forgotten() {
+        let mut m = SoundManager::default();
+        m.loaded.insert(347);
+        m.listener = level();
+        assert!(m.play(MAIN, 3, Play { emitter: Some([0.0, 0.0, 0.0]), looped: true, ..Default::default() }));
+        let Some(Request::Play { id, .. }) = m.requests.first().copied() else { panic!() };
+        m.requests.clear();
+        m.update(&[id]);
+        assert_eq!(m.voices(), 1, "a finished loop stays");
+        m.not_started(&[id]);
+        m.requests.clear();
+        m.update(&[]);
+        assert_eq!(m.voices(), 0);
+        assert!(m.requests.is_empty(), "no volume or pan for a forgotten voice");
     }
 
     #[test]

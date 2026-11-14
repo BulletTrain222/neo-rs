@@ -218,12 +218,18 @@ pub fn sync_effects(
         }
     }
     let requests = std::mem::take(&mut p.sound.requests);
+    let mut not_started = Vec::new();
     if let Ok(mut e) = link.engine.lock() {
         for r in requests {
             match r {
                 neopets_sim::sound::Request::Play { id, block, cue, volume, pan } => {
-                    if let Some(Some(def)) = link.blocks.get(&block) {
-                        e.play(id, def.clone(), cue, volume, pan);
+                    let started = match link.blocks.get(&block) {
+                        Some(Some(def)) => e.play(id, def.clone(), cue, volume, pan),
+                        _ => false,
+                    };
+                    // A voice the engine never started is forgotten by the sim too.
+                    if !started {
+                        not_started.push(id);
                     }
                 }
                 neopets_sim::sound::Request::Set { id, volume, pan } => e.set(id, volume, pan),
@@ -232,6 +238,7 @@ pub fn sync_effects(
         }
         p.sound_finished.extend(e.take_finished());
     }
+    p.sound.not_started(&not_started);
 }
 
 /// A bank's instruments and child tracks for the sim's engine: the directory groups with their
