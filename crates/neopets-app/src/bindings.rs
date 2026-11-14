@@ -358,17 +358,27 @@ pub fn mouse_stick(delta: f32, sensitivity: u32) -> f32 {
 
 /// Read the virtual pad from the keyboard, mouse and gamepads.
 #[allow(clippy::too_many_arguments)]
-pub fn read_pad(keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, motion: Res<AccumulatedMouseMotion>, all_pads: Query<(Entity, &Gamepad)>, exclude: Res<PadExclude>, bindings: Res<Bindings>, mute: Res<PadMute>, look: Res<MouseLook>, mut pad: ResMut<Pad>) {
+#[allow(clippy::too_many_arguments)]
+pub fn read_pad(keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, motion: Res<AccumulatedMouseMotion>, all_pads: Query<(Entity, &Gamepad)>, exclude: Res<PadExclude>, bindings: Res<Bindings>, mute: Res<PadMute>, look: Res<MouseLook>, mut pad: ResMut<Pad>, menu: Option<Res<crate::menu_view::Menu>>) {
     let gamepads: Vec<&Gamepad> = all_pads.iter().filter(|(e, _)| Some(*e) != exclude.0).map(|(_, g)| g).collect();
     let _span = crate::perf::span("read_pad");
     *pad = Pad::default();
     if mute.0 {
         return;
     }
+    // A text row being typed in (the Multiplayer page's join address or password): the
+    // keyboard types there, so its bound keys do nothing else (Backspace was Triangle, which went
+    // back a page; the number pad's 8, 2, 4 and 6 moved the cursor), except the arrows, Enter,
+    // Tab and Esc, which still move off the row and leave the page.
+    let typing = menu.as_ref().is_some_and(|m| {
+        m.flow.current == crate::menus::DISPLAY && m.flow.display_page == 2 && matches!(m.flow.display_focus, crate::display::ADDRESS_ROW | crate::display::PASSWORD_ROW)
+    });
+    let kept = |k: KeyCode| !typing || matches!(k, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Enter | KeyCode::Tab | KeyCode::Escape);
     for a in 0..ACTIONS {
         let bit = 1u32 << a;
         for i in bindings.keys[a].iter().flatten() {
             match *i {
+                Input::Key(k) if !kept(k) => {}
                 Input::Key(k) => {
                     if keys.pressed(k) {
                         pad.held |= bit;
