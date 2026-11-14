@@ -3134,7 +3134,8 @@ impl Play {
         self.world_audio_reset();
         self.cut = None;
         self.cut_target = None;
-        if self.job.is_none() {
+        // A joiner's reload after a movie is the host's (a new welcome follows it).
+        if self.job.is_none() && !self.net_follow {
             if let Some(pack) = self.other.as_ref().map(|o| o.pack) {
                 self.job = Some(Job::ReloadTransition(pack));
             }
@@ -3631,6 +3632,12 @@ impl Play {
     /// Carry out one script call of a thread of world `pack`; a blocking call returns what it
     /// waits for.
     fn execute(&mut self, a: Action, pack: u32) -> Option<Wait> {
+        // Online, joining (net.rs): this side's scripts change no world; the host's script
+        // load comes as a new welcome.
+        if self.net_follow && matches!(a, Action::EnterInterior { .. } | Action::ReplaceExterior { .. } | Action::LeaveInterior { .. }) {
+            self.last_door = format!("script: {a:?} left to the host (joining)");
+            return None;
+        }
         {
             match a {
                 Action::EnterInterior { slot } if self.world.buffer == Buffer::Exterior => {
@@ -18330,6 +18337,20 @@ impl Play {
 
     fn break_one(&mut self, i: usize) {
         self.break_one_with(i, true);
+    }
+
+    /// Diagnostic: every player falls (the single-player death; the game-over page follows).
+    pub fn diag_game_over(&mut self) {
+        // A hero cannot be hurt with a box up: any box is closed first.
+        self.dialogue_open = false;
+        self.textbox.open = false;
+        self.player.hero_hp = 0;
+        self.player.down = None;
+        for o in self.others.iter_mut() {
+            o.hero_hp = 0;
+            o.down = Some(0);
+        }
+        self.default_death();
     }
 
     /// Diagnostic: the hero 8 from the nearest intact breakable with pieces, and it breaks.

@@ -165,6 +165,9 @@ pub struct State {
     pub anim_times: Vec<(u16, f32)>,
     /// What the host's screen and music show that the joiner shows too.
     pub show: Show,
+    /// The host's page while its states run: 0 play, 2 the game-over page (a paused host
+    /// sends pings instead).
+    pub page: u8,
 }
 
 /// The breakables of the current world (their states) and the live items of each resident world
@@ -362,6 +365,19 @@ pub enum Event {
     Voice { id: u32, emitter: [f32; 3], base: i32, r: f32, r0: f32 },
     /// Player 2's motor send (level, countdown ticks) for the joiner's controller.
     Rumble(u8, i32),
+    /// A line for the joiner (`NOTICE_SAVED`: the host saved the game).
+    Notice(u8),
+}
+
+/// `Event::Notice` lines.
+pub const NOTICE_SAVED: u8 = 1;
+
+/// The joiner's words for a host notice.
+pub fn notice_text(n: u8) -> Option<&'static str> {
+    match n {
+        NOTICE_SAVED => Some("The host saved the game."),
+        _ => None,
+    }
 }
 
 /// The joiner's listener (sound.rs): its view's eye with the rows right, up and forward.
@@ -608,6 +624,10 @@ impl Event {
                 w.u8(22);
                 w.u16(*m);
             }
+            Event::Notice(n) => {
+                w.u8(23);
+                w.u8(*n);
+            }
             Event::Rumble(level, count) => {
                 w.u8(5);
                 w.u8(*level);
@@ -640,6 +660,7 @@ impl Event {
             20 => Event::Stinger(r.i32()?),
             21 => Event::Emote(r.u32()?, r.u32()?, r.u32()?),
             22 => Event::Movie(r.u16()?),
+            23 => Event::Notice(r.u8()?),
             5 => Event::Rumble(r.u8()?, r.i32()?),
             4 => Event::Voice { id: r.u32()?, emitter: r.v3()?, base: r.i32()?, r: r.f32()?, r0: r.f32()? },
             _ => return None,
@@ -779,6 +800,7 @@ impl State {
             w.u16(i);
             w.f32(t);
         }
+        w.u8(self.page);
         w.0
     }
 
@@ -852,7 +874,8 @@ impl State {
         for _ in 0..n {
             anim_times.push((r.u16()?, r.f32()?));
         }
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times })
+        let page = r.u8()?;
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page })
     }
 }
 

@@ -1640,6 +1640,10 @@ fn step_sim(
                             error!("Save failed: {e}");
                         }
                         m.flow.written(ok.is_ok());
+                        // Online, hosting: the joiner is told (it keeps no save of its own).
+                        if ok.is_ok() && netr.role == net::Role::Host && netr.peer.is_some() {
+                            netr.push_event(net::Event::Notice(net::NOTICE_SAVED));
+                        }
                     }
                     Some(menus::Command::Load(k)) => pending = m.flow.picker.file.slot(k).cloned(),
                     Some(menus::Command::BookClose(saved)) => {
@@ -1781,6 +1785,55 @@ fn step_sim(
                 }
             }
             debug_tools::window_replay(&mut play.play, &mut input);
+            // NEOPETS_NET_GAMEOVER=T (diagnostic, not on a joiner): every player falls on play
+            // tick T (the game-over page); NEOPETS_NET_CONTINUE: Cross on the page every second.
+            if !play.play.net_follow {
+                if std::env::var("NEOPETS_NET_GAMEOVER").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
+                    // NEOPETS_NET_SNAPSHOT: as if the game had been saved just before (Continue
+                    // then reloads it instead of going to the title screen).
+                    if std::env::var_os("NEOPETS_NET_SNAPSHOT").is_some() {
+                        let mut slot = neopets_sim::save::Slot::empty();
+                        play.play.write_slot(&mut slot, b"DIAG");
+                        play.play.snapshot = Some(slot);
+                    }
+                    play.play.diag_game_over();
+                    info!("net: game over forced on tick {}", play.play.ticks);
+                }
+                if let Some(t) = std::env::var("NEOPETS_NET_GAMEOVER").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|&t| play.play.ticks > t && (play.play.ticks - t) % 120 == 0) {
+                    let p = &play.play;
+                    info!("net: {} ticks after the fall: state {} hero {} page {:?} flag E {} mode {} timer E {} clip {:?} hp {} others down {:?} job {} dialogue {}", p.ticks - t, p.player.loco.state, p.hero_index, p.death.page, p.death.flag_e, p.death.mode, p.death.timer_e.running(), p.player.hero.clip_state(), p.player.hero_hp, p.others.iter().map(|o| o.down).collect::<Vec<_>>(), p.job.is_some(), p.dialogue_open);
+                }
+                // NEOPETS_NET_MOVIE="T:m": movie m queued on play tick T, as a script would.
+                if let Some((t, m)) = std::env::var("NEOPETS_NET_MOVIE").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u16>().ok()?))) {
+                    if t == play.play.ticks {
+                        // Queued before this tick's count of new movies: sent here.
+                        play.play.state.movie_queue.push(m);
+                        if netr.peer.is_some() {
+                            netr.push_event(net::Event::Movie(m));
+                        }
+                    }
+                }
+                // NEOPETS_NET_NOTICE=T: the saved notice sent on play tick T, as a save would.
+                if std::env::var("NEOPETS_NET_NOTICE").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) && netr.peer.is_some() {
+                    netr.push_event(net::Event::Notice(net::NOTICE_SAVED));
+                }
+                if std::env::var_os("NEOPETS_NET_CONTINUE").is_some() && play.play.death.page.is_some() && play.play.ticks % 60 == 0 {
+                    input.jump = true;
+                    info!("net: Cross on the game-over page on tick {}", play.play.ticks);
+                }
+            }
+            // NEOPETS_TRACE_SETFLAG="tick:flag[,...]" in a window too (diagnostic, not on a
+            // joiner): a story flag set on those play ticks, as in the trace.
+            if !play.play.net_follow {
+                for g in std::env::var("NEOPETS_TRACE_SETFLAG").unwrap_or_default().split(',') {
+                    let n: Vec<u64> = g.split(':').filter_map(|x| x.trim().parse().ok()).collect();
+                    if let [t, flag] = n[..] {
+                        if t == play.play.ticks {
+                            play.play.state.set(flag as u16, true);
+                        }
+                    }
+                }
+            }
             if netr.following() && play.play.net_follow {
                 // Online, joining (net.rs): this side's controller goes to the host as player 2's;
                 // this side's game runs without it and is then put where the host's is.
@@ -1811,7 +1864,26 @@ fn step_sim(
                 let movies = play.play.state.movie_queue.len();
                 play.play.effects.share.mute = true;
                 play.play.effects.share.log = None;
+                // NEOPETS_TRACE_NETOWN (diagnostic): what this side's own game changes of the
+                // shared story in its tick (the host's comes with its states).
+                let own = std::env::var_os("NEOPETS_TRACE_NETOWN").is_some().then(|| {
+                    let s = &play.play.state;
+                    (s.flags.clone(), s.items.clone(), s.neopoints, s.collected.clone(), s.maps.clone(), play.play.job.is_some(), play.play.world.pack)
+                });
                 play.play.tick(&neopets_sim::hero::HeroInput::default(), neopets_sim::camera::CameraPad::default());
+                if let Some((flags, items, np, collected, maps, job, pack)) = own {
+                    let s = &play.play.state;
+                    let added: Vec<u16> = s.flags.difference(&flags).copied().collect();
+                    let removed: Vec<u16> = flags.difference(&s.flags).copied().collect();
+                    let mut changed: Vec<(u16, u32, u32)> = s.items.iter().filter(|(k, v)| items.get(k) != Some(v)).map(|(&k, &v)| (k, items.get(&k).copied().unwrap_or(0), v)).chain(items.iter().filter(|(k, _)| !s.items.contains_key(k)).map(|(&k, &v)| (k, v, 0))).collect();
+                    changed.sort_unstable();
+                    let coll: Vec<u32> = s.collected.symmetric_difference(&collected).copied().collect();
+                    let mp: Vec<u32> = s.maps.symmetric_difference(&maps).copied().collect();
+                    let load = !job && play.play.job.is_some();
+                    if !added.is_empty() || !removed.is_empty() || !changed.is_empty() || s.neopoints != np || !coll.is_empty() || !mp.is_empty() || load || play.play.world.pack != pack {
+                        println!("NETOWN joiner tick {}: flags +{:?} -{:?}, items {:?}, NP {} -> {}, collected {:?}, maps {:?}, load started {} ({}), world {} -> {}", play.play.ticks, added, removed, changed, np, s.neopoints, coll, mp, load, play.play.last_door, pack, play.play.world.pack);
+                    }
+                }
                 // The joiner hears the host's sounds, not its own game's (net.rs events).
                 // NEOPETS_TRACE_NETEV: the events played so far, every 300 ticks (diagnostic).
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
@@ -1846,6 +1918,10 @@ fn step_sim(
                         net::Event::Emote(b, s, l) => play.play.emote_requests.push((b, s, l)),
                         net::Event::Movie(m) => play.play.state.movie_queue.push(m),
                         net::Event::Rumble(level, count) => play.play.motor = Some(neopets_sim::rumble::Send { level, count }),
+                        net::Event::Notice(n) => {
+                            info!("net: the host's notice {n}");
+                            netr.notice = net::notice_text(n).map(String::from);
+                        }
                     }
                 }
                 // Only a state of the world loaded here (one from before a world change waits).

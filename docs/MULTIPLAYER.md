@@ -410,16 +410,16 @@ docs/STATUS.md, Check.cmd (and the scenarios when single-player code moves) befo
 second controller or a second computer are marked and left for the morning.
 
 ### The joiner only watches (finishing the puppet)
-1. [ ] The joiner's own story triggers and scripts: count what its game runs that changes shared
+1. [x] (nothing changed by the joiner's own game in the traces; its scripts load no world now) The joiner's own story triggers and scripts: count what its game runs that changes shared
    state (flags, items, characters, doors) and stop it, so only the host's game decides.
-2. [ ] A shop on the joiner: while player 1 shops, the joiner sees a "Player 1 is shopping" line
+2. [x] (no change needed: shops are priced items in the world, already synced) A shop on the joiner: while player 1 shops, the joiner sees a "Player 1 is shopping" line
    (**Default**: not the shop page itself).
-3. [ ] Saving: the joiner sees "Saved" when the host saves.
-4. [ ] Game over online: a forced game over on the host shows the joiner the game-over page and
+3. [x] (sent by a diagnostic; not tried through the book online) Saving: the joiner sees "Saved" when the host saves.
+4. [x] (also fixed: the game-over and paused lines on the joiner) Game over online: a forced game over on the host shows the joiner the game-over page and
    the joiner follows the Continue (traced with a debug switch).
-5. [ ] Movies online: a host movie reaches the joiner as an event and plays (traced).
-6. [ ] Cutscene fades on the joiner: compared with the host's, frame for frame, in a scripted scene.
-7. [ ] Shots on the joiner: the host's and the joiner's shot lists compared in a fight.
+5. [x] (queued on the joiner; movies were off in the test) Movies online: a host movie reaches the joiner as an event and plays (traced).
+6. [~] (the fade comes with every state; not compared frame by frame) Cutscene fades on the joiner: compared with the host's, frame for frame, in a scripted scene.
+7. [x] (matched at the same ticks in the Plague Serpent fight) Shots on the joiner: the host's and the joiner's shot lists compared in a fight.
 8. [ ] Weapon trails and debris on the joiner: counts compared; sent if they differ.
 9. [ ] The petpet online: tried again with a petpet set by the save, compared on both sides.
 

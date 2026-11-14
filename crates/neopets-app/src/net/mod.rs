@@ -34,7 +34,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 18;
+const PROTOCOL: u16 = 19;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -714,6 +714,9 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 net.last_heard = Some(now);
                 let page = r.u8().unwrap_or(0);
                 let paused = page != 0;
+                if net.peer_page != page {
+                    info!("net: the other side's page is now {page} (ping)");
+                }
                 net.peer_paused = paused;
                 net.peer_page = page;
                 // The joiner paused: player 2 lets go of the controls (the presses counted so
@@ -843,6 +846,13 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 net.last_state_at = Some(now);
                 net.gap_states += 1;
                 if let Some(mut s) = State::decode(&mut r) {
+                    // A running host is not paused (its pings say so only while quiet); its
+                    // game-over page comes with each state.
+                    if net.peer_page != s.page {
+                        info!("net: the host's page is now {} (state)", s.page);
+                    }
+                    net.peer_paused = s.page != 0;
+                    net.peer_page = s.page;
                     // The host's events in order, each once (a gap waits for the resend).
                     for (n, e) in std::mem::take(&mut s.events) {
                         if n == net.applied + 1 {
@@ -1038,6 +1048,7 @@ mod tests {
             world_rev: 4,
             world: Some(WorldSync { pack: 909, breakables: vec![1, 2, 0], items: vec![(909, 3, NetItem { id: 160, position: [1.0, 2.0, 3.0], state: 1, angle: 0.5, scale: 1.0, direction: [0.0, 0.0, 1.0], price: -2, reference: 0.2 })], chars: vec![(909, 1, 0), (909, 2, 3)], objects: vec![(4, 2, 1.5, 3)] }),
             anim_times: vec![(4, 0.75)],
+            page: 2,
             moving: vec![(909, 4, [0.0, 1.0, 0.0], 0.25)],
             flags: vec![1, 500],
             items: vec![(57, 2)],
@@ -1051,6 +1062,7 @@ mod tests {
                 (10, Event::Fx(neopets_sim::effect::Op::Release { handle: 4 })),
                 (11, Event::Voice { id: 3, emitter: [1.0, 2.0, 3.0], base: 1024, r: 200.0, r0: 10.0 }),
                 (12, Event::Rumble(200, 45)),
+                (13, Event::Notice(NOTICE_SAVED)),
             ],
             shots: vec![(3, neopets_sim::projectile::Shot::remote(
                 neopets_sim::projectile::Setup { kind: 2, visual: 23, element: 1, owner: Some(77), start: [0.0; 3], velocity: [0.0, 0.0, 1.0], lifetime: 9, damage: 3.0, radius: 1.0, spin: 0.0, area_radius: 0.0, area_duration: 0, key: -1, ignore_world: false, status: (-1, 0, 0), effects: [-1; 6], trail: -1 },

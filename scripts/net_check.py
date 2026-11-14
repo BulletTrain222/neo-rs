@@ -6,7 +6,7 @@ welcomes, the events made and acknowledged, the effect objects and music on each
 state sizes, and any panic. Exits 1 on a failed check.
 
     python scripts/net_check.py [--seconds 60] [--still] [--drop 20] [--delay 100]
-        [--host-env K=V ...] [--join-env K=V ...]
+        [--host-env K=V ...] [--join-env K=V ...] [--host-args "--pack 909 ..."]
 
 Logs go to private/nettest/host.log and join.log. Opens game windows (they need not be seen).
 """
@@ -61,6 +61,7 @@ def main():
     ap.add_argument('--delay', type=int, default=0, help='milliseconds each received message is held (both sides)')
     ap.add_argument('--host-env', nargs='*')
     ap.add_argument('--join-env', nargs='*')
+    ap.add_argument('--host-args', default='', help='more arguments for the host, for example "--pack 909 --flag 110"')
     a = ap.parse_args()
 
     os.makedirs(OUT, exist_ok=True)
@@ -72,7 +73,7 @@ def main():
         common['NEOPETS_NET_DELAY'] = str(a.delay)
     kill_all()
     time.sleep(1)
-    host_args = [EXE, '--play'] + ([] if a.still else ['--autoplay'])
+    host_args = [EXE, '--play'] + ([] if a.still else ['--autoplay']) + a.host_args.split()
     with open(host_log, 'w') as hf:
         subprocess.Popen(host_args, cwd=ROOT, stdout=hf, stderr=subprocess.STDOUT, env=env_with(a.host_env, dict(common, NEOPETS_NET_HOST='1')))
     failures = []

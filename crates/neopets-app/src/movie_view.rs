@@ -207,7 +207,10 @@ pub fn collect(mut movies: Option<ResMut<Movies>>, mut play: Option<ResMut<crate
         mv.queue.extend(m.flow.movies.drain(..));
     }
     if let Some(p) = play.as_deref_mut() {
-        mv.queue.extend(p.play.state.movie_queue.drain(..));
+        for m in p.play.state.movie_queue.drain(..) {
+            info!("movie {m} queued on play tick {}{}", p.play.ticks, if mv.off { " (movies off: skipped)" } else { "" });
+            mv.queue.push_back(m);
+        }
     }
 }
 

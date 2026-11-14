@@ -99,6 +99,7 @@ impl crate::play::Play {
                 message: self.message.map(|(line, at)| (line, self.ticks.saturating_sub(at).min(u32::MAX as u64) as u32)),
                 shake: self.shake_now.map(|o| (o.side, o.up, o.aim)),
             },
+            page: if self.death.page.is_some() || self.death.flag_e { 2 } else { 0 },
         }
     }
 
