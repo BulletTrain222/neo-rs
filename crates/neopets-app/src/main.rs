@@ -2004,8 +2004,13 @@ fn step_sim(
                 // Online, joining (net.rs): this side's controller goes to the host as player 2's;
                 // this side's game runs without it and is then put where the host's is.
                 // NEOPETS_NET_WALK (diagnostic): this side walks ahead, jumping every 1.5 seconds.
-                if std::env::var_os("NEOPETS_NET_WALK").is_some() {
+                // NEOPETS_NET_WALK=circle: it also steers to one side, walking round in circles
+                // (it does not end up against a wall).
+                if let Some(v) = std::env::var_os("NEOPETS_NET_WALK") {
                     input.forward = 1.0;
+                    if v == "circle" {
+                        input.side = 0.6;
+                    }
                     input.jump = play.play.ticks % 90 == 45;
                 }
                 // This side's D-pad and Triangle go to the host for player 2's panels (this side's
@@ -2073,7 +2078,8 @@ fn step_sim(
                 // NEOPETS_TRACE_NETEV: the events played so far, every 300 ticks (diagnostic).
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                     let cpu = std::mem::take(&mut netr.cpu_us);
-                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state; the host's hero stalled {} times, largest step {:.2}; buffer {} (most {}, holding {}); apply {:.1} us a tick", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats, netr.smooth.2, netr.smooth.3, netr.queue.len(), netr.queue_most, netr.hold, cpu as f32 / 300.0);
+                    let own_stalls = std::mem::take(&mut netr.own_smooth.2);
+                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state; the host's hero stalled {} times, largest step {:.2}; buffer {} (most {}, holding {}); apply {:.1} us a tick; your hero stalled {} times", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats, netr.smooth.2, netr.smooth.3, netr.queue.len(), netr.queue_most, netr.hold, cpu as f32 / 300.0, own_stalls);
                     netr.queue_most = 0;
                     (netr.gap_states, netr.gap_max, netr.repeats) = (0, 0, 0);
                     (netr.smooth.2, netr.smooth.3) = (0, 0.0);
@@ -2143,6 +2149,14 @@ fn step_sim(
                         }
                         netr.smooth.0 = Some(at);
                         netr.smooth.1 = d;
+                        if let Some(at) = play.play.others.first().map(|o| o.loco.position()) {
+                            let d = netr.own_smooth.0.map_or(0.0, |b: [f32; 3]| ((at[0] - b[0]).powi(2) + (at[2] - b[2]).powi(2)).sqrt());
+                            if d < 0.001 && netr.own_smooth.1 > 0.05 {
+                                netr.own_smooth.2 += 1;
+                            }
+                            netr.own_smooth.0 = Some(at);
+                            netr.own_smooth.1 = d;
+                        }
                     }
                     // The host walked on into a world this side's game did not: after 1.5 seconds
                     // (no load running here) ask for a new welcome.

@@ -56,8 +56,11 @@ pub struct Coop {
 impl Coop {
     /// Seat `i`'s input for one tick (the jump, attack and Square presses are taken).
     pub fn take(&mut self, i: usize) -> (HeroInput, CameraPad) {
-        if let Some(r) = self.remote.get_mut(i).and_then(Option::take) {
-            return r;
+        // Online: the joiner's latest input, kept for the next tick with its presses taken.
+        if let Some(r) = self.remote.get_mut(i).and_then(Option::as_mut) {
+            let out = *r;
+            (r.0.jump, r.0.attack, r.0.square) = (false, false, false);
+            return out;
         }
         let Some(s) = self.seats.get_mut(i) else { return Default::default() };
         let mut input = s.input;

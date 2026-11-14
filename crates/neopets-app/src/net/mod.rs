@@ -125,6 +125,9 @@ pub struct Net {
     /// Joiner, for the trace: the host's hero's last place and step here, the stalls and the
     /// largest step since the last trace line.
     pub smooth: (Option<[f32; 3]>, f32, u32, f32),
+    /// Joiner (diagnostic, NEOPETS_TRACE_NETEV): this side's own hero: its last place, last
+    /// step, and the ticks it stood still right after moving (a stall).
+    pub own_smooth: (Option<[f32; 3]>, f32, u32),
     /// Joiner, for the trace: the most states waiting in the buffer since the last line.
     pub queue_most: usize,
     /// For the trace: microseconds spent on the online work since the last trace line (the
@@ -1275,9 +1278,6 @@ fn host_route(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, pl
             renumber(net, &mut extra, Some(seat));
         }
     }
-    for c in coop.remote.iter_mut() {
-        *c = None;
-    }
     let linked = |n: &Net| n.peer.is_some() as usize;
     let others = extra.iter().map(linked).sum();
     let mine = std::mem::take(&mut inbox[0]);
@@ -1295,9 +1295,14 @@ fn host_route(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, pl
             });
         }
     }
-    // Sessions whose joiner is gone close (their socket is a copy of this one's).
+    // Sessions whose joiner is gone close (their socket is a copy of this one's), and the seats
+    // past the last joiner have no input.
     extra.retain(|e| e.peer.is_some());
     net.extra = extra;
+    let seats = net.peers();
+    for c in coop.remote.iter_mut().skip(seats) {
+        *c = None;
+    }
 }
 
 /// Host: seat `freed` is empty now (its player left the game): the joiners after it move up one.
@@ -1808,12 +1813,20 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
     }
     // The host's input for the joiner's player from its controller (its presses since the last
     // frame).
+    // The latest input stays for every tick until a newer one comes (a frame that ran two ticks
+    // gave the second none, and the player stood still for it: with four windows on one
+    // computer the joiners' players stuttered), and a press stays until a tick takes it (a
+    // frame that ran no tick lost the press to the next frame's input).
     if net.role == Role::Host && net.peer.is_some() && net.seat < coop.remote.len() {
+        let before = coop.remote[net.seat].map(|(h, _)| (h.jump, h.attack, h.square));
         coop.remote[net.seat] = net.remote.map(|i| {
-            let (h, c) = i.to_hero(&net.seen);
+            let (mut h, c) = i.to_hero(&net.seen);
             // NEOPETS_TRACE_NETINPUT (diagnostic): each jump press as it reaches the host.
             if h.jump && std::env::var_os("NEOPETS_TRACE_NETINPUT").is_some() {
                 info!("net: jump {} arrived", i.jumps);
+            }
+            if let Some((j, a, q)) = before {
+                (h.jump, h.attack, h.square) = (h.jump || j, h.attack || a, h.square || q);
             }
             (h, c)
         });
