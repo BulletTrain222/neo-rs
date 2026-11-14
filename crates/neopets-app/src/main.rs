@@ -5833,6 +5833,8 @@ fn play_trace(
     if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
         play.trace_select_hero(1);
     }
+    // NEOPETS_ATTACK_TURN=original (diagnostic): the trace's attack turn as the original's.
+    play.steady_turn = std::env::var("NEOPETS_ATTACK_TURN").as_deref() != Ok("original");
     // NEOPETS_TRACE_TARGET=<name>: the fight trace fights only characters with that name.
     play.fight_target = std::env::var("NEOPETS_TRACE_TARGET").ok().filter(|n| !n.is_empty());
     // NEOPETS_TRACE_CHEATS="god,magic,charge": the developer menu's cheats from the start.

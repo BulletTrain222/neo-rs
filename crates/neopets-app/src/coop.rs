@@ -180,6 +180,8 @@ pub fn read_coop(
     // The Multiplayer page's options.
     // NEOPETS_NET_ALONE=1 or 0 (diagnostic): Doors take Only you or Both, whatever the settings
     // file says.
+    // The Gameplay page's Attack turn (NEOPETS_ATTACK_TURN=original, diagnostic, for traces too).
+    play.play.steady_turn = settings.steady_turn && std::env::var("NEOPETS_ATTACK_TURN").as_deref() != Ok("original");
     let alone = std::env::var("NEOPETS_NET_ALONE").ok().map_or(settings.coop_doors_alone, |v| v.trim() != "0");
     if (play.play.coop_revive, play.play.coop_partner, play.play.coop_together, play.play.coop_doors_alone) != (settings.coop_revive, settings.coop_partner, settings.coop_together, alone) {
         (play.play.coop_revive, play.play.coop_partner, play.play.coop_together, play.play.coop_doors_alone) = (settings.coop_revive, settings.coop_partner, settings.coop_together, alone);

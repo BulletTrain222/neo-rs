@@ -1527,6 +1527,8 @@ pub struct Play {
     pub coop_doors_alone: bool,
     /// Online, joining: this side's seat on the host (0: player 2).
     pub net_seat: usize,
+    /// The Gameplay page's Attack turn (Steady: toward the enemy's body, not its target point).
+    pub steady_turn: bool,
     /// Online, hosting: separate worlds are possible (a joiner is in).
     pub net_apart_ok: bool,
     /// Host: the door an online player 2 is taking alone this tick (net.rs sends it apart).
@@ -2569,6 +2571,7 @@ impl Play {
             coop_doors_alone: false,
             net_apart_ok: false,
             net_seat: 0,
+            steady_turn: true,
             apart_door: None,
             net_apart: false,
             diag_p2_square: 0,
@@ -12832,6 +12835,21 @@ impl Play {
             let h = self.player.loco.position();
             for c in self.characters.iter().filter(|c| c.name == name && c.pack == pack) {
                 let clip = c.anim.clip_state().action;
+                // Its attachment point 7: the bone it hangs from, that bone's depth in the
+                // skeleton, and the number of bones.
+                if self.ticks == 30 {
+                    let b = c.anim.bones();
+                    let depth = |mut j: usize| {
+                        let mut n = 0;
+                        while let Some(p) = b.parents.get(j).copied().flatten() {
+                            j = p;
+                            n += 1;
+                        }
+                        n
+                    };
+                    let a7 = b.attach.get(7).copied();
+                    println!("LOCKWHY {} attach 7 {:?} depth {:?} of {} bones; attach 0..8 bones {:?}; max depth {}", c.name, a7, a7.and_then(|a| a.0).map(depth), b.parents.len(), b.attach.iter().map(|a| a.0).collect::<Vec<_>>(), (0..b.parents.len()).map(depth).max().unwrap_or(0));
+                }
                 println!("LOCKWHY tick {}: {} id {} d {:.1} inactive {} dying {} hp {} dead {} vetoed {} townsfolk {} row {} unhittable {} (pet {} invulnerable {} lying {} outer {:?} clip {clip}) ghost {:?} | lock {:?} targets {:?}", self.ticks, c.name, c.id, (c.position[0] - h[0]).hypot(c.position[2] - h[2]), c.inactive, c.dying.is_some(), c.hp, c.enemy.as_ref().is_some_and(|e| e.is_dead()), c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(clip)), c.townsfolk.is_some(), c.row.is_some(), c.unhittable(), c.pet_like(), c.invulnerable, c.enemy.as_ref().is_some_and(|e| e.lying()), c.enemy.as_ref().map(|e| (e.state, e.outer)), c.ghost.as_ref().map(|g| g.targetable), self.player.lock, self.player.targets.records.iter().map(|r| (r.id, r.flag)).collect::<Vec<_>>());
             }
         }
@@ -12876,9 +12894,23 @@ impl Play {
         if !tor && self.player.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 8 | 13)) {
             return;
         }
+        // SPEC-0040 Behavior 20 item 7, first case: while the hero's animation reports frame flag
+        // 64, the hero keeps its own heading and nothing else runs (before, the turn ran on
+        // every attack tick, and near an enemy whose target point swings (the Swamp Tentacle's
+        // end) Tor turned to it mid-swing and struck away from its body; user report 150).
+        if self.player.hero.frame_bits() & 64 != 0 {
+            return;
+        }
         let forced = forced.filter(|_| tor);
         let f = self.player.loco.facing;
-        let target = forced.and_then(|id| self.aim_point(id)).or_else(|| self.player.targets.records.first().filter(|r| r.flag).and_then(|r| self.aim_point(r.id))).or_else(|| {
+        // Tor also takes the head of the target list in attack sub-states 7 and 8 while its
+        // stored distance is below 7.0, flagged or not (item 7, Tor's case).
+        let sub = self.player.attack.as_ref().map(|a| a.sub);
+        let held = self.player.targets.records.first().filter(|r| r.flag || (tor && matches!(sub, Some(7 | 8)) && r.d < 7.0));
+        // Attack turn Steady (this build's option): toward the held target's body (its position),
+        // not its target point; a boss's forced lock keeps its own point.
+        let point = |id: u64| if self.steady_turn { self.characters.iter().find(|c| c.id == id).map(|c| c.position) } else { self.aim_point(id) };
+        let target = forced.and_then(|id| self.aim_point(id)).or_else(|| held.and_then(|r| point(r.id))).or_else(|| {
             if !tor {
                 return None;
             }

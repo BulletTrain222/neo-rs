@@ -24,10 +24,12 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 44;
+pub const ROWS: usize = 45;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
-pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
+pub const GAMEPLAY_ROWS: [usize; 5] = [17, 18, 19, 20, ATTACK_TURN_ROW];
+/// The Gameplay page's Attack turn row (this build's option).
+pub const ATTACK_TURN_ROW: usize = 44;
 /// The rows on the Multiplayer page (docs/MULTIPLAYER.md; this build's feature), in the order
 /// shown: local co-op first, then the shared rules, then online.
 pub const MULTI_ROWS: [usize; 18] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], 25, TOGETHER_ROW, TAGS_ROW, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW, DOORS_ROW];
@@ -167,11 +169,15 @@ pub struct DisplaySettings {
     pub coop_pads: [u8; 4],
     /// A tag (P1 to P4) over each other player (on by default).
     pub coop_tags: bool,
+    /// Steady: an attack turns the hero toward the enemy's body; Original: toward its target
+    /// point (SPEC-0040 Behavior 20 item 7, attachment point 7, which on some enemies swings
+    /// with their limbs). This build's option, Steady by default (user report 150).
+    pub steady_turn: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4], coop_tags: true }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4], coop_tags: true, steady_turn: true }
     }
 }
 
@@ -223,6 +229,7 @@ impl DisplaySettings {
                 "coop together" => s.coop_together = v == "true",
                 "coop doors alone" => s.coop_doors_alone = v == "true",
                 "coop tags" => s.coop_tags = v != "false",
+                "attack turn" => s.steady_turn = v != "original",
                 "coop players" => s.coop_players = v.parse().unwrap_or(2).clamp(2, 4),
                 "coop pads" => {
                     for (k, n) in v.split(',').take(4).enumerate() {
@@ -239,7 +246,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\nnet port = {}\ncoop together = {}\ncoop doors alone = {}\ncoop players = {}\ncoop pads = {}\ncoop tags = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\nnet port = {}\ncoop together = {}\ncoop doors alone = {}\ncoop players = {}\ncoop pads = {}\ncoop tags = {}\nattack turn = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -274,7 +281,8 @@ impl DisplaySettings {
             self.coop_doors_alone,
             self.coop_players,
             self.coop_pads.map(|n| n.to_string()).join(","),
-            self.coop_tags
+            self.coop_tags,
+            if self.steady_turn { "steady" } else { "original" }
         )
     }
 
@@ -409,6 +417,7 @@ impl DisplaySettings {
             ("Player 3 controller".into(), pad_name(self.coop_pads[2])),
             ("Player 4 controller".into(), pad_name(self.coop_pads[3])),
             ("Player tags".into(), if self.coop_tags { "On".into() } else { "Off".into() }),
+            ("Attack turn".into(), if self.steady_turn { "Steady".into() } else { "Original".into() }),
         ]
     }
 
@@ -467,6 +476,7 @@ impl DisplaySettings {
             TOGETHER_ROW => self.coop_together = !self.coop_together,
             DOORS_ROW => self.coop_doors_alone = !self.coop_doors_alone,
             TAGS_ROW => self.coop_tags = !self.coop_tags,
+            ATTACK_TURN_ROW => self.steady_turn = !self.steady_turn,
             PLAYERS_ROW => self.coop_players = 2 + step(self.coop_players.clamp(2, 4) - 2, 3),
             r if PAD_ROWS.contains(&r) => {
                 let k = r - PAD_ROWS[0];
@@ -785,6 +795,7 @@ const HELP: [&str; ROWS + 1] = [
     "Player 3's controller (3 or 4 players). Auto: the next free controller.",
     "Player 4's controller (4 players). Auto: the next free controller.",
     "On: a coloured tag (P1 to P4) over each other player, so you can tell who is who. Not in the original game.",
+    "Steady: an attack turns your hero toward the enemy's body. Original: toward the game's aim point, which on some enemies (the Swamp Tentacle) swings with them and can turn a swing away.",
     "Back to Options.",
 ];
 
@@ -1002,7 +1013,7 @@ mod tests {
     fn viewport_fits_the_aspect() {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
-        assert_eq!(page_rows(1), [17, 18, 19, 20]);
+        assert_eq!(page_rows(1), [17, 18, 19, 20, 44]);
         assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 25, 35, 43, 28, 29, 30, 31, 32, 33, 34, 36]);
         assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
