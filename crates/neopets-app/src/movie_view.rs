@@ -257,6 +257,17 @@ pub struct MovieSoundDecoder {
     at: usize,
 }
 
+impl Movies {
+    /// Drop every queued movie and the one playing (a save state loaded over a new game's
+    /// opening; no hand-off is due, as the game loaded in its place has none).
+    pub fn drop_all(&mut self) {
+        self.queue.clear();
+        self.current = None;
+        self.picture = None;
+        self.ended = false;
+    }
+}
+
 impl Iterator for MovieSoundDecoder {
     type Item = bevy::audio::Sample;
 

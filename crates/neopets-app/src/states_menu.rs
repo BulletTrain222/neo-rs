@@ -32,6 +32,8 @@ pub struct StatesMenu {
     line: String,
     /// NEOPETS_TEST_STATES opened the list once (diagnostic, for a screenshot).
     tested: bool,
+    /// NEOPETS_LOAD_STATE has had its load.
+    auto_loaded: bool,
 }
 
 #[derive(Component)]
@@ -81,9 +83,44 @@ pub fn states_menu(
     play: Option<ResMut<crate::PlayState>>,
     archive: Option<ResMut<crate::Archive>>,
     mut panels: Query<(Entity, &mut Text), With<StatesPanel>>,
+    mut movies: Option<ResMut<crate::movie_view::Movies>>,
 ) {
     let typed: Vec<Key> = typed.read().filter(|k| k.state.is_pressed()).map(|k| k.logical_key.clone()).collect();
     let Some(mut play) = play else { return };
+    // NEOPETS_LOAD_STATE=name (or id): that save state loaded once, as soon as play has run a
+    // few ticks (over a new game's opening movies, which are dropped), as the list's Enter does
+    // (a test tool, e.g. to host from a state without opening the list).
+    let mut archive = archive;
+    if !menu.auto_loaded && play.play.ticks > 2 {
+        if let Ok(want) = std::env::var("NEOPETS_LOAD_STATE") {
+            menu.auto_loaded = true;
+            let want = want.trim().to_lowercase();
+            let found = read_entries().into_iter().find(|e| e.id.to_lowercase() == want || e.name.trim().to_lowercase() == want);
+            match (found, archive.as_deref_mut()) {
+                (Some(e), Some(a)) => {
+                    let crate::Archive { disc, index } = a;
+                    match crate::load_state(disc, index, &play.play, &e.id) {
+                        Some(Ok(new)) => {
+                            play.play = new;
+                            if let Some(m) = movies.as_deref_mut() {
+                                m.drop_all();
+                            }
+                            match a.disc.reopen() {
+                                Ok(second) => commands.insert_resource(crate::Streamer::start(second, a.index.clone(), play.play.boot.clone())),
+                                Err(err) => error!("No loader thread, streaming is off: {err}"),
+                            }
+                            dev.toast = Some((format!("Loaded \"{}\"", e.name), 150));
+                            info!("NEOPETS_LOAD_STATE: loaded \"{}\" ({})", e.name, e.id);
+                        }
+                        Some(Err(err)) => error!("NEOPETS_LOAD_STATE: could not load {}: {err}", e.id),
+                        None => error!("NEOPETS_LOAD_STATE: {}'s files are gone", e.id),
+                    }
+                }
+                (None, _) => error!("NEOPETS_LOAD_STATE: no save state named {want}"),
+                (_, None) => error!("NEOPETS_LOAD_STATE: no disc"),
+            }
+        }
+    }
     let pad = |b: GamepadButton| gamepads.iter().any(|g| g.just_pressed(b));
     if !dev.states_open {
         // F9 opens the list, unless the report note or the developer menu has the keys.
