@@ -201,3 +201,61 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 8. Smaller states (flags and items on change).
 Each item is tested with two windows over 127.0.0.1, recorded in docs/STATUS.md, checked with
 Check.cmd and committed on its own. Anything unclear goes in the morning report.
+
+## Night plan 2 (2026-11-13, the display is off)
+
+Every item is tested from logs and traces (no screen). Each one is recorded in docs/STATUS.md,
+checked with Check.cmd (and scripts/scenarios.py when single-player code changes) and
+committed on its own. **Default** marks a rule chosen without the user; the morning report lists
+them all.
+
+### Tools first
+1. [ ] `scripts/net_check.py`: starts a host and a joiner window over 127.0.0.1 (host on the
+   autopilot), waits, reads both logs and reports: joined, welcomes, events made and
+   acknowledged, effect objects on both sides, music on both, state size. Fails loudly.
+2. [ ] Lossy network switches: NEOPETS_NET_DROP=percent (drop that share of received messages)
+   and NEOPETS_NET_DELAY=ms (hold received messages that long). Test: at 20% loss and 100 ms,
+   every event is still played once and in order, and the session holds.
+3. [ ] A decode test: random and truncated bytes never panic any decoder (synthetic bytes).
+4. [ ] Session tests: a second joiner is refused while one is in; a join before the host is in
+   a game is refused; a joiner can leave and join again; the host keeps hosting after a leave.
+
+### Player 2 can do more (one PC and online)
+5. [ ] Doors: player 2 walking through a door or exit takes both players. Player 1 arrives
+   with player 2 beside. Doors that need Square show the prompt on player 2's half, and player
+   2's Square uses them. **Default:** either player's door moves both.
+6. [ ] Talk boxes: either player's Cross moves a box on (Default); only player 1 chooses an
+   answer.
+7. [ ] Player 2's Mote magic and power attacks: traced on one PC.
+8. [ ] Player 2 on ledges, ladders, climbing and swimming: traced where the scenarios go, and
+   gaps recorded.
+9. [ ] Rumble: each player's own controller; the joiner's comes as an event.
+10. [ ] One PC: "Player 2 joined" and "Player 2 left" in game, as online.
+
+### The joiner sees the same world
+11. [ ] World items: pickups taken (by either player) vanish on the joiner, and dropped ones
+    appear.
+12. [ ] Breakables and moving objects: broken crates, opened doors and gates, and platforms
+    as on the host.
+13. [ ] Sounds heard from the joiner's own player: the host sends where a sound is, and the
+    joiner works out volume and pan from its own camera.
+14. [ ] Effects already running when the joiner arrives are sent at the welcome.
+15. [ ] Characters only when they change (states smaller in busy places), and a state-size
+    reading in a busy town.
+16. [ ] Talk box choice cursor, shop prices and the buy prompt on the joiner.
+17. [ ] Prompts on the joiner are player 2's own (door and talk prompts where player 2 stands).
+18. [ ] The double shake in host cutscenes on the joiner.
+
+### Guards against breaking it later
+19. [ ] A co-op scenario in scripts/scenarios.py: player 2 joins, walks, attacks, is hit, goes
+    down and is revived.
+20. [ ] net_check.py run after each online change.
+
+### Words
+21. [ ] "How to play together" at the top of this file: one PC, home network, what each option
+    does, what to do when Windows asks about the firewall.
+22. [ ] The morning report: what was done, what was not, every Default, what needs the screen
+    or a second computer.
+
+### Not tonight (needs the user)
+- Looking at it on screen; two real computers; internet play (port forwarding, UPnP).
