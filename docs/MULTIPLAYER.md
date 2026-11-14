@@ -1,6 +1,43 @@
 # Multiplayer plan (this build's feature; not in the original game)
 
-Status (2026-11-13): steps 1 to 3 built (local co-op, split screen, co-op rules, the Multiplayer page); step 4 built on the home network (net.rs): host and join, shared talk boxes and cutscene camera, world changes, joining from the title screen. Written from the user's decisions; docs/STATUS.md records each increment.
+Status (2026-11-13): steps 1 to 3 built (local co-op, split screen, co-op rules, the Multiplayer page); step 4 built on the home network (net.rs): host and join, shared talk boxes and cutscene camera, world changes, joining from the title screen, shared sounds, effects, music, items and breakables, pausing and quitting. Player 2 has its own panels, doors, guard, climbing and rumble. Written from the user's decisions; docs/STATUS.md records each increment.
+
+## How to play together
+
+**On one computer (split screen).** Plug in a second controller and start a game. Press
+Start on the second controller and player 2 appears beside player 1, on the bottom (or right)
+half of the screen. Press Select on that controller to take player 2 out again. Player 2 has its
+own health and magic bars, item panel (D-pad up), Mote panel (D-pad down), camera and rumble.
+
+**On two computers (home network).** Both computers need their own copy of the game disc and
+the same build of this game.
+1. The host starts or loads a game, then opens Options, Multiplayer and chooses **Host a game**.
+   The help line shows the address to give your friend (for example 192.168.1.20).
+2. The friend opens Options, Multiplayer (from the title screen is fine), types that address
+   on **Join address** with the number keys and the dot (Backspace deletes), and chooses
+   **Join a game**. They go straight into the host's game as player 2, full screen.
+3. The first time the host does this, Windows asks whether to let the game through the
+   firewall: allow it on **Private networks**.
+4. To stop, either player can Quit from the pause page. If the host quits, the friend goes back
+   to the title screen.
+
+**The Multiplayer page.**
+| Row | Choices | What it does |
+|---|---|---|
+| Knocked out | Revive, Game over | Revive: a fallen player gets up when the other stands beside them for 2 seconds, or by themselves after 10. Game over: any fall ends the game |
+| Split screen | Top and bottom, Side by side | How one computer's screen is shared |
+| Player 2 | Partner, Second Tor | Partner: Roberta when the story has her; Second Tor: always Tor |
+| Host a game | | Host the game you are playing (press again to stop) |
+| Join address | | The host's address |
+| Join a game | | Join that host (press again to leave) |
+
+**What the two players share.** One world and story, one bag of items and Neopoints, the
+enemies, talk boxes (either player's Square moves a box on; only player 1 answers questions,
+talks to people and shops) and cutscenes. Either player's door takes both. Each player has
+their own hero, health, magic, camera, item and Mote panels, and rumble.
+
+**Not yet.** Playing over the internet (outside the home network), and checking everything on
+screen with two real computers.
 
 The original game is single-player. Every co-op rule here is this build's own choice. It is
 recorded in docs/STATUS.md as such when built, and single-player play stays as it is today.
@@ -250,10 +287,10 @@ them all.
 ### Guards against breaking it later
 19. [x] A co-op scenario in scripts/scenarios.py: player 2 joins, walks, attacks, is hit, goes
     down and is revived.
-20. [ ] net_check.py run after each online change.
+20. [x] net_check.py run after each online change.
 
 ### Words
-21. [ ] "How to play together" at the top of this file: one PC, home network, what each option
+21. [x] "How to play together" at the top of this file: one PC, home network, what each option
     does, what to do when Windows asks about the firewall.
 22. [ ] The morning report: what was done, what was not, every Default, what needs the screen
     or a second computer.
