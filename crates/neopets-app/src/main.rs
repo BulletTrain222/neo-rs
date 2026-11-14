@@ -1821,6 +1821,7 @@ fn step_sim(
                 play.play.stinger_requests.truncate(clips.0);
                 play.play.emote_requests.truncate(clips.1);
                 play.play.state.movie_queue.truncate(movies);
+                play.play.motor = None;
                 let table = play.play.effect_table.clone();
                 // The joiner hears from its own view (player 2's camera, or the host's cutscene).
                 let ears = {
@@ -1843,6 +1844,7 @@ fn step_sim(
                         net::Event::Stinger(k) => play.play.stinger_requests.push(k),
                         net::Event::Emote(b, s, l) => play.play.emote_requests.push((b, s, l)),
                         net::Event::Movie(m) => play.play.state.movie_queue.push(m),
+                        net::Event::Rumble(level, count) => play.play.motor = Some(neopets_sim::rumble::Send { level, count }),
                     }
                 }
                 // Only a state of the world loaded here (one from before a world change waits).
@@ -1923,6 +1925,9 @@ fn step_sim(
                     }
                     for m in play.play.state.movie_queue[movies.min(play.play.state.movie_queue.len())..].to_vec() {
                         netr.push_event(net::Event::Movie(m));
+                    }
+                    if let Some(s) = play.play.others.first_mut().and_then(|o| o.motor.take()) {
+                        netr.push_event(net::Event::Rumble(s.level, s.count));
                     }
                     let s = play.play.net_state(netr.generation);
                     netr.send_state(&s);
@@ -2791,11 +2796,22 @@ struct ObjectRoot(u32, usize);
 /// Each frame: a placed object's root takes its drawn transform from the play, or hides.
 /// SPEC-0033 Behavior 1C step 4: the motor send of the last tick goes to pad 0's large motor
 /// (the first connected controller's strong motor) for its countdown, replacing what it played.
-fn send_rumble(state: Option<ResMut<PlayState>>, gamepads: Query<Entity, With<Gamepad>>, mut out: MessageWriter<bevy::input::gamepad::GamepadRumbleRequest>) {
+fn send_rumble(state: Option<ResMut<PlayState>>, gamepads: Query<Entity, With<Gamepad>>, mut out: MessageWriter<bevy::input::gamepad::GamepadRumbleRequest>, coop: Res<coop::Coop>) {
     let _span = crate::perf::span("send_rumble");
     let Some(mut state) = state else { return };
+    // Co-op on one PC: player 2's send goes to its own controller.
+    if let (Some(send), Some(gamepad)) = (state.play.others.first_mut().and_then(|o| o.motor.take()), coop.pad) {
+        out.write(bevy::input::gamepad::GamepadRumbleRequest::Stop { gamepad });
+        if send.level > 0 && send.count > 0 {
+            out.write(bevy::input::gamepad::GamepadRumbleRequest::Add {
+                gamepad,
+                duration: std::time::Duration::from_secs_f32(send.count as f32 / 60.0),
+                intensity: bevy::input::gamepad::GamepadRumbleIntensity::strong_motor(send.level as f32 / 255.0),
+            });
+        }
+    }
     let Some(send) = state.play.motor.take() else { return };
-    let Some(gamepad) = gamepads.iter().min() else { return };
+    let Some(gamepad) = gamepads.iter().filter(|g| Some(*g) != coop.pad).min() else { return };
     out.write(bevy::input::gamepad::GamepadRumbleRequest::Stop { gamepad });
     if send.level > 0 && send.count > 0 {
         out.write(bevy::input::gamepad::GamepadRumbleRequest::Add {

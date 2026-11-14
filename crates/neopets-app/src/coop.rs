@@ -50,7 +50,7 @@ impl Coop {
 
 /// Each frame: joining and leaving, and player 2's input from its controller.
 #[allow(clippy::too_many_arguments)]
-pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindings>, mute: Res<bindings::PadMute>, mut coop: ResMut<Coop>, mut exclude: ResMut<bindings::PadExclude>, play: Option<ResMut<PlayState>>, settings: Res<crate::display::DisplaySettings>) {
+pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindings>, mute: Res<bindings::PadMute>, mut coop: ResMut<Coop>, mut exclude: ResMut<bindings::PadExclude>, play: Option<ResMut<PlayState>>, settings: Res<crate::display::DisplaySettings>, mut dev: ResMut<crate::dev_menu::DevMenu>) {
     let Some(mut play) = play else {
         coop.pad = None;
         exclude.0 = None;
@@ -76,6 +76,7 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
             if play.play.add_player() {
                 coop.pad = Some(e);
                 info!("co-op: player 2 joined");
+                dev.toast = Some(("Player 2 joined.".into(), 240));
             }
         }
     } else if let Some(g) = coop.pad.and_then(|e| gamepads.get(e).ok()).map(|(_, g)| g) {
@@ -83,6 +84,7 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
             play.play.remove_player();
             coop.pad = None;
             info!("co-op: player 2 left");
+            dev.toast = Some(("Player 2 left.".into(), 240));
         }
     }
     exclude.0 = coop.pad;

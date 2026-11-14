@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 10;
+const PROTOCOL: u16 = 11;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -370,6 +370,8 @@ pub enum Event {
     /// Where the host's voice `id` sounds from (emitter, base volume, radii), sent just before its
     /// start: the joiner works out the volume and pan from its own listener.
     Voice { id: u32, emitter: [f32; 3], base: i32, r: f32, r0: f32 },
+    /// Player 2's motor send (level, countdown ticks) for the joiner's controller.
+    Rumble(u8, i32),
 }
 
 /// The joiner's listener (sound.rs): its view's eye with the rows right, up and forward.
@@ -616,6 +618,11 @@ impl Event {
                 w.u8(22);
                 w.u16(*m);
             }
+            Event::Rumble(level, count) => {
+                w.u8(5);
+                w.u8(*level);
+                w.i32(*count);
+            }
             Event::Voice { id, emitter, base, r, r0 } => {
                 w.u8(4);
                 w.u32(*id);
@@ -643,6 +650,7 @@ impl Event {
             20 => Event::Stinger(r.i32()?),
             21 => Event::Emote(r.u32()?, r.u32()?, r.u32()?),
             22 => Event::Movie(r.u16()?),
+            5 => Event::Rumble(r.u8()?, r.i32()?),
             4 => Event::Voice { id: r.u32()?, emitter: r.v3()?, base: r.i32()?, r: r.f32()?, r0: r.f32()? },
             _ => return None,
         })
@@ -1829,6 +1837,7 @@ mod tests {
                 (9, Event::Fx(neopets_sim::effect::Op::Update { handle: 4, listener: Some(([0.0; 3], [0.0, 0.0, 1.0])) })),
                 (10, Event::Fx(neopets_sim::effect::Op::Release { handle: 4 })),
                 (11, Event::Voice { id: 3, emitter: [1.0, 2.0, 3.0], base: 1024, r: 200.0, r0: 10.0 }),
+                (12, Event::Rumble(200, 45)),
             ],
             shots: vec![(3, neopets_sim::projectile::Shot::remote(
                 neopets_sim::projectile::Setup { kind: 2, visual: 23, element: 1, owner: Some(77), start: [0.0; 3], velocity: [0.0, 0.0, 1.0], lifetime: 9, damage: 3.0, radius: 1.0, spin: 0.0, area_radius: 0.0, area_duration: 0, key: -1, ignore_world: false, status: (-1, 0, 0), effects: [-1; 6], trail: -1 },

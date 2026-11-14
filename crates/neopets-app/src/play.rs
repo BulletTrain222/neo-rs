@@ -1385,6 +1385,10 @@ pub struct Player {
     /// 1 has (they stay off here; the HUD swap trades them in). And the door's confirm latch.
     pub captions: (Option<u16>, bool, bool, bool, Option<Vec<u8>>),
     pub door_confirm: bool,
+    /// This player's rumble manager (SPEC-0033 Behavior 1C) and the motor send of its last tick
+    /// (player 1's goes to `Play::motor`).
+    pub rumble: neopets_sim::rumble::Rumble,
+    pub motor: Option<neopets_sim::rumble::Send>,
     /// Down (co-op, not player 1): the ticks since this player went down, and the ticks player 1
     /// has stood close by reviving it.
     pub down: Option<u32>,
@@ -2000,7 +2004,6 @@ pub struct Play {
     /// SPEC-0033 Behavior 1C: the rumble manager, its presets and Tor's leap-landing request
     /// (preset, seconds, magnitude) from the boot program, and the motor send of this tick for
     /// the window to pass to the first controller's large motor.
-    rumble: neopets_sim::rumble::Rumble,
     rumble_presets: Vec<neopets_sim::rumble::Preset>,
     /// The parked hero's quick-item marker (-1 none).
     other_marker: i32,
@@ -2450,6 +2453,8 @@ impl Play {
                 dpad: Default::default(),
                 captions: Default::default(),
                 door_confirm: false,
+                rumble: Default::default(),
+                motor: None,
                 down: None,
                 revive: 0,
                 area_cool: 0,
@@ -2782,7 +2787,6 @@ impl Play {
             spawned: false,
             generation: 0,
             menu_open: false,
-            rumble: Default::default(),
             rumble_presets: Vec::new(),
             other_marker: -1,
             replace_after_movie: false,
@@ -4844,7 +4848,8 @@ impl Play {
         // SPEC-0027 Per-frame use of the shake: the view (not the camera) moves by the frame's
         // amounts along its level right axis and the world up; with an aim distance it keeps
         // looking at the point that far ahead of the unshaken eye.
-        let Some(o) = self.shake_now else { return (eye, forward, up, focal) };
+        // A joiner looking through the host's cutscene view: the host's shake is already in it.
+        let Some(o) = self.shake_now.filter(|_| !(self.net_follow && self.net_cut.is_some())) else { return (eye, forward, up, focal) };
         let f = unit(forward);
         let h = unit([-f[2], 0.0, f[0]]);
         let moved = [eye[0] + o.side * h[0], eye[1] + o.up, eye[2] + o.side * h[2]];
@@ -5689,7 +5694,7 @@ impl Play {
                     let d2 = (0..3).map(|k| (c[k] - eye[k]) * (c[k] - eye[k])).sum::<f32>();
                     let m = neopets_sim::rumble::falloff(e.intensity, e.inner, e.outer, d2);
                     if m > 0.0 {
-                        self.rumble.request(&self.rumble_presets, 0, e.rumble_seconds, m);
+                        self.player.rumble.request(&self.rumble_presets, 0, e.rumble_seconds, m);
                     }
                 }
                 if e.id == -1 || e.trail {
@@ -12035,7 +12040,7 @@ impl Play {
         self.clip_effects_step();
         // SPEC-0033 Behavior 1C per pass (not while the menu is up, game status 9): entries run
         // down with Vibration off, but nothing is sent then.
-        let send = self.rumble.tick(self.menu_open);
+        let send = self.player.rumble.tick(self.menu_open);
         if self.options.block.vibration != 0 {
             if let Some(s) = send {
                 self.motor = Some(s);
@@ -14037,14 +14042,14 @@ impl Play {
                     self.player.loco.body.velocity = [0.0; 3];
                     // SPEC-0033 Behavior 1C source 3: preset 0, 1.0 s, magnitude 0.7, with the
                     // shared countdown loaded with 60.
-                    self.rumble.request(&self.rumble_presets, 0, 1.0, 0.7);
+                    self.player.rumble.request(&self.rumble_presets, 0, 1.0, 0.7);
                     self.grab_rumble = 60;
                 }
                 // Each strike-state tick of a hold: at 0 the rumble again and 60; then down by 1.
                 enemy::Grab::Hold => {
                     if self.grab_rumble == 0 {
                         self.grab_rumble = 60;
-                        self.rumble.request(&self.rumble_presets, 0, 1.0, 0.7);
+                        self.player.rumble.request(&self.rumble_presets, 0, 1.0, 0.7);
                     }
                     self.grab_rumble -= 1;
                 }
@@ -18830,7 +18835,7 @@ impl Play {
             if sub == 13 && self.player.hero.clip_state().action != 26 {
                 self.sound.play(VOICE, neopets_sim::trigger::recoil_cue(self.player.recoil_material).into(), Cue::default());
                 let (p, t, m) = self.landing_rumble;
-                self.rumble.request(&self.rumble_presets, p, t, m);
+                self.player.rumble.request(&self.rumble_presets, p, t, m);
             }
         }
         force
@@ -19193,6 +19198,7 @@ impl Play {
         p.hero_flash = 0;
         p.hero_trail = None;
         (p.quick, p.mote_panel, p.dpad, p.captions, p.door_confirm) = Default::default();
+        (p.rumble, p.motor) = Default::default();
         self.place_beside(&mut p);
         self.others.push(p);
         true
@@ -19468,6 +19474,11 @@ impl Play {
                 };
                 let w = self.hud_words.clone();
                 self.player.hud.tick(v, false, &w);
+            }
+            // Player 2's rumble (its own controller's).
+            let send = self.player.rumble.tick(self.menu_open);
+            if self.options.block.vibration != 0 && send.is_some() {
+                self.player.motor = send;
             }
             (self.hero_index, self.weapon, self.shield) = saved;
             self.coop_running = false;

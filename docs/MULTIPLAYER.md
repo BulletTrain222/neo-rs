@@ -162,7 +162,7 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Camera and its controls | Own follow camera; invert and speed per computer | [x] | [x] |
 | HUD (portrait, health and magic bars) | Own; Neopoints shown on both | [x] | [x] |
 | Talk prompt ("Talk" over an NPC) | Shown to player 1 only (player 1 talks); door prompts to each player | [x] | [x] |
-| Rumble | Own controller only | [ ] player 2 | [ ] joiner's pad |
+| Rumble | Own controller only | [x] | [x] |
 | Controls and bindings | Per computer; on one PC, player 2 uses the second pad | [x] | [x] |
 | Display, audio volume, graphics | Per computer | [x] | [x] |
 | Sound listener | One PC: player 1. Online: each computer hears from its own player | [x] | [x] |
@@ -229,8 +229,8 @@ them all.
 7. [ ] Player 2's Mote magic and power attacks: traced on one PC.
 8. [ ] Player 2 on ledges, ladders, climbing and swimming: traced where the scenarios go, and
    gaps recorded.
-9. [ ] Rumble: each player's own controller; the joiner's comes as an event.
-10. [ ] One PC: "Player 2 joined" and "Player 2 left" in game, as online.
+9. [x] Rumble: each player's own controller; the joiner's comes as an event.
+10. [x] One PC: "Player 2 joined" and "Player 2 left" in game, as online.
 
 ### The joiner sees the same world
 11. [x] World items: pickups taken (by either player) vanish on the joiner, and dropped ones
@@ -242,9 +242,9 @@ them all.
 14. [ ] Effects already running when the joiner arrives are sent at the welcome.
 15. [ ] Characters only when they change (states smaller in busy places), and a state-size
     reading in a busy town.
-16. [ ] Talk box choice cursor, shop prices and the buy prompt on the joiner.
+16. [x] (no change needed: no cursor in question boxes; shop prompts are player 1's) Talk box choice cursor, shop prices and the buy prompt on the joiner.
 17. [ ] Prompts on the joiner are player 2's own (door and talk prompts where player 2 stands).
-18. [ ] The double shake in host cutscenes on the joiner.
+18. [x] The double shake in host cutscenes on the joiner.
 
 ### Guards against breaking it later
 19. [ ] A co-op scenario in scripts/scenarios.py: player 2 joins, walks, attacks, is hit, goes
