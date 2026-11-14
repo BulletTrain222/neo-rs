@@ -5988,6 +5988,45 @@ impl Play {
         }
     }
 
+    /// Co-op (docs/MULTIPLAYER.md): a boss's step with the nearest standing player as its hero.
+    /// Each boss reads "the hero" (player 1) for its aim, grabs and hits; when player 2 stands
+    /// nearer the nearest boss, player 2 is swapped in for that step (as in its own co-op step),
+    /// so the boss turns on player 2 and its hits land there.
+    fn with_boss_target(&mut self, step: fn(&mut Self)) {
+        let swap = !self.others.is_empty() && {
+            let pack = self.world.pack;
+            let bosses: Vec<[f32; 3]> = self
+                .characters
+                .iter()
+                .filter(|c| c.pack == pack && !c.inactive && c.hp > 0 && c.dying.is_none())
+                .filter(|c| c.boss.is_some() || c.gnarfas.is_some() || c.king.is_some() || c.knight.is_some() || c.gelert.is_some() || c.ixi.is_some() || c.sister.is_some() || c.draik.is_some() || c.faerie.is_some() || c.fyora.is_some() || c.serpent.is_some() || c.cloud.is_some())
+                .map(|c| c.position)
+                .collect();
+            let near = |p: [f32; 3]| bosses.iter().map(|b| (b[0] - p[0]).hypot(b[2] - p[2])).fold(f32::MAX, f32::min);
+            let standing = |p: &Player| p.down.is_none() && p.loco.state != hero_states::DEAD;
+            let o = &self.others[0];
+            let pick = !bosses.is_empty() && standing(o) && (!standing(&self.player) || near(o.loco.position()) < near(self.player.loco.position()));
+            // NEOPETS_TRACE_BOSSTARGET: the choice and both distances every 60 ticks (diagnostic).
+            if std::env::var_os("NEOPETS_TRACE_BOSSTARGET").is_some() && self.ticks % 60 == 0 && !bosses.is_empty() {
+                println!("BOSSTARGET tick {}: {} bosses; player 1 {:.1} away, player 2 {:.1} away; the boss steps see player {}; hp {} and {}", self.ticks, bosses.len(), near(self.player.loco.position()), near(o.loco.position()), if pick { 2 } else { 1 }, self.player.hero_hp, o.hero_hp);
+            }
+            pick
+        };
+        if !swap {
+            step(self);
+            return;
+        }
+        self.swap_player(0);
+        let saved = (self.hero_index, self.weapon, self.shield);
+        let who = self.player.who.min(1);
+        self.hero_index = who;
+        self.weapon = self.equipment.entries[0][who];
+        self.shield = self.equipment.entries[1][who];
+        step(self);
+        (self.hero_index, self.weapon, self.shield) = saved;
+        self.swap_player(0);
+    }
+
     /// Diagnostic (NEOPETS_COOP_SWITCH): the story's switch to the other hero (a forced request).
     pub fn diag_story_switch(&mut self) {
         let other = 1 - self.hero_index.min(1);
@@ -12314,24 +12353,24 @@ impl Play {
         self.dummy_step();
         self.pet_step();
         self.food_fallback();
-        self.boss_step();
+        self.with_boss_target(Self::boss_step);
         self.avoid_step();
         self.dev_group_step();
         self.haste_rescue_step();
         self.stairs_step();
-        self.gnarfas_step();
-        self.king_step();
-        self.knight_step();
-        self.gelert_step();
-        self.ixi_step();
+        self.with_boss_target(Self::gnarfas_step);
+        self.with_boss_target(Self::king_step);
+        self.with_boss_target(Self::knight_step);
+        self.with_boss_target(Self::gelert_step);
+        self.with_boss_target(Self::ixi_step);
         self.breakable_push_characters();
-        self.sisters_step();
-        self.draik_step();
-        self.faerie_step();
-        self.fyora_step();
-        self.serpent_step();
+        self.with_boss_target(Self::sisters_step);
+        self.with_boss_target(Self::draik_step);
+        self.with_boss_target(Self::faerie_step);
+        self.with_boss_target(Self::fyora_step);
+        self.with_boss_target(Self::serpent_step);
         self.mice_step();
-        self.cloud_beast_step();
+        self.with_boss_target(Self::cloud_beast_step);
         self.enemies_step();
         self.pending_navmesh_step();
         self.lock_step();

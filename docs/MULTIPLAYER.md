@@ -349,9 +349,9 @@ chosen without the user.
     (Select still takes player 2 out). **Default.**
 
 ### Fights
-11. [ ] Bosses: a boss that only ever looks at player 1 is found and, where its code allows,
+11. [x] Bosses: a boss that only ever looks at player 1 is found and, where its code allows,
     turned to the nearest standing player like other enemies.
-12. [ ] A boss fight online: host warped into a developer boss fight; the joiner's boss health
+12. [x] (effects 31 and 31, boss health equal; hits not seen) A boss fight online: host warped into a developer boss fight; the joiner's boss health
     bar, effects and shots compared.
 13. [ ] Player 2's Mote magic and power attacks traced.
 14. [ ] Characters the host makes that the joiner lacks (spawned in fights) counted, and made
