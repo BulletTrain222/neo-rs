@@ -7853,6 +7853,7 @@ fn play_frame(
     let rotation = Quat::from_rotation_y(f[0].atan2(f[2]));
     if !state.play.spawned {
         state.play.spawned = true;
+        info!("hero model built: hero {} ({} parts)", state.play.hero_index, state.play.player.model.parts.len());
         // A hero switch re-spawns the hero with the incoming model.
         for e in &hero_roots {
             commands.entity(e).despawn();

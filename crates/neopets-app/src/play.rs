@@ -11590,6 +11590,10 @@ impl Play {
         self.textbox.open = false;
         self.player.down = None;
         self.player.down_line = None;
+        // The hero drawn as player 1 is now this side's own (its model is built again, as at a
+        // hero switch; before, the host's hero's mesh was kept with this hero's skeleton and
+        // drew black and torn, user report 145).
+        self.spawned = false;
     }
 
     /// Joiner apart: a fallen hero gets up by itself after 10 seconds (the game goes on with
