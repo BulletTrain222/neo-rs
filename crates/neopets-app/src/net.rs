@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 17;
+const PROTOCOL: u16 = 18;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -218,6 +218,8 @@ pub struct State {
     pub world_rev: u32,
     pub world: Option<WorldSync>,
     pub moving: Vec<(u32, u16, [f32; 3], f32)>,
+    /// The current world's animating objects' times (index, seconds).
+    pub anim_times: Vec<(u16, f32)>,
     /// What the host's screen and music show that the joiner shows too.
     pub show: Show,
 }
@@ -231,6 +233,9 @@ pub struct WorldSync {
     pub items: Vec<(u32, u16, NetItem)>,
     /// The host's characters (pack, slot, ordinal): the joiner hides any other.
     pub chars: Vec<(u32, u8, u32)>,
+    /// The current world's animated objects (SPEC-0028): index, state, speed, drawn and scripted
+    /// flags (a gate player 2 opened opens on the joiner too).
+    pub objects: Vec<(u16, i32, f32, u8)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -270,6 +275,13 @@ impl WorldSync {
             w.u8(s);
             w.u32(o);
         }
+        w.u16(self.objects.len() as u16);
+        for &(i, st, speed, bits) in &self.objects {
+            w.u16(i);
+            w.i32(st);
+            w.f32(speed);
+            w.u8(bits);
+        }
     }
 
     fn read(r: &mut Reader) -> Option<Self> {
@@ -287,7 +299,12 @@ impl WorldSync {
         for _ in 0..n {
             chars.push((r.u32()?, r.u8()?, r.u32()?));
         }
-        Some(Self { pack, breakables, items, chars })
+        let n = r.u16()? as usize;
+        let mut objects = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            objects.push((r.u16()?, r.i32()?, r.f32()?, r.u8()?));
+        }
+        Some(Self { pack, breakables, items, chars, objects })
     }
 }
 
@@ -814,6 +831,11 @@ impl State {
             w.v3(*at);
             w.f32(*angle);
         }
+        w.u16(self.anim_times.len() as u16);
+        for &(i, t) in &self.anim_times {
+            w.u16(i);
+            w.f32(t);
+        }
         w.0
     }
 
@@ -882,7 +904,12 @@ impl State {
         for _ in 0..n {
             moving.push((r.u32()?, r.u16()?, r.v3()?, r.f32()?));
         }
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving })
+        let n = r.u16()? as usize;
+        let mut anim_times = Vec::with_capacity(n.min(256));
+        for _ in 0..n {
+            anim_times.push((r.u16()?, r.f32()?));
+        }
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times })
     }
 }
 
@@ -1080,7 +1107,7 @@ pub struct Net {
     /// joiner's acknowledgement; the joiner's latest copy.
     world_rev: u32,
     #[allow(clippy::type_complexity)]
-    world_last: Option<(u32, Vec<u8>, Vec<(u32, u16, u16, u8)>, Vec<(u32, u8, u32)>)>,
+    world_last: Option<(u32, Vec<u8>, Vec<(u32, u16, u16, u8)>, Vec<(u32, u8, u32)>, Vec<(u16, i32, u32, u8)>)>,
     /// Host: each character's state last sent, and the round-robin cursors of the characters and
     /// moving items resent unchanged (so a lost state heals).
     chars_last: std::collections::HashMap<(u32, u8, u32), CharState>,
@@ -1150,7 +1177,7 @@ impl Net {
             s.story = self.story_rev;
             s.has_story = self.story_acked < self.story_rev;
             // The world's breakables and the set of live items (not their bouncing places).
-            let sig = s.world.as_ref().map(|w| (w.pack, w.breakables.clone(), w.items.iter().map(|(p, k, it)| (*p, *k, it.id, it.state)).collect::<Vec<_>>(), w.chars.clone()));
+            let sig = s.world.as_ref().map(|w| (w.pack, w.breakables.clone(), w.items.iter().map(|(p, k, it)| (*p, *k, it.id, it.state)).collect::<Vec<_>>(), w.chars.clone(), w.objects.iter().map(|o| (o.0, o.1, o.2.to_bits(), o.3)).collect::<Vec<_>>()));
             if sig != self.world_last {
                 self.world_rev += 1;
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() {
@@ -1976,7 +2003,9 @@ impl crate::play::Play {
                     c.sort_unstable();
                     c
                 },
+                objects: self.world.object_anims.iter().enumerate().map(|(i, o)| (i as u16, o.state, o.speed, o.drawn as u8 | (o.scripted as u8) << 1)).collect(),
             }),
+            anim_times: self.world.object_anims.iter().enumerate().filter(|(_, o)| o.animating()).map(|(i, o)| (i as u16, o.time)).collect(),
             moving: self
                 .pools
                 .iter()
@@ -2160,6 +2189,22 @@ impl crate::play::Play {
                 }
             }
         }
+        // The host's animated objects: states, speeds and flags from the world sync, the moving
+        // ones' times from each state.
+        if let Some(ws) = s.world.as_ref().filter(|w| w.pack == self.world.pack) {
+            for &(i, st, speed, bits) in &ws.objects {
+                if let Some(o) = self.world.object_anims.get_mut(i as usize) {
+                    (o.state, o.speed, o.drawn, o.scripted) = (st, speed, bits & 1 != 0, bits & 2 != 0);
+                }
+            }
+        }
+        if s.pack == self.world.pack {
+            for &(i, t) in &s.anim_times {
+                if let Some(o) = self.world.object_anims.get_mut(i as usize) {
+                    o.time = t;
+                }
+            }
+        }
         for &(pack, k, at, angle) in &s.moving {
             if let Some(Some(it)) = self.pools.get_mut(&pack).and_then(|p| p.slots.get_mut(k as usize)) {
                 it.position = at;
@@ -2232,7 +2277,8 @@ mod tests {
             panels: (true, [57, -1, 3, 9], 1, 57, false, 255),
             p2_prompt: Some(13),
             world_rev: 4,
-            world: Some(WorldSync { pack: 909, breakables: vec![1, 2, 0], items: vec![(909, 3, NetItem { id: 160, position: [1.0, 2.0, 3.0], state: 1, angle: 0.5, scale: 1.0, direction: [0.0, 0.0, 1.0], price: -2, reference: 0.2 })], chars: vec![(909, 1, 0), (909, 2, 3)] }),
+            world: Some(WorldSync { pack: 909, breakables: vec![1, 2, 0], items: vec![(909, 3, NetItem { id: 160, position: [1.0, 2.0, 3.0], state: 1, angle: 0.5, scale: 1.0, direction: [0.0, 0.0, 1.0], price: -2, reference: 0.2 })], chars: vec![(909, 1, 0), (909, 2, 3)], objects: vec![(4, 2, 1.5, 3)] }),
+            anim_times: vec![(4, 0.75)],
             moving: vec![(909, 4, [0.0, 1.0, 0.0], 0.25)],
             flags: vec![1, 500],
             items: vec![(57, 2)],

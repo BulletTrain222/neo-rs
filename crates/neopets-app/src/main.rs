@@ -1865,7 +1865,7 @@ fn step_sim(
                 }
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                     let p = &play.play;
-                    println!("NETFX joiner tick {} (told {:?}): {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}, world items {} broken {} hidden {}, objects {:?}, monster bar {:?}, boss hp {:?}", p.ticks, netr.world_held.as_ref().map(|h| (h.0, h.1.items.len(), h.1.items.iter().filter(|e| e.0 == p.world.pack || p.other.as_ref().is_some_and(|o| o.pack == e.0)).count(), h.1.pack)), p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints, p.pools.iter().filter(|(k, _)| **k == p.world.pack || p.other.as_ref().is_some_and(|o| o.pack == **k)).map(|(_, pl)| pl.live()).sum::<usize>(), p.world.breakables.iter().filter(|b| b.state == 2).count(), p.characters.iter().filter(|c| c.inactive).count(), p.world.object_anims.iter().enumerate().filter(|(_, o)| o.state != 3).map(|(i, o)| (i, o.state, o.drawn)).collect::<Vec<_>>(), p.monster_bar.target.map(|_| (p.monster_bar.name.clone(), p.monster_bar.fill)), p.characters.iter().filter(|c| c.boss.is_some() || c.gnarfas.is_some() || c.knight.is_some() || c.gelert.is_some() || c.ixi.is_some() || c.serpent.is_some()).map(|c| c.hp).collect::<Vec<_>>());
+                    println!("NETFX joiner tick {} (missing {:?}) (told {:?}): {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}, world items {} broken {} hidden {}, objects {:?}, monster bar {:?}, boss hp {:?}", p.ticks, netr.world_held.as_ref().map(|h| h.1.chars.iter().filter(|k| !p.characters.iter().any(|c| (c.pack, c.slot, c.ordinal as u32) == **k)).count()), netr.world_held.as_ref().map(|h| (h.0, h.1.items.len(), h.1.items.iter().filter(|e| e.0 == p.world.pack || p.other.as_ref().is_some_and(|o| o.pack == e.0)).count(), h.1.pack)), p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints, p.pools.iter().filter(|(k, _)| **k == p.world.pack || p.other.as_ref().is_some_and(|o| o.pack == **k)).map(|(_, pl)| pl.live()).sum::<usize>(), p.world.breakables.iter().filter(|b| b.state == 2).count(), p.characters.iter().filter(|c| c.inactive).count(), p.world.object_anims.iter().enumerate().filter(|(_, o)| o.state != 3).map(|(i, o)| (i, o.state, o.drawn)).collect::<Vec<_>>(), p.monster_bar.target.map(|_| (p.monster_bar.name.clone(), p.monster_bar.fill)), p.characters.iter().filter(|c| c.boss.is_some() || c.gnarfas.is_some() || c.knight.is_some() || c.gelert.is_some() || c.ixi.is_some() || c.serpent.is_some()).map(|c| c.hp).collect::<Vec<_>>());
                 }
             } else {
                 let sounds = play.play.sound.requests.len();
@@ -6936,6 +6936,14 @@ fn play_trace(
             let wait = std::env::var("NEOPETS_COOP_WALKFROM").ok().and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| play.ticks < n);
             let p2 = if wait || std::env::var_os("NEOPETS_COOP_STILL").is_some() {
                 neopets_sim::hero::HeroInput::default()
+            } else if let Some(t) = std::env::var("NEOPETS_COOP_POWER").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+                // NEOPETS_COOP_POWER=t: player 2 presses attack on tick t and holds it 80 ticks
+                // (a power attack with a Mote in word 2).
+                let held = play.ticks >= t && play.ticks < t + 80;
+                if play.ticks % 10 == 0 {
+                    println!("COOP {} power: p2 attack {:?} mp {:?} | {}", play.ticks, play.others.first().and_then(|o| o.attack.as_ref().map(|a| (a.sub, a.f))), play.others.first().map(|o| o.hero_mp), play.last_mote);
+                }
+                neopets_sim::hero::HeroInput { attack: play.ticks == t, attack_held: held, ..Default::default() }
             } else if std::env::var_os("NEOPETS_COOP_CLIMB").is_some() {
                 // NEOPETS_COOP_CLIMB: player 2 pushes the stick forward (no jumps).
                 neopets_sim::hero::HeroInput { forward: 1.0, ..Default::default() }

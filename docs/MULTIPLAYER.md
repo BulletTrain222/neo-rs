@@ -353,12 +353,12 @@ chosen without the user.
     turned to the nearest standing player like other enemies.
 12. [x] (effects 31 and 31, boss health equal; hits not seen) A boss fight online: host warped into a developer boss fight; the joiner's boss health
     bar, effects and shots compared.
-13. [ ] Player 2's Mote magic and power attacks traced.
-14. [ ] Characters the host makes that the joiner lacks (spawned in fights) counted, and made
+13. [x] Player 2's Mote magic and power attacks traced.
+14. [x] (none missing, in a boss fight and with crates breaking) Characters the host makes that the joiner lacks (spawned in fights) counted, and made
     on the joiner if the counts show it matters.
 
 ### The joiner's world, complete
-15. [ ] Moving objects (gates, lifts, platforms): the host's object animations sent when they
+15. [x] Moving objects (gates, lifts, platforms): the host's object animations sent when they
     change, the moving ones' times every tick.
 16. [x] Characters sent only when changed (positions every tick only for those that move).
 17. [ ] The petpet online: compared on both sides.
