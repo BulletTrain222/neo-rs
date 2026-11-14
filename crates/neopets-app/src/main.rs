@@ -7212,6 +7212,16 @@ fn play_trace(
                     }
                 }
             }
+            // NEOPETS_COOP_HURT1=t: player 1 takes a hit of 9,999 on tick t; both players' downs,
+            // player 1's state and the game-over page every 20 ticks after.
+            if let Some(t) = std::env::var("NEOPETS_COOP_HURT1").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+                if play.ticks == t {
+                    play.diag_hurt(9999.0);
+                }
+                if play.ticks > t && play.ticks % 20 == 0 {
+                    println!("COOP {} downs: p1 {:?} state {} p2 {:?}; page {:?} flag E {}", play.ticks, play.player.down, play.player.loco.state, play.others.first().map(|o| o.down), play.death.page, play.death.flag_e);
+                }
+            }
             // NEOPETS_COOP_SQUARE="t[,t...]": player 2 presses Square on those ticks, and its
             // caption is printed then.
             if std::env::var("NEOPETS_COOP_SQUARE").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {

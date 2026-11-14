@@ -18,11 +18,21 @@ pub struct Pcm {
     samples: Arc<Vec<i16>>,
     channels: u16,
     rate: u32,
+    /// Plays from the start again at its end (a looping disc stream). Looping here, in place of
+    /// a looping player, keeps one copy of the stream: a looping player keeps a second copy, as
+    /// floats (about 40 MB for a three-minute stream).
+    looping: bool,
 }
 
 impl Pcm {
     pub fn from(p: neopets_data::audio::Pcm) -> Self {
-        Self { samples: Arc::new(p.samples), channels: p.channels.max(1), rate: p.rate.max(1) }
+        Self { samples: Arc::new(p.samples), channels: p.channels.max(1), rate: p.rate.max(1), looping: false }
+    }
+
+    /// The same, playing from the start again at its end (play it once: it never ends).
+    pub fn looping(mut self) -> Self {
+        self.looping = true;
+        self
     }
 }
 
@@ -31,12 +41,16 @@ pub struct PcmDecoder {
     at: usize,
     channels: u16,
     rate: u32,
+    looping: bool,
 }
 
 impl Iterator for PcmDecoder {
     type Item = bevy::audio::Sample;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.looping && self.at >= self.samples.len() && !self.samples.is_empty() {
+            self.at = 0;
+        }
         let s = *self.samples.get(self.at)?;
         self.at += 1;
         Some(s as f32 / 32768.0)
@@ -45,7 +59,7 @@ impl Iterator for PcmDecoder {
 
 impl Source for PcmDecoder {
     fn current_span_len(&self) -> Option<usize> {
-        Some(self.samples.len() - self.at)
+        (!self.looping).then(|| self.samples.len() - self.at)
     }
 
     fn channels(&self) -> ChannelCount {
@@ -57,7 +71,7 @@ impl Source for PcmDecoder {
     }
 
     fn total_duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs_f64(self.samples.len() as f64 / self.channels as f64 / self.rate as f64))
+        (!self.looping).then(|| Duration::from_secs_f64(self.samples.len() as f64 / self.channels as f64 / self.rate as f64))
     }
 }
 
@@ -65,7 +79,7 @@ impl Decodable for Pcm {
     type Decoder = PcmDecoder;
 
     fn decoder(&self) -> Self::Decoder {
-        PcmDecoder { samples: self.samples.clone(), at: 0, channels: self.channels, rate: self.rate }
+        PcmDecoder { samples: self.samples.clone(), at: 0, channels: self.channels, rate: self.rate, looping: self.looping }
     }
 }
 
@@ -467,7 +481,7 @@ pub fn sync_music(
         });
         if let MusicLoad::Decoding(rx) = load {
             let done = match rx.try_recv() {
-                Ok(Ok(p)) => Some(Some(pcms.add(Pcm::from(p)))),
+                Ok(Ok(p)) => Some(Some(pcms.add(Pcm::from(p).looping()))),
                 Ok(Err(e)) => {
                     error!("Stream {r}: {e}");
                     Some(None)
@@ -481,7 +495,8 @@ pub fn sync_music(
             }
         }
         if let MusicLoad::Ready(Some(h)) = load {
-            commands.spawn((AudioPlayer(h.clone()), PlaybackSettings::LOOP.with_volume(Volume::Linear(ch.volume as f32 / 1024.0)), StreamVoice(k, r)));
+            // Once: the stream loops in its own decoder (one copy kept, not two).
+            commands.spawn((AudioPlayer(h.clone()), PlaybackSettings::ONCE.with_volume(Volume::Linear(ch.volume as f32 / 1024.0)), StreamVoice(k, r)));
         }
     }
 }

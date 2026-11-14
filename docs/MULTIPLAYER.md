@@ -622,14 +622,14 @@ stand-in on this computer, and left for the user to switch on.
 25. [ ] A down player shows how long until they get up, and a revive bar while the other
     stands beside (HUD, both views).
 26. [x] (they did not move: the Square rows were player 1's; fixed) Player 2's push blocks: traced, and fixed if they do not move.
-27. [ ] Player 2's magic items' statuses (buffs, cures) traced.
+27. [~] (the same swap as the healing traced; statuses not traced) Player 2's magic items' statuses (buffs, cures) traced.
 28. [ ] Player 2's quick panel and Mote panel on the joiner: a quick item used from the
     joiner's D-pad traced end to end.
 29. [ ] Player 2 in a boss grab (a boss that holds the hero): traced, freed as player 1 is.
-30. [ ] Player 2 riding a moving platform (822) traced.
+30. [x] (it fell off: no riding step; fixed) Player 2 riding a moving platform (822) traced.
 31. [ ] Player 2's ledges online traced.
-32. [ ] Both players down at once with revive on: game over, as the rules say (traced).
-33. [ ] Player 2 talking to an NPC: Default stays player 1's; player 2 gets a "Player 1
+32. [x] Both players down at once with revive on: game over, as the rules say (traced).
+33. [~] (stays player 1's; no line added) Player 2 talking to an NPC: Default stays player 1's; player 2 gets a "Player 1
     talks" line instead of nothing.
 
 ### The joiner's world, last pieces
@@ -642,14 +642,14 @@ stand-in on this computer, and left for the user to switch on.
 
 ### Tests and tools
 39. [ ] net_check.py `--long` (an hour) and `--soak` (joins and leaves) modes.
-40. [ ] A scenario per new co-op rule.
+40. [x] (four new: block, ladder, platform, both down) A scenario per new co-op rule.
 41. [x] Synthetic tests for the packing (round trip within its step), the password, names.
 42. [x] (and at most 18 characters a state) A test that a state with every field at its largest stays under the limit.
 43. [ ] scripts/net_check.py reports CPU per tick.
 
 ### Single player, found along the way
 44. [ ] Any leak or growth the stress items find in single play, fixed and traced.
-45. [ ] The looping disc streams: one copy of a stream instead of two (the loop keeps a
+45. [x] (the title screen stays at 411 MB) The looping disc streams: one copy of a stream instead of two (the loop keeps a
     second copy as floats); memory measured.
 
 ### Words

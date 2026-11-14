@@ -18431,6 +18431,13 @@ impl Play {
         self.break_one_with(i, true);
     }
 
+    /// Diagnostic: player 1 takes a hit of `d` through the normal hit (the co-op down rules
+    /// apply).
+    pub fn diag_hurt(&mut self, d: f32) {
+        let f = self.player.loco.facing;
+        self.hero_hit(d, 0.0, false, f, "a diagnostic hit".into());
+    }
+
     /// Diagnostic: every player falls (the single-player death; the game-over page follows).
     pub fn diag_game_over(&mut self) {
         // A hero cannot be hurt with a box up: any box is closed first.
@@ -19657,6 +19664,11 @@ impl Play {
             let id = self.player.loco.action();
             self.player.hero.request(id, force);
             self.player.hero.set_rate(self.player.loco.rate);
+            // Riding moving platforms as player 1 does (before, a platform slid out from under
+            // player 2).
+            if !self.cheats.noclip {
+                self.ride_step();
+            }
             self.hero_contacts(false);
             // Player 2's doors (docs/MULTIPLAYER.md: either player's door moves both), as player
             // 1's door step; a door that moves player 2 (to another world or across this one)
