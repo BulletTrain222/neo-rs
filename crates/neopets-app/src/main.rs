@@ -1755,6 +1755,11 @@ fn step_sim(
             input.jump = std::mem::take(&mut play.play.jump_latch);
             input.square = std::mem::take(&mut play.play.square_latch);
             input.attack = std::mem::take(&mut play.play.attack_latch);
+            // NEOPETS_HOST_WALK (diagnostic, not on a joiner): this side runs round in circles
+            // (R1 held), running into whatever is in the way.
+            if std::env::var_os("NEOPETS_HOST_WALK").is_some() && !play.play.net_follow {
+                (input.forward, input.side, input.run) = (1.0, 0.35, true);
+            }
             let pad = neopets_sim::camera::CameraPad {
                 // SPEC-0035 Behavior 3: the invert flags complement the right-stick bytes.
                 right_x: if play.play.options.invert.0 { 255 - byte(right.x) } else { byte(right.x) },
@@ -1835,6 +1840,28 @@ fn step_sim(
                     play.play.swap_player(k);
                     info!("net: player {} hit on tick {t} (diagnostic)", k + 2);
                 }
+            }
+            // NEOPETS_NET_BLOCK="T:dx,dz" (diagnostic, hosting): on play tick T the current
+            // world's block nearest player 1 is moved by (dx, dz), its box with it.
+            // NEOPETS_TRACE_BLOCKS: every 60 ticks, the current world's moved blocks.
+            if let Some((t, d)) = std::env::var("NEOPETS_NET_BLOCK").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| {
+                let n: Vec<f32> = b.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                Some((a.trim().parse::<u64>().ok()?, [*n.first()?, *n.get(1)?]))
+            }) {
+                if t == play.play.ticks && !play.play.net_follow {
+                    let h = play.play.player.loco.position();
+                    if let Some((i, b)) = play.play.world.blocks.iter_mut().enumerate().min_by(|a, b| ((a.1.position[0] - h[0]).hypot(a.1.position[2] - h[2])).total_cmp(&(b.1.position[0] - h[0]).hypot(b.1.position[2] - h[2]))) {
+                        b.position[0] += d[0];
+                        b.position[2] += d[1];
+                        b.corner[0] += d[0];
+                        b.corner[2] += d[1];
+                        info!("net: block {i} moved to {:?} (diagnostic)", b.position);
+                    }
+                }
+            }
+            if std::env::var_os("NEOPETS_TRACE_BLOCKS").is_some() && play.play.ticks % 60 == 0 {
+                let moved: Vec<String> = play.play.world.blocks.iter().enumerate().filter(|(_, b)| (0..3).any(|k| (b.position[k] - b.home[k]).abs() > 1e-3)).map(|(i, b)| format!("{i} at {:?}", b.position.map(|v| (v * 10.0).round() / 10.0))).collect();
+                println!("BLOCKS {} tick {}: world {} has {} blocks, moved {:?}", if play.play.net_follow { "joiner" } else { "host" }, play.play.ticks, play.play.world.pack, play.play.world.blocks.len(), moved);
             }
             // NEOPETS_TRACE_COOPPOS (diagnostic): every player's position, hero and camera eye
             // every 60 ticks (local co-op).
@@ -2096,7 +2123,8 @@ fn step_sim(
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                     let cpu = std::mem::take(&mut netr.cpu_us);
                     let own_stalls = std::mem::take(&mut netr.own_smooth.2);
-                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state; the host's hero stalled {} times, largest step {:.2}; buffer {} (most {}, holding {}); apply {:.1} us a tick; your hero stalled {} times", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats, netr.smooth.2, netr.smooth.3, netr.queue.len(), netr.queue_most, netr.hold, cpu as f32 / 300.0, own_stalls);
+                    let own_jerks = std::mem::take(&mut netr.own_jerk.1);
+                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state; the host's hero stalled {} times, largest step {:.2}; buffer {} (most {}, holding {}); apply {:.1} us a tick; your hero stalled {} times, jerked {} times", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats, netr.smooth.2, netr.smooth.3, netr.queue.len(), netr.queue_most, netr.hold, cpu as f32 / 300.0, own_stalls, own_jerks);
                     netr.queue_most = 0;
                     (netr.gap_states, netr.gap_max, netr.repeats) = (0, 0, 0);
                     (netr.smooth.2, netr.smooth.3) = (0, 0.0);
@@ -2171,6 +2199,13 @@ fn step_sim(
                             if d < 0.001 && netr.own_smooth.1 > 0.05 {
                                 netr.own_smooth.2 += 1;
                             }
+                            let step = netr.own_smooth.0.map_or([0.0; 3], |b: [f32; 3]| [at[0] - b[0], 0.0, at[2] - b[2]]);
+                            let prev = netr.own_jerk.0;
+                            let (l0, l1) = (prev[0].hypot(prev[2]), step[0].hypot(step[2]));
+                            if l0 > 0.02 && l1 > 0.02 && (prev[0] * step[0] + prev[2] * step[2] < 0.0 || (l1 - l0).abs() > 0.5 * l0.max(l1)) {
+                                netr.own_jerk.1 += 1;
+                            }
+                            netr.own_jerk.0 = step;
                             netr.own_smooth.0 = Some(at);
                             netr.own_smooth.1 = d;
                         }

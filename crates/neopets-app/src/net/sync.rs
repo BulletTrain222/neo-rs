@@ -110,6 +110,15 @@ impl crate::play::Play {
             cmd_ack: 0,
             equip: (self.equipment.entries, self.equipment.motes, self.cloak_worn),
             pet: self.petpet.as_ref().map(|p| (p.type_id, p.t, p.f)),
+            // Moved blocks: the moving ones every state, all the moved ones every half second.
+            blocks: self
+                .world
+                .blocks
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| (b.moving || self.ticks % 30 == 0) && (0..3).any(|k| (b.position[k] - b.home[k]).abs() > 1e-3))
+                .map(|(i, b)| (i as u16, b.position))
+                .collect(),
         }
     }
 
@@ -167,6 +176,20 @@ impl crate::play::Play {
             o.captions.0 = s.p2_prompt;
         }
         self.net_seat = s.seat as usize;
+        // The host's moved blocks (a crate pushed by any player): their place and box follow
+        // (before, a joiner drew the crate where it started while the host's hero stood on it
+        // where it had been pushed; user report 151).
+        if s.pack == self.world.pack {
+            for &(i, p) in &s.blocks {
+                if let Some(b) = self.world.blocks.get_mut(i as usize) {
+                    let d = [p[0] - b.position[0], p[1] - b.position[1], p[2] - b.position[2]];
+                    if d.iter().any(|v| v.abs() > 1e-4) {
+                        b.position = p;
+                        b.corner = [b.corner[0] + d[0], b.corner[1] + d[1], b.corner[2] + d[2]];
+                    }
+                }
+            }
+        }
         // This side's player's HUD timers run down as the host's do in its co-op step (before,
         // the panels a new player shows for 4 seconds stayed up for good on the joiner: the
         // equipment icons in the middle of the screen).

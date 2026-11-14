@@ -221,6 +221,9 @@ pub struct State {
     pub equip: ([[Option<u16>; 2]; 3], [[Option<u16>; 3]; 2], bool),
     /// The host's live petpet (type, time left T, full time F): the joiner keeps the same one.
     pub pet: Option<(i32, i32, i32)>,
+    /// The current world's movable blocks away from their home (index, position): moving ones
+    /// every state, the others now and then.
+    pub blocks: Vec<(u16, [f32; 3])>,
 }
 
 /// The breakables of the current world (their states) and the live items of each resident world
@@ -896,6 +899,11 @@ impl State {
             }
             None => w.u8(0),
         }
+        w.u8(self.blocks.len().min(255) as u8);
+        for &(i, p) in self.blocks.iter().take(255) {
+            w.u16(i);
+            w.v3(p);
+        }
         w.0
     }
 
@@ -999,7 +1007,9 @@ impl State {
             0 => None,
             _ => Some((r.i32()?, r.i32()?, r.i32()?)),
         };
-        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, seat, rtt, cmd_ack, equip, pet })
+        let n = r.u8()? as usize;
+        let blocks = (0..n).map(|_| Some((r.u16()?, r.v3()?))).collect::<Option<Vec<_>>>()?;
+        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, seat, rtt, cmd_ack, equip, pet, blocks })
     }
 }
 

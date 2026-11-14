@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 31;
+const PROTOCOL: u16 = 32;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -128,6 +128,11 @@ pub struct Net {
     /// Joiner (diagnostic, NEOPETS_TRACE_NETEV): this side's own hero: its last place, last
     /// step, and the ticks it stood still right after moving (a stall).
     pub own_smooth: (Option<[f32; 3]>, f32, u32),
+    /// Joiner (diagnostic): this side's own hero's last step and the ticks its step jerked
+    /// (turned back, or changed length by more than half, while moving).
+    pub own_jerk: ([f32; 3], u32),
+    /// Joiner: the tick count of the jitter buffer's gradual catch-up (`next_state`).
+    catch_up: u32,
     /// Joiner, for the trace: the most states waiting in the buffer since the last line.
     pub queue_most: usize,
     /// For the trace: microseconds spent on the online work since the last trace line (the
@@ -557,7 +562,17 @@ impl Net {
         while self.queue.front().is_some_and(|s| s.generation != loaded) && self.queue.iter().any(|s| s.generation == loaded) {
             self.queue.pop_front();
         }
-        while self.queue.len() > 3 {
+        // A burst (the host's states sent several to a frame, or this side's frame late) is kept
+        // and played down gradually: beyond the hold plus two, one extra state is skipped every
+        // fourth tick (a small step), and only past 12 are the oldest dropped at once. Before,
+        // everything past 3 was dropped in one go, and the heroes jumped on several ticks at
+        // once: with four games on one computer the joiners' walking jerked, most while the
+        // host ran about (user report 154).
+        while self.queue.len() > 12 {
+            self.queue.pop_front();
+        }
+        self.catch_up = self.catch_up.wrapping_add(1);
+        if self.queue.len() > self.hold + 2 && self.catch_up % 4 == 0 {
             self.queue.pop_front();
         }
         // The states kept in hand follow how unevenly they arrive (Default): one, two after

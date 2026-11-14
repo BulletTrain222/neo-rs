@@ -1398,6 +1398,10 @@ pub struct Player {
     pub down_line: Option<Vec<u8>>,
     /// L1 and R1 both held last tick (another player's hero switch takes a new press of both).
     pub switch_held: bool,
+    /// Another player's place on the last foliage step and its weapon point there (its bush
+    /// bend speed and reed cut launch; player 1's are `Play::bend_last` and `reed_point`).
+    pub foliage_last: Option<[f32; 3]>,
+    pub foliage_point: Option<[f32; 3]>,
     /// Another player of player 1's hero: the outfit model it was given (`Play::outfits`), so a
     /// change of player 1's outfit reaches it (`same_hero_outfits`).
     pub outfit: u32,
@@ -2504,6 +2508,8 @@ impl Play {
                 area_cool: 0,
                 down_line: None,
                 switch_held: false,
+                foliage_last: None,
+                foliage_point: None,
                 outfit: 0,
                 items_drawn: Vec::new(),
                 attack: None,
@@ -17256,16 +17262,47 @@ impl Play {
         let moved = self.bend_last.map_or(0.0, |l: [f32; 3]| ((hero[0] - l[0]).powi(2) + (hero[2] - l[2]).powi(2)).sqrt() * 60.0);
         self.bend_last = Some(hero);
         let facing = self.player.loco.facing;
-        let weapon = self.weapon_segment();
+        let weapon = self.foliage_weapon();
         let shots: Vec<([f32; 3], f32)> = self.player.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
+        // Every player bends, cuts and shoots the foliage (co-op, this build; before, only
+        // player 1 did: joiners could not cut reeds or plants, user reports 152 and 153). Player
+        // 1 first, then each other player: place, facing, weapon segment, shots, bend speed,
+        // weapon point and reed launch, Roberta.
+        let point_of = |w: &neopets_sim::combat::Cylinder| add(w.center, scale(w.axis, 2.5 - 0.5 * w.length - 0.25));
+        let p1_point = weapon.as_ref().map(point_of);
+        let p1_launch = p1_point.zip(self.reed_point).map(|(a, b)| sub_v(a, b));
+        self.reed_point = p1_point;
+        #[allow(clippy::type_complexity)]
+        let mut players: Vec<([f32; 3], [f32; 3], Option<neopets_sim::combat::Cylinder>, Vec<([f32; 3], f32)>, f32, Option<[f32; 3]>, bool)> = vec![(hero, facing, weapon.clone(), shots.clone(), moved, p1_launch, self.hero_index == 1)];
+        for i in 0..self.others.len() {
+            self.swap_player(i);
+            let saved = (self.hero_index, self.weapon, self.shield);
+            let who = self.player.who.min(1);
+            self.hero_index = who;
+            self.weapon = self.equipment.entries[0][who];
+            self.shield = self.equipment.entries[1][who];
+            let at = self.player.loco.position();
+            let w = self.foliage_weapon();
+            let speed = self.player.foliage_last.map_or(0.0, |l: [f32; 3]| ((at[0] - l[0]).powi(2) + (at[2] - l[2]).powi(2)).sqrt() * 60.0);
+            let point = w.as_ref().map(point_of);
+            let launch = point.zip(self.player.foliage_point).map(|(a, b)| sub_v(a, b));
+            (self.player.foliage_last, self.player.foliage_point) = (Some(at), point);
+            let player_shots = self.player.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
+            players.push((at, self.player.loco.facing, w, player_shots, speed, launch, who == 1));
+            (self.hero_index, self.weapon, self.shield) = saved;
+            self.swap_player(i);
+        }
+        // The foliage near any player runs (each player's eye or place within 100 units).
+        let mut eyes = vec![eye];
+        eyes.extend(self.others.iter().map(|o| o.camera.eye));
+        let near_any = |c: [f32; 3]| eyes.iter().any(|e| (c[0] - e[0]).powi(2) + (c[1] - e[1]).powi(2) + (c[2] - e[2]).powi(2) < 100.0 * 100.0);
         let table = self.effect_table.clone();
         let mut drops: Vec<(u32, [f32; 3], Vec<u16>)> = Vec::new();
         let mut sparkles = Vec::new();
         let current = self.world.pack;
         for (&pack, patches) in self.foliage.iter_mut() {
             for p in patches.iter_mut().filter(|p| !p.bushes.is_empty() && p.on) {
-                let d = [p.centre[0] - eye[0], p.centre[1] - eye[1], p.centre[2] - eye[2]];
-                if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= 100.0 * 100.0 {
+                if !near_any(p.centre) {
                     continue;
                 }
                 let negg = neopets_sim::foliage::negg_of(p.model);
@@ -17275,20 +17312,25 @@ impl Play {
                     // The body test (a segment with radius 0.75): read here as the hero's feet
                     // within 0.75 plus the hero radius of the bush base, horizontally, at a
                     // similar height.
+                    // The bend follows the nearest player.
+                    let near_player = players.iter().min_by(|a, b| (q.position[0] - a.0[0]).hypot(q.position[2] - a.0[2]).total_cmp(&(q.position[0] - b.0[0]).hypot(q.position[2] - b.0[2])));
+                    let (hero, facing, moved) = near_player.map_or((hero, facing, moved), |h| (h.0, h.1, h.4));
                     let distance = (q.position[0] - hero[0]).hypot(q.position[2] - hero[2]);
                     let contact = distance < 0.75 + neopets_sim::contact::HERO_RADIUS && (q.position[1] - hero[1]).abs() < 3.0;
                     b.bend_step(p.kind.near == Some(198), &neopets_sim::foliage::BendHero { distance, contact, speed: moved, facing });
                     let mut hits = 0;
                     if b.hittable() {
-                        let near = (q.position[0] - hero[0]).powi(2) + (q.position[1] - hero[1]).powi(2) + (q.position[2] - hero[2]).powi(2) < 25.0;
-                        if let (true, Some(w)) = (near, weapon.as_ref()) {
-                            let bush = neopets_sim::combat::Cylinder::from_base(q.position, [0.0, 1.0, 0.0], 0.5, 6.0);
-                            if neopets_sim::combat::overlap(w, &bush) {
-                                hits += 1;
+                        for (at, _, weapon, shots, ..) in &players {
+                            let near = (q.position[0] - at[0]).powi(2) + (q.position[1] - at[1]).powi(2) + (q.position[2] - at[2]).powi(2) < 25.0;
+                            if let (true, Some(w)) = (near, weapon.as_ref()) {
+                                let bush = neopets_sim::combat::Cylinder::from_base(q.position, [0.0, 1.0, 0.0], 0.5, 6.0);
+                                if neopets_sim::combat::overlap(w, &bush) {
+                                    hits += 1;
+                                }
                             }
-                        }
-                        if p.kind.near != Some(198) {
-                            hits += shots.iter().filter(|(s, r)| ((s[0] - q.position[0]).powi(2) + (s[1] - q.position[1]).powi(2) + (s[2] - q.position[2]).powi(2)).sqrt() < r + 1.5).count() as u32;
+                            if p.kind.near != Some(198) {
+                                hits += shots.iter().filter(|(s, r)| ((s[0] - q.position[0]).powi(2) + (s[1] - q.position[1]).powi(2) + (s[2] - q.position[2]).powi(2)).sqrt() < r + 1.5).count() as u32;
+                            }
                         }
                     }
                     let step = b.step(hits, may_sparkle, &mut self.rng);
@@ -17309,23 +17351,23 @@ impl Play {
         // units, the cut by a weapon hit in the attack window (cue 22 for Tor, 28 for Roberta;
         // the piece launched along the weapon point's motion; the weapon test is taken as the bush capsule's, a
         // radius 0.5 and length 6.0 up from the base), the cut piece's fall and the drop roll.
-        let mut reed_cuts = 0;
+        // Reed cuts by hero (0 Tor, 1 Roberta) for the cue.
+        let mut reed_cuts = [0u32; 2];
         // SPEC-0060 Cut set-up: the launch is the change of the weapon point 2.5 along its frame
-        // axis between two samples (here this tick and the last); `Reed::cut` keeps its
-        // horizontal part, normalised (a zero change gives a piece that never moves off).
-        let point = weapon.as_ref().map(|w| add(w.center, scale(w.axis, 2.5 - 0.5 * w.length - 0.25)));
-        let launch = point.zip(self.reed_point).map(|(a, b)| sub_v(a, b));
-        self.reed_point = point;
+        // axis between two samples (here this tick and the last; each player's own, gathered
+        // above); `Reed::cut` keeps its horizontal part, normalised (a zero change gives a piece
+        // that never moves off).
         let worlds = [&self.world].into_iter().chain(self.other.as_ref());
         let worlds: Vec<_> = worlds.collect();
         for (&pack, patches) in self.foliage.iter_mut() {
             let Some(world) = worlds.iter().find(|w| w.pack == pack) else { continue };
             for p in patches.iter_mut().filter(|p| !p.reeds.is_empty() && p.on) {
-                let d = [p.centre[0] - eye[0], p.centre[1] - eye[1], p.centre[2] - eye[2]];
-                if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= 100.0 * 100.0 {
+                if !near_any(p.centre) {
                     continue;
                 }
                 for (q, r) in p.plants.iter().zip(p.reeds.iter_mut()) {
+                    // The bend away from the nearest player.
+                    let hero = players.iter().map(|h| h.0).min_by(|a, b| (q.position[0] - a[0]).hypot(q.position[2] - a[2]).total_cmp(&(q.position[0] - b[0]).hypot(q.position[2] - b[2]))).unwrap_or(hero);
                     match r.state {
                         0 => {
                             // Reed angles: the spring-back, the body contact and bend, then the
@@ -17337,12 +17379,16 @@ impl Play {
                             if dh < 2.5 && std::env::var_os("NEOPETS_TRACE_REEDS").is_some() {
                                 println!("      reed tick {}: d {dh:.2} base y {:.2} hero y {:.2} tilt {:.0} latch {}", self.ticks, q.position[1], hero[1], r.up[1].clamp(-1.0, 1.0).acos().to_degrees(), r.latch);
                             }
-                            if let (true, Some(w)) = (cuttable, weapon.as_ref()) {
+                            if cuttable {
                                 let reed = neopets_sim::combat::Cylinder::from_base(q.position, r.up, 0.5, 6.0);
-                                if neopets_sim::combat::overlap(w, &reed) && r.cut(launch.unwrap_or([0.0; 3])) {
-                                    reed_cuts += 1;
-                                    if let Some(id) = neopets_sim::foliage::reed_drop(self.rng.range(0, 100)) {
-                                        drops.push((pack, q.position, vec![id]));
+                                for (_, _, weapon, _, _, launch, roberta) in &players {
+                                    let Some(w) = weapon.as_ref() else { continue };
+                                    if neopets_sim::combat::overlap(w, &reed) && r.cut(launch.unwrap_or([0.0; 3])) {
+                                        reed_cuts[*roberta as usize] += 1;
+                                        if let Some(id) = neopets_sim::foliage::reed_drop(self.rng.range(0, 100)) {
+                                            drops.push((pack, q.position, vec![id]));
+                                        }
+                                        break;
                                     }
                                 }
                             }
@@ -17356,11 +17402,18 @@ impl Play {
                 }
             }
         }
-        if reed_cuts > 0 && std::env::var_os("NEOPETS_TRACE_PATCHES").is_some() {
-            println!("      {reed_cuts} reed(s) cut on tick {}", self.ticks);
+        if reed_cuts.iter().sum::<u32>() > 0 && std::env::var_os("NEOPETS_TRACE_PATCHES").is_some() {
+            println!("      {} reed(s) cut on tick {}", reed_cuts.iter().sum::<u32>(), self.ticks);
         }
-        for _ in 0..reed_cuts {
-            self.cue(if self.hero_index == 0 { 22 } else { 28 });
+        for (hero, &n) in reed_cuts.iter().enumerate() {
+            for _ in 0..n {
+                self.cue(if hero == 0 { 22 } else { 28 });
+            }
+        }
+        // Online, joining: the host's game drops the items (they come with its world sync);
+        // this side shows the cuts only.
+        if self.net_follow {
+            drops.clear();
         }
         // Behavior 8: a key-4 patch within 100 units of the eye moves its solid cylinder (height
         // 25, radius 5.5 x the tree's scale) to each tree in turn and tests the hero against it in
@@ -17669,6 +17722,25 @@ impl Play {
 
     /// The hero's weapon segment as a thin cylinder while the attack window is open (frame bit
     /// 1; SPEC-0036), from the weapon attach point along its axis over the weapon reach.
+    /// The weapon segment for the foliage tests: as `weapon_segment`, but on a joiner (whose own
+    /// game does not run the players' attacks) the clip's strike window alone counts.
+    fn foliage_weapon(&self) -> Option<neopets_sim::combat::Cylinder> {
+        if !self.net_follow {
+            return self.weapon_segment();
+        }
+        if self.player.hero.frame_bits() & 1 == 0 {
+            return None;
+        }
+        let place = placement(self.player.loco.position(), self.player.loco.facing);
+        let frames = self.player.hero.bone_frames();
+        let &(Some(bone), angles, offset) = self.player.hero.bones().attach.first()? else { return None };
+        let w = place.mul(frames.get(bone)?).mul(&attach_rotation(offset, angles));
+        let axis = unit(w.cols[2]);
+        let l = self.weapon_reach() + 2.0;
+        let p0 = add(w.t, scale(axis, 0.25));
+        Some(neopets_sim::combat::Cylinder { center: add(p0, scale(axis, 0.5 * l)), axis, radius: 0.0, length: l })
+    }
+
     fn weapon_segment(&self) -> Option<neopets_sim::combat::Cylinder> {
         let roberta = self.hero_index == 1 && self.player.r_attack.as_ref().is_some_and(|a| a.sub != 8);
         if (self.player.attack.is_none() && self.player.loco.air_sub == 0 && !roberta) || self.player.hero.frame_bits() & 1 == 0 {
