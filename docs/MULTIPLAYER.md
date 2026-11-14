@@ -317,3 +317,56 @@ Left for later: player 2's Mote magic and power attacks were audited but not tra
 moving objects are the joiner's own (matched where tested); characters are sent in full each
 tick (small enough so far); nothing was seen on screen (the display was off); two real
 computers and internet play need the user.
+
+## Night plan 3 (2026-11-14, the display is off)
+
+Same rules as plan 2: tested from logs and traces, recorded in docs/STATUS.md, Check.cmd (and
+the scenarios when single-player code moves) before each commit, **Default** for every rule
+chosen without the user.
+
+### Ready for the internet
+1. [ ] The welcome (a 12.5 KB save slot) goes in parts of about 1,000 bytes, each acknowledged,
+   so it never needs IP fragments (which some routers drop). Tested with loss switched on.
+2. [ ] Bandwidth: bytes a second each way, measured on the farm and in a fight; positions
+   packed smaller if it is over about 60 KB/s.
+3. [ ] A port other than 47817 (private/net.txt, or `host:port` in the join address).
+
+### Smoother joiner
+4. [ ] Walking into a neighbouring area: the joiner follows without a full reload when its own
+   game already made the same move (today every world change reloads the joiner).
+5. [ ] State arrival timing on the joiner (gaps between states) measured; smoothing if
+   movement would stutter.
+6. [ ] How long a joiner's reload takes, measured.
+
+### Co-op that keeps going
+7. [ ] One PC: player 2 stays in through a load, a Continue after game over and a developer
+   warp (today player 2 has to press Start again).
+8. [ ] Saving with player 2 in writes the same slot as without (player 2 never ends up saved
+   as player 1, or as the parked hero).
+9. [ ] Story hero switches (Tor to Roberta and back) with player 2 in: traced, and player 2
+   kept sensible (Partner becomes the other hero).
+10. [ ] One PC: the second controller's Start opens the pause page once player 2 is in
+    (Select still takes player 2 out). **Default.**
+
+### Fights
+11. [ ] Bosses: a boss that only ever looks at player 1 is found and, where its code allows,
+    turned to the nearest standing player like other enemies.
+12. [ ] A boss fight online: host warped into a developer boss fight; the joiner's boss health
+    bar, effects and shots compared.
+13. [ ] Player 2's Mote magic and power attacks traced.
+14. [ ] Characters the host makes that the joiner lacks (spawned in fights) counted, and made
+    on the joiner if the counts show it matters.
+
+### The joiner's world, complete
+15. [ ] Moving objects (gates, lifts, platforms): the host's object animations sent when they
+    change, the moving ones' times every tick.
+16. [ ] Characters sent only when changed (positions every tick only for those that move).
+17. [ ] The petpet online: compared on both sides.
+
+### Keeping it tidy
+18. [ ] net.rs split into parts (messages and codecs, the session, the state sync) with no
+    change in behaviour (net_check and the codec tests the same before and after).
+19. [ ] net_check.py checks more by itself: world revisions equal on both sides, object lists
+    equal, events all played.
+20. [ ] A short multiplayer summary entry in docs/STATUS.md pointing at each increment.
+21. [ ] The morning report.
