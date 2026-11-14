@@ -424,16 +424,16 @@ second controller or a second computer are marked and left for the morning.
 9. [ ] The petpet online: tried again with a petpet set by the save, compared on both sides.
 
 ### Player 2 does more
-10. [ ] Chests, switches, levers and push blocks: player 2 can use them (one PC and online).
-11. [ ] The item screen opened by player 2 shows player 2's own hero and equipment (**Default**).
-12. [ ] Player 2's shield reflects shots (traced).
-13. [ ] Player 2 casting magic items (traced).
-14. [ ] Lock-on for player 2 (traced).
-15. [ ] Player 2 swimming (traced where there is water).
-16. [ ] Player 2 falling out of the world comes back beside player 1 (**Default**).
-17. [ ] Player 2 left far behind (more than a set distance, or in an unloaded area) is brought
+10. [x] (chest and lever traced; player 1 is brought over for the scene; push blocks not traced) Chests, switches, levers and push blocks: player 2 can use them (one PC and online).
+11. [x] (one PC; online the joiner's item screen does not reach the host yet) The item screen opened by player 2 shows player 2's own hero and equipment (**Default**).
+12. [x] Player 2's shield reflects shots (traced).
+13. [~] (uses go to player 2; healing traced, statuses not) Player 2 casting magic items (traced).
+14. [x] (its target list now steps; a lock was not seen set for either player) Lock-on for player 2 (traced).
+15. [x] (no swimming in this build; water is deadly ground, item 16) Player 2 swimming (traced where there is water).
+16. [x] (lava traced; falling below was already covered) Player 2 falling out of the world comes back beside player 1 (**Default**).
+17. [x] (already built in step 3: 60 across or 25 up or down) Player 2 left far behind (more than a set distance, or in an unloaded area) is brought
     beside player 1 (**Default**).
-18. [ ] After a cutscene, player 2 stands beside player 1.
+18. [x] After a cutscene, player 2 stands beside player 1.
 
 ### Menus
 19. [ ] Pause page rows: "Leave game" on the joiner and "Stop hosting" on the host.

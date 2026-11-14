@@ -1523,6 +1523,13 @@ pub struct Play {
     pub net_fx: HashMap<usize, usize>,
     /// The world the co-op step last saw (a change puts the other players beside player 1).
     coop_pack: u32,
+    /// Who opened the pause page on one PC (0 player 1, 1 player 2): the item screen shows and
+    /// works on that player (docs/MULTIPLAYER.md, Default).
+    pub menu_player: usize,
+    /// Player 2's Square use waiting for player 1 (chest group or usize::MAX, trigger, routine).
+    coop_use: Option<(usize, u16, Option<u8>)>,
+    /// A scripted scene ran at the last co-op step (its end puts player 2 beside player 1).
+    coop_cut: bool,
     /// SPEC-0028 section 11: the atmosphere zone selection and this frame's output (the blend
     /// factor b is the sky dome's role-10 opacity).
     atmos_sel: neopets_sim::atmosphere::Selector,
@@ -2526,6 +2533,9 @@ impl Play {
             net_cut: None,
             net_fx: HashMap::new(),
             coop_pack: 0,
+            coop_use: None,
+            coop_cut: false,
+            menu_player: 0,
             atmos_sel: Default::default(),
             atmos_out: Default::default(),
             boot,
@@ -11384,6 +11394,42 @@ impl Play {
         Some(state)
     }
 
+    /// Diagnostic: the nearest deadly ground point (probe kind 2, and 2 units each way too) to
+    /// (x, z) within `r`, on a grid of 2 units, with its height.
+    pub fn diag_deadly_near(&self, x: f32, z: f32, r: f32) -> Option<[f32; 3]> {
+        let mut best: Option<(f32, [f32; 3])> = None;
+        let n = (r / 2.0) as i32;
+        for i in -n..=n {
+            for j in -n..=n {
+                let (px, pz) = (x + i as f32 * 2.0, z + j as f32 * 2.0);
+                let hp = self.world.probe(px, pz, 1000.0);
+                let inside = [(-2.0, 0.0), (2.0, 0.0), (0.0, -2.0), (0.0, 2.0)].iter().all(|&(dx, dz)| {
+                    let q = self.world.probe(px + dx, pz + dz, 1000.0);
+                    q.found && q.kind == Some(2) && (q.height - hp.height).abs() < 0.5
+                });
+                if hp.found && hp.kind == Some(2) && inside {
+                    let d = (i * i + j * j) as f32;
+                    if best.is_none_or(|b| d < b.0) {
+                        best = Some((d, [px, hp.height, pz]));
+                    }
+                }
+            }
+        }
+        best.map(|b| b.1)
+    }
+
+    /// Diagnostic: the ground probe at (x, z) from height c.
+    pub fn diag_probe(&self, x: f32, z: f32, c: f32) -> String {
+        let hp = self.world.probe(x, z, c);
+        format!("found {} kind {:?} height {:.2} surface {:?}", hp.found, hp.kind, hp.height, hp.surface)
+    }
+
+    /// Diagnostic: script group `g`'s locator 0 and facing (where its scene puts the hero).
+    pub fn diag_group_spot(&self, g: usize) -> Option<([f32; 3], [f32; 3])> {
+        let group = self.world.groups.get(g)?;
+        group.locators.first().and_then(|&k| usize::try_from(k).ok()).and_then(|k| self.world.entries.get(k).copied())
+    }
+
     /// Diagnostic: chest group `g` pays out with the hero stood at its locator 0.
     pub fn diag_chest(&mut self, g: usize) {
         let Some(group) = self.world.groups.get(g).cloned() else {
@@ -13302,50 +13348,96 @@ impl Play {
     /// a landed shot's area hurts a player standing in it at most once a second, both through
     /// the player's own damage reduction (no guard, reflection or shot status for it yet).
     fn coop_shots(&mut self) {
+        let owners: HashMap<u64, [f32; 3]> = self.characters.iter().map(|c| (c.id, c.position)).collect();
         for k in 0..self.others.len() {
             if self.others[k].down.is_some() {
                 continue;
             }
-            let at = self.others[k].loco.position();
-            let grounded = self.others[k].loco.body.gap < 1.0;
-            let cool = &mut self.others[k].area_cool;
-            *cool = cool.saturating_sub(1);
-            let mut hits = Vec::new();
-            for slot in self.shots.slots.iter_mut() {
-                let Some(p) = slot.as_ref() else { continue };
-                // NEOPETS_TRACE_COOPSHOT: each shot within 8 units of another player (diagnostic).
-                if std::env::var_os("NEOPETS_TRACE_COOPSHOT").is_some() && (at[0] - p.position[0]).hypot(at[2] - p.position[2]) < 8.0 {
-                    println!("COOPSHOT kind {} area {} at_owner {} owner {:?} radius {:.2} area radius {:.2} at ({:.1}, {:.1}, {:.1}) player ({:.1}, {:.1}, {:.1}) grounded {}", p.s.kind, p.area, p.at_owner, p.s.owner, p.s.radius, p.s.area_radius, p.position[0], p.position[1], p.position[2], at[0], at[1], at[2], grounded);
-                }
-                // A landed shot's area (kind 1): within its radius on the ground, a pulse at most
-                // once a second, as the pool gives player 1.
-                if p.area {
-                    if *cool == 0 && grounded && (at[0] - p.position[0]).hypot(at[2] - p.position[2]) < p.s.area_radius {
-                        hits.push((p.s.damage.max(0.0), p.s.element));
-                        *cool = 60;
-                    }
-                    continue;
-                }
-                if p.at_owner || p.s.owner.is_none() {
-                    continue;
-                }
-                if neopets_sim::projectile::sphere_meets_body(p.position, p.s.radius, at, contact::HERO_RADIUS, HERO_HEIGHT) {
-                    hits.push((p.s.damage.max(0.0), p.s.element));
-                    *slot = None;
-                }
-            }
-            if hits.is_empty() {
-                continue;
-            }
+            // Player k swapped in with its hero, weapon and shield: its guard and shield Mote
+            // decide a block or a reflection as player 1's do (SPEC-0029 Behavior 9).
             self.swap_player(k);
             let saved = (self.hero_index, self.weapon, self.shield);
             let who = self.player.who.min(1);
             (self.hero_index, self.weapon, self.shield) = (who, self.equipment.entries[0][who], self.equipment.entries[1][who]);
             self.coop_running = true;
-            for (damage, element) in hits {
+            let at = self.player.loco.position();
+            let facing = self.player.loco.facing;
+            let guard = self.hero_guarding();
+            let shield = self.equipment.motes[who][1].map(|m| neopets_sim::mote::element(Some(m)));
+            let grounded = self.player.loco.body.gap < 1.0;
+            let cool = &mut self.player.area_cool;
+            *cool = cool.saturating_sub(1);
+            let mut events = Vec::new();
+            let mut area_hits = Vec::new();
+            for slot in self.shots.slots.iter_mut() {
+                let Some(p) = slot.as_mut() else { continue };
+                // NEOPETS_TRACE_COOPSHOT: each shot within 8 units of another player (diagnostic).
+                if std::env::var_os("NEOPETS_TRACE_COOPSHOT").is_some() && (at[0] - p.position[0]).hypot(at[2] - p.position[2]) < 8.0 {
+                    println!("COOPSHOT kind {} area {} at_owner {} owner {:?} radius {:.2} area radius {:.2} at ({:.1}, {:.1}, {:.1}) player ({:.1}, {:.1}, {:.1}) grounded {} guard {guard}", p.s.kind, p.area, p.at_owner, p.s.owner, p.s.radius, p.s.area_radius, p.position[0], p.position[1], p.position[2], at[0], at[1], at[2], grounded);
+                }
+                // A landed shot's area (kind 1): within its radius on the ground, a pulse at most
+                // once a second, as the pool gives player 1.
+                if p.area {
+                    if *cool == 0 && grounded && (at[0] - p.position[0]).hypot(at[2] - p.position[2]) < p.s.area_radius {
+                        area_hits.push((p.s.damage.max(0.0), p.s.element));
+                        *cool = 60;
+                    }
+                    continue;
+                }
+                // A reflected shot tests only its owner; spells and lobbed shots no player. Script
+                // launchers' shots (no owner) hit player 2 as they hit player 1.
+                if p.at_owner || matches!(p.s.kind, 2..=8) {
+                    continue;
+                }
+                if neopets_sim::projectile::sphere_meets_body(p.position, p.s.radius, at, contact::HERO_RADIUS, HERO_HEIGHT) {
+                    let owner = p.s.owner.and_then(|o| owners.get(&o).copied());
+                    if neopets_sim::projectile::hero_contact(p, facing, guard, shield, owner, &mut events) {
+                        *slot = None;
+                    }
+                }
+            }
+            for (damage, element) in area_hits {
                 let d = self.enemy_damage(damage, false, element, 1.0);
-                let f = self.player.loco.facing;
-                self.hero_hit(d, 0.0, false, f, "a shot".into());
+                self.hero_hit(d, 0.0, false, facing, "a shot".into());
+            }
+            for ev in events {
+                use neopets_sim::projectile::Event;
+                match ev {
+                    Event::Hero { damage, blocked, element, .. } => {
+                        let d = self.enemy_damage(damage, blocked, element, 1.0);
+                        self.hero_hit(neopets_sim::projectile::taken(d, blocked), 0.0, blocked, facing, "a shot".into());
+                    }
+                    Event::Reflected { element } => {
+                        // The shield Mote's charge for a reflection, from this player's hero.
+                        if let (Some(sh), Some(m1)) = (self.equipment.entries[1][who], self.equipment.motes[who][1]) {
+                            if neopets_sim::mote::element_passes(element, neopets_sim::mote::element(Some(m1))) {
+                                let s = if self.item_kind(sh) == 5 { self.items.get(sh).map_or(0.0, |i| i.stats[1] as f32) } else { 0.0 };
+                                self.spend_charge(1, m1, neopets_sim::mote::charge_tor(1, s));
+                            }
+                        }
+                        if std::env::var_os("NEOPETS_TRACE_COOPSHOT").is_some() {
+                            println!("COOPSHOT tick {}: player {} reflected a shot (element {element})", self.ticks, k + 2);
+                        }
+                    }
+                    Event::Status { code, chance, seconds } => {
+                        let r = self.rng.range(0, 100);
+                        if r <= chance && !(code == 0 && self.player.statuses.active(neopets_sim::status::STUN)) {
+                            self.hero_status(code, seconds);
+                        }
+                    }
+                    Event::Leach => {
+                        let table = self.effect_table.clone();
+                        let p = add(self.player.loco.position(), [0.0, 1.5, 0.0]);
+                        self.effects.one_shot(&table, 4039, p, neopets_sim::effect::IDENTITY, &mut self.rng);
+                        self.player.hero_mp = (self.player.hero_mp - self.sister_words.leach_drain).max(0);
+                    }
+                    Event::Effect { id, at } => {
+                        let table = self.effect_table.clone();
+                        self.effects.one_shot(&table, id, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+                    }
+                    // The Mote-eater's drain follows player 1 (one drain in this build).
+                    _ => {}
+                }
             }
             (self.hero_index, self.weapon, self.shield) = saved;
             self.coop_running = false;
@@ -19370,13 +19462,32 @@ impl Play {
         }
         let pack = self.world.pack;
         let moved_world = std::mem::replace(&mut self.coop_pack, pack) != pack;
+        // A scripted scene that just ended (docs/MULTIPLAYER.md, Default): player 2 more than 8
+        // units from player 1 is put beside it (the scene may have moved player 1).
+        let cut_now = self.cut.is_some_and(|c| c.state != 0);
+        let cut_ended = std::mem::replace(&mut self.coop_cut, cut_now) && !cut_now;
         for i in 0..self.others.len() {
             let (mut input, pad) = inputs.get(i).copied().unwrap_or_default();
             // Staying together: after a world change (doors, loads) or more than 60 units across
             // or 25 up or down from player 1, player 2 is put beside player 1 again.
             {
                 let (a, b) = (self.player.loco.position(), self.others[i].loco.position());
-                if moved_world || (a[0] - b[0]).hypot(a[2] - b[2]) > 60.0 || (a[1] - b[1]).abs() > 25.0 {
+                // Player 2 on deadly ground (water, lava; SPEC-0055 8A) comes back beside player 1
+                // with the respawn penalty (docs/MULTIPLAYER.md, Default; one player's fall is
+                // not the game's death).
+                let deadly = {
+                    let hp = self.world.probe(b[0], b[2], b[1] + neopets_sim::motion::PROBE_CEILING);
+                    let d = (hp.found && hp.kind == Some(2)).then(|| neopets_sim::death::Deadly { respawn: hp.respawn.unwrap_or(0xFF), surface: hp.surface.unwrap_or(0) });
+                    self.others[i].down.is_none() && neopets_sim::death::deadly_kill(d, b[1] - hp.height)
+                };
+                if deadly {
+                    let o = &mut self.others[i];
+                    o.hero_hp -= neopets_sim::death::respawn_penalty(o.hero_hp);
+                    o.hero_flash = HIT_FLASH;
+                    self.last_hurt = format!("player 2 fell onto deadly ground on tick {}: back beside player 1, hp {}", self.ticks, o.hero_hp);
+                }
+                let after_cut = cut_ended && (a[0] - b[0]).hypot(a[2] - b[2]) > 8.0;
+                if moved_world || deadly || after_cut || (a[0] - b[0]).hypot(a[2] - b[2]) > 60.0 || (a[1] - b[1]).abs() > 25.0 {
                     let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
                     self.place_beside(&mut o);
                     self.others[i] = o;
@@ -19437,6 +19548,11 @@ impl Play {
             self.weapon = self.equipment.entries[0][who];
             self.shield = self.equipment.entries[1][who];
             self.camera_step(pad);
+            // Player 2's lock-on and target list (its attack turn and aim), as player 1's;
+            // the talker list stays player 1's.
+            let talk = (self.talkers.clone(), self.talker);
+            self.lock_step();
+            (self.talkers, self.talker) = talk;
             let (forward, left) = self.player.camera.rows();
             // Player 2's own quick-item and Mote panels (its D-pad and Triangle), with its HUD
             // record swapped in for their tweens and re-arms; an item goes to player 2.
@@ -19549,6 +19665,8 @@ impl Play {
             let free = !self.dialogue_open && self.player.down.is_none();
             if free {
                 self.door_step();
+                let p1 = self.others[i].loco.position();
+                self.coop_square_step(input.square, p1);
             }
             self.player.door_confirm = self.confirm;
             self.player.captions.0 = self.door_prompt.take().filter(|_| free);
@@ -19592,7 +19710,81 @@ impl Play {
                 self.coop_pack = self.world.pack;
                 self.last_door = format!("player 2's door: player 1 brought to ({:.1}, {:.1}, {:.1}) in {}", at[0], at[1], at[2], self.world.pack);
             }
+            self.coop_use_step(i);
         }
+    }
+
+    /// Player 2's Square things (docs/MULTIPLAYER.md, Default: either player uses chests, levers
+    /// and switches), with player 2 swapped in: a lock chest's trigger, and each trigger volume
+    /// player 2 stands in (and player 1 does not) whose routine, tried on a copy of the story as
+    /// a stay with no Square, only posts a Square prompt. The prompt shows on player 2's half;
+    /// player 2's Square marks the use, which runs after player 2's step with player 1 brought
+    /// to player 2's place (the scene's hero is player 1, as at doors). Volumes that start
+    /// anything by being entered stay player 1's (story triggers keep their order).
+    fn coop_square_step(&mut self, square: bool, p1: [f32; 3]) {
+        let p = self.player.loco.position();
+        let mine: Vec<u16> = self.world.volumes.iter().filter(|v| v.hero_touches(p) && !v.hero_touches(p1)).map(|v| v.index).filter(|i| !self.world.disabled_triggers.contains(i)).collect();
+        let pack = self.world.pack;
+        let stay = neopets_sim::trigger::Record { state: 2, stamp: self.ticks as i64, object: true, block: -1 };
+        for i in mine {
+            if let Some(g) = self.world.groups.iter().position(|g| g.kind == 1 && g.triggers.first() == Some(&(i as i32))) {
+                // The prompt as player 1's (no press here).
+                self.chest_step(g, stay, false);
+                if square && self.door_prompt == Some(6) {
+                    self.coop_use = Some((g, i, None));
+                }
+                continue;
+            }
+            let Some(&routine) = self.world.routines.get(&i) else { continue };
+            let call = level::TriggerCall { index: i, state: 2, object: true, square: false, block: -1 };
+            let mut dry = self.state.clone();
+            dry.talking = self.dialogue_open;
+            let out = level::on_trigger(pack, routine, call, &mut dry);
+            if !out.actions.is_empty() || out.prompt.is_none() {
+                continue;
+            }
+            if self.door_prompt.is_none() && !self.talk_prompt {
+                self.door_prompt = out.prompt;
+            }
+            if square {
+                self.coop_use = Some((usize::MAX, i, Some(routine)));
+            }
+        }
+    }
+
+    /// Player 2's chest or Square routine (`coop_square_step`), after player 2's step: player 1
+    /// is put at player 2's place facing its way, player 2 beside, and the chest's press or the
+    /// routine's Square call runs for player 1.
+    fn coop_use_step(&mut self, i: usize) {
+        let Some((g, trigger, routine)) = self.coop_use.take() else { return };
+        let (at, facing) = (self.others[i].loco.position(), self.others[i].loco.facing);
+        self.player.loco.teleport(at, facing);
+        let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
+        self.place_beside(&mut o);
+        self.others[i] = o;
+        let saved = (self.door_prompt.take(), self.talk_prompt);
+        self.talk_prompt = false;
+        let stay = neopets_sim::trigger::Record { state: 2, stamp: self.ticks as i64, object: true, block: -1 };
+        let trace = std::env::var_os("NEOPETS_TRACE_COOPSQUARE").is_some();
+        match routine {
+            None => {
+                self.chest_step(g, stay, true);
+                if trace {
+                    println!("COOPSQUARE tick {}: player 2's chest group {g} (trigger {trigger}) opened by player 1 brought to ({:.1}, {:.1}, {:.1})", self.ticks, at[0], at[1], at[2]);
+                }
+            }
+            Some(routine) => {
+                let call = level::TriggerCall { index: trigger, state: 2, object: true, square: true, block: -1 };
+                self.state.talking = self.dialogue_open;
+                let out = level::on_trigger(self.world.pack, routine, call, &mut self.state);
+                if trace {
+                    println!("COOPSQUARE tick {}: player 2's trigger {trigger} (routine {routine}) run for player 1 brought to ({:.1}, {:.1}, {:.1}): {:?}", self.ticks, at[0], at[1], at[2], out.actions);
+                }
+                self.apply(&out.actions);
+            }
+        }
+        (self.door_prompt, self.talk_prompt) = saved;
+        self.last_door = format!("player 2's Square at trigger {trigger}: player 1 brought to ({:.1}, {:.1}, {:.1})", at[0], at[1], at[2]);
     }
 
     /// Swaps player `i` of `others` into `player` (and the running player out to its place), so
@@ -21070,6 +21262,31 @@ impl Play {
             maps: self.state.maps.iter().copied().collect(),
             collected: self.state.collected.iter().copied().collect(),
         }
+    }
+
+    /// `f` with the menu's player (`menu_player`) as the running player: player 2 swapped in
+    /// with its hero, weapon and shield, its quick and Mote panels and its HUD record (as in its
+    /// co-op step), so the item screen shows player 2's hero and an item it uses goes to it.
+    pub fn as_menu_player<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        if self.menu_player == 0 || self.others.is_empty() {
+            return f(self);
+        }
+        self.swap_player(0);
+        let saved = (self.hero_index, self.weapon, self.shield);
+        let who = self.player.who.min(1);
+        self.hero_index = who;
+        self.weapon = self.equipment.entries[0][who];
+        self.shield = self.equipment.entries[1][who];
+        std::mem::swap(&mut self.quick, &mut self.player.quick);
+        std::mem::swap(&mut self.mote_panel, &mut self.player.mote_panel);
+        std::mem::swap(&mut self.hud, &mut self.player.hud);
+        let r = f(self);
+        std::mem::swap(&mut self.quick, &mut self.player.quick);
+        std::mem::swap(&mut self.mote_panel, &mut self.player.mote_panel);
+        std::mem::swap(&mut self.hud, &mut self.player.hud);
+        (self.hero_index, self.weapon, self.shield) = saved;
+        self.swap_player(0);
+        r
     }
 
     pub fn item_view(&self, grid: &[i32; 20]) -> crate::menus::ItemView {

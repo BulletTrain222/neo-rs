@@ -364,48 +364,8 @@ impl Pool {
                         }
                     }
                 } else if sphere_meets_body(p.position, p.s.radius, env.hero, env.hero_radius, env.hero_height) {
-                    let d = unit(p.velocity);
-                    let f = env.hero_facing;
-                    let blocked = env.guard && d[0] * f[0] + d[1] * f[1] + d[2] * f[2] < 0.0;
-                    let visual_ok = matches!(p.s.visual, 0..=5 | 7..=14 | 16 | 23);
-                    // Behavior 9 rule 2 (R-0034): word 1 holds a Mote, and the shot's element is
-                    // nonzero and equals that Mote's element kind, or the kind is 7. The build had
-                    // it reversed (element 0 only), so a fire shield never sent back the shield
-                    // lesson's fireball (user's report 38).
-                    let reflectable = blocked && matches!(p.s.kind, 0 | 10) && visual_ok && p.s.element != 0 && env.shield.is_some_and(|k| k == p.s.element || k == 7);
-                    let owner = p.s.owner.and_then(|o| (env.owner_body)(o));
-                    if reflectable {
-                        let speed = len(p.velocity);
-                        // At the owner + (0, 2, 0); a shot with no owner (the shield lesson's
-                        // launcher, owner -1) goes straight back the way it came at the same speed and,
-                        // with no owner to test, hits nothing more (SPEC-0044, R-0246).
-                        p.velocity = match owner {
-                            Some((base, _, _)) => unit(sub([base[0], base[1] + 2.0, base[2]], p.position)).map(|c| c * speed),
-                            None => p.velocity.map(|c| -c),
-                        };
-                        if p.s.kind == 10 {
-                            p.s.damage = 0.0;
-                        }
-                        p.at_owner = true;
-                        effect(p, 2, p.position, &mut out);
-                        out.push(Event::Reflected { element: p.s.element });
-                    } else {
-                        let d = p.s.damage.max(0.0);
-                        effect(p, if blocked { 2 } else { 5 }, p.position, &mut out);
-                        if blocked {
-                            out.push(Event::Hero { damage: d, owner: p.s.owner, blocked: true, element: p.s.element });
-                        } else {
-                            out.push(Event::Hero { damage: d, owner: p.s.owner, blocked: false, element: p.s.element });
-                            if p.s.kind == 14 {
-                                out.push(Event::MoteEater);
-                            }
-                            if p.s.status.0 != -1 {
-                                out.push(Event::Status { code: p.s.status.0, chance: p.s.status.1, seconds: p.s.status.2 });
-                            }
-                        }
-                        if p.s.kind == 15 {
-                            out.push(Event::Leach);
-                        }
+                    let owner = p.s.owner.and_then(|o| (env.owner_body)(o)).map(|b| b.0);
+                    if hero_contact(p, env.hero_facing, env.guard, env.shield, owner, &mut out) {
                         *slot = None;
                         continue;
                     }
@@ -454,6 +414,53 @@ impl Pool {
 }
 
 /// Send effect id j of a shot when it is not -1.
+/// A shot meeting a hero's body (SPEC-0029 Behavior 9): blocked when the hero guards facing the
+/// shot; a blocked straight shot whose element the shield Mote matches (rule 2) is reflected at
+/// its owner (`owner`, the owner's base) or straight back; otherwise the hit, its effect and its
+/// extras. True when the shot ends (every case but the reflection). Used for each player.
+pub fn hero_contact(p: &mut Shot, facing: Vec3, guard: bool, shield: Option<i32>, owner: Option<Vec3>, out: &mut Vec<Event>) -> bool {
+    let d = unit(p.velocity);
+    let f = facing;
+    let blocked = guard && d[0] * f[0] + d[1] * f[1] + d[2] * f[2] < 0.0;
+    let visual_ok = matches!(p.s.visual, 0..=5 | 7..=14 | 16 | 23);
+    // Behavior 9 rule 2 (R-0034): word 1 holds a Mote, and the shot's element is nonzero and
+    // equals that Mote's element kind, or the kind is 7. The build had it reversed (element 0
+    // only), so a fire shield never sent back the shield lesson's fireball (user's report 38).
+    let reflectable = blocked && matches!(p.s.kind, 0 | 10) && visual_ok && p.s.element != 0 && shield.is_some_and(|k| k == p.s.element || k == 7);
+    if reflectable {
+        let speed = len(p.velocity);
+        // At the owner + (0, 2, 0); a shot with no owner (the shield lesson's launcher, owner
+        // -1) goes straight back the way it came at the same speed and, with no owner to test,
+        // hits nothing more (SPEC-0044, R-0246).
+        p.velocity = match owner {
+            Some(base) => unit(sub([base[0], base[1] + 2.0, base[2]], p.position)).map(|c| c * speed),
+            None => p.velocity.map(|c| -c),
+        };
+        if p.s.kind == 10 {
+            p.s.damage = 0.0;
+        }
+        p.at_owner = true;
+        effect(p, 2, p.position, out);
+        out.push(Event::Reflected { element: p.s.element });
+        return false;
+    }
+    let dmg = p.s.damage.max(0.0);
+    effect(p, if blocked { 2 } else { 5 }, p.position, out);
+    out.push(Event::Hero { damage: dmg, owner: p.s.owner, blocked, element: p.s.element });
+    if !blocked {
+        if p.s.kind == 14 {
+            out.push(Event::MoteEater);
+        }
+        if p.s.status.0 != -1 {
+            out.push(Event::Status { code: p.s.status.0, chance: p.s.status.1, seconds: p.s.status.2 });
+        }
+    }
+    if p.s.kind == 15 {
+        out.push(Event::Leach);
+    }
+    true
+}
+
 fn effect(p: &Shot, j: usize, at: Vec3, out: &mut Vec<Event>) {
     if p.s.effects[j] != -1 {
         out.push(Event::Effect { id: p.s.effects[j], at });

@@ -1615,7 +1615,12 @@ fn step_sim(
                     box_busy: play.play.dialogue_open && play.play.textbox.open,
                 };
                 m.flow.held = held;
-                m.flow.view = play.play.item_view(&m.flow.grid_ids);
+                // Back in play the menu is player 1's again (player 2's Start sets it to 2's).
+                if m.flow.current == menus::PLAY {
+                    play.play.menu_player = 0;
+                }
+                let grid = m.flow.grid_ids;
+                m.flow.view = play.play.as_menu_player(|p| p.item_view(&grid));
                 m.flow.map_view = play.play.map_view();
                 // SPEC-0025 Clean-side mapping of the card jobs: the scans read the save file,
                 // the write job writes the whole file at once.
@@ -1660,7 +1665,12 @@ fn step_sim(
                             netr.request = Some(net::Request::Leave);
                         }
                     }
-                    Some(c) => play.play.item_command(&c),
+                    Some(c) => {
+                        play.play.as_menu_player(|p| p.item_command(&c));
+                        if play.play.menu_player != 0 && std::env::var_os("NEOPETS_TRACE_COOPMENU").is_some() {
+                            println!("COOPMENU tick {}: player 2's item command {c:?}; p2 hp {:?}", play.play.ticks, play.play.others.first().map(|o| o.hero_hp));
+                        }
+                    }
                     None => {}
                 }
                 // NEOPETS_SHOT_BOOK=value: the window opens that book at once (diagnostic, to picture it).
@@ -2095,6 +2105,7 @@ fn step_sim(
                 if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                     if m.flow.current == menus::PLAY {
                         m.flow.set(&a.f, menus::PAUSE);
+                        play.play.menu_player = 1;
                         info!("co-op: player 2 opened the pause page");
                     }
                 }
@@ -7067,6 +7078,61 @@ fn play_trace(
                     }
                 }
             }
+            // NEOPETS_COOP_CHEST="g@t": on tick t player 2 is put at script group g's locator 0
+            // (a chest's) with player 1 twenty units back, and presses Square every 20 ticks
+            // after; held items and the group's state every 20 ticks.
+            if let Some((g, t)) = std::env::var("NEOPETS_COOP_CHEST").ok().as_deref().and_then(|v| v.split_once('@')).and_then(|(a, b)| Some((a.trim().parse::<usize>().ok()?, b.trim().parse::<u64>().ok()?))) {
+                if play.ticks == t {
+                    if let Some((at, d)) = play.diag_group_spot(g) {
+                        play.player.loco.teleport([at[0] - d[0] * 20.0, at[1] + 1.0, at[2] - d[2] * 20.0], d);
+                        if let Some(o) = play.others.first_mut() {
+                            o.loco.teleport([at[0], at[1] + 0.5, at[2]], d);
+                        }
+                        println!("COOP chest: player 2 put at group {g}'s locator {at:?}");
+                    }
+                }
+                if play.ticks > t && play.ticks % 20 == 0 {
+                    p2.square = true;
+                    let mut held: Vec<(u16, u32)> = play.state.items.iter().map(|(k, v)| (*k, *v)).collect();
+                    held.sort_unstable();
+                    println!("COOP {} chest: p2 caption {:?} items {:?} {}", play.ticks, play.others.first().map(|o| o.captions.0), held, play.last_door);
+                }
+            }
+            // NEOPETS_COOP_MENUUSE="t:id": on tick t player 2's item screen uses item id (the
+            // item screen's command, run as the menu's player 2), and both players' health then.
+            if let Some((t, id)) = std::env::var("NEOPETS_COOP_MENUUSE").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u16>().ok()?))) {
+                if play.ticks == t {
+                    play.menu_player = 1;
+                    play.as_menu_player(|p| p.item_command(&menus::Command::UseItem(id)));
+                    play.menu_player = 0;
+                    println!("COOPMENU {}: player 2's item screen used {id}: p1 hp {} p2 hp {:?}", play.ticks, play.player.hero_hp, play.others.first().map(|o| o.hero_hp));
+                }
+            }
+            // NEOPETS_COOP_DEADLY=t: on tick t player 2 is dropped onto the deadly ground nearest
+            // player 1 (within 300), and its place and health every 10 ticks after.
+            if let Some(t) = std::env::var("NEOPETS_COOP_DEADLY").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+                if play.ticks == t {
+                    let a = play.player.loco.position();
+                    let spot = play.diag_deadly_near(a[0], a[2], 300.0);
+                    println!("COOP deadly: nearest deadly ground {spot:?} (player 1 at {a:?})");
+                    if let (Some(at), Some(o)) = (spot, play.others.first_mut()) {
+                        let f = o.loco.facing;
+                        o.loco.teleport([at[0], at[1] + 1.0, at[2]], f);
+                    }
+                }
+                if play.ticks > t && play.ticks <= t + 120 && play.ticks % 10 == 0 {
+                    if let Some(o) = play.others.first() {
+                        let q = o.loco.position();
+                        println!("COOP {} deadly: p2 at {:?} hp {} probe {} | {}", play.ticks, q.map(|v| v.round()), o.hero_hp, play.diag_probe(q[0], q[2], q[1] + 2.5), play.last_hurt);
+                    }
+                }
+            }
+            // NEOPETS_COOP_SQUARE="t[,t...]": player 2 presses Square on those ticks, and its
+            // caption is printed then.
+            if std::env::var("NEOPETS_COOP_SQUARE").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {
+                p2.square = true;
+                println!("COOP {} square: p2 caption {:?}", play.ticks, play.others.first().map(|o| o.captions.0));
+            }
             // NEOPETS_COOP_BOX: player 2 presses Square in talk boxes every 10 ticks instead of
             // player 1 (player 2 moves the boxes on).
             if std::env::var_os("NEOPETS_COOP_BOX").is_some() && play.dialogue_open && play.ticks % 10 == 5 {
@@ -7142,7 +7208,7 @@ fn play_trace(
                     let a = play.player.loco.position();
                     println!("COOP {} p2 ({:.1}, {:.1}, {:.1}) state {} clip {} hp {} down {:?} | p1 ({:.1}, {:.1}, {:.1}) hp {} down {:?} state {} | p2 eye ({:.1}, {:.1}, {:.1})", play.ticks, q[0], q[1], q[2], o.loco.state, o.hero.clip_state().action, o.hero_hp, o.down, a[0], a[1], a[2], play.player.hero_hp, play.player.down, play.player.loco.state, o.camera.eye[0], o.camera.eye[1], o.camera.eye[2]);
                     let near: Vec<String> = play.characters.iter().filter(|c| c.enemy.is_some() && (c.position[0] - q[0]).hypot(c.position[2] - q[2]) < 15.0).map(|c| format!("{} hp {} at {:.1}", c.name, c.hp, (c.position[0] - q[0]).hypot(c.position[2] - q[2]))).collect();
-                    println!("COOP {} enemies near p2: {}", play.ticks, near.join(", "));
+                    println!("COOP {} enemies near p2: {} | p2 lock {:?} targets {} p1 lock {:?} targets {}", play.ticks, near.join(", "), o.lock, o.targets.records.len(), play.player.lock, play.player.targets.records.len());
                     println!("COOP {} p2 hud c {} g0 {} health {:?} | p1 hud c {} g0 {} health {:?}", play.ticks, o.hud.c, o.hud.g0, o.hud.health, play.hud.c, play.hud.g0, play.hud.health);
                 }
             }
