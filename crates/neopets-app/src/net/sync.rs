@@ -156,8 +156,10 @@ impl crate::play::Play {
             put(o, &s.heroes[1]);
             o.camera.eye = s.eye;
             o.camera.focus = s.focus;
-            // Player 2 is not run on this side: its animation steps here (player 1's in the tick).
+            // Player 2 is not run on this side: its animation steps here (player 1's in the tick),
+            // and its pendulum chains (Roberta's head tails) after the pose.
             let _ = o.hero.tick();
+            o.hero.chain_step(o.loco.position(), o.loco.facing);
             // Player 2's panels as the host has them (the joiner's HUD shows them).
             let pn = &s.panels;
             (o.quick.open, o.quick.entries, o.quick.selection, o.quick.marker) = (pn.0, pn.1, pn.2 as usize, pn.3);
@@ -185,6 +187,7 @@ impl crate::play::Play {
             let Some(o) = self.others.get_mut(k + 1) else { break };
             put(o, h);
             let _ = o.hero.tick();
+            o.hero.chain_step(o.loco.position(), o.loco.facing);
         }
         // The other players' held items (their weapon and shield as drawn), worked out here as
         // the host does in their co-op step (before, no other player had a sword here).

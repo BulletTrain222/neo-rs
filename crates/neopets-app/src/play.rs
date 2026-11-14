@@ -12826,6 +12826,15 @@ impl Play {
         let attacking = self.player.loco.state == hero_states::ATTACK;
         let exists = |id: u64| self.characters.iter().any(|c| c.id == id);
         self.player.lock = self.player.candidates.tick(&chars, exists, self.player.loco.position(), self.player.loco.facing, attacking);
+        // NEOPETS_TRACE_LOCKWHY=name (diagnostic): every 30 ticks, each lock-on test for the
+        // characters of that name, and the lock and target list that came out.
+        if let Some(name) = std::env::var("NEOPETS_TRACE_LOCKWHY").ok().filter(|_| self.ticks % 30 == 0) {
+            let h = self.player.loco.position();
+            for c in self.characters.iter().filter(|c| c.name == name && c.pack == pack) {
+                let clip = c.anim.clip_state().action;
+                println!("LOCKWHY tick {}: {} id {} d {:.1} inactive {} dying {} hp {} dead {} vetoed {} townsfolk {} row {} unhittable {} (pet {} invulnerable {} lying {} outer {:?} clip {clip}) ghost {:?} | lock {:?} targets {:?}", self.ticks, c.name, c.id, (c.position[0] - h[0]).hypot(c.position[2] - h[2]), c.inactive, c.dying.is_some(), c.hp, c.enemy.as_ref().is_some_and(|e| e.is_dead()), c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(clip)), c.townsfolk.is_some(), c.row.is_some(), c.unhittable(), c.pet_like(), c.invulnerable, c.enemy.as_ref().is_some_and(|e| e.lying()), c.enemy.as_ref().map(|e| (e.state, e.outer)), c.ghost.as_ref().map(|g| g.targetable), self.player.lock, self.player.targets.records.iter().map(|r| (r.id, r.flag)).collect::<Vec<_>>());
+            }
+        }
         // SPEC-0010 Hero lock-on: while its companion exists the Cloud Beast writes its id into the
         // hero's forced lock word every tick (both bodies are otherwise unhittable, so no
         // candidate scan finds them).
@@ -12845,6 +12854,11 @@ impl Play {
         let mut targets = std::mem::take(&mut self.player.targets);
         targets.tick(&chars, hero, self.player.loco.facing, self.hero_index.min(1), clear);
         self.player.targets = targets;
+        if let Some(name) = std::env::var("NEOPETS_TRACE_LOCKWHY").ok().filter(|_| self.ticks % 30 == 0) {
+            for &(id, p) in points.iter().filter(|(id, _)| self.characters.iter().any(|c| c.id == *id && c.name == name)) {
+                println!("LOCKWHY tick {}: id {id} aim point {:?} (position {:?}) from {:?}: clear {}", self.ticks, p.map(|v| (v * 10.0).round() / 10.0), chars.iter().find(|c| c.0 == id).map(|c| c.1.map(|v| (v * 10.0).round() / 10.0)), eye.map(|v| (v * 10.0).round() / 10.0), clear(id));
+            }
+        }
         // SPEC-0022 Candidate lists: the talker list, the townsfolk of the current world.
         let talkers: Vec<(u64, [f32; 3])> = self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.townsfolk.is_some()).map(|c| (c.id, c.position)).collect();
         self.talker = self.talkers.tick(&talkers, hero, self.player.loco.facing);
@@ -20058,6 +20072,12 @@ impl Play {
                 self.world.pack != door_from.0 || (b[0] - door_from.1[0]).hypot(b[2] - door_from.1[2]) > 8.0 || (b[1] - door_from.1[1]).abs() > 8.0
             };
             self.player.root_step = self.player.hero.tick();
+            // Its pendulum chains (Roberta's head tails, Tor's), as player 1's after its pose
+            // (before, they hung still on every other player).
+            if std::env::var_os("NEOPETS_NO_CHAINS").is_none() {
+                let (at, facing) = (self.player.loco.position(), self.player.loco.facing);
+                self.player.hero.chain_step(at, facing);
+            }
             self.player.items_drawn = self.hero_items();
             self.pickup_step();
             // SPEC-0023: player 2's HUD record steps as player 1's (not under a dialogue box).
