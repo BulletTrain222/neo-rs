@@ -1,6 +1,7 @@
 mod archive_view;
 mod bindings;
 mod coop;
+mod hero_colour;
 mod net;
 mod button_style;
 mod controls_page;
@@ -7936,6 +7937,13 @@ fn play_frame(
     let f = state.play.player.loco.facing;
     // Characters face +Z in model space (SPEC-0004); turn that onto the facing.
     let rotation = Quat::from_rotation_y(f[0].atan2(f[2]));
+    // Multiplayer colours (hero_colour.rs): player 1's Tor in its colour while others play; a
+    // change of colour builds the model again.
+    let colour = state.play.drawn_colour(None);
+    if colour != state.play.p1_colour {
+        state.play.p1_colour = colour;
+        state.play.spawned = false;
+    }
     if !state.play.spawned {
         state.play.spawned = true;
         info!("hero model built: hero {} ({} parts)", state.play.hero_index, state.play.player.model.parts.len());
@@ -7954,9 +7962,27 @@ fn play_frame(
                 }
             }
         }
-        let parts = part_assets(&state.play.player.model, &mut meshes, &mut materials, &mut images);
+        // NEOPETS_TRACE_HEROTEX (diagnostic): each texture of the hero's model saved as
+        // private/shots/herotex_k.png, with its size, its parts and its share of yellow texels.
+        if std::env::var_os("NEOPETS_TRACE_HEROTEX").is_some() {
+            let m = &state.play.player.model;
+            for (k, t) in m.textures.iter().enumerate() {
+                let parts = m.parts.iter().filter(|p| p.texture == Some(k)).count();
+                let mut copy = t.image.rgba.clone();
+                let yellow = hero_colour::recolour(&mut copy, 1) as f32 / (t.image.width * t.image.height).max(1) as f32;
+                if let Ok(png) = neopets_data::png::encode_rgba(t.image.width, t.image.height, &t.image.rgba) {
+                    let _ = std::fs::write(format!("private/shots/herotex_{k}.png"), png);
+                }
+                info!("hero texture {k}: {}x{}, {parts} parts, {:.0}% yellow, fur {}", t.image.width, t.image.height, yellow * 100.0, hero_colour::fur_texture(&t.image.rgba));
+            }
+            let tinted = m.parts.iter().enumerate().filter(|(_, p)| p.colors.iter().any(|c| { let k = c[0].max(c[1]).max(c[2]).max(1e-6); c[2] / k < 0.5 && c[1] / k > 0.5 })).map(|(i, p)| (i, p.texture)).collect::<Vec<_>>();
+            info!("hero parts with a yellow vertex tint (part, texture): {tinted:?}");
+        }
+        let coloured = (colour != 0).then(|| hero_colour::recoloured(&state.play.player.model, colour));
+        let drawn = coloured.as_ref().unwrap_or(&state.play.player.model);
+        let parts = part_assets(drawn, &mut meshes, &mut materials, &mut images);
         // SPEC-0003 How a pass is drawn: two-pass parts' second layer, skinned with pass 0.
-        let second = pass1_assets(&state.play.player.model, &mut meshes, &mut pass1_materials, &mut images);
+        let second = pass1_assets(drawn, &mut meshes, &mut pass1_materials, &mut images);
         let mut skinned = Vec::new();
         // GPU skinning (gpu_skin.rs), as for the world's characters.
         let bones = state.play.player.hero.skin_matrices().len();

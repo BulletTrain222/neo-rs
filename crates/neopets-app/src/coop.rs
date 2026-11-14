@@ -180,6 +180,10 @@ pub fn read_coop(
     // The Multiplayer page's options.
     // NEOPETS_NET_ALONE=1 or 0 (diagnostic): Doors take Only you or Both, whatever the settings
     // file says.
+    // The Multiplayer page's colours (a joiner takes the host's with its states).
+    if !play.play.net_follow {
+        play.play.player_colours = settings.coop_colours;
+    }
     // The Gameplay page's Attack turn (NEOPETS_ATTACK_TURN=original, diagnostic, for traces too).
     play.play.steady_turn = settings.steady_turn && std::env::var("NEOPETS_ATTACK_TURN").as_deref() != Ok("original");
     let alone = std::env::var("NEOPETS_NET_ALONE").ok().map_or(settings.coop_doors_alone, |v| v.trim() != "0");
@@ -295,6 +299,7 @@ pub struct Drawn {
     joints: Vec<Entity>,
     who: usize,
     outfit: u32,
+    colour: u8,
 }
 
 #[derive(Component)]
@@ -316,8 +321,9 @@ pub fn draw_others(
     mut roots: Query<&mut Transform, With<OtherHero>>,
 ) {
     let others = play.as_ref().map_or(&[][..], |p| &p.play.others[..]);
-    // Gone or changed: despawned.
-    while drawn.len() > others.len() || drawn.iter().zip(others).any(|(d, o)| d.who != o.who || d.outfit != o.outfit) {
+    let colours: Vec<u8> = play.as_ref().map_or(Vec::new(), |p| (0..p.play.others.len()).map(|i| p.play.drawn_colour(Some(i))).collect());
+    // Gone or changed (hero, outfit or colour): despawned.
+    while drawn.len() > others.len() || drawn.iter().zip(others).zip(&colours).any(|((d, o), &c)| d.who != o.who || d.outfit != o.outfit || d.colour != c) {
         if let Some(d) = drawn.pop() {
             commands.entity(d.root).despawn();
         }
@@ -330,7 +336,9 @@ pub fn draw_others(
         let rotation = Quat::from_rotation_y(f[0].atan2(f[2]));
         if drawn.len() <= i {
             // The hero's program-6 parts are drawn solid, as player 1's (`play_frame`).
-            let mut model = o.model.clone();
+            // Its multiplayer colour (hero_colour.rs).
+            let colour = colours.get(i).copied().unwrap_or(0);
+            let mut model = if colour != 0 { crate::hero_colour::recoloured(&o.model, colour) } else { o.model.clone() };
             for part in model.parts.iter_mut().filter(|q| q.program == Some(6) || (!q.colors.is_empty() && q.colors.iter().all(|c| c[3] < 0.5))) {
                 for c in &mut part.colors {
                     c[3] = 1.0;
@@ -371,7 +379,7 @@ pub fn draw_others(
                     }
                 })
                 .id();
-            drawn.push(Drawn { root, joints, who: o.who, outfit: o.outfit });
+            drawn.push(Drawn { root, joints, who: o.who, outfit: o.outfit, colour });
         }
         let d = &drawn[i];
         if let Ok(mut t) = roots.get_mut(d.root) {

@@ -24,7 +24,7 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 45;
+pub const ROWS: usize = 49;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 5] = [17, 18, 19, 20, ATTACK_TURN_ROW];
@@ -32,7 +32,7 @@ pub const GAMEPLAY_ROWS: [usize; 5] = [17, 18, 19, 20, ATTACK_TURN_ROW];
 pub const ATTACK_TURN_ROW: usize = 44;
 /// The rows on the Multiplayer page (docs/MULTIPLAYER.md; this build's feature), in the order
 /// shown: local co-op first, then the shared rules, then online.
-pub const MULTI_ROWS: [usize; 18] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], 25, TOGETHER_ROW, TAGS_ROW, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW, DOORS_ROW];
+pub const MULTI_ROWS: [usize; 22] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], COLOUR_ROWS[0], COLOUR_ROWS[1], COLOUR_ROWS[2], COLOUR_ROWS[3], 25, TOGETHER_ROW, TAGS_ROW, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW, DOORS_ROW];
 /// Rows no page shows any more (27, the Player 2 partner choice: every player starts as Tor and
 /// switches on its own).
 pub const RETIRED_ROWS: [usize; 1] = [27];
@@ -42,6 +42,8 @@ pub const COOP_ROW: usize = 37;
 pub const PLAYERS_ROW: usize = 38;
 /// Each player's controller (players 1 to 4).
 pub const PAD_ROWS: [usize; 4] = [39, 40, 41, 42];
+/// Each player's colour (players 1 to 4; Tor's yellow fur recoloured; this build's option).
+pub const COLOUR_ROWS: [usize; 4] = [45, 46, 47, 48];
 /// Player tags (P1 to P4) over the other players.
 pub const TAGS_ROW: usize = 43;
 /// A controller choice: Auto, or controller 1 to this many (in the order they were connected).
@@ -169,6 +171,8 @@ pub struct DisplaySettings {
     pub coop_pads: [u8; 4],
     /// A tag (P1 to P4) over each other player (on by default).
     pub coop_tags: bool,
+    /// Each player's colour in multiplayer (`hero_colour::COLOURS`; 0 the original yellow).
+    pub coop_colours: [u8; 4],
     /// Steady: an attack turns the hero toward the enemy's body; Original: toward its target
     /// point (SPEC-0040 Behavior 20 item 7, attachment point 7, which on some enemies swings
     /// with their limbs). This build's option, Steady by default (user report 150).
@@ -177,7 +181,7 @@ pub struct DisplaySettings {
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4], coop_tags: true, steady_turn: true }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4], coop_tags: true, steady_turn: true, coop_colours: [0, 1, 2, 3] }
     }
 }
 
@@ -230,6 +234,11 @@ impl DisplaySettings {
                 "coop doors alone" => s.coop_doors_alone = v == "true",
                 "coop tags" => s.coop_tags = v != "false",
                 "attack turn" => s.steady_turn = v != "original",
+                "coop colours" => {
+                    for (k, n) in v.split(',').take(4).enumerate() {
+                        s.coop_colours[k] = n.trim().parse::<u8>().unwrap_or(0).min(crate::hero_colour::COLOURS.len() as u8 - 1);
+                    }
+                }
                 "coop players" => s.coop_players = v.parse().unwrap_or(2).clamp(2, 4),
                 "coop pads" => {
                     for (k, n) in v.split(',').take(4).enumerate() {
@@ -246,7 +255,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\nnet port = {}\ncoop together = {}\ncoop doors alone = {}\ncoop players = {}\ncoop pads = {}\ncoop tags = {}\nattack turn = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\nnet port = {}\ncoop together = {}\ncoop doors alone = {}\ncoop players = {}\ncoop pads = {}\ncoop tags = {}\nattack turn = {}\ncoop colours = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -282,7 +291,8 @@ impl DisplaySettings {
             self.coop_players,
             self.coop_pads.map(|n| n.to_string()).join(","),
             self.coop_tags,
-            if self.steady_turn { "steady" } else { "original" }
+            if self.steady_turn { "steady" } else { "original" },
+            self.coop_colours.map(|n| n.to_string()).join(",")
         )
     }
 
@@ -418,6 +428,10 @@ impl DisplaySettings {
             ("Player 4 controller".into(), pad_name(self.coop_pads[3])),
             ("Player tags".into(), if self.coop_tags { "On".into() } else { "Off".into() }),
             ("Attack turn".into(), if self.steady_turn { "Steady".into() } else { "Original".into() }),
+            ("Player 1 colour".into(), crate::hero_colour::COLOURS[self.coop_colours[0] as usize].into()),
+            ("Player 2 colour".into(), crate::hero_colour::COLOURS[self.coop_colours[1] as usize].into()),
+            ("Player 3 colour".into(), crate::hero_colour::COLOURS[self.coop_colours[2] as usize].into()),
+            ("Player 4 colour".into(), crate::hero_colour::COLOURS[self.coop_colours[3] as usize].into()),
         ]
     }
 
@@ -477,6 +491,10 @@ impl DisplaySettings {
             DOORS_ROW => self.coop_doors_alone = !self.coop_doors_alone,
             TAGS_ROW => self.coop_tags = !self.coop_tags,
             ATTACK_TURN_ROW => self.steady_turn = !self.steady_turn,
+            r if COLOUR_ROWS.contains(&r) => {
+                let k = r - COLOUR_ROWS[0];
+                self.coop_colours[k] = step(self.coop_colours[k] as usize, crate::hero_colour::COLOURS.len()) as u8;
+            }
             PLAYERS_ROW => self.coop_players = 2 + step(self.coop_players.clamp(2, 4) - 2, 3),
             r if PAD_ROWS.contains(&r) => {
                 let k = r - PAD_ROWS[0];
@@ -796,6 +814,10 @@ const HELP: [&str; ROWS + 1] = [
     "Player 4's controller (4 players). Auto: the next free controller.",
     "On: a coloured tag (P1 to P4) over each other player, so you can tell who is who. Not in the original game.",
     "Steady: an attack turns your hero toward the enemy's body. Original: toward the game's aim point, which on some enemies (the Swamp Tentacle) swings with them and can turn a swing away.",
+    "Player 1's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow. The host's choices count online. Not in the original game.",
+    "Player 2's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow.",
+    "Player 3's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow.",
+    "Player 4's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow.",
     "Back to Options.",
 ];
 
@@ -1014,7 +1036,7 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(1), [17, 18, 19, 20, 44]);
-        assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 25, 35, 43, 28, 29, 30, 31, 32, 33, 34, 36]);
+        assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 45, 46, 47, 48, 25, 35, 43, 28, 29, 30, 31, 32, 33, 34, 36]);
         assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));

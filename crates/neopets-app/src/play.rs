@@ -1533,6 +1533,10 @@ pub struct Play {
     pub net_seat: usize,
     /// The Gameplay page's Attack turn (Steady: toward the enemy's body, not its target point).
     pub steady_turn: bool,
+    /// Multiplayer colours by player number (1 to 4; hero_colour.rs): the Multiplayer page's
+    /// here and on a host, the host's on a joiner. `p1_colour`: the colour player 1 is drawn in.
+    pub player_colours: [u8; 4],
+    pub p1_colour: u8,
     /// Online, hosting: separate worlds are possible (a joiner is in).
     pub net_apart_ok: bool,
     /// Host: the door an online player 2 is taking alone this tick (net.rs sends it apart).
@@ -2578,6 +2582,8 @@ impl Play {
             net_apart_ok: false,
             net_seat: 0,
             steady_turn: true,
+            player_colours: [0; 4],
+            p1_colour: 0,
             apart_door: None,
             net_apart: false,
             diag_p2_square: 0,
@@ -19759,6 +19765,22 @@ impl Play {
     /// Every other player leaves (local co-op).
     pub fn remove_player(&mut self) {
         self.keep_players(0);
+    }
+
+    /// The colour a player is drawn in (`None`: player 1; `Some(i)`: `others[i]`): its player
+    /// number's colour while two or more play and it is Tor; else 0 (the hero's own).
+    pub fn drawn_colour(&self, other: Option<usize>) -> u8 {
+        if self.others.is_empty() {
+            return 0;
+        }
+        let (who, number) = match other {
+            None => (self.hero_index, 1),
+            Some(i) => (self.others.get(i).map_or(1, |o| o.who), self.player_number(i)),
+        };
+        if who.min(1) != 0 {
+            return 0;
+        }
+        self.player_colours.get(number - 1).copied().unwrap_or(0)
     }
 
     /// The number shown for other player `i` (`others[i]`): players 2 to 4 by seat; on a joiner

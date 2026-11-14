@@ -110,6 +110,7 @@ impl crate::play::Play {
             cmd_ack: 0,
             equip: (self.equipment.entries, self.equipment.motes, self.cloak_worn),
             pet: self.petpet.as_ref().map(|p| (p.type_id, p.t, p.f)),
+            colours: self.player_colours,
             // Moved blocks: the moving ones every state, all the moved ones every half second.
             blocks: self
                 .world
@@ -176,6 +177,7 @@ impl crate::play::Play {
             o.captions.0 = s.p2_prompt;
         }
         self.net_seat = s.seat as usize;
+        self.player_colours = s.colours;
         // The host's moved blocks (a crate pushed by any player): their place and box follow
         // (before, a joiner drew the crate where it started while the host's hero stood on it
         // where it had been pushed; user report 151).

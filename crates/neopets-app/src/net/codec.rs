@@ -224,6 +224,8 @@ pub struct State {
     /// The current world's movable blocks away from their home (index, position): moving ones
     /// every state, the others now and then.
     pub blocks: Vec<(u16, [f32; 3])>,
+    /// The host's multiplayer colours by player number (hero_colour.rs).
+    pub colours: [u8; 4],
 }
 
 /// The breakables of the current world (their states) and the live items of each resident world
@@ -904,6 +906,9 @@ impl State {
             w.u16(i);
             w.v3(p);
         }
+        for c in self.colours {
+            w.u8(c);
+        }
         w.0
     }
 
@@ -1009,7 +1014,8 @@ impl State {
         };
         let n = r.u8()? as usize;
         let blocks = (0..n).map(|_| Some((r.u16()?, r.v3()?))).collect::<Option<Vec<_>>>()?;
-        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, seat, rtt, cmd_ack, equip, pet, blocks })
+        let colours = [r.u8()?, r.u8()?, r.u8()?, r.u8()?];
+        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, seat, rtt, cmd_ack, equip, pet, blocks, colours })
     }
 }
 
