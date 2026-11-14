@@ -623,20 +623,20 @@ stand-in on this computer, and left for the user to switch on.
     stands beside (HUD, both views).
 26. [x] (they did not move: the Square rows were player 1's; fixed) Player 2's push blocks: traced, and fixed if they do not move.
 27. [~] (the same swap as the healing traced; statuses not traced) Player 2's magic items' statuses (buffs, cures) traced.
-28. [ ] Player 2's quick panel and Mote panel on the joiner: a quick item used from the
+28. [~] (the panels' opening was traced in plan 2; an item used from the joiner's D-pad not traced) Player 2's quick panel and Mote panel on the joiner: a quick item used from the
     joiner's D-pad traced end to end.
-29. [ ] Player 2 in a boss grab (a boss that holds the hero): traced, freed as player 1 is.
+29. [ ] (not tried) Player 2 in a boss grab (a boss that holds the hero): traced, freed as player 1 is.
 30. [x] (it fell off: no riding step; fixed) Player 2 riding a moving platform (822) traced.
-31. [ ] Player 2's ledges online traced.
+31. [~] (the host runs player 2's ledges as on one PC, traced there; not online) Player 2's ledges online traced.
 32. [x] Both players down at once with revive on: game over, as the rules say (traced).
 33. [~] (stays player 1's; no line added) Player 2 talking to an NPC: Default stays player 1's; player 2 gets a "Player 1
     talks" line instead of nothing.
 
 ### The joiner's world, last pieces
 34. [x] (it was missing on the joiner; now sent) The petpet online: given by a host diagnostic after the welcome, compared.
-35. [ ] Weapon trails and debris compared on both sides.
-36. [ ] Cutscene fades compared frame by frame in a scripted scene.
-37. [ ] The host's camera shake and rumble in a boss fight compared.
+35. [ ] (not tried) Weapon trails and debris compared on both sides.
+36. [ ] (not tried; the fade comes with every state) Cutscene fades compared frame by frame in a scripted scene.
+37. [~] (both traced in plan 2; not in a boss fight) The host's camera shake and rumble in a boss fight compared.
 38. [~] (boss health matched; the bar shows only after a hit, not compared) The monster health bar compared during a fight with hits (a host diagnostic hurts
     the boss).
 
@@ -653,9 +653,9 @@ stand-in on this computer, and left for the user to switch on.
     second copy as floats); memory measured.
 
 ### Words
-46. [ ] docs/STATUS.md entries and the multiplayer summary.
-47. [ ] The checklists brought up to date.
-48. [ ] The morning report.
+46. [x] docs/STATUS.md entries and the multiplayer summary.
+47. [x] The checklists brought up to date.
+48. [x] The morning report.
 
 ### Design note: prediction for the joiner (items 15 and 17, not built)
 Today the joiner's own player 2 moves only when the host's state comes back: about 30 to 45 ms
@@ -672,3 +672,40 @@ would follow the drawn player 2. The risks are visible only on screen: rubber-ba
 two sides disagree (pushes by enemies, moving platforms, scripted holds), and the camera
 swinging. It is best built with the screen on, behind a Multiplayer page row (Default off), and
 compared with today's at 50 and 150 ms.
+
+### Night plan 5 report (2026-11-14)
+Done and committed, each with Check passing and the scenarios (now 55) where single-player code
+moved. 29 of the 48 items are done, 9 partly, 10 left (the stress items 2 and 4 to 7 at the
+user's word, prediction and local sounds for the screen, a boss grab, trails and fades).
+
+**Smaller and steadier online.** States are packed (a character 27 bytes instead of 42, at most
+18 characters and 8 moving items a state, so a state stays under 1,150 bytes): 28.9 KB/s on the
+farm road (was about 34), 30.5 in a boss fight (was 44.6). The joiner works out the volume and
+pan of placed host sounds itself, so those changes are no longer sent (24 KB/s in world 947).
+The jitter buffer follows the network (stalls at 40 ms of jitter 142 to 87 a minute), and a late
+state no longer steps characters back. The online work is small: about 80 microseconds a tick on
+the host, 12 on the joiner.
+
+**Joining.** A Password row (none by default), player names in the joined and left lines (the
+computer's name, or `name=` in private/net.txt), a joiner of another build told so. A UPnP row
+(Off by default) asks the router to let a friend in while you host; it was tried only against a
+stand-in router on this computer, never your router. "How to play together" has an internet
+section.
+
+**Player 2.** Grabs and pushes blocks and steps off ladders with Square (the Square rows were
+player 1's), rides moving platforms (it fell off before), and its view shows "Down: up in 7 s"
+or "Reviving 50%". The host's petpet now shows on the joiner (it was missing). Both players
+down ends the game.
+
+**Long runs.** An hour online passed every comparison with memory level (about 610 and 550 MB);
+an hour alone stayed at 565 MB. The looping music streams no longer keep a second copy (the title
+screen stays at 411 MB; it grew 137 MB in 3.5 minutes before).
+
+Defaults chosen without the user: the jitter buffer holds one to three states as the network
+needs; player names default to the computer's name; no password; UPnP off; the down line's
+words.
+
+Questions for the original game: R-0284 (part way up a ladder, Stop Climbing takes hold again at
+once, for either player).
+
+Not checked: anything on screen or heard, UPnP with a real router, two computers, the internet.
