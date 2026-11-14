@@ -34,7 +34,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 21;
+const PROTOCOL: u16 = 22;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -222,6 +222,8 @@ pub struct Net {
     pub cmds: std::collections::VecDeque<(u8, u16, u16)>,
     pub cmds_done: u8,
     cmd_done: u8,
+    /// The other side's player name (the joiner's on the host, the host's on the joiner).
+    pub peer_name: String,
     /// Joiner: when this join began (a join with no answer gives up after 20 seconds).
     join_started: Option<Instant>,
     /// Host, for the trace: events made since the last trace line, by kind (`kind_of`).
@@ -622,6 +624,7 @@ impl Net {
 /// A welcome: the generation, the host's game as a save slot, and its gameplay effects running
 /// now (effect operations, applied after the load).
 fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::effect::Op], base: u32) -> Vec<u8> {
+    let host = my_name();
     let mut w = Writer::new(WELCOME);
     w.u32(generation);
     w.bytes(&slot.0);
@@ -630,6 +633,7 @@ fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::e
         write_op(&mut w, op);
     }
     w.u32(base);
+    w.text(&host);
     w.0
 }
 
@@ -653,12 +657,15 @@ fn take_welcome(net: &mut Net, r: &mut Reader, from: SocketAddr) {
             net.applied = base;
         }
     }
+    if let Some(host) = r.text() {
+        net.peer_name = host.chars().filter(|c| !c.is_control()).take(12).collect();
+    }
     net.loaded = generation;
     net.state = None;
     net.queue.clear();
     net.status = format!("Joined {from}.");
     if first {
-        net.notice = Some("Joined the host's game.".into());
+        net.notice = Some(if net.peer_name.trim().is_empty() { "Joined the host's game.".into() } else { format!("Joined {}'s game.", net.peer_name) });
     }
     info!("net: welcome {generation} from {from}");
 }
@@ -727,7 +734,7 @@ pub fn local_address() -> Option<std::net::IpAddr> {
 
 /// Each frame: requests from the Multiplayer page, the socket's messages, joining, timeouts.
 #[allow(clippy::too_many_arguments)]
-pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut archive: Option<ResMut<crate::Archive>>, mut coop: ResMut<crate::coop::Coop>, menu: Option<Res<crate::menu_view::Menu>>) {
+pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut archive: Option<ResMut<crate::Archive>>, mut coop: ResMut<crate::coop::Coop>, menu: Option<Res<crate::menu_view::Menu>>, password: Res<NetPassword>) {
     if net.disc.is_none() {
         if let Some(a) = archive.as_deref_mut() {
             use std::hash::{Hash, Hasher};
@@ -889,12 +896,30 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     due.sort_by_key(|m| m.0);
     ready.extend(due.into_iter().map(|(_, b, from)| (b, from)));
     for (bytes, from) in ready {
+        // Another version of this game (its messages cannot be read here): a joiner is told; a
+        // host answers a hello with a refusal the joiner can tell apart by its version.
+        if bytes.len() >= 7 && bytes[..4] == MAGIC && u16::from_le_bytes([bytes[4], bytes[5]]) != PROTOCOL {
+            if net.role == Role::Join && net.target == Some(from) {
+                info!("net: the host runs another version of the game");
+                net.stop("The host's game is a different build of this game. Use the same build on both computers.");
+            } else if net.role == Role::Host && bytes[6] == HELLO {
+                let mut w = Writer::new(REFUSE);
+                w.text("a different build");
+                if let Some(s) = net.socket.as_ref() {
+                    let _ = s.send_to(&w.0, from);
+                }
+            }
+            continue;
+        }
         let Some((kind, mut r)) = Reader::open(&bytes) else { continue };
         match (net.role, kind) {
             (Role::Host, HELLO) => {
                 let (build, disc) = (r.text(), r.u64());
+                let (name, pass) = (r.text().unwrap_or_default(), r.u64().unwrap_or(0));
                 let refuse = if build.as_deref() != Some(build_id().as_str()) {
-                    Some(format!("different game builds ({} here, {} there)", build_id(), build.unwrap_or_default()))
+                    Some(format!("your game is a different build ({} there, {} here); use the same build on both computers", build.unwrap_or_default(), build_id()))
+                } else if pass != password_hash(&password.0) {
+                    Some("the password is not the one on the host's Multiplayer page".to_string())
                 } else if disc != net.disc {
                     Some("different discs".to_string())
                 } else if net.peer.is_some_and(|p| p != from) {
@@ -937,9 +962,11 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     let base = net.event_base();
                     net.welcome = Some(welcome(net.generation, &slot, &p.play.effects.snapshot(), base));
                     net.welcome_mask = 0;
-                    net.status = format!("{from} joined.");
-                    net.notice = Some("Player 2 joined.".into());
-                    info!("net: {from} joined");
+                    let who: String = name.chars().filter(|c| !c.is_control()).take(12).collect();
+                    net.peer_name = if who.trim().is_empty() { "Player 2".into() } else { who };
+                    net.status = format!("{} joined from {from}.", net.peer_name);
+                    net.notice = Some(format!("{} joined.", net.peer_name));
+                    info!("net: {from} joined ({})", net.peer_name);
                 }
             }
             (Role::Host, INPUT) if net.peer == Some(from) => {
@@ -989,7 +1016,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     // No timeout for a joiner that said goodbye.
                     net.last_heard = None;
                     net.status = "Your friend left. Still hosting.".into();
-                    net.notice = Some("Player 2 left.".into());
+                    net.notice = Some(format!("{} left.", if net.peer_name.is_empty() { "Player 2" } else { net.peer_name.as_str() }));
                     info!("net: the joiner left");
                 } else {
                     if net.loaded > 0 {
@@ -1223,6 +1250,8 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         let mut w = Writer::new(HELLO);
         w.text(&build_id());
         w.u64(net.disc.unwrap_or(0));
+        w.text(&my_name());
+        w.u64(password_hash(&password.0));
         let bytes = w.0;
         net.send(&bytes);
         net.last_sent = Some(now);
@@ -1344,6 +1373,47 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     }
 }
 
+/// This computer's player name (Default: `name=` in private/net.txt, else the computer's name,
+/// at most 12 letters, else "Player"), shown to the other side in the joined and left lines.
+pub fn my_name() -> String {
+    let named = std::fs::read_to_string("private/net.txt").ok().and_then(|t| t.lines().find_map(|l| l.trim().strip_prefix("name=").map(|v| v.trim().to_string())));
+    let raw = named.or_else(|| std::env::var("COMPUTERNAME").ok()).unwrap_or_default();
+    let clean: String = raw.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').take(12).collect();
+    let clean = clean.trim();
+    if clean.is_empty() {
+        "Player".into()
+    } else {
+        // "SAM-PC" reads "Sam-pc": the first letter capital, the rest small.
+        let mut c = clean.chars();
+        c.next().map(|f| f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase()).unwrap_or_default()
+    }
+}
+
+/// A password's hash as it travels (0 for none).
+pub fn password_hash(p: &str) -> u64 {
+    if p.is_empty() {
+        return 0;
+    }
+    // FNV-1a, so both computers get the same number for the same password.
+    p.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// The Multiplayer page's password (Default: none): the host's for the game it hosts, the
+/// joiner's for the game it joins. Typed with letters and digits; kept in private/password.txt.
+#[derive(Resource)]
+pub struct NetPassword(pub String);
+
+impl Default for NetPassword {
+    fn default() -> Self {
+        // NEOPETS_NET_PASSWORD (diagnostic) in place of the file, so two windows on one computer
+        // can differ.
+        if let Ok(p) = std::env::var("NEOPETS_NET_PASSWORD") {
+            return Self(p);
+        }
+        Self(std::fs::read_to_string("private/password.txt").map(|t| t.trim().to_string()).unwrap_or_default())
+    }
+}
+
 /// The Multiplayer page's join address being typed (digits, dots and a colon; Backspace).
 #[derive(Resource)]
 pub struct JoinAddress(pub String);
@@ -1356,9 +1426,36 @@ impl Default for JoinAddress {
 
 /// Each frame: with the Multiplayer page's address row focused, the number keys, the dot and the
 /// colon type into the address, Backspace deletes.
-pub fn type_address(menu: Option<Res<crate::menu_view::Menu>>, keys: Res<ButtonInput<KeyCode>>, mut address: ResMut<JoinAddress>) {
+pub fn type_address(menu: Option<Res<crate::menu_view::Menu>>, keys: Res<ButtonInput<KeyCode>>, mut address: ResMut<JoinAddress>, mut password: ResMut<NetPassword>) {
     let Some(menu) = menu else { return };
-    if menu.flow.current != crate::menus::DISPLAY || menu.flow.display_page != 2 || menu.flow.display_focus != crate::display::ADDRESS_ROW {
+    if menu.flow.current != crate::menus::DISPLAY || menu.flow.display_page != 2 {
+        return;
+    }
+    // The password row: letters and digits, Backspace deletes (kept for next time).
+    if menu.flow.display_focus == crate::display::PASSWORD_ROW {
+        let before = password.0.clone();
+        for k in keys.get_just_pressed() {
+            let c = match k {
+                KeyCode::Digit0 | KeyCode::Numpad0 => Some('0'),
+                KeyCode::Backspace => {
+                    password.0.pop();
+                    None
+                }
+                _ => {
+                    let name = format!("{k:?}");
+                    name.strip_prefix("Key").or_else(|| name.strip_prefix("Digit")).or_else(|| name.strip_prefix("Numpad")).filter(|r| r.len() == 1).and_then(|r| r.chars().next()).map(|c| c.to_ascii_lowercase())
+                }
+            };
+            if let Some(c) = c.filter(|_| password.0.len() < 20) {
+                password.0.push(c);
+            }
+        }
+        if password.0 != before {
+            let _ = std::fs::write("private/password.txt", &password.0);
+        }
+        return;
+    }
+    if menu.flow.display_focus != crate::display::ADDRESS_ROW {
         return;
     }
     const KEYS: [(KeyCode, char); 22] = [
@@ -1510,6 +1607,16 @@ mod tests {
         assert_eq!(hear(other, &mut voices, &near), other);
         hear(Request::Stop { id: 7 }, &mut voices, &near);
         assert!(voices.is_empty());
+    }
+
+    /// No password travels as 0; the same password gives the same number on both computers,
+    /// another password another number.
+    #[test]
+    fn password_hashes() {
+        assert_eq!(password_hash(""), 0);
+        assert_eq!(password_hash("apple7"), password_hash("apple7"));
+        assert_ne!(password_hash("apple7"), password_hash("pear"));
+        assert_ne!(password_hash("a"), 0);
     }
 
     /// The packed records come back within their step: a facing within 1/32767, a large clip

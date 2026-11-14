@@ -41,6 +41,7 @@ the same build of this game.
 | Join address | | The host's address |
 | Join a game | | Join that host (press again to leave) |
 | Remove player 2 | | Host only: send player 2 back to their title screen and keep hosting |
+| Password | None | Optional: the host types one before hosting, and the friend the same before joining |
 
 **What the two players share.** One world and story, one bag of items and Neopoints, the
 enemies, talk boxes (either player's Square moves a box on; only player 1 answers questions,
@@ -590,12 +591,12 @@ stand-in on this computer, and left for the user to switch on.
     not after the round trip.
 
 ### Joining
-19. [ ] An optional password on the Multiplayer page (Default: none); a wrong one is refused
+19. [x] An optional password on the Multiplayer page (Default: none); a wrong one is refused
     with a line.
-20. [ ] Player names (Default: the computer's name, shortened): "Sam joined.".
-21. [ ] The joiner's title screen says "Joining..." and why a join failed (a refusal shows
+20. [x] Player names (Default: the computer's name, shortened): "Sam joined.".
+21. [~] (the Multiplayer page's line shows each refusal, where the join starts) The joiner's title screen says "Joining..." and why a join failed (a refusal shows
     on the title screen, not only on the Multiplayer page).
-22. [ ] A friendly refusal for a different build ("The host has a newer build").
+22. [x] (another protocol version told apart too; not traced with two builds) A friendly refusal for a different build ("The host has a newer build").
 23. [ ] UPnP (Default: off): a Multiplayer page row that asks the router to forward the port
     for the session and removes it at the end; tried only against a stand-in router on this
     computer.
@@ -626,7 +627,7 @@ stand-in on this computer, and left for the user to switch on.
 ### Tests and tools
 39. [ ] net_check.py `--long` (an hour) and `--soak` (joins and leaves) modes.
 40. [ ] A scenario per new co-op rule.
-41. [~] (packing done; password and names to come) Synthetic tests for the packing (round trip within its step), the password, names.
+41. [x] Synthetic tests for the packing (round trip within its step), the password, names.
 42. [x] (and at most 18 characters a state) A test that a state with every field at its largest stays under the limit.
 43. [ ] scripts/net_check.py reports CPU per tick.
 

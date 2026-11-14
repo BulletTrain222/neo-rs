@@ -24,18 +24,20 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 32;
+pub const ROWS: usize = 33;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
 /// The rows on the Multiplayer page (local co-op, docs/MULTIPLAYER.md; this build's feature).
-pub const MULTI_ROWS: [usize; 7] = [25, 26, 27, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW];
+pub const MULTI_ROWS: [usize; 8] = [25, 26, 27, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW];
 /// The Multiplayer page's online rows (net.rs): host, the join address, join.
 pub const HOST_ROW: usize = 28;
 pub const ADDRESS_ROW: usize = 29;
 pub const JOIN_ROW: usize = 30;
 /// The host sends player 2 away (it keeps hosting).
 pub const REMOVE_ROW: usize = 31;
+/// The game's password (none by default), typed with letters and digits.
+pub const PASSWORD_ROW: usize = 32;
 /// Split screen layouts.
 pub const SPLITS: [&str; 2] = ["Top and bottom", "Side by side"];
 
@@ -341,6 +343,7 @@ impl DisplaySettings {
             ("Join address".into(), String::new()),
             ("Join a game".into(), String::new()),
             ("Remove player 2".into(), String::new()),
+            ("Password".into(), String::new()),
         ]
     }
 
@@ -513,6 +516,7 @@ pub fn take_requests(
                 let _ = std::fs::write("private/join.txt", &address.0);
             }
             ADDRESS_ROW => {}
+            PASSWORD_ROW => {}
             REMOVE_ROW => {
                 if net.role == crate::net::Role::Host && net.peer.is_some() {
                     net.request = Some(crate::net::Request::Remove);
@@ -685,6 +689,7 @@ const HELP: [&str; ROWS + 1] = [
     "The host's address (shown on their Host row). Type it with the number keys; Backspace deletes.",
     "Join the host's game. Each player needs their own copy of the game disc.",
     "Hosting: sends player 2 back to their title screen. You keep hosting, and they can join again.",
+    "Optional. The host types one before hosting; a friend must type the same before joining. Letters and digits; Backspace deletes.",
     "Back to Options.",
 ];
 
@@ -791,7 +796,7 @@ pub fn show_window(
     mut values: Query<(&DispValue, &mut Text), (Without<DispLabel>, Without<DispHelp>, Without<DispTitle>)>,
     mut help: Query<&mut Text, (With<DispHelp>, Without<DispLabel>, Without<DispValue>, Without<DispTitle>)>,
     mut titles: Query<&mut Text, (With<DispTitle>, Without<DispHelp>, Without<DispLabel>, Without<DispValue>)>,
-    (net, address): (Res<crate::net::Net>, Res<crate::net::JoinAddress>),
+    (net, address, password): (Res<crate::net::Net>, Res<crate::net::JoinAddress>, Res<crate::net::NetPassword>),
 ) {
     let _span = crate::perf::span("show_window");
     let flow = menu.as_ref().map(|m| &m.flow);
@@ -818,6 +823,11 @@ pub fn show_window(
             _ => "Press to join".into(),
         };
         shown[REMOVE_ROW].1 = if net.role == Role::Host && net.peer.is_some() { "Press to remove".into() } else { "No player 2 online".into() };
+        shown[PASSWORD_ROW].1 = match (password.0.is_empty(), focus == PASSWORD_ROW) {
+            (true, false) => "None".into(),
+            (true, true) => "_".into(),
+            (false, f) => "*".repeat(password.0.len()) + if f { "_" } else { "" },
+        };
     }
     let page = page_rows(flow.display_page);
     for (i, r, mut bg, mut node) in &mut rows {
@@ -867,7 +877,7 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(1), [17, 18, 19, 20]);
-        assert_eq!(page_rows(2), [25, 26, 27, 28, 29, 30, 31]);
+        assert_eq!(page_rows(2), [25, 26, 27, 28, 29, 30, 31, 32]);
         assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));

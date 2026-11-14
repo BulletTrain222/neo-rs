@@ -1016,6 +1016,7 @@ fn main() {
         .init_resource::<coop::Coop>()
         .init_resource::<net::Net>()
         .init_resource::<net::JoinAddress>()
+        .init_resource::<net::NetPassword>()
         .init_resource::<bindings::MouseLook>()
         .init_resource::<controls_page::ControlsPage>()
         .init_resource::<perf::PerfOverlay>()
