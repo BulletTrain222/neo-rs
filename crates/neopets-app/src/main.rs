@@ -7105,6 +7105,10 @@ fn play_trace(
         // ticks; its position is printed every 30 ticks (docs/MULTIPLAYER.md step 2).
         if std::env::var_os("NEOPETS_COOP").is_some() {
             if play.ticks == 1 {
+                // NEOPETS_COOP_APART: the Multiplayer page's Stay together off (diagnostic).
+                if std::env::var_os("NEOPETS_COOP_APART").is_some() {
+                    play.coop_together = false;
+                }
                 // NEOPETS_COOP_NOREVIVE: the Multiplayer page's "Game over" (diagnostic).
                 play.coop_revive = std::env::var_os("NEOPETS_COOP_NOREVIVE").is_none();
                 // NEOPETS_COOP_TOR: player 2 is a second Tor (the Multiplayer page's choice).

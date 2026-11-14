@@ -1513,6 +1513,9 @@ pub struct Play {
     /// revived (else a fall is game over at once), and player 2 is the partner hero when one waits.
     pub coop_revive: bool,
     pub coop_partner: bool,
+    /// The Multiplayer page's Stay together (on by default): player 2 is brought back beside
+    /// player 1 when far away; off, each goes where they like in the loaded area.
+    pub coop_together: bool,
     /// Online, hosting: the joiner's own Player 2 choice (partner or second Tor), which decides
     /// its player 2 in place of this side's.
     pub coop_partner_remote: Option<bool>,
@@ -2534,6 +2537,7 @@ impl Play {
             coop_running: false,
             coop_revive: true,
             coop_partner: true,
+            coop_together: true,
             coop_partner_remote: None,
             coop_lost: false,
             net_follow: false,
@@ -19511,8 +19515,17 @@ impl Play {
                     o.hero_flash = HIT_FLASH;
                     self.last_hurt = format!("player 2 fell onto deadly ground on tick {}: back beside player 1, hp {}", self.ticks, o.hero_hp);
                 }
-                let after_cut = cut_ended && (a[0] - b[0]).hypot(a[2] - b[2]) > 8.0;
-                if moved_world || deadly || after_cut || (a[0] - b[0]).hypot(a[2] - b[2]) > 60.0 || (a[1] - b[1]).abs() > 25.0 {
+                // Stay together on (the Multiplayer page; Default): far away (60 across, 25 up or
+                // down) or apart after a scene brings player 2 back. Off: only a fall into nothing
+                // (no ground under player 2, 25 below player 1 or more) brings it back.
+                let together = self.coop_together;
+                let after_cut = together && cut_ended && (a[0] - b[0]).hypot(a[2] - b[2]) > 8.0;
+                let far = together && ((a[0] - b[0]).hypot(a[2] - b[2]) > 60.0 || (a[1] - b[1]).abs() > 25.0);
+                let lost = !together && a[1] - b[1] > 25.0 && {
+                    let c = b[1] + neopets_sim::motion::PROBE_CEILING;
+                    !self.world.probe(b[0], b[2], c).found && self.other.as_ref().is_none_or(|o| !o.probe(b[0], b[2], c).found)
+                };
+                if moved_world || deadly || after_cut || far || lost {
                     let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
                     self.place_beside(&mut o);
                     self.others[i] = o;

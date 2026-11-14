@@ -59,6 +59,7 @@ out lost messages and uneven delays.
 | Password | None | Optional: the host types one before hosting, and the friend the same before joining |
 | Open the port (UPnP) | Off, On | While hosting, ask the router to let a friend on the internet in |
 | Port | 47817 (default) | The UDP port to host on, and to join on when the address has none; type it or step it with Left and Right |
+| Stay together | On, Off | On: player 2 is brought back when more than 60 units away. Off: each goes where they like in the area; doors and loads still take both |
 
 **What the two players share.** One world and story, one bag of items and Neopoints, the
 enemies, talk boxes (either player's Square moves a box on; only player 1 answers questions,
