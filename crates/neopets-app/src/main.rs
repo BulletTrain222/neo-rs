@@ -1901,16 +1901,25 @@ fn step_sim(
             // Players in separate worlds (net/apart.rs): the joiner going apart takes the door the
             // host handed over with its own game; while apart, each side's story changes go out
             // and the other's come in, and a fallen joiner gets up by itself.
-            if let Some(n) = netr.apart_start.take() {
+            if let Some((n, at)) = netr.apart_start.take() {
                 play.play.go_apart();
-                play.play.take_door(n as usize);
+                // Where the host had player 2 when it went (its last state may be a tick behind).
+                if at != [0.0; 3] {
+                    let f = play.play.player.loco.facing;
+                    play.play.player.loco.teleport(at, f);
+                }
+                // 0xFFFF: player 2 walked into the next area; this side's game makes it current
+                // as its hero stands there (no door).
+                if n != u16::MAX {
+                    play.play.take_door(n as usize);
+                }
                 netr.start_story(&play.play.state);
                 info!("net: apart: this side's game took door {n} ({})", play.play.last_door);
             }
             if netr.apart {
                 netr.story_sync(&mut play.play.state);
                 // The world is 0 while a load runs (not yet anywhere).
-                netr.apart_me = (if play.play.job.is_some() { 0 } else { play.play.world.pack }, play.play.player.hero_hp, play.play.player.hero_mp);
+                netr.apart_me = (if play.play.job.is_some() { 0 } else { play.play.world.pack }, play.play.player.hero_hp, play.play.player.hero_mp, play.play.player.loco.position());
                 if play.play.net_apart {
                     play.play.apart_down_step();
                     if std::env::var_os("NEOPETS_TRACE_APART").is_some() {
@@ -1925,6 +1934,23 @@ fn step_sim(
                     if std::env::var_os("NEOPETS_TRACE_APART").is_some() && play.play.ticks % 300 == 0 {
                         let p = &play.play;
                         info!("net: apart tick {}: world {} job {:?} at {:?} state {} dialogue {} cut {} | {}", p.ticks, p.world.pack, p.job.is_some(), p.player.loco.position().map(|v| v.round()), p.player.loco.state, p.dialogue_open, p.cut.is_some_and(|c| c.state != 0), p.last_door);
+                    }
+                }
+            }
+            // NEOPETS_NET_P2AT="T:x,z,y" (diagnostic, hosting): player 2 put there on play tick T;
+            // NEOPETS_NET_AT="T:x,z,y" (not following): player 1 the same.
+            for (key, p2) in [("NEOPETS_NET_P2AT", true), ("NEOPETS_NET_AT", false)] {
+                if let Some((t, at)) = std::env::var(key).ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| {
+                    let n: Vec<f32> = b.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    Some((a.trim().parse::<u64>().ok()?, [*n.first()?, *n.get(2)?, *n.get(1)?]))
+                }) {
+                    if t == play.play.ticks && !play.play.net_follow {
+                        let who = if p2 { play.play.others.first_mut() } else { Some(&mut play.play.player) };
+                        if let Some(o) = who {
+                            let f = o.loco.facing;
+                            o.loco.teleport(at, f);
+                            info!("net: {} put at {at:?} on tick {t}", if p2 { "player 2" } else { "player 1" });
+                        }
                     }
                 }
             }

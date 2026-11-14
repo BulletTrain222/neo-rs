@@ -1525,6 +1525,8 @@ pub struct Play {
     /// Joiner: apart from the host, this side runs its own world with its hero as player 1
     /// (no hero switches; a fall is a down, not a game over).
     pub net_apart: bool,
+    /// Player 2 stood in the next area last step (it is brought back beside player 1).
+    coop_crossed: bool,
     /// Diagnostic: ticks player 2 still presses Square (diag_p2_door_at).
     diag_p2_square: u32,
     /// Diagnostic: ticks player 1 still presses Square (diag_door_at, step_sim).
@@ -2555,6 +2557,7 @@ impl Play {
             apart_door: None,
             net_apart: false,
             diag_p2_square: 0,
+            coop_crossed: false,
             diag_p1_square: 0,
             coop_partner_remote: None,
             coop_lost: false,
@@ -19661,7 +19664,8 @@ impl Play {
                     let c = b[1] + neopets_sim::motion::PROBE_CEILING;
                     !self.world.probe(b[0], b[2], c).found && self.other.as_ref().is_none_or(|o| !o.probe(b[0], b[2], c).found)
                 };
-                if moved_world || deadly || after_cut || far || lost {
+                let crossed = i == 0 && std::mem::take(&mut self.coop_crossed);
+                if moved_world || deadly || after_cut || far || lost || crossed {
                     let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
                     self.place_beside(&mut o);
                     self.others[i] = o;
@@ -19836,7 +19840,21 @@ impl Play {
             if !self.cheats.noclip {
                 self.ride_step();
             }
-            self.hero_contacts(false);
+            // Player 2 standing on the next area's ground (the loaded neighbour; only player 1
+            // makes it the current world): with Doors take Only you online, player 2 goes off
+            // into it on its own (the joiner's game makes it current); otherwise player 2 is
+            // brought back beside player 1 (that area's walls and characters do not run for
+            // player 2, and past it nothing is loaded: player 2 fell and was put back again and
+            // again; user report 142).
+            if self.hero_contacts(false) {
+                if self.coop_remote && self.coop_doors_alone {
+                    if self.apart_door.is_none() {
+                        self.apart_door = Some(WALKED_APART);
+                    }
+                } else {
+                    self.coop_crossed = true;
+                }
+            }
             // Player 2's doors (docs/MULTIPLAYER.md: either player's door moves both), as player
             // 1's door step; a door that moves player 2 (to another world or across this one)
             // brings player 1 along after this step.
@@ -22184,6 +22202,8 @@ fn boot_string(boot: &[u8], va: u32) -> Vec<u8> {
 /// The hit flash: 14 frames (a 4-frame and a 10-frame stage) with colour-override slot 1 at
 /// (1.5, 0.5, 0.5) (SPEC-0046 Per-frame draw order, step 6).
 pub const HIT_FLASH: u8 = 14;
+/// `apart_door` when player 2 walked into the next area (no door).
+pub const WALKED_APART: usize = usize::MAX;
 pub const FLASH_COLOUR: [[f32; 3]; 15] = [[1.5, 0.5, 0.5]; 15];
 
 /// The colour slot vectors of a record's 15 colour words: (byte 0, byte 1, byte 2) / 255.

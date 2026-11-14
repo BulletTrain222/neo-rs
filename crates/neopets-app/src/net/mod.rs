@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 25;
+const PROTOCOL: u16 = 26;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -241,10 +241,10 @@ pub struct Net {
     /// for step_sim; the other side's world and vitals; this side's (step_sim fills it); when
     /// this side last sent.
     pub apart: bool,
-    apart_go: Option<(u16, u32)>,
+    apart_go: Option<(u16, u32, [f32; 3])>,
     /// Host: the world apart began in.
     apart_from: Option<u32>,
-    pub apart_start: Option<u16>,
+    pub apart_start: Option<(u16, [f32; 3])>,
     pub story_base: Option<apart::StoryBase>,
     ops_out: std::collections::VecDeque<(u32, Vec<apart::StoryOp>)>,
     ops_next: u32,
@@ -254,7 +254,9 @@ pub struct Net {
     /// Host: the joiner has been in another world since going apart (only then can they meet).
     pub other_left: bool,
     other_vitals: (i32, i32),
-    pub apart_me: (u32, i32, i32),
+    pub apart_me: (u32, i32, i32, [f32; 3]),
+    /// Host: where the joiner's hero last was (it stays there when they meet in this world).
+    other_pos: [f32; 3],
     apart_sent: Option<Instant>,
     /// Joiner: when this join began (a join with no answer gives up after 20 seconds).
     join_started: Option<Instant>,
@@ -672,16 +674,23 @@ impl Net {
             return;
         }
         keep_p2(self, play);
+        // Player 2's place goes with the door (the host's last state did not have it there
+        // yet); a walk into the next area travels as door 0xFFFF.
+        let at = play.others.first().map_or([0.0; 3], |o| o.loco.position());
         play.remove_player();
         play.coop_remote = false;
         self.apart = true;
-        self.apart_go = Some((door as u16, play.world.pack));
+        self.apart_go = Some((if door == crate::play::WALKED_APART { u16::MAX } else { door as u16 }, play.world.pack, at));
         self.other_pack = play.world.pack;
         self.other_left = false;
         self.apart_from = Some(play.world.pack);
         self.start_story(&play.state);
         self.notice = Some(format!("{} went off on their own.", if self.peer_name.is_empty() { "Player 2" } else { self.peer_name.as_str() }));
-        info!("net: player 2 takes door {door} of {} alone; apart", play.world.pack);
+        if door == crate::play::WALKED_APART {
+            info!("net: player 2 walks into the next area alone; apart");
+        } else {
+            info!("net: player 2 takes door {door} of {} alone; apart", play.world.pack);
+        }
     }
 
     /// Host: the players meet again (or a story moment calls player 2 back): player 2 comes
@@ -701,6 +710,13 @@ impl Net {
         let (hp, mp) = self.other_vitals;
         if let Some(o) = play.others.first_mut().filter(|_| hp > 0) {
             (o.hero_hp, o.hero_mp) = (hp.min(o.hero_max), mp.max(0).min(o.hero_mp_max));
+        }
+        // Met in this world: player 2 stays where it walked in (not put beside player 1).
+        if self.other_pack == play.world.pack && self.other_pos != [0.0; 3] {
+            if let Some(o) = play.others.first_mut() {
+                let f = o.loco.facing;
+                o.loco.teleport(self.other_pos, f);
+            }
         }
         // A new welcome on the next tick (the joiner loads this game again).
         self.welcome_pack = u32::MAX;
@@ -840,10 +856,10 @@ fn carried(s: &State, p: &State, k: f32) -> State {
 /// An apart message from the other side: its world and vitals, its acknowledgement of this
 /// side's changes, its next changes in order, and (from the host) the door the joiner takes.
 fn read_apart(net: &mut Net, r: &mut Reader, host: bool) {
-    let (Some(pack), Some(hp), Some(mp), Some(ack), Some(go)) = (r.u32(), r.i32(), r.i32(), r.u32(), r.u8()) else { return };
+    let (Some(pack), Some(hp), Some(mp), Some(pos), Some(ack), Some(go)) = (r.u32(), r.i32(), r.i32(), r.v3(), r.u32(), r.u8()) else { return };
     let door = if go == 1 {
-        match (r.u16(), r.u32()) {
-            (Some(d), Some(p)) => Some((d, p)),
+        match (r.u16(), r.u32(), r.v3()) {
+            (Some(d), Some(p), Some(at)) => Some((d, p, at)),
             _ => return,
         }
     } else {
@@ -870,6 +886,7 @@ fn read_apart(net: &mut Net, r: &mut Reader, host: bool) {
     }
     net.other_pack = pack;
     net.other_vitals = (hp, mp);
+    net.other_pos = pos;
     // A world (not 0, which is a load still running) other than the one apart began in.
     if host && pack != 0 && net.apart_go.is_none() && Some(pack) != net.apart_from {
         net.other_left = true;
@@ -879,10 +896,10 @@ fn read_apart(net: &mut Net, r: &mut Reader, host: bool) {
         if net.apart_go.take().is_some() {
             info!("net: player 2 is in its own world ({pack})");
         }
-    } else if let Some((d, p)) = door {
+    } else if let Some((d, p, at)) = door {
         if !net.apart {
             net.apart = true;
-            net.apart_start = Some(d);
+            net.apart_start = Some((d, at));
             net.other_pack = p;
             net.notice = Some("You went off on your own. Walk into player 1's world to meet again.".into());
             info!("net: taking door {d} of {p} alone; apart");
@@ -1519,12 +1536,14 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         w.u32(net.apart_me.0);
         w.i32(net.apart_me.1);
         w.i32(net.apart_me.2);
+        w.v3(net.apart_me.3);
         w.u32(net.ops_in_last);
         match net.apart_go {
-            Some((door, pack)) => {
+            Some((door, pack, at)) => {
                 w.u8(1);
                 w.u16(door);
                 w.u32(pack);
+                w.v3(at);
             }
             None => w.u8(0),
         }

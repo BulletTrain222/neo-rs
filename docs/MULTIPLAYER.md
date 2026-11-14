@@ -60,7 +60,7 @@ out lost messages and uneven delays.
 | Open the port (UPnP) | Off, On | While hosting, ask the router to let a friend on the internet in |
 | Port | 47817 (default) | The UDP port to host on, and to join on when the address has none; type it or step it with Left and Right |
 | Stay together | On, Off | On: player 2 is brought back when more than 60 units away. Off: each goes where they like in the area; doors and loads still take both |
-| Doors take | Both, Only you | Online: Only you lets player 2 go through a door alone into its own world; the two meet again when one walks into the other's world |
+| Doors take | Both, Only you | Online: Only you lets player 2 go through a door or walk into the next area alone, into its own world; the two meet again when one walks into the other's world. Both: a door takes both, and player 2 stepping into the next area comes back beside player 1 |
 
 **What the two players share.** One world and story, one bag of items and Neopoints, the
 enemies, talk boxes (either player's Square moves a box on; only player 1 answers questions,
