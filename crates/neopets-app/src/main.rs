@@ -1815,7 +1815,8 @@ fn step_sim(
                 // The joiner hears the host's sounds, not its own game's (net.rs events).
                 // NEOPETS_TRACE_NETEV: the events played so far, every 300 ticks (diagnostic).
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
-                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds);
+                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats);
+                    (netr.gap_states, netr.gap_max, netr.repeats) = (0, 0, 0);
                 }
                 play.play.sound.requests.truncate(sounds);
                 play.play.stinger_requests.truncate(clips.0);
@@ -1848,8 +1849,19 @@ fn step_sim(
                     }
                 }
                 // Only a state of the world loaded here (one from before a world change waits).
-                if let Some(s) = netr.state.clone().filter(|s| s.generation == netr.loaded) {
+                if let Some(s) = netr.next_state().filter(|s| s.generation == netr.loaded) {
                     play.play.apply_net_state(&s);
+                    // The host walked on into a world this side's game did not: after 1.5 seconds
+                    // (no load running here) ask for a new welcome.
+                    if s.pack != play.play.world.pack && play.play.job.is_none() {
+                        netr.mismatch += 1;
+                    } else {
+                        netr.mismatch = 0;
+                    }
+                    if netr.mismatch > 90 {
+                        netr.mismatch = 0;
+                        netr.ask_resync();
+                    }
                 }
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                     let p = &play.play;
@@ -1859,6 +1871,7 @@ fn step_sim(
                 let sounds = play.play.sound.requests.len();
                 let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());
                 let movies = play.play.state.movie_queue.len();
+                let swaps_before = play.play.swaps;
                 // Online, hosting: the gameplay effects are logged for the joiner (net.rs).
                 let hosting = netr.role == net::Role::Host && netr.peer.is_some();
                 play.play.effects.share.mute = false;
@@ -1898,7 +1911,17 @@ fn step_sim(
                 }
                 // Online, hosting: the state after this tick, and a new welcome after a world change.
                 if play.play.coop_remote {
-                    // A world change, or a new game or load here (Continue after a game over).
+                    // A world change, or a new game or load here (Continue after a game over): a
+                    // new welcome. Walking into the loaded neighbour needs none (the joiner's own
+                    // game makes the same move; it asks for a welcome if it ends up elsewhere).
+                    let walked = play.play.swaps != swaps_before && play.play.job.is_none() && play.play.generation == netr.welcome_game;
+                    if walked && play.play.world.pack != netr.welcome_pack && !netr.resync {
+                        netr.welcome_pack = play.play.world.pack;
+                        info!("net: world {} by walking; the joiner follows without a welcome", play.play.world.pack);
+                    }
+                    if std::mem::take(&mut netr.resync) {
+                        netr.welcome_pack = u32::MAX;
+                    }
                     if play.play.world.pack != netr.welcome_pack || play.play.generation != netr.welcome_game {
                         let mut slot = neopets_sim::save::Slot::empty();
                         play.play.write_slot(&mut slot, b"NETPLAY");

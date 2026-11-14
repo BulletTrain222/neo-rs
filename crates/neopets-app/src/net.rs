@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 16;
+const PROTOCOL: u16 = 17;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -53,6 +53,8 @@ const BLOB_PART: u8 = 10;
 const STATE_LIMIT: usize = 1150;
 /// Events that did not fit in a state, in up to two more messages a tick.
 const EVENTS: u8 = 11;
+/// The joiner's world has differed from the host's for a while: a new welcome, please.
+const RESYNC: u8 = 12;
 
 /// This build's identity, checked at joining: the crate version and the build's own number.
 fn build_id() -> String {
@@ -1046,6 +1048,21 @@ pub struct Net {
     /// last went out.
     pub notice: Option<String>,
     pub ended: bool,
+    /// Host: the joiner asked for a new welcome. Joiner: ticks its world has differed from the
+    /// host's, and when it last asked.
+    pub resync: bool,
+    /// Joiner: when the last state arrived, and the largest gap between states and the number of
+    /// states since the last trace line (milliseconds; for NEOPETS_TRACE_NETEV).
+    last_state_at: Option<Instant>,
+    pub gap_max: u32,
+    pub gap_states: u32,
+    /// Joiner: states waiting to be applied, one a tick (a one-state jitter buffer), the ticks
+    /// that applied no new state, and the ticks since one was.
+    pub queue: std::collections::VecDeque<State>,
+    pub repeats: u32,
+    starve: u32,
+    pub mismatch: u32,
+    resync_asked: Option<Instant>,
     /// Bytes sent and received so far (for the bandwidth trace).
     pub bytes_out: u64,
     pub bytes_in: u64,
@@ -1277,6 +1294,39 @@ impl Net {
         }
     }
 
+    /// Joiner: the state for this tick from the jitter buffer: one a tick in order, keeping one
+    /// in hand when it can (states arrive unevenly), catching up when more than three wait, and
+    /// the last one again when none came.
+    pub fn next_state(&mut self) -> Option<State> {
+        let loaded = self.loaded;
+        while self.queue.front().is_some_and(|s| s.generation != loaded) && self.queue.iter().any(|s| s.generation == loaded) {
+            self.queue.pop_front();
+        }
+        while self.queue.len() > 3 {
+            self.queue.pop_front();
+        }
+        if self.queue.len() >= 2 || (!self.queue.is_empty() && self.starve >= 1) {
+            self.state = self.queue.pop_front();
+            self.starve = 0;
+        } else {
+            self.starve += 1;
+            self.repeats += 1;
+        }
+        self.state.clone()
+    }
+
+    /// Joiner: ask the host for a new welcome (at most every 2 seconds).
+    pub fn ask_resync(&mut self) {
+        let now = Instant::now();
+        if self.role != Role::Join || self.resync_asked.is_some_and(|t| now.duration_since(t) < Duration::from_secs(2)) {
+            return;
+        }
+        self.resync_asked = Some(now);
+        let w = Writer::new(RESYNC);
+        self.send(&w.0);
+        info!("net: this side's world differs from the host's; asked for a new welcome");
+    }
+
     /// Host: a blob channel's revision in parts, at once for a new revision and every 100 ms while
     /// it is not acknowledged.
     fn blob_send(&mut self, channel: usize, rev: u32, bytes: &[u8]) {
@@ -1364,6 +1414,7 @@ fn take_welcome(net: &mut Net, r: &mut Reader, from: SocketAddr) {
     };
     net.loaded = generation;
     net.state = None;
+    net.queue.clear();
     net.status = format!("Joined {from}.");
     if first {
         net.notice = Some("Joined the host's game.".into());
@@ -1684,6 +1735,11 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     }
                 }
             }
+            (Role::Host, RESYNC) if net.peer == Some(from) => {
+                net.last_heard = Some(now);
+                net.resync = true;
+                info!("net: the joiner asked for a new welcome");
+            }
             (Role::Host, PART_ACK) if net.peer == Some(from) => {
                 net.last_heard = Some(now);
                 if let (Some(generation), Some(mask)) = (r.u32(), r.u64()) {
@@ -1699,6 +1755,11 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             }
             (Role::Join, STATE) if net.target == Some(from) => {
                 net.last_heard = Some(now);
+                if let Some(t) = net.last_state_at {
+                    net.gap_max = net.gap_max.max(now.duration_since(t).as_millis() as u32);
+                }
+                net.last_state_at = Some(now);
+                net.gap_states += 1;
                 if let Some(mut s) = State::decode(&mut r) {
                     // The host's events in order, each once (a gap waits for the resend).
                     for (n, e) in std::mem::take(&mut s.events) {
@@ -1744,8 +1805,10 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     s.characters = net.chars_acc.values().copied().collect();
                     s.moving = net.moving_acc.values().copied().collect();
                     // A newer world (a later welcome) restarts the host's ticks.
-                    if net.state.as_ref().is_none_or(|old| (s.generation, s.tick) >= (old.generation, old.tick)) {
-                        net.state = Some(s);
+                    // Into the jitter buffer, in order (an older or repeated state is dropped).
+                    let newest = net.queue.back().or(net.state.as_ref()).map(|o| (o.generation, o.tick));
+                    if newest.is_none_or(|n| (s.generation, s.tick) > n) {
+                        net.queue.push_back(s);
                     }
                 }
             }

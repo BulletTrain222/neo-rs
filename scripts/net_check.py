@@ -114,7 +114,9 @@ def main():
     if played:
         report.append(f'joiner played {played[-1]} events')
     hf = re.findall(r'NETFX host tick (\d+): .*?(\d+) objects.*?music (\[.*?\]) bank', h)
-    jf = re.findall(r'NETFX joiner tick (\d+): .*?(\d+) objects.*?music (\[.*?\]) bank', j)
+    jf = re.findall(r'NETFX joiner tick (\d+)[^:]*: .*?(\d+) objects.*?music (\[.*?\]) bank', j)
+    if welcomes and a.seconds >= 20 and not (hf and jf):
+        failures.append('no effect and music lines to compare')
     if hf and jf:
         report.append(f'effect objects: host {hf[-1][1]}, joiner {jf[-1][1]}')
         report.append(f'music: host {hf[-1][2]}, joiner {jf[-1][2]}')

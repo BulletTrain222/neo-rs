@@ -329,14 +329,14 @@ chosen without the user.
    so it never needs IP fragments (which some routers drop). Tested with loss switched on.
 2. [x] (34 KB/s normal, 53 KB/s in a burst; all messages under 1,150 bytes) Bandwidth: bytes a second each way, measured on the farm and in a fight; positions
    packed smaller if it is over about 60 KB/s.
-3. [ ] A port other than 47817 (private/net.txt, or `host:port` in the join address).
+3. [x] A port other than 47817 (private/net.txt, or `host:port` in the join address).
 
 ### Smoother joiner
-4. [ ] Walking into a neighbouring area: the joiner follows without a full reload when its own
+4. [x] Walking into a neighbouring area: the joiner follows without a full reload when its own
    game already made the same move (today every world change reloads the joiner).
-5. [ ] State arrival timing on the joiner (gaps between states) measured; smoothing if
+5. [x] (a one-state jitter buffer) State arrival timing on the joiner (gaps between states) measured; smoothing if
    movement would stutter.
-6. [ ] How long a joiner's reload takes, measured.
+6. [x] (35 ms, scenes 120 ms more) How long a joiner's reload takes, measured.
 
 ### Co-op that keeps going
 7. [ ] One PC: player 2 stays in through a load, a Continue after game over and a developer
