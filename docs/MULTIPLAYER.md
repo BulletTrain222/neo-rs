@@ -675,8 +675,8 @@ compared with today's at 50 and 150 ms.
 
 ### Night plan 5 report (2026-11-14)
 Done and committed, each with Check passing and the scenarios (now 55) where single-player code
-moved. 29 of the 48 items are done, 9 partly, 10 left (the stress items 2 and 4 to 7 at the
-user's word, prediction and local sounds for the screen, a boss grab, trails and fades).
+moved. 28 of the 48 items are done, 8 partly, 12 left (the stress items 2 and 4 to 7 at the
+user's word, item 8, prediction and local sounds for the screen, a boss grab, trails and fades).
 
 **Smaller and steadier online.** States are packed (a character 27 bytes instead of 42, at most
 18 characters and 8 moving items a state, so a state stays under 1,150 bytes): 28.9 KB/s on the
