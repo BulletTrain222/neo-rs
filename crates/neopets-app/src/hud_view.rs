@@ -590,7 +590,7 @@ fn hud_pass<const VIEW: u8>(
         health_dividers: hud.health.dividers,
         pool_dividers: hud.pool.dividers,
         monster: VIEW == 0 && mb.t != 0 && !p.quick.open,
-        square: VIEW == 0 && p.square_caption().is_some(),
+        square: p.square_caption().is_some(),
         quick_open: p.quick.open,
         selection: p.quick.selection,
         counts: p.quick.entries.map(|id| count(id)),

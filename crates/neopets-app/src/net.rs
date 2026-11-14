@@ -28,7 +28,7 @@ use crate::PlayState;
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 7;
+const PROTOCOL: u16 = 8;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -196,6 +196,8 @@ pub struct State {
     /// Player 2's quick-item panel (open, entries, selection, marker) and Mote panel (open,
     /// selection), for the joiner's HUD.
     pub panels: (bool, [i32; 4], u8, i32, bool, u8),
+    /// Player 2's door prompt (its Square caption) for the joiner's HUD.
+    pub p2_prompt: Option<u16>,
     /// What the host's screen and music show that the joiner shows too.
     pub show: Show,
 }
@@ -654,6 +656,7 @@ impl State {
         w.u8(pn.2);
         w.i32(pn.3);
         w.u8(pn.5);
+        w.u16(self.p2_prompt.map_or(u16::MAX, |p| p));
         w.0
     }
 
@@ -710,7 +713,8 @@ impl State {
         let bits = r.u8()?;
         let entries = [r.i32()?, r.i32()?, r.i32()?, r.i32()?];
         let panels = (bits & 1 != 0, entries, r.u8()?, r.i32()?, bits & 2 != 0, r.u8()?);
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels })
+        let p2_prompt = Some(r.u16()?).filter(|&p| p != u16::MAX);
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt })
     }
 }
 
@@ -1367,6 +1371,7 @@ impl crate::play::Play {
             story: 0,
             has_story: true,
             panels: p2.map_or((false, [-1; 4], 4, -1, false, 255), |o| (o.quick.open, o.quick.entries, o.quick.selection as u8, o.quick.marker, o.mote_panel.open, o.mote_panel.selection)),
+            p2_prompt: p2.and_then(|o| o.captions.0),
             show: Show {
                 music: self.music.channels.map(|c| (c.stream, c.volume)),
                 bank: (self.bank_music.playing, self.bank_music.volume, self.bank_music.started),
@@ -1410,6 +1415,7 @@ impl crate::play::Play {
             let pn = &s.panels;
             (o.quick.open, o.quick.entries, o.quick.selection, o.quick.marker) = (pn.0, pn.1, pn.2 as usize, pn.3);
             (o.mote_panel.open, o.mote_panel.selection) = (pn.4, pn.5);
+            o.captions.0 = s.p2_prompt;
         }
         for c in self.characters.iter_mut() {
             let Some(h) = s.characters.iter().find(|h| h.pack == c.pack && h.slot == c.slot && h.ordinal as usize == c.ordinal) else { continue };
@@ -1537,6 +1543,7 @@ mod tests {
             story: 3,
             has_story: true,
             panels: (true, [57, -1, 3, 9], 1, 57, false, 255),
+            p2_prompt: Some(13),
             flags: vec![1, 500],
             items: vec![(57, 2)],
             neopoints: 40,

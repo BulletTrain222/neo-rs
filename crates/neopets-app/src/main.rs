@@ -6864,9 +6864,45 @@ fn play_trace(
             } else {
                 neopets_sim::hero::HeroInput { forward: 1.0, jump: play.ticks % 90 == 45, ..Default::default() }
             };
+            let mut p2 = p2;
+            // NEOPETS_COOP_DOOR="n@t[;n@t...]": on tick t player 2 is put in door plane n of the
+            // world then current (player 1 fifteen units back; the planes are listed then) and
+            // presses Square every 20 ticks after the first; player 2's caption, the door line and
+            // the world every 10 ticks.
+            if let Ok(v) = std::env::var("NEOPETS_COOP_DOOR") {
+                let doors: Vec<(usize, u64)> = v.split(';').filter_map(|e| {
+                    let (n, t) = e.split_once('@')?;
+                    Some((n.trim().parse().ok()?, t.trim().parse().ok()?))
+                }).collect();
+                for &(n, t) in &doors {
+                    if play.ticks != t {
+                        continue;
+                    }
+                    for (k, pl) in play.world.planes.iter().enumerate() {
+                        println!("COOP door plane {k} of {}: at ({:.1}, {:.1}, {:.1}) normal ({:.2}, {:.2}, {:.2}) width {:.1} height {:.1}", play.world.pack, pl.p[0], pl.p[1], pl.p[2], pl.f[0], pl.f[1], pl.f[2], pl.w, pl.h);
+                    }
+                    if let Some(pl) = play.world.planes.get(n).copied() {
+                        let at = [pl.p[0] + pl.d[0] * pl.w * 0.5 + pl.q[0] * 0.5, pl.p[1] + pl.d[1] * pl.w * 0.5 + pl.q[1] * 0.5, pl.p[2] + pl.d[2] * pl.w * 0.5 + pl.q[2] * 0.5];
+                        let face = [-pl.f[0], 0.0, -pl.f[2]];
+                        play.player.loco.teleport([at[0] + pl.f[0] * 15.0, at[1] + 2.0, at[2] + pl.f[2] * 15.0], face);
+                        if let Some(o) = play.others.first_mut() {
+                            o.loco.teleport(at, face);
+                        }
+                        println!("COOP door: player 2 put in door {n} of {} at ({:.1}, {:.1}, {:.1})", play.world.pack, at[0], at[1], at[2]);
+                    }
+                }
+                let first = doors.iter().map(|d| d.1).min().unwrap_or(u64::MAX);
+                if play.ticks > first && play.ticks % 20 == 0 {
+                    p2.square = true;
+                }
+                if play.ticks > first && play.ticks % 10 == 0 {
+                    let q = play.others.first().map(|o| (o.loco.position(), o.captions.0));
+                    let a = play.player.loco.position();
+                    println!("COOP {} door: world {} job {:?} p2 {:?} | p1 ({:.1}, {:.1}, {:.1}) | {}", play.ticks, play.world.pack, play.job, q, a[0], a[1], a[2], play.last_door);
+                }
+            }
             // NEOPETS_COOP_DRINK: below half health player 2 opens its own quick panel, moves to
             // the first entry it owns and presses Cross (as the trace's own drink above).
-            let mut p2 = p2;
             if std::env::var_os("NEOPETS_COOP_DRINK").is_some() {
                 if let Some(o) = play.others.first_mut() {
                     if o.hero_hp > 0 && o.hero_hp < o.hero_max / 2 {

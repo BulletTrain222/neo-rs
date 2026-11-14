@@ -25,6 +25,8 @@ pub struct Coop {
     pub cam: CameraPad,
     pub jump: bool,
     pub attack: bool,
+    /// Player 2's Square press (doors), kept for the next tick.
+    pub square: bool,
     /// Player 2's D-pad and Triangle presses for its quick-item and Mote panels.
     pub panel: neopets_sim::quick::PanelInput,
     /// Online (net.rs): player 2's input from the joiner's controller, in place of a local pad.
@@ -41,6 +43,7 @@ impl Coop {
         let mut i = self.input;
         i.jump = std::mem::take(&mut self.jump);
         i.attack = std::mem::take(&mut self.attack);
+        i.square = std::mem::take(&mut self.square);
         (i, self.cam)
     }
 }
@@ -116,6 +119,7 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
     };
     coop.jump |= pressed(bindings::CROSS);
     coop.attack |= pressed(bindings::CIRCLE) || pressed(bindings::R2);
+    coop.square |= pressed(bindings::SQUARE);
     coop.panel.up |= pressed(bindings::UP);
     coop.panel.left |= pressed(bindings::LEFT);
     coop.panel.right |= pressed(bindings::RIGHT);

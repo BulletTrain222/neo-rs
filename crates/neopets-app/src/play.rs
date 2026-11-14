@@ -1380,6 +1380,11 @@ pub struct Player {
     pub quick: neopets_sim::quick::QuickPanel,
     pub mote_panel: neopets_sim::quick::MotePanel,
     pub dpad: neopets_sim::quick::PanelInput,
+    /// This player's Square captions as the HUD shows them (co-op, not player 1): the door
+    /// prompt shown, and the talk, book and save captions and the buy caption, which only player
+    /// 1 has (they stay off here; the HUD swap trades them in). And the door's confirm latch.
+    pub captions: (Option<u16>, bool, bool, bool, Option<Vec<u8>>),
+    pub door_confirm: bool,
     /// Down (co-op, not player 1): the ticks since this player went down, and the ticks player 1
     /// has stood close by reviving it.
     pub down: Option<u32>,
@@ -2443,6 +2448,8 @@ impl Play {
                 quick: Default::default(),
                 mote_panel: Default::default(),
                 dpad: Default::default(),
+                captions: Default::default(),
+                door_confirm: false,
                 down: None,
                 revive: 0,
                 area_cool: 0,
@@ -19177,7 +19184,7 @@ impl Play {
         p.hero_shots.clear();
         p.hero_flash = 0;
         p.hero_trail = None;
-        (p.quick, p.mote_panel, p.dpad) = Default::default();
+        (p.quick, p.mote_panel, p.dpad, p.captions, p.door_confirm) = Default::default();
         self.place_beside(&mut p);
         self.others.push(p);
         true
@@ -19207,6 +19214,12 @@ impl Play {
         std::mem::swap(&mut self.hero_index, &mut self.player.who);
         std::mem::swap(&mut self.quick, &mut self.player.quick);
         std::mem::swap(&mut self.mote_panel, &mut self.player.mote_panel);
+        let c = &mut self.player.captions;
+        std::mem::swap(&mut self.prompt_shown, &mut c.0);
+        std::mem::swap(&mut self.talk_prompt, &mut c.1);
+        std::mem::swap(&mut self.book_prompt, &mut c.2);
+        std::mem::swap(&mut self.save_prompt, &mut c.3);
+        std::mem::swap(&mut self.buy_caption, &mut c.4);
         if !entering {
             self.swap_player(0);
         }
@@ -19394,6 +19407,27 @@ impl Play {
             self.player.hero.request(id, force);
             self.player.hero.set_rate(self.player.loco.rate);
             self.hero_contacts(false);
+            // Player 2's doors (docs/MULTIPLAYER.md: either player's door moves both): its own
+            // prompt and Square confirm, as player 1's door step; a door that moves player 2 (to
+            // another world or across this one) brings player 1 along after this step.
+            if self.player.captions.0.is_some() && input.square {
+                self.player.door_confirm = true;
+            }
+            let door_from = (self.world.pack, self.player.loco.position());
+            if !self.dialogue_open && self.player.down.is_none() {
+                let saved = (self.door_prompt.take(), self.confirm, self.square_now);
+                (self.confirm, self.square_now) = (self.player.door_confirm, input.square);
+                self.door_step();
+                self.player.door_confirm = self.confirm;
+                self.player.captions.0 = self.door_prompt.take();
+                (self.door_prompt, self.confirm, self.square_now) = saved;
+            } else {
+                self.player.captions.0 = None;
+            }
+            let door_moved = {
+                let b = self.player.loco.position();
+                self.world.pack != door_from.0 || (b[0] - door_from.1[0]).hypot(b[2] - door_from.1[2]) > 8.0 || (b[1] - door_from.1[1]).abs() > 8.0
+            };
             self.player.root_step = self.player.hero.tick();
             self.player.items_drawn = self.hero_items();
             self.pickup_step();
@@ -19412,6 +19446,18 @@ impl Play {
             (self.hero_index, self.weapon, self.shield) = saved;
             self.coop_running = false;
             self.swap_player(i);
+            // Player 2 went through a door: player 1 comes to where player 2 arrived, and player 2
+            // stands beside (a loading door brings player 1 when the load finishes, and player 2
+            // follows by the world-change rule above).
+            if door_moved {
+                let (at, facing) = (self.others[i].loco.position(), self.others[i].loco.facing);
+                self.player.loco.teleport(at, facing);
+                let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
+                self.place_beside(&mut o);
+                self.others[i] = o;
+                self.coop_pack = self.world.pack;
+                self.last_door = format!("player 2's door: player 1 brought to ({:.1}, {:.1}, {:.1}) in {}", at[0], at[1], at[2], self.world.pack);
+            }
         }
     }
 

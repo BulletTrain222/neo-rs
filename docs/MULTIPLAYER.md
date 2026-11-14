@@ -119,7 +119,7 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | World and loaded neighbour | Both always in the same world | [x] | [x] world change sends a new welcome |
 | Story flags and quests | One set | [x] | [x] sent each state |
 | Story triggers | Fired by player 1 only (keeps story order) | [x] | [ ] joiner's own triggers must not fire |
-| Doors and world exits | Either player; both go; player 2 placed beside | [x] player 1's; [ ] player 2's (prompt and confirm are one per game) | [x] player 1's |
+| Doors and world exits | Either player; both go; player 2 placed beside | [x] (barn traced both ways) | [x] (the host runs player 2's) |
 | Talk boxes | Player 1 opens and answers; both see the box | [x] | [x] shown on the joiner |
 | Talk box advance | Default: either player can press Cross to go on (not choose) | [ ] | [ ] |
 | Cutscenes (scripted camera, bars, fades) | Both watch; player 2 holds still | [x] | [x] camera and bars; [ ] fades |
@@ -161,7 +161,7 @@ host's state or from events the host sends: effects, shots, sounds, music and fa
 | Lock-on and target | Own | [?] | [?] |
 | Camera and its controls | Own follow camera; invert and speed per computer | [x] | [x] |
 | HUD (portrait, health and magic bars) | Own; Neopoints shown on both | [x] | [x] |
-| Talk prompt ("Talk" over an NPC) | Shown to player 1 only (player 1 talks) | [x] | [x] |
+| Talk prompt ("Talk" over an NPC) | Shown to player 1 only (player 1 talks); door prompts to each player | [x] | [x] |
 | Rumble | Own controller only | [ ] player 2 | [ ] joiner's pad |
 | Controls and bindings | Per computer; on one PC, player 2 uses the second pad | [x] | [x] |
 | Display, audio volume, graphics | Per computer | [x] | [x] |
@@ -221,7 +221,7 @@ them all.
    a game is refused; a joiner can leave and join again; the host keeps hosting after a leave.
 
 ### Player 2 can do more (one PC and online)
-5. [ ] Doors: player 2 walking through a door or exit takes both players. Player 1 arrives
+5. [x] Doors: player 2 walking through a door or exit takes both players. Player 1 arrives
    with player 2 beside. Doors that need Square show the prompt on player 2's half, and player
    2's Square uses them. **Default:** either player's door moves both.
 6. [ ] Talk boxes: either player's Cross moves a box on (Default); only player 1 chooses an
