@@ -24,12 +24,12 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 33;
+pub const ROWS: usize = 34;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
 /// The rows on the Multiplayer page (local co-op, docs/MULTIPLAYER.md; this build's feature).
-pub const MULTI_ROWS: [usize; 8] = [25, 26, 27, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW];
+pub const MULTI_ROWS: [usize; 9] = [25, 26, 27, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW];
 /// The Multiplayer page's online rows (net.rs): host, the join address, join.
 pub const HOST_ROW: usize = 28;
 pub const ADDRESS_ROW: usize = 29;
@@ -38,6 +38,8 @@ pub const JOIN_ROW: usize = 30;
 pub const REMOVE_ROW: usize = 31;
 /// The game's password (none by default), typed with letters and digits.
 pub const PASSWORD_ROW: usize = 32;
+/// Ask the router to forward the port while hosting (UPnP).
+pub const UPNP_ROW: usize = 33;
 /// Split screen layouts.
 pub const SPLITS: [&str; 2] = ["Top and bottom", "Side by side"];
 
@@ -132,11 +134,13 @@ pub struct DisplaySettings {
     /// Local co-op: player 2 is the partner hero when the story has one waiting (true), else
     /// always a second Tor.
     pub coop_partner: bool,
+    /// Ask the router to forward the hosting port (UPnP; this build's option, off by default).
+    pub upnp: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false }
     }
 }
 
@@ -184,6 +188,7 @@ impl DisplaySettings {
                 "coop revive" => s.coop_revive = v == "true",
                 "coop split" => s.coop_split = v.parse().unwrap_or(0).min(SPLITS.len() - 1),
                 "coop partner" => s.coop_partner = v == "true",
+                "upnp" => s.upnp = v == "true",
                 "graphics api" => s.graphics_api = GRAPHICS_APIS.iter().position(|a| a.eq_ignore_ascii_case(v)).unwrap_or(s.graphics_api),
                 _ => {}
             }
@@ -193,7 +198,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -221,7 +226,8 @@ impl DisplaySettings {
             self.water_reflections,
             self.coop_revive,
             self.coop_split,
-            self.coop_partner
+            self.coop_partner,
+            self.upnp
         )
     }
 
@@ -344,6 +350,7 @@ impl DisplaySettings {
             ("Join a game".into(), String::new()),
             ("Remove player 2".into(), String::new()),
             ("Password".into(), String::new()),
+            ("Open the port (UPnP)".into(), if self.upnp { "On".into() } else { "Off".into() }),
         ]
     }
 
@@ -396,6 +403,7 @@ impl DisplaySettings {
             25 => self.coop_revive = !self.coop_revive,
             26 => self.coop_split = step(self.coop_split, SPLITS.len()),
             27 => self.coop_partner = !self.coop_partner,
+            UPNP_ROW => self.upnp = !self.upnp,
             _ => {}
         }
     }
@@ -690,6 +698,7 @@ const HELP: [&str; ROWS + 1] = [
     "Join the host's game. Each player needs their own copy of the game disc.",
     "Hosting: sends player 2 back to their title screen. You keep hosting, and they can join again.",
     "Optional. The host types one before hosting; a friend must type the same before joining. Letters and digits; Backspace deletes.",
+    "On: while you host, your router is asked to let a friend on the internet in (UPnP). The way in closes when you stop hosting, or by itself after two hours. Some routers have UPnP turned off.",
     "Back to Options.",
 ];
 
@@ -877,7 +886,7 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(1), [17, 18, 19, 20]);
-        assert_eq!(page_rows(2), [25, 26, 27, 28, 29, 30, 31, 32]);
+        assert_eq!(page_rows(2), [25, 26, 27, 28, 29, 30, 31, 32, 33]);
         assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));

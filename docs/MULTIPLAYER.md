@@ -31,6 +31,21 @@ the same build of this game.
    Put `port=47818` (or another number) in `private/net.txt`; the address to give your friend
    then ends in `:47818`.
 
+**Over the internet (not tried yet).** The friend needs a way in to the host's computer
+through the host's router:
+1. Easiest: before hosting, set **Open the port (UPnP)** to On. While you host, the game asks
+   the router to let your friend in, and the help line shows the internet address to give them.
+   The way in closes when you stop hosting, or by itself after two hours. Some routers have
+   UPnP turned off; then the help line says the router could not open the port.
+2. By hand: in the router's settings, forward **UDP port 47817** to the host's computer (the
+   address the help line shows, for example 192.168.1.20). The friend then joins with the
+   host's internet address (search "what is my IP" on the host's computer).
+3. Setting a **Password** keeps strangers out.
+
+What it needs: about 25 to 30 KB/s from the host to the friend and 5 KB/s back (measured at
+rest, walking and in a boss fight). A round trip under about 100 ms plays well; the game rides
+out lost messages and uneven delays.
+
 **The Multiplayer page.**
 | Row | Choices | What it does |
 |---|---|---|
@@ -42,6 +57,7 @@ the same build of this game.
 | Join a game | | Join that host (press again to leave) |
 | Remove player 2 | | Host only: send player 2 back to their title screen and keep hosting |
 | Password | None | Optional: the host types one before hosting, and the friend the same before joining |
+| Open the port (UPnP) | Off, On | While hosting, ask the router to let a friend on the internet in |
 
 **What the two players share.** One world and story, one bag of items and Neopoints, the
 enemies, talk boxes (either player's Square moves a box on; only player 1 answers questions,
@@ -51,8 +67,8 @@ Bosses go after whichever standing player is nearer. Each player has their own h
 magic, shield (blocks and reflections), camera, item and Mote panels, and rumble. A player who
 lands in lava or water comes back beside the other, a little hurt.
 
-**Not yet.** Playing over the internet (outside the home network), and checking everything on
-screen with two real computers.
+**Not yet.** Playing over the internet has not been tried (the UPnP row was tried only against
+a stand-in router), nor everything on screen with two real computers.
 
 The original game is single-player. Every co-op rule here is this build's own choice. It is
 recorded in docs/STATUS.md as such when built, and single-player play stays as it is today.
@@ -579,7 +595,7 @@ stand-in on this computer, and left for the user to switch on.
 12. [x] (placed voices' changes not sent at all; the joiner works them out) Sound volume and pan changes (the most common event) sent only when they change by
     more than a step a listener would hear.
 13. [x] (not needed: 0.22 s at 100 ms each way) The welcome's save slot packed (runs of zeros), and the join time measured.
-14. [ ] Bandwidth at rest, walking and in a fight, written in "How to play together".
+14. [x] Bandwidth at rest, walking and in a fight, written in "How to play together".
 
 ### How the joiner feels
 15. [ ] (not built: needs the screen to judge; see the design note in the report) Player 2 moved at once on the joiner from its own controller (prediction), drawn
@@ -597,10 +613,10 @@ stand-in on this computer, and left for the user to switch on.
 21. [~] (the Multiplayer page's line shows each refusal, where the join starts) The joiner's title screen says "Joining..." and why a join failed (a refusal shows
     on the title screen, not only on the Multiplayer page).
 22. [x] (another protocol version told apart too; not traced with two builds) A friendly refusal for a different build ("The host has a newer build").
-23. [ ] UPnP (Default: off): a Multiplayer page row that asks the router to forward the port
+23. [x] (tried against a stand-in router only) UPnP (Default: off): a Multiplayer page row that asks the router to forward the port
     for the session and removes it at the end; tried only against a stand-in router on this
     computer.
-24. [ ] "How to play together" gets an internet section (port forwarding by hand, or UPnP).
+24. [x] "How to play together" gets an internet section (port forwarding by hand, or UPnP).
 
 ### Co-op extras
 25. [ ] A down player shows how long until they get up, and a revive bar while the other

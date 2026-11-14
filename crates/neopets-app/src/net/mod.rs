@@ -26,6 +26,7 @@ use neopets_sim::hero::HeroInput;
 use crate::PlayState;
 
 mod codec;
+pub mod upnp;
 mod sync;
 pub use codec::*;
 // These two names are also in Bevy's prelude: the messages' own come first.
@@ -224,6 +225,9 @@ pub struct Net {
     cmd_done: u8,
     /// The other side's player name (the joiner's on the host, the host's on the joiner).
     pub peer_name: String,
+    /// Host: the router's answer being waited for (UPnP), and the port it forwards.
+    upnp_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<upnp::Outcome>>>,
+    pub upnp_port: Option<u16>,
     /// Joiner: when this join began (a join with no answer gives up after 20 seconds).
     join_started: Option<Instant>,
     /// Host, for the trace: events made since the last trace line, by kind (`kind_of`).
@@ -734,7 +738,8 @@ pub fn local_address() -> Option<std::net::IpAddr> {
 
 /// Each frame: requests from the Multiplayer page, the socket's messages, joining, timeouts.
 #[allow(clippy::too_many_arguments)]
-pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut archive: Option<ResMut<crate::Archive>>, mut coop: ResMut<crate::coop::Coop>, menu: Option<Res<crate::menu_view::Menu>>, password: Res<NetPassword>) {
+#[allow(clippy::too_many_arguments)]
+pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut archive: Option<ResMut<crate::Archive>>, mut coop: ResMut<crate::coop::Coop>, menu: Option<Res<crate::menu_view::Menu>>, password: Res<NetPassword>, settings: Res<crate::display::DisplaySettings>) {
     if net.disc.is_none() {
         if let Some(a) = archive.as_deref_mut() {
             use std::hash::{Hash, Hasher};
@@ -782,6 +787,19 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                         None => format!("Hosting on port {port}."),
                     };
                     net.host_line = net.status.clone();
+                    // The Multiplayer page's UPnP row (or NEOPETS_UPNP, diagnostic): ask the
+                    // router to forward the port, on its own thread.
+                    if settings.upnp || std::env::var_os("NEOPETS_UPNP").is_some() {
+                        if let Some(ip) = local_address() {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(upnp::open(port, ip));
+                            });
+                            net.upnp_rx = Some(std::sync::Mutex::new(rx));
+                            net.status = format!("{} Asking the router to open the port...", net.host_line);
+                            info!("net: asking the router to forward port {port}");
+                        }
+                    }
                     info!("net: hosting on port {port}");
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -829,6 +847,13 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             }
         }
         Some(Request::Leave) => {
+            // The router's forward ends with the hosting (on its own thread).
+            if let Some(port) = net.upnp_port.take() {
+                std::thread::spawn(move || {
+                    let r = upnp::close(port);
+                    info!("net: the router's forward of port {port}: {r:?}");
+                });
+            }
             if net.role == Role::Join {
                 if let Some(p) = play.as_deref_mut() {
                     p.play.remove_player();
@@ -851,6 +876,25 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     }
     if net.role == Role::Off {
         return;
+    }
+    // The router's answer (UPnP).
+    if let Some(r) = net.upnp_rx.as_ref().and_then(|rx| rx.lock().ok()?.try_recv().ok()) {
+        net.upnp_rx = None;
+        let port = host_port();
+        match r {
+            upnp::Outcome::Opened(ip) => {
+                net.upnp_port = Some(port);
+                let shown = ip.map_or_else(|| "your internet address".to_string(), |ip| if port == PORT { ip } else { format!("{ip}:{port}") });
+                net.host_line = format!("{} A friend on the internet joins with {shown}.", net.host_line);
+                info!("net: the router forwards port {port}");
+            }
+            upnp::Outcome::Failed(e) => {
+                net.host_line = format!("{} The router could not open the port: {e}.", net.host_line);
+                info!("net: the router could not forward port {port}: {e}");
+            }
+            upnp::Outcome::Closed => {}
+        }
+        net.status = net.host_line.clone();
     }
     let now = Instant::now();
     // The messages waiting. NEOPETS_NET_DROP=percent and NEOPETS_NET_DELAY=ms (diagnostic): a

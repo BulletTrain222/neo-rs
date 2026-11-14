@@ -1845,6 +1845,10 @@ fn step_sim(
                         }
                     }
                 }
+                // NEOPETS_NET_STOPAT=T: hosting (or joining) stopped on play tick T.
+                if std::env::var("NEOPETS_NET_STOPAT").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
+                    netr.request = Some(net::Request::Leave);
+                }
                 // NEOPETS_NET_REMOVE=T: the Multiplayer page's Remove player 2 on play tick T.
                 if std::env::var("NEOPETS_NET_REMOVE").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) && netr.peer.is_some() {
                     netr.request = Some(net::Request::Remove);
