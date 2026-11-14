@@ -621,7 +621,7 @@ stand-in on this computer, and left for the user to switch on.
 ### Co-op extras
 25. [ ] A down player shows how long until they get up, and a revive bar while the other
     stands beside (HUD, both views).
-26. [ ] Player 2's push blocks: traced, and fixed if they do not move.
+26. [x] (they did not move: the Square rows were player 1's; fixed) Player 2's push blocks: traced, and fixed if they do not move.
 27. [ ] Player 2's magic items' statuses (buffs, cures) traced.
 28. [ ] Player 2's quick panel and Mote panel on the joiner: a quick item used from the
     joiner's D-pad traced end to end.

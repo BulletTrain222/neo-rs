@@ -19665,6 +19665,12 @@ impl Play {
             let free = !self.dialogue_open && self.player.down.is_none();
             if free {
                 self.door_step();
+                // Player 2's Square rows as player 1's (SPEC-0022 Square chooser): stop climbing
+                // a ladder or panel, let go of an edge, a ledge or a block, grab a block.
+                if std::env::var_os("NEOPETS_TRACE_COOPSQUARE").is_some() && (input.square || self.square_now) {
+                    println!("COOPSQUARE tick {}: player 2's Square rows: input {} square_now {} state {}", self.ticks, input.square, self.square_now, self.player.loco.state);
+                }
+                self.block_step();
                 let p1 = self.others[i].loco.position();
                 // Only while player 1 can be brought over: standing, not held by a scene, no load.
                 let p1_free = self.others[i].down.is_none() && self.others[i].loco.state != hero_states::DEAD && self.cut.is_none_or(|c| c.state == 0) && self.job.is_none();

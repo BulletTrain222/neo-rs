@@ -7115,8 +7115,9 @@ fn play_trace(
                     println!("COOP {} power: p2 attack {:?} mp {:?} | {}", play.ticks, play.others.first().and_then(|o| o.attack.as_ref().map(|a| (a.sub, a.f))), play.others.first().map(|o| o.hero_mp), play.last_mote);
                 }
                 neopets_sim::hero::HeroInput { attack: play.ticks == t, attack_held: held, ..Default::default() }
-            } else if std::env::var_os("NEOPETS_COOP_CLIMB").is_some() {
-                // NEOPETS_COOP_CLIMB: player 2 pushes the stick forward (no jumps).
+            } else if std::env::var("NEOPETS_COOP_CLIMB").is_ok_and(|v| v.trim().parse::<u64>().map_or(true, |n| n <= 1 || play.ticks < n)) {
+                // NEOPETS_COOP_CLIMB: player 2 pushes the stick forward (no jumps); "=n" (above 1)
+                // lets go from tick n.
                 neopets_sim::hero::HeroInput { forward: 1.0, ..Default::default() }
             } else if std::env::var_os("NEOPETS_COOP_GUARD").is_some() {
                 // NEOPETS_COOP_GUARD: player 2 holds the guard button.
