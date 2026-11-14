@@ -113,6 +113,12 @@ SCENARIOS = [
     ('the hero rides the 822 moving platform', 'SPEC-0018 riding (ground attach carry)', 400, 822, ['--flag', '621', '--start', '-206.7,2340.5,226'], {'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_PLACE': '20:-207,2340,0,232'}, has(r'400 pos \(\s+-2\d\d\.\d+\s+2[23]\d\.\d+\s+\d+\.\d+\) state  1')),
     ('a named save state saves and loads the hero back', 'this build (save states)', 260, 800, ['--start', '480,2380,297', '--flag', '55'], {'NEOPETS_STATES_DIR': 'target/states-scenario', 'NEOPETS_TRACE_STATE': 'save:test@60'}, has(r'save state on tick 60: ready true Ok\("s\d+(-\d+)?"\) at \[489\.07')),
     ('sound records match the spec', 'SPEC-0031 types 4 and 5', 1, 909, [], {'NEOPETS_TRACE_CUE_RECORDS': '1'}, has(r'CUE RECORDS type 4 81, type 5 24')),
+    # Co-op (docs/MULTIPLAYER.md; this build's feature, not the original's).
+    ('co-op: player 2 goes down and is revived beside player 1', 'this build (co-op rules)', 160, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_STILL': '1', 'NEOPETS_COOP_HP': '0', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GOD': '1'}, both(has(r'COOP 30 p2 .* down Some'), has(r'COOP 150 p2 .* hp [1-9]\d* down None'))),
+    ('co-op: player 2 drinks from its own quick panel', 'this build (co-op panels)', 200, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_STILL': '1', 'NEOPETS_COOP_HP': '40', 'NEOPETS_COOP_DRINK': '1', 'NEOPETS_TRACE_GIVE': '2:140:1,2:141:1,2:142:1,2:143:1,2:144:1,2:145:1,2:146:1,2:147:1,2:148:1,2:149:1,2:150:1,2:151:1,2:152:1,2:153:1,2:154:1,2:155:1,2:156:1,2:157:1,2:158:1,2:159:1'}, has(r'used item 146 on tick \d+: hp 120')),
+    ('co-op: player 2 takes both players into the barn and out', 'this build (co-op doors)', 330, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_STILL': '1', 'NEOPETS_COOP_DOOR': '0@60;0@250', 'NEOPETS_TRACE_STAND': '1'}, both(has(r'COOP 70 door: world 909 .*Some\(13\)'), both(has(r'COOP 2[0-4]0 door: world 951'), has(r'COOP (2[6-9]|3[0-2])0 door: world 909')))),
+    ('co-op: player 2 moves talk boxes on', 'this build (co-op talk boxes)', 60, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_STILL': '1', 'NEOPETS_COOP_BOX': '1', 'NEOPETS_TRACE_COOPBOX': '1'}, has(r'COOPBOX tick \d+: .*dialogue false')),
+    ('co-op: a second Tor guards with a shield', 'this build (co-op guard)', 100, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_TOR': '1', 'NEOPETS_COOP_GUARD': '1', 'NEOPETS_TRACE_GIVE': '2:106:1'}, has(r'COOP 90 p2 .* state 20 clip 63')),
 ]
 
 

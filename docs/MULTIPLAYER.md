@@ -247,7 +247,7 @@ them all.
 18. [x] The double shake in host cutscenes on the joiner.
 
 ### Guards against breaking it later
-19. [ ] A co-op scenario in scripts/scenarios.py: player 2 joins, walks, attacks, is hit, goes
+19. [x] A co-op scenario in scripts/scenarios.py: player 2 joins, walks, attacks, is hit, goes
     down and is revived.
 20. [ ] net_check.py run after each online change.
 
