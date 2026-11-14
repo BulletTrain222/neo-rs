@@ -273,7 +273,7 @@ them all.
 ### The joiner sees the same world
 11. [x] World items: pickups taken (by either player) vanish on the joiner, and dropped ones
     appear.
-12. [~] Breakables and moving objects (breakables done; gates and platforms still the joiner's own scripts): broken crates, opened doors and gates, and platforms
+12. [~] Breakables and moving objects (breakables done; gates and platforms still the joiner's own scripts, matched at the farm where nothing moved): broken crates, opened doors and gates, and platforms
     as on the host.
 13. [x] Sounds heard from the joiner's own player: the host sends where a sound is, and the
     joiner works out volume and pan from its own camera.
@@ -292,8 +292,28 @@ them all.
 ### Words
 21. [x] "How to play together" at the top of this file: one PC, home network, what each option
     does, what to do when Windows asks about the firewall.
-22. [ ] The morning report: what was done, what was not, every Default, what needs the screen
+22. [x] The morning report: what was done, what was not, every Default, what needs the screen
     or a second computer.
 
 ### Not tonight (needs the user)
 - Looking at it on screen; two real computers; internet play (port forwarding, UPnP).
+
+### Night plan 2 report (2026-11-14, morning)
+Done and committed, each with Check passing (and the scenarios where single-player code moved;
+44 pass): test tools (net_check.py, lossy-network switches, a broken-message test, session
+tests), player 2's doors, talk boxes moved on by either player, world items, breakables and
+stray characters following the host, sounds heard from the joiner's own player, rumble per
+player, one-PC joined and left lines, no double shake, co-op scenarios, player 2 climbing and
+ladders, running effects in the welcome, this guide.
+
+Defaults chosen without the user (say if any should change):
+- Either player's door moves both players.
+- Either player's Square moves a talk box on; only player 1 answers, talks and shops.
+- Online, the joiner's pause pauses only the joiner (player 2 lets go); the host's pauses both.
+- The rope gun is player 1's alone.
+- Loading the next world follows player 1.
+
+Left for later: player 2's Mote magic and power attacks were audited but not traced;
+moving objects are the joiner's own (matched where tested); characters are sent in full each
+tick (small enough so far); nothing was seen on screen (the display was off); two real
+computers and internet play need the user.
