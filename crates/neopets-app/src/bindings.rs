@@ -341,9 +341,20 @@ impl Pad {
 #[derive(Resource, Default)]
 pub struct PadMute(pub bool);
 
-/// The controller player 2 has in local co-op (coop.rs): left out of player 1's pad.
+/// Player 1's controllers in play (coop.rs): the one chosen for it (`only`), else every one the
+/// other players (local co-op) do not have.
 #[derive(Resource, Default)]
-pub struct PadExclude(pub Option<Entity>);
+pub struct PadExclude {
+    pub only: Option<Entity>,
+    pub others: Vec<Entity>,
+}
+
+impl PadExclude {
+    /// Whether controller `e` drives player 1 (and the menus' virtual pad in play).
+    pub fn p1(&self, e: Entity) -> bool {
+        self.only.map_or(!self.others.contains(&e), |o| o == e)
+    }
+}
 
 /// Whether the mouse turns the camera this frame (the cursor is grabbed in play).
 #[derive(Resource, Default)]
@@ -360,7 +371,7 @@ pub fn mouse_stick(delta: f32, sensitivity: u32) -> f32 {
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 pub fn read_pad(keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, motion: Res<AccumulatedMouseMotion>, all_pads: Query<(Entity, &Gamepad)>, exclude: Res<PadExclude>, bindings: Res<Bindings>, mute: Res<PadMute>, look: Res<MouseLook>, mut pad: ResMut<Pad>, menu: Option<Res<crate::menu_view::Menu>>) {
-    let gamepads: Vec<&Gamepad> = all_pads.iter().filter(|(e, _)| Some(*e) != exclude.0).map(|(_, g)| g).collect();
+    let gamepads: Vec<&Gamepad> = all_pads.iter().filter(|(e, _)| exclude.p1(*e)).map(|(_, g)| g).collect();
     let _span = crate::perf::span("read_pad");
     *pad = Pad::default();
     if mute.0 {

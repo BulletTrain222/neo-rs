@@ -1,14 +1,17 @@
 //! Local co-op (docs/MULTIPLAYER.md step 2; this build's feature, not in the original game):
-//! player 2's controller, player 2's hero on screen, and the split screen.
+//! the other players' controllers, their heroes on screen, and the split screen.
 //!
-//! Joining: Start on a second controller (not the first one connected, which stays player 1's)
-//! adds player 2 beside player 1 (`Play::add_player`: Roberta while she waits parked, else a
-//! second Tor); Select on player 2's controller takes player 2 out. That controller then drives
-//! only player 2. NEOPETS_COOP=1 adds player 2 when play starts (on the second controller when
-//! there is one), for testing.
+//! Starting: the Multiplayer page's Local co-op row (Cross) adds players 2 to 4 beside player 1
+//! (`Play::add_player`: player 2 is Roberta while she waits parked, else each is another Tor), as
+//! many as its Players row asks for, and Cross again takes them out. A controller press never
+//! starts it (the user's choice). Each player's controller is chosen on its row (Auto: player 1
+//! keeps the keyboard and the first free controller; players 2 to 4 take the next free ones in
+//! the order they were connected). NEOPETS_COOP=1 starts it when play starts, for testing.
 //!
-//! Split screen: player 1's camera draws the top half of the scene image and a second camera,
-//! following player 2's follow camera, the bottom half.
+//! Split screen: two players share the window top and bottom (or side by side), three have
+//! player 1 on the top half and players 2 and 3 on the bottom quarters, four have a quarter
+//! each. Player 1's camera draws its part of the scene image; each other player has its own
+//! camera and image, shown over its part.
 use bevy::camera::{RenderTarget, Viewport};
 use bevy::prelude::*;
 use neopets_sim::camera::CameraPad;
@@ -16,49 +19,160 @@ use neopets_sim::hero::HeroInput;
 
 use crate::{bindings, gpu_skin, PlayState};
 
-/// Player 2's controller and its input, built each frame; the jump press is kept until a tick
-/// takes it.
-#[derive(Resource, Default)]
-pub struct Coop {
+/// The most players on one computer.
+pub const MAX_PLAYERS: usize = 4;
+
+/// One other player's controller and its input, built each frame; the presses are kept until a
+/// tick takes them.
+#[derive(Default, Clone)]
+pub struct Seat {
     pub pad: Option<Entity>,
     pub input: HeroInput,
     pub cam: CameraPad,
     pub jump: bool,
     pub attack: bool,
-    /// Player 2's Square press (doors), kept for the next tick.
+    /// The Square press (doors), kept for the next tick.
     pub square: bool,
-    /// Player 2's Start in play: the pause page opens (step_sim).
-    pub pause: bool,
-    /// The game (`Play::generation`) player 2 was last in (a new one brings player 2 back).
-    pub game: u32,
-    /// Player 2's D-pad and Triangle presses for its quick-item and Mote panels.
+    /// The D-pad and Triangle presses for its quick-item and Mote panels.
     pub panel: neopets_sim::quick::PanelInput,
+}
+
+/// Players 2 to 4 (seats 0 to 2).
+#[derive(Resource, Default)]
+pub struct Coop {
+    pub seats: [Seat; MAX_PLAYERS - 1],
+    /// A player's Start in play (its seat): the pause page opens for it (step_sim).
+    pub pause: Option<usize>,
     /// Online (net.rs): player 2's input from the joiner's controller, in place of a local pad.
     pub remote: Option<(HeroInput, CameraPad)>,
+    /// The Local co-op row's press: start (true) or stop (false).
+    pub request: Option<bool>,
+    /// Local co-op is on: the other players are kept in play (added again after a load).
+    pub wanted: bool,
     started: bool,
 }
 
 impl Coop {
-    /// Player 2's input for one tick (the jump and attack presses are taken).
-    pub fn take(&mut self) -> (HeroInput, CameraPad) {
-        if let Some(r) = self.remote.take() {
-            return r;
+    /// Seat `i`'s input for one tick (the jump, attack and Square presses are taken).
+    pub fn take(&mut self, i: usize) -> (HeroInput, CameraPad) {
+        if i == 0 {
+            if let Some(r) = self.remote.take() {
+                return r;
+            }
         }
-        let mut i = self.input;
-        i.jump = std::mem::take(&mut self.jump);
-        i.attack = std::mem::take(&mut self.attack);
-        i.square = std::mem::take(&mut self.square);
-        (i, self.cam)
+        let Some(s) = self.seats.get_mut(i) else { return Default::default() };
+        let mut input = s.input;
+        input.jump = std::mem::take(&mut s.jump);
+        input.attack = std::mem::take(&mut s.attack);
+        input.square = std::mem::take(&mut s.square);
+        (input, s.cam)
+    }
+
+    /// Local co-op ends (going online): the seats let go of their controllers.
+    pub fn release_local(&mut self) {
+        self.wanted = false;
+        for s in &mut self.seats {
+            s.pad = None;
+        }
     }
 }
 
-/// Each frame: joining and leaving, and player 2's input from its controller.
+/// Each player's controller from the rows' choices (0 Auto, k controller k in connection order)
+/// and the connected controllers in that order: player 1's (with Auto, the first controller no
+/// one chose), then players 2 to 4's (with Auto, the next free ones in order).
+pub fn assign<T: Copy + PartialEq>(connected: &[T], choice: [u8; MAX_PLAYERS], players: usize) -> [Option<T>; MAX_PLAYERS] {
+    let n = players.min(MAX_PLAYERS);
+    let mut out = [None; MAX_PLAYERS];
+    let mut used: Vec<T> = Vec::new();
+    for k in 0..n {
+        if let Some(&e) = (choice[k] as usize).checked_sub(1).and_then(|c| connected.get(c)) {
+            if !used.contains(&e) {
+                out[k] = Some(e);
+                used.push(e);
+            }
+        }
+    }
+    for k in 0..n {
+        if choice[k] == 0 {
+            if let Some(&e) = connected.iter().find(|e| !used.contains(e)) {
+                out[k] = Some(e);
+                used.push(e);
+            }
+        }
+    }
+    out
+}
+
+/// Player `view`'s part of the window with `players` on screen, in half-window units (x, y,
+/// width, height out of 2 by 2); `side` is the two-player side-by-side layout.
+pub fn view_rect(players: usize, side: bool, view: usize) -> Option<[u32; 4]> {
+    match (players, view) {
+        (0 | 1, 0) => Some([0, 0, 2, 2]),
+        (2, 0) => Some(if side { [0, 0, 1, 2] } else { [0, 0, 2, 1] }),
+        (2, 1) => Some(if side { [1, 0, 1, 2] } else { [0, 1, 2, 1] }),
+        (3, 0) => Some([0, 0, 2, 1]),
+        (3, 1) => Some([0, 1, 1, 1]),
+        (3, 2) => Some([1, 1, 1, 1]),
+        (4.., 0..=3) => Some([view as u32 % 2, view as u32 / 2, 1, 1]),
+        _ => None,
+    }
+}
+
+/// A part of the window in half units as pixels of a `w` by `h` picture: (x, y, width, height).
+pub fn rect_pixels(r: [u32; 4], w: u32, h: u32) -> (u32, u32, u32, u32) {
+    let (x0, y0) = (w * r[0] / 2, h * r[1] / 2);
+    let (x1, y1) = (w * (r[0] + r[2]) / 2, h * (r[1] + r[3]) / 2);
+    (x0, y0, x1 - x0, y1 - y0)
+}
+
+/// How many players share this window's screen (online, each computer shows one).
+pub fn on_screen(p: &crate::play::Play) -> usize {
+    if p.net_follow || p.coop_remote { 1 } else { (1 + p.others.len()).min(MAX_PLAYERS) }
+}
+
+/// Each frame: starting and stopping, each player's controller, and the other players' input.
 #[allow(clippy::too_many_arguments)]
-pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindings>, mute: Res<bindings::PadMute>, mut coop: ResMut<Coop>, mut exclude: ResMut<bindings::PadExclude>, play: Option<ResMut<PlayState>>, settings: Res<crate::display::DisplaySettings>, mut dev: ResMut<crate::dev_menu::DevMenu>, menu: Option<Res<crate::menu_view::Menu>>) {
+pub fn read_coop(
+    gamepads: Query<(Entity, &Gamepad)>,
+    keys: Res<bindings::Bindings>,
+    mute: Res<bindings::PadMute>,
+    mut coop: ResMut<Coop>,
+    mut exclude: ResMut<bindings::PadExclude>,
+    play: Option<ResMut<PlayState>>,
+    settings: Res<crate::display::DisplaySettings>,
+    mut dev: ResMut<crate::dev_menu::DevMenu>,
+    menu: Option<Res<crate::menu_view::Menu>>,
+    net: Res<crate::net::Net>,
+) {
     let in_play = menu.as_ref().is_none_or(|m| m.flow.current == crate::menus::PLAY);
+    let mut connected: Vec<Entity> = gamepads.iter().map(|(e, _)| e).collect();
+    connected.sort();
+    // NEOPETS_COOP=n (diagnostic, 2 to 4): that many players, whatever the Players row says.
+    let players = std::env::var("NEOPETS_COOP").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| (2..=MAX_PLAYERS).contains(n)).unwrap_or(settings.coop_players).clamp(2, MAX_PLAYERS);
+    let pads = assign(&connected, settings.coop_pads, players);
+    let online = net.role != crate::net::Role::Off;
+    if let Some(on) = coop.request.take() {
+        if on && online {
+            dev.toast = Some(("Local co-op is off while playing online.".into(), 240));
+        } else {
+            coop.wanted = on;
+            dev.toast = Some((if on { format!("Local co-op: {players} players.") } else { "Local co-op stopped.".into() }, 240));
+            info!("co-op: local co-op {}", if on { "started" } else { "stopped" });
+        }
+    }
+    // NEOPETS_COOP=1 (diagnostic): local co-op on when play starts.
+    if !coop.started && play.as_ref().is_some_and(|p| p.play.ticks > 0) {
+        coop.started = true;
+        if std::env::var_os("NEOPETS_COOP").is_some() {
+            coop.wanted = true;
+            info!("co-op: local co-op started (NEOPETS_COOP), {players} players, {} controllers", connected.len());
+        }
+    }
     let Some(mut play) = play else {
-        coop.pad = None;
-        exclude.0 = None;
+        for s in &mut coop.seats {
+            s.pad = None;
+        }
+        *exclude = bindings::PadExclude::default();
         return;
     };
     // The Multiplayer page's options.
@@ -68,100 +182,100 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
     if (play.play.coop_revive, play.play.coop_partner, play.play.coop_together, play.play.coop_doors_alone) != (settings.coop_revive, settings.coop_partner, settings.coop_together, alone) {
         (play.play.coop_revive, play.play.coop_partner, play.play.coop_together, play.play.coop_doors_alone) = (settings.coop_revive, settings.coop_partner, settings.coop_together, alone);
     }
-    let first = gamepads.iter().map(|(e, _)| e).min();
-    // A new game or a load replaced the play (and its players): player 2 comes back while its
-    // controller is still there (or, with NEOPETS_COOP, always), beside player 1.
-    if play.play.others.is_empty() {
-        let pad_here = coop.pad.is_some_and(|e| gamepads.get(e).is_ok());
-        let online = play.play.net_follow || play.play.coop_remote;
-        if (pad_here || (coop.started && std::env::var_os("NEOPETS_COOP").is_some())) && play.play.ticks > 0 && !online && play.play.generation != coop.game {
-            if play.play.add_player() {
-                info!("co-op: player 2 kept after a new game or load (game {})", play.play.generation);
-            }
-        } else if !pad_here {
-            coop.pad = None;
-        }
-    }
-    if !play.play.others.is_empty() {
-        coop.game = play.play.generation;
-    }
-    if !coop.started && play.play.ticks > 0 {
-        coop.started = true;
-        if std::env::var_os("NEOPETS_COOP").is_some() && play.play.add_player() {
-            coop.pad = gamepads.iter().map(|(e, _)| e).filter(|e| Some(*e) != first).min();
-            info!("co-op: player 2 added at start (NEOPETS_COOP), on controller {:?} of {}", coop.pad, gamepads.iter().count());
-        }
-    }
-    if coop.pad.is_none() && !mute.0 && in_play {
-        if let Some((e, _)) = gamepads.iter().find(|(e, g)| Some(*e) != first && g.just_pressed(GamepadButton::Start)) {
-            if play.play.add_player() {
-                coop.pad = Some(e);
-                info!("co-op: player 2 joined");
-                dev.toast = Some(("Player 2 joined.".into(), 240));
-            }
-        }
-    } else if let Some(g) = coop.pad.and_then(|e| gamepads.get(e).ok()).map(|(_, g)| g) {
-        // In play: Select takes player 2 out; Start opens the pause page (Default: the item
-        // screen of player 1's Start would hold player 1's items).
-        if in_play && g.just_pressed(GamepadButton::Select) {
+    // Online, the other player is the joiner's: local co-op ends (its players go).
+    let remote = play.play.net_follow || play.play.coop_remote;
+    if online && coop.wanted {
+        coop.release_local();
+        if !remote {
             play.play.remove_player();
-            coop.pad = None;
-            info!("co-op: player 2 left");
-            dev.toast = Some(("Player 2 left.".into(), 240));
-        } else if in_play && g.just_pressed(GamepadButton::Start) {
-            coop.pause = true;
+        }
+        info!("co-op: local co-op ended for online play");
+    }
+    // The players asked for: added beside player 1 once play runs (and again after a new game
+    // or load), and taken out when stopped or fewer are asked for.
+    if !remote && !online && play.play.ticks > 0 {
+        let want = if coop.wanted { players - 1 } else { 0 };
+        while play.play.others.len() < want {
+            if !play.play.add_player() {
+                break;
+            }
+            info!("co-op: player {} joined", play.play.others.len() + 1);
+        }
+        if play.play.others.len() > want {
+            play.play.keep_players(want);
+            info!("co-op: {} players now", want + 1);
         }
     }
-    // In a menu both controllers drive it; in play the second one is player 2's alone.
-    exclude.0 = coop.pad.filter(|_| in_play);
-    let Some(g) = coop.pad.and_then(|e| gamepads.get(e).ok()).map(|(_, g)| g) else {
-        coop.input = HeroInput::default();
-        coop.cam = CameraPad::default();
-        // NEOPETS_COOP_WALK (diagnostic, with NEOPETS_COOP and no second controller): player 2
-        // walks ahead, turning the camera slowly, and jumps every 1.5 seconds.
-        if std::env::var_os("NEOPETS_COOP_WALK").is_some() && !play.play.others.is_empty() {
-            coop.input.forward = 1.0;
-            coop.cam.right_x = 170;
-            coop.jump |= play.play.ticks % 90 == 45;
-            coop.attack |= play.play.ticks % 90 == 20;
-        }
-        return;
+    let local = if remote { 0 } else { play.play.others.len() };
+    for (i, s) in coop.seats.iter_mut().enumerate() {
+        s.pad = if i < local { pads[i + 1] } else { None };
+    }
+    // In a menu every controller drives it; in play each other player's controller is its own
+    // alone, and player 1 has the keyboard and its chosen controller (on Auto, every one left).
+    *exclude = if in_play {
+        bindings::PadExclude { only: pads[0].filter(|_| settings.coop_pads[0] != 0), others: coop.seats.iter().filter_map(|s| s.pad).collect() }
+    } else {
+        bindings::PadExclude::default()
     };
-    let button = |a: usize| a.checked_sub(bindings::FIRST_BUTTON).and_then(|k| keys.pad[k]);
-    let held = |a: usize| button(a).is_some_and(|b| g.pressed(b));
-    let pressed = |a: usize| button(a).is_some_and(|b| g.just_pressed(b));
-    let stick = g.left_stick();
-    let (x, y) = (crate::controls::ps2_axis(stick.x), crate::controls::ps2_axis(stick.y));
-    coop.input = HeroInput {
-        side: -x,
-        forward: y,
-        run: held(bindings::R1),
-        square_held: held(bindings::SQUARE),
-        cross_held: held(bindings::CROSS),
-        guard: held(bindings::L1),
-        attack_held: held(bindings::CIRCLE) || held(bindings::R2),
-        r2_held: held(bindings::R2),
-        circle_held: held(bindings::CIRCLE),
-        l2: held(bindings::L2),
-        ..Default::default()
-    };
-    coop.jump |= pressed(bindings::CROSS);
-    coop.attack |= pressed(bindings::CIRCLE) || pressed(bindings::R2);
-    coop.square |= pressed(bindings::SQUARE);
-    coop.panel.up |= pressed(bindings::UP);
-    coop.panel.left |= pressed(bindings::LEFT);
-    coop.panel.right |= pressed(bindings::RIGHT);
-    coop.panel.down |= pressed(bindings::DOWN);
-    coop.panel.triangle |= pressed(bindings::TRIANGLE);
-    let r = g.right_stick();
-    let byte = |v: f32| (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round() as u8;
     let invert = play.play.options.invert;
-    coop.cam = CameraPad {
-        right_x: if invert.0 { 255 - byte(r.x) } else { byte(r.x) },
-        right_y: if invert.1 { 255 - byte(-r.y) } else { byte(-r.y) },
-        r3_held: false,
-        r3_pressed: false,
-    };
+    let walk = std::env::var_os("NEOPETS_COOP_WALK").is_some();
+    let ticks = play.play.ticks;
+    for i in 0..coop.seats.len() {
+        let pad = coop.seats[i].pad.and_then(|e| gamepads.get(e).ok()).map(|(_, g)| g);
+        let Some(g) = pad else {
+            let s = &mut coop.seats[i];
+            s.input = HeroInput::default();
+            s.cam = CameraPad::default();
+            // NEOPETS_COOP_WALK (diagnostic, with NEOPETS_COOP): a player with no controller
+            // walks ahead, turning its camera slowly, and jumps every 1.5 seconds.
+            if walk && i < local {
+                s.input.forward = 1.0;
+                s.cam.right_x = 170;
+                s.jump |= ticks % 90 == 45;
+                s.attack |= ticks % 90 == 20;
+            }
+            continue;
+        };
+        // In play: Start opens the pause page for this player.
+        if in_play && !mute.0 && g.just_pressed(GamepadButton::Start) {
+            coop.pause = Some(i);
+        }
+        let s = &mut coop.seats[i];
+        let button = |a: usize| a.checked_sub(bindings::FIRST_BUTTON).and_then(|k| keys.pad[k]);
+        let held = |a: usize| button(a).is_some_and(|b| g.pressed(b));
+        let pressed = |a: usize| button(a).is_some_and(|b| g.just_pressed(b));
+        let stick = g.left_stick();
+        let (x, y) = (crate::controls::ps2_axis(stick.x), crate::controls::ps2_axis(stick.y));
+        s.input = HeroInput {
+            side: -x,
+            forward: y,
+            run: held(bindings::R1),
+            square_held: held(bindings::SQUARE),
+            cross_held: held(bindings::CROSS),
+            guard: held(bindings::L1),
+            attack_held: held(bindings::CIRCLE) || held(bindings::R2),
+            r2_held: held(bindings::R2),
+            circle_held: held(bindings::CIRCLE),
+            l2: held(bindings::L2),
+            ..Default::default()
+        };
+        s.jump |= pressed(bindings::CROSS);
+        s.attack |= pressed(bindings::CIRCLE) || pressed(bindings::R2);
+        s.square |= pressed(bindings::SQUARE);
+        s.panel.up |= pressed(bindings::UP);
+        s.panel.left |= pressed(bindings::LEFT);
+        s.panel.right |= pressed(bindings::RIGHT);
+        s.panel.down |= pressed(bindings::DOWN);
+        s.panel.triangle |= pressed(bindings::TRIANGLE);
+        let r = g.right_stick();
+        let byte = |v: f32| (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round() as u8;
+        s.cam = CameraPad {
+            right_x: if invert.0 { 255 - byte(r.x) } else { byte(r.x) },
+            right_y: if invert.1 { 255 - byte(-r.y) } else { byte(-r.y) },
+            r3_held: false,
+            r3_pressed: false,
+        };
+    }
 }
 
 /// An other player's drawn hero: its root, its GPU joints and the model it was built from.
@@ -268,13 +382,14 @@ pub fn draw_others(
     }
 }
 
-/// Player 2's camera (split screen, bottom half) and the screen node that shows its picture.
+/// Another player's camera (split screen; its seat) and the screen node that shows its picture.
 #[derive(Component)]
-pub struct Player2Cam;
+pub struct PlayerCam(usize);
 #[derive(Component)]
-pub struct Player2View;
+pub struct PlayerView(usize);
 
-/// Player 2's picture: its own image, the size it was made at and its colour-grade material.
+/// Another player's picture: its own image, the size it was made at and its colour-grade
+/// material.
 #[derive(Default)]
 pub struct Picture {
     image: Option<Handle<Image>>,
@@ -282,127 +397,164 @@ pub struct Picture {
     grade: Option<Handle<crate::graphics::SceneGrade>>,
 }
 
-/// Each frame: with player 2 in, player 1's camera draws the top half of the scene image, and a
-/// second 3D camera following player 2's follow camera draws its own image, shown over the
-/// bottom half of the game picture with the same colour grade. Its own image (not the scene
-/// image's bottom half): Bevy's ambient occlusion read a camera drawn at an offset in the
-/// target wrongly and left that half nearly black. Without player 2, player 1's camera draws
-/// the whole image again.
+/// Each frame: with other players on this screen, player 1's camera draws its part of the scene
+/// image (`view_rect`), and each other player's 3D camera, following that player's follow
+/// camera, draws its own image, shown over its part of the game picture with the same colour
+/// grade. Their own images (not parts of the scene image): Bevy's ambient occlusion read a camera
+/// drawn at an offset in the target wrongly and left that part nearly black. With player 1
+/// alone, its camera draws the whole image again.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn split_cameras(
     mut commands: Commands,
     play: Option<Res<PlayState>>,
     target: Res<crate::display::SceneTarget>,
-    mut mains: Query<&mut Camera, (With<Camera3d>, With<crate::orbit::Orbit>, Without<Player2Cam>)>,
-    mut seconds: Query<(Entity, &mut Transform), With<Player2Cam>>,
-    scene_views: Query<&Node, (With<crate::display::SceneView>, Without<Player2View>)>,
-    mut views: Query<(Entity, &mut Node), With<Player2View>>,
+    mut mains: Query<&mut Camera, (With<Camera3d>, With<crate::orbit::Orbit>, Without<PlayerCam>)>,
+    mut seconds: Query<(Entity, &PlayerCam, &mut Transform)>,
+    scene_views: Query<&Node, (With<crate::display::SceneView>, Without<PlayerView>)>,
+    mut views: Query<(Entity, &PlayerView, &mut Node)>,
     mut images: ResMut<Assets<Image>>,
     mut grades: ResMut<Assets<crate::graphics::SceneGrade>>,
-    mut pic: Local<Picture>,
+    mut pics: Local<[Picture; MAX_PLAYERS - 1]>,
     settings: Res<crate::display::DisplaySettings>,
 ) {
-    // Online (net.rs) each computer shows one player full screen: no split.
-    let other = play.as_ref().filter(|p| !p.play.net_follow && !p.play.coop_remote).and_then(|p| p.play.others.first());
-    // The Multiplayer page's layout: one above the other, or side by side.
-    let side = settings.coop_split == 1;
     let (w, h) = target.size;
-    let Some(o) = other.filter(|_| w > 0 && h > 1) else {
-        for (e, _) in &seconds {
+    // Online (net.rs) each computer shows one player full screen: no split.
+    let players = if w > 1 && h > 1 { play.as_ref().map_or(1, |p| on_screen(&p.play)) } else { 1 };
+    let side = settings.coop_split == 1;
+    // Cameras and nodes of players no longer on screen go.
+    for (e, c, _) in &seconds {
+        if c.0 + 1 >= players {
             commands.entity(e).despawn();
-        }
-        for (e, _) in &views {
-            commands.entity(e).despawn();
-        }
-        for mut c in &mut mains {
-            if c.viewport.is_some() {
-                c.viewport = None;
-            }
-        }
-        return;
-    };
-    let half = if side { (w - w / 2, h) } else { (w, h - h / 2) };
-    for mut c in &mut mains {
-        let top = (UVec2::ZERO, if side { UVec2::new(w / 2, h) } else { UVec2::new(w, h / 2) });
-        if c.viewport.as_ref().map(|v| (v.physical_position, v.physical_size)) != Some(top) {
-            c.viewport = Some(Viewport { physical_position: top.0, physical_size: top.1, ..default() });
         }
     }
-    // Player 2's image, remade when the scene image's size changes.
-    let mut remade = false;
-    if pic.image.is_none() || pic.size != half {
-        let mut image = Image::new_target_texture(half.0, half.1, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
-        image.sampler = bevy::image::ImageSampler::linear();
-        let handle = images.add(image);
-        if let Some(old) = pic.image.replace(handle.clone()) {
-            images.remove(&old);
+    for (e, v, _) in &views {
+        if v.0 + 1 >= players {
+            commands.entity(e).despawn();
         }
-        pic.size = half;
-        remade = true;
-        let existing = pic.grade.clone().filter(|g| grades.get(g).is_some());
-        match existing {
-            Some(g) => {
-                if let Some(mut m) = grades.get_mut(&g) {
-                    m.image = handle;
+    }
+    let main = (players > 1).then(|| view_rect(players, side, 0)).flatten().map(|r| rect_pixels(r, w, h));
+    for mut c in &mut mains {
+        let want = main.map(|(x, y, pw, ph)| (UVec2::new(x, y), UVec2::new(pw, ph)));
+        if c.viewport.as_ref().map(|v| (v.physical_position, v.physical_size)) != want {
+            c.viewport = want.map(|(p, s)| Viewport { physical_position: p, physical_size: s, ..default() });
+        }
+    }
+    let Some(play) = play.filter(|_| players > 1) else { return };
+    let scene = scene_views.iter().next().and_then(|n| match (n.left, n.top, n.width, n.height) {
+        (Val::Px(l), Val::Px(t), Val::Px(sw), Val::Px(sh)) => Some((l, t, sw, sh)),
+        _ => None,
+    });
+    for (i, o) in play.play.others.iter().enumerate().take(players - 1) {
+        let Some(r) = view_rect(players, side, i + 1) else { continue };
+        let (_, _, pw, ph) = rect_pixels(r, w, h);
+        let size = (pw.max(1), ph.max(1));
+        let pic = &mut pics[i];
+        // Its image, remade when its size changes.
+        let mut remade = false;
+        if pic.image.is_none() || pic.size != size {
+            let mut image = Image::new_target_texture(size.0, size.1, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
+            image.sampler = bevy::image::ImageSampler::linear();
+            let handle = images.add(image);
+            if let Some(old) = pic.image.replace(handle.clone()) {
+                images.remove(&old);
+            }
+            pic.size = size;
+            remade = true;
+            let existing = pic.grade.clone().filter(|g| grades.get(g).is_some());
+            match existing {
+                Some(g) => {
+                    if let Some(mut m) = grades.get_mut(&g) {
+                        m.image = handle;
+                    }
+                }
+                None => {
+                    let grade = grades.iter().next().map(|(_, g)| g.grade).unwrap_or_default();
+                    pic.grade = Some(grades.add(crate::graphics::SceneGrade { grade, image: handle }));
+                }
+            }
+        }
+        let Some(image) = pic.image.clone() else { continue };
+        let eye = Vec3::from(o.camera.eye);
+        let focus = Vec3::from(o.camera.focus);
+        let want = Transform::from_translation(eye).looking_to(focus - eye, Vec3::Y);
+        match seconds.iter_mut().find(|(_, c, _)| c.0 == i) {
+            Some((e, _, mut t)) => {
+                if *t != want {
+                    *t = want;
+                }
+                if remade {
+                    commands.entity(e).insert(RenderTarget::from(image));
                 }
             }
             None => {
-                let grade = grades.iter().next().map(|(_, g)| g.grade).unwrap_or_default();
-                pic.grade = Some(grades.add(crate::graphics::SceneGrade { grade, image: handle }));
-            }
-        }
-    }
-    let Some(image) = pic.image.clone() else { return };
-    let eye = Vec3::from(o.camera.eye);
-    let focus = Vec3::from(o.camera.focus);
-    let want = Transform::from_translation(eye).looking_to(focus - eye, Vec3::Y);
-    match seconds.single_mut() {
-        Ok((e, mut t)) => {
-            if *t != want {
-                *t = want;
-            }
-            if remade {
-                commands.entity(e).insert(RenderTarget::from(image));
-            }
-        }
-        Err(_) => {
-            let fov = 2.0 * (neopets_sim::camera::SCREEN.1 / (2.0 * neopets_sim::camera::FOCAL)).atan();
-            commands.spawn((
-                Camera3d::default(),
-                Camera { order: -2, ..default() },
-                RenderTarget::from(image),
-                bevy::core_pipeline::tonemapping::Tonemapping::None,
-                Projection::Perspective(PerspectiveProjection { fov, near: neopets_sim::camera::NEAR, far: 10_560.0, ..default() }),
-                want,
-                bevy::light::cluster::ClusterConfig::Single,
-                bevy::light::ShadowFilteringMethod::Gaussian,
-                Player2Cam,
-            ));
-        }
-    }
-    // The screen node: the bottom half of the game picture (the scene view's rectangle).
-    let Some(scene) = scene_views.iter().next() else { return };
-    let (Val::Px(left), Val::Px(top), Val::Px(width), Val::Px(height)) = (scene.left, scene.top, scene.width, scene.height) else { return };
-    let want = if side {
-        (Val::Px(left + width / 2.0), Val::Px(top), Val::Px(width / 2.0), Val::Px(height))
-    } else {
-        (Val::Px(left), Val::Px(top + height / 2.0), Val::Px(width), Val::Px(height / 2.0))
-    };
-    match views.single_mut() {
-        Ok((_, mut n)) => {
-            if (n.left, n.top, n.width, n.height) != want {
-                (n.left, n.top, n.width, n.height) = want;
-            }
-        }
-        Err(_) => {
-            if let Some(g) = pic.grade.clone() {
+                let fov = 2.0 * (neopets_sim::camera::SCREEN.1 / (2.0 * neopets_sim::camera::FOCAL)).atan();
                 commands.spawn((
-                    Node { position_type: PositionType::Absolute, left: want.0, top: want.1, width: want.2, height: want.3, ..default() },
-                    bevy::ui_render::prelude::MaterialNode(g),
-                    GlobalZIndex(i32::MIN + 2),
-                    Player2View,
+                    Camera3d::default(),
+                    Camera { order: -2 - i as isize, ..default() },
+                    RenderTarget::from(image),
+                    bevy::core_pipeline::tonemapping::Tonemapping::None,
+                    Projection::Perspective(PerspectiveProjection { fov, near: neopets_sim::camera::NEAR, far: 10_560.0, ..default() }),
+                    want,
+                    bevy::light::cluster::ClusterConfig::Single,
+                    bevy::light::ShadowFilteringMethod::Gaussian,
+                    PlayerCam(i),
                 ));
             }
         }
+        // The screen node: this player's part of the game picture (the scene view's rectangle).
+        let Some((left, top, width, height)) = scene else { continue };
+        let at = |k: u32, size: f32| size * k as f32 / 2.0;
+        let want = (Val::Px(left + at(r[0], width)), Val::Px(top + at(r[1], height)), Val::Px(at(r[2], width)), Val::Px(at(r[3], height)));
+        match views.iter_mut().find(|(_, v, _)| v.0 == i) {
+            Some((_, _, mut n)) => {
+                if (n.left, n.top, n.width, n.height) != want {
+                    (n.left, n.top, n.width, n.height) = want;
+                }
+            }
+            None => {
+                if let Some(g) = pic.grade.clone() {
+                    commands.spawn((
+                        Node { position_type: PositionType::Absolute, left: want.0, top: want.1, width: want.2, height: want.3, ..default() },
+                        bevy::ui_render::prelude::MaterialNode(g),
+                        GlobalZIndex(i32::MIN + 2),
+                        PlayerView(i),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn controllers_by_choice_and_auto() {
+        // Auto everywhere: player 1 the first, then the next in order.
+        assert_eq!(assign(&[10, 11, 12, 13], [0; 4], 4), [Some(10), Some(11), Some(12), Some(13)]);
+        // Two players: the rest are not given out.
+        assert_eq!(assign(&[10, 11, 12], [0; 4], 2), [Some(10), Some(11), None, None]);
+        // Player 2 on controller 1: player 1 (Auto) takes the next free one.
+        assert_eq!(assign(&[10, 11, 12], [0, 1, 0, 0], 3), [Some(11), Some(10), Some(12), None]);
+        // A choice past the connected ones is none; the same controller twice goes to the first.
+        assert_eq!(assign(&[10, 11], [0, 4, 1, 0], 3), [Some(11), None, Some(10), None]);
+        // Fewer controllers than players: the last ones have none.
+        assert_eq!(assign(&[10], [0; 4], 4), [Some(10), None, None, None]);
+    }
+
+    #[test]
+    fn screen_parts() {
+        assert_eq!(view_rect(1, false, 0), Some([0, 0, 2, 2]));
+        assert_eq!(view_rect(2, false, 1), Some([0, 1, 2, 1]));
+        assert_eq!(view_rect(2, true, 1), Some([1, 0, 1, 2]));
+        assert_eq!(view_rect(3, false, 0), Some([0, 0, 2, 1]));
+        assert_eq!(view_rect(3, true, 2), Some([1, 1, 1, 1]));
+        assert_eq!(view_rect(4, false, 3), Some([1, 1, 1, 1]));
+        assert_eq!(view_rect(4, false, 4), None);
+        assert_eq!(view_rect(2, false, 2), None);
+        // An odd size: the parts meet with no gap.
+        assert_eq!(rect_pixels([0, 0, 1, 1], 1001, 601), (0, 0, 500, 300));
+        assert_eq!(rect_pixels([1, 1, 1, 1], 1001, 601), (500, 300, 501, 301));
     }
 }

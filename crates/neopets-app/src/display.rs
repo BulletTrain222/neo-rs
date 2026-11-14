@@ -24,12 +24,21 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 37;
+pub const ROWS: usize = 43;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
-/// The rows on the Multiplayer page (local co-op, docs/MULTIPLAYER.md; this build's feature).
-pub const MULTI_ROWS: [usize; 12] = [25, 26, 27, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW, TOGETHER_ROW, DOORS_ROW];
+/// The rows on the Multiplayer page (docs/MULTIPLAYER.md; this build's feature), in the order
+/// shown: local co-op first, then the shared rules, then online.
+pub const MULTI_ROWS: [usize; 18] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], 27, 25, TOGETHER_ROW, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW, DOORS_ROW];
+/// Local co-op on this computer: start or stop it.
+pub const COOP_ROW: usize = 37;
+/// How many players local co-op has (2 to 4).
+pub const PLAYERS_ROW: usize = 38;
+/// Each player's controller (players 1 to 4).
+pub const PAD_ROWS: [usize; 4] = [39, 40, 41, 42];
+/// A controller choice: Auto, or controller 1 to this many (in the order they were connected).
+pub const PAD_CHOICES: u8 = 4;
 /// The Multiplayer page's online rows (net.rs): host, the join address, join.
 pub const HOST_ROW: usize = 28;
 pub const ADDRESS_ROW: usize = 29;
@@ -49,15 +58,14 @@ pub const DOORS_ROW: usize = 36;
 /// Split screen layouts.
 pub const SPLITS: [&str; 2] = ["Top and bottom", "Side by side"];
 
-/// The rows of the Display page (0), the Gameplay page (1) or the Multiplayer page (2).
+/// The rows of the Display page (0), the Gameplay page (1) or the Multiplayer page (2), in the
+/// order shown.
 pub fn page_rows(page: u8) -> Vec<usize> {
-    (0..ROWS)
-        .filter(|k| match page {
-            1 => GAMEPLAY_ROWS.contains(k),
-            2 => MULTI_ROWS.contains(k),
-            _ => !GAMEPLAY_ROWS.contains(k) && !MULTI_ROWS.contains(k),
-        })
-        .collect()
+    match page {
+        1 => GAMEPLAY_ROWS.to_vec(),
+        2 => MULTI_ROWS.to_vec(),
+        _ => (0..ROWS).filter(|k| !GAMEPLAY_ROWS.contains(k) && !MULTI_ROWS.contains(k)).collect(),
+    }
 }
 /// Character shadows: off, the original volumes as the game draws them (blocky hulls, a drop of
 /// 8 of 255), or this build's detailed ones (each character's own shape, cast by the sun).
@@ -148,11 +156,15 @@ pub struct DisplaySettings {
     pub coop_together: bool,
     /// Online: a door takes only the player who goes through it (off by default: both).
     pub coop_doors_alone: bool,
+    /// Local co-op: how many players (2 to 4).
+    pub coop_players: usize,
+    /// Each player's controller: 0 Auto, k controller k in the order they were connected.
+    pub coop_pads: [u8; 4],
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4] }
     }
 }
 
@@ -203,6 +215,12 @@ impl DisplaySettings {
                 "upnp" => s.upnp = v == "true",
                 "coop together" => s.coop_together = v == "true",
                 "coop doors alone" => s.coop_doors_alone = v == "true",
+                "coop players" => s.coop_players = v.parse().unwrap_or(2).clamp(2, 4),
+                "coop pads" => {
+                    for (k, n) in v.split(',').take(4).enumerate() {
+                        s.coop_pads[k] = n.trim().parse::<u8>().unwrap_or(0).min(PAD_CHOICES);
+                    }
+                }
                 "net port" => s.net_port = v.parse().ok().filter(|&p: &u16| p > 0).unwrap_or(crate::net::PORT),
                 "graphics api" => s.graphics_api = GRAPHICS_APIS.iter().position(|a| a.eq_ignore_ascii_case(v)).unwrap_or(s.graphics_api),
                 _ => {}
@@ -213,7 +231,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\nnet port = {}\ncoop together = {}\ncoop doors alone = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\nnet port = {}\ncoop together = {}\ncoop doors alone = {}\ncoop players = {}\ncoop pads = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -245,7 +263,9 @@ impl DisplaySettings {
             self.upnp,
             self.net_port,
             self.coop_together,
-            self.coop_doors_alone
+            self.coop_doors_alone,
+            self.coop_players,
+            self.coop_pads.map(|n| n.to_string()).join(",")
         )
     }
 
@@ -372,6 +392,13 @@ impl DisplaySettings {
             ("Port".into(), if self.net_port == crate::net::PORT { format!("{} (default)", self.net_port) } else { self.net_port.to_string() }),
             ("Stay together".into(), if self.coop_together { "On".into() } else { "Off".into() }),
             ("Doors take".into(), if self.coop_doors_alone { "Only you".into() } else { "Both".into() }),
+            // The Local co-op row's value comes from the game (show_window).
+            ("Local co-op".into(), String::new()),
+            ("Players".into(), self.coop_players.to_string()),
+            ("Player 1 controller".into(), pad_name(self.coop_pads[0])),
+            ("Player 2 controller".into(), pad_name(self.coop_pads[1])),
+            ("Player 3 controller".into(), pad_name(self.coop_pads[2])),
+            ("Player 4 controller".into(), pad_name(self.coop_pads[3])),
         ]
     }
 
@@ -429,9 +456,19 @@ impl DisplaySettings {
             PORT_ROW => self.net_port = (self.net_port as i32 + delta).clamp(1024, 65535) as u16,
             TOGETHER_ROW => self.coop_together = !self.coop_together,
             DOORS_ROW => self.coop_doors_alone = !self.coop_doors_alone,
+            PLAYERS_ROW => self.coop_players = 2 + step(self.coop_players.clamp(2, 4) - 2, 3),
+            r if PAD_ROWS.contains(&r) => {
+                let k = r - PAD_ROWS[0];
+                self.coop_pads[k] = step(self.coop_pads[k] as usize, PAD_CHOICES as usize + 1) as u8;
+            }
             _ => {}
         }
     }
+}
+
+/// A controller choice as shown: Auto, or Controller k.
+pub fn pad_name(n: u8) -> String {
+    if n == 0 { "Auto".into() } else { format!("Controller {n}") }
 }
 
 /// The frame rate limit: the frame waits out the rest of its time (the last millisecond by
@@ -532,6 +569,7 @@ pub fn take_requests(
     monitors: Query<&bevy::window::Monitor, With<bevy::window::PrimaryMonitor>>,
     mut net: ResMut<crate::net::Net>,
     address: Res<crate::net::JoinAddress>,
+    mut coop: ResMut<crate::coop::Coop>,
 ) {
     let _span = crate::perf::span("take_requests");
     let Some(mut menu) = menu else { return };
@@ -550,6 +588,8 @@ pub fn take_requests(
             }
             ADDRESS_ROW => {}
             PASSWORD_ROW => {}
+            // Local co-op: Cross (or Left and Right) starts it, or stops it while on.
+            COOP_ROW => coop.request = Some(!coop.wanted),
             REMOVE_ROW => {
                 if net.role == crate::net::Role::Host && net.peer.is_some() {
                     net.request = Some(crate::net::Request::Remove);
@@ -716,8 +756,8 @@ const HELP: [&str; ROWS + 1] = [
     "Beams of sunlight through trees and a soft haze toward the sun. Shafts need World shadows on. Not in the original game.",
     "Flat water mirrors the scenery and sky around it, more at low angles. Not in the original game.",
     "Revive: a fallen player gets up when the other stands beside them. Game over: any fall ends the game.",
-    "How two players share the screen: one above the other, or side by side.",
-    "Start on a second controller joins in play, Select leaves. Partner: Roberta when the story has her waiting.",
+    "How two players share the screen: one above the other, or side by side. Three or four players always have quarters.",
+    "Partner: player 2 is Roberta when the story has her waiting. Second Tor: always Tor. Players 3 and 4 are always Tor.",
     "Play with a friend on your home network. Start a game first, then host; your friend joins with the address shown.",
     "The host's address (shown on their Host row). Type it with the number keys; Backspace deletes.",
     "Join the host's game. Each player needs their own copy of the game disc.",
@@ -727,6 +767,12 @@ const HELP: [&str; ROWS + 1] = [
     "The UDP port the game hosts on, and joins on when the address names none. 47817 unless you change it; both computers should match. Type it with the number keys (Backspace deletes) or step it with Left and Right.",
     "On: player 2 is brought back beside player 1 when more than 60 units away. Off: each player goes where they like in the area around them; a door or a load still takes both, and a fall off the world still brings player 2 back. The host's choice counts online.",
     "Online: Both, a door either player takes moves both. Only you: player 2 can go through a door alone into another world, and the two meet again when one walks into the other's world (a movie or a hero switch on the host brings player 2 back). The host's choice counts.",
+    "Cross starts or stops play on this computer. Players 2 to 4 join beside player 1, each with a part of the screen. Not while online.",
+    "Players on this computer: 2, 3 or 4. Three or four share the screen in quarters (with three, player 1 has the top half).",
+    "Player 1's controller. Auto: the keyboard and every controller no other player has. Player 1 always has the keyboard.",
+    "Player 2's controller. Auto: the next free one. Controllers are numbered in the order they were plugged in.",
+    "Player 3's controller (3 or 4 players). Auto: the next free controller.",
+    "Player 4's controller (4 players). Auto: the next free controller.",
     "Back to Options.",
 ];
 
@@ -757,7 +803,8 @@ pub fn spawn_window(mut commands: Commands) {
         .with_children(|ui| {
             ui.spawn((Text::new("Display"), font(22.0), TextColor(GOLD), DispTitle));
             ui.spawn((Text::new("Up and down pick, left and right or a click change. Esc or B go back."), font(12.0), TextColor(DIM), Node { margin: UiRect::bottom(px(8)), ..default() }));
-            for k in 0..=ROWS {
+            let order: Vec<usize> = (0..3u8).flat_map(page_rows).chain([ROWS]).collect();
+            for k in order {
                 let back = k == ROWS;
                 ui.spawn((
                     Button,
@@ -777,7 +824,7 @@ pub fn spawn_window(mut commands: Commands) {
                             });
                         };
                         arrow(r, -1);
-                        r.spawn(Node { width: px(170), justify_content: JustifyContent::Center, ..default() }).with_children(|v| {
+                        r.spawn(Node { width: px(230), justify_content: JustifyContent::Center, ..default() }).with_children(|v| {
                             v.spawn((Text::default(), font(15.0), TextColor(GOLD), TextLayout::no_wrap(), DispValue(k)));
                         });
                         arrow(r, 1);
@@ -834,6 +881,7 @@ pub fn show_window(
     mut help: Query<&mut Text, (With<DispHelp>, Without<DispLabel>, Without<DispValue>, Without<DispTitle>)>,
     mut titles: Query<&mut Text, (With<DispTitle>, Without<DispHelp>, Without<DispLabel>, Without<DispValue>)>,
     (net, address, password): (Res<crate::net::Net>, Res<crate::net::JoinAddress>, Res<crate::net::NetPassword>),
+    (coop, play, gamepads): (Res<crate::coop::Coop>, Option<Res<crate::PlayState>>, Query<Entity, With<Gamepad>>),
 ) {
     let _span = crate::perf::span("show_window");
     let flow = menu.as_ref().map(|m| &m.flow);
@@ -862,6 +910,32 @@ pub fn show_window(
         shown[REMOVE_ROW].1 = if net.role == Role::Host && net.peer.is_some() { "Press to remove".into() } else { "No player 2 online".into() };
         if focus == PORT_ROW {
             shown[PORT_ROW].1 = format!("{}_", if settings.net_port == 0 { String::new() } else { settings.net_port.to_string() });
+        }
+        // Local co-op: on or off, and each controller row's controller as it is now.
+        let here = play.as_ref().map_or(0, |p| if p.play.net_follow || p.play.coop_remote { 0 } else { p.play.others.len() });
+        shown[COOP_ROW].1 = if net.role != Role::Off {
+            "Not while online".into()
+        } else if coop.wanted {
+            if here == 0 { "On (starts in play)".into() } else { format!("On, {} players", here + 1) }
+        } else {
+            "Press to start".into()
+        };
+        let mut connected: Vec<Entity> = gamepads.iter().collect();
+        connected.sort();
+        // While on, as many as are playing (a test switch can ask for another number).
+        let count = if coop.wanted && here > 0 { here + 1 } else { settings.coop_players.clamp(2, 4) };
+        let pads = crate::coop::assign(&connected, settings.coop_pads, count);
+        for (k, &row) in PAD_ROWS.iter().enumerate() {
+            let number = pads[k].and_then(|e| connected.iter().position(|&c| c == e)).map(|n| n + 1);
+            let choice = settings.coop_pads[k];
+            shown[row].1 = match (k, choice, number) {
+                _ if k >= count => format!("{} (not playing)", pad_name(choice)),
+                (0, 0, _) => "Auto (keyboard + rest)".into(),
+                (_, 0, Some(n)) => format!("Auto (Controller {n})"),
+                (_, 0, None) => "Auto (none free)".into(),
+                (_, c, Some(_)) => pad_name(c),
+                (_, c, None) => format!("{} (not connected)", pad_name(c)),
+            };
         }
         shown[PASSWORD_ROW].1 = match (password.0.is_empty(), focus == PASSWORD_ROW) {
             (true, false) => "None".into(),
@@ -917,7 +991,7 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(1), [17, 18, 19, 20]);
-        assert_eq!(page_rows(2), [25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36]);
+        assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 27, 25, 35, 28, 29, 30, 31, 32, 33, 34, 36]);
         assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));
@@ -979,6 +1053,17 @@ mod tests {
         s.change(14, 1, &sizes);
         assert_eq!((s.shadow_quality, s.rows()[14].1.as_str()), (0, "Very Low"), "wraps to Very Low");
         assert_eq!(DisplaySettings::parse(&s.text()), s);
+        // Local co-op: 2 to 4 players (wrapping), each controller Auto or 1 to 4, saved.
+        s.change(PLAYERS_ROW, 1, &sizes);
+        s.change(PLAYERS_ROW, 1, &sizes);
+        assert_eq!(s.rows()[PLAYERS_ROW].1, "4");
+        s.change(PLAYERS_ROW, 1, &sizes);
+        assert_eq!(s.coop_players, 2, "wraps");
+        s.change(PAD_ROWS[1], -1, &sizes);
+        assert_eq!(s.rows()[PAD_ROWS[1]].1, "Controller 4", "Left from Auto wraps");
+        s.change(PAD_ROWS[3], 1, &sizes);
+        assert_eq!(DisplaySettings::parse(&s.text()), s);
+        assert_eq!(DisplaySettings::parse("coop pads = 9,x,2").coop_pads, [4, 0, 2, 0]);
         // A settings file from before Very Low keeps its level.
         assert_eq!(SHADOW_QUALITY[DisplaySettings::parse("shadow quality = 1").shadow_quality], "Medium");
         assert_eq!(SHADOW_QUALITY[DisplaySettings::parse("shadow quality = 0").shadow_quality], "Low");

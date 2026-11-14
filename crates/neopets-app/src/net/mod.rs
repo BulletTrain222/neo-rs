@@ -809,9 +809,9 @@ fn take_welcome(net: &mut Net, r: &mut Reader, from: SocketAddr) {
             net.applied = base;
         }
     }
-    if let Some(host) = r.text() {
-        net.peer_name = host.chars().filter(|c| !c.is_control()).take(12).collect();
-    }
+    // The host is called Player 1 (its name is no longer sent; the user's choice).
+    let _ = r.text();
+    net.peer_name = "Player 1".into();
     net.load_interior = r.u32().filter(|&p| p != 0);
     net.loaded = generation;
     net.state = None;
@@ -1197,6 +1197,8 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     // the joiner chose on its Multiplayer page.
                     p.play.coop_partner_remote = partner;
                     p.play.coop_remote = true;
+                    // Local players beyond player 2 go (player 2 is the joiner's now).
+                    p.play.keep_players(1);
                     if p.play.others.is_empty() {
                         p.play.add_player();
                     }
@@ -1208,7 +1210,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                             info!("net: player 2 back with {hp} health and {mp} magic");
                         }
                     }
-                    coop.pad = None;
+                    coop.release_local();
                     net.generation += 1;
                     net.welcome_pack = p.play.world.pack;
                     net.welcome_game = p.play.generation;
@@ -1217,8 +1219,9 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     let base = net.event_base();
                     net.welcome = Some(welcome(net.generation, &slot, &p.play.effects.snapshot(), base, p.play.interior_pack()));
                     net.welcome_mask = 0;
-                    let who: String = name.chars().filter(|c| !c.is_control()).take(12).collect();
-                    net.peer_name = if who.trim().is_empty() { "Player 2".into() } else { who };
+                    // Players are called by number (Player 2), not by the computer's name.
+                    let _ = name;
+                    net.peer_name = "Player 2".into();
                     net.status = format!("{} joined from {from}.", net.peer_name);
                     net.notice = Some(format!("{} joined.", net.peer_name));
                     info!("net: {from} joined ({})", net.peer_name);
@@ -1635,7 +1638,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         });
         if let Some(i) = net.remote {
             let pl = i.to_panel(&net.seen);
-            let q = &mut coop.panel;
+            let q = &mut coop.seats[0].panel;
             (q.up, q.left, q.right, q.down, q.triangle) = (q.up | pl.up, q.left | pl.left, q.right | pl.right, q.down | pl.down, q.triangle | pl.triangle);
             net.seen = i;
         }
@@ -1685,20 +1688,10 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     }
 }
 
-/// This computer's player name (Default: `name=` in private/net.txt, else the computer's name,
-/// at most 12 letters, else "Player"), shown to the other side in the joined and left lines.
+/// This computer's player name as sent: none (players are called Player 1, Player 2 and so on
+/// by their place, not by the computer's name; the user's choice).
 pub fn my_name() -> String {
-    let named = std::fs::read_to_string("private/net.txt").ok().and_then(|t| t.lines().find_map(|l| l.trim().strip_prefix("name=").map(|v| v.trim().to_string())));
-    let raw = named.or_else(|| std::env::var("COMPUTERNAME").ok()).unwrap_or_default();
-    let clean: String = raw.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').take(12).collect();
-    let clean = clean.trim();
-    if clean.is_empty() {
-        "Player".into()
-    } else {
-        // "SAM-PC" reads "Sam-pc": the first letter capital, the rest small.
-        let mut c = clean.chars();
-        c.next().map(|f| f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase()).unwrap_or_default()
-    }
+    String::new()
 }
 
 /// A password's hash as it travels (0 for none).

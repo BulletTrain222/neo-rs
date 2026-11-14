@@ -4,12 +4,21 @@ Status (2026-11-13): steps 1 to 3 built (local co-op, split screen, co-op rules,
 
 ## How to play together
 
-**On one computer (split screen).** Plug in a second controller and start a game. Press
-Start on the second controller and player 2 appears beside player 1, on the bottom (or right)
-half of the screen. Press Select on that controller to take player 2 out again. Player 2 has its
-own health and magic bars, item panel (D-pad up), Mote panel (D-pad down), camera and rumble.
-Player 2's Start opens the pause page; the item screen there is player 2's (its hero's Motes,
-and an item used goes to player 2).
+**On one computer (split screen, 2 to 4 players).** Plug in the controllers, then open Options,
+Multiplayer. Set **Players** (2, 3 or 4) and, if you like, each player's controller, then press
+Cross on **Local co-op**. In play, players 2 to 4 appear beside player 1, each with their own
+part of the screen: two players top and bottom (or side by side), three with player 1 on the
+top half and players 2 and 3 on the bottom quarters, four with a quarter each. Cross on Local
+co-op again takes them out. A controller press never starts it. Each other player has their own
+health and magic bars, item panel (D-pad up), Mote panel (D-pad down), camera and rumble; their
+Start opens the pause page with their own item screen (their hero's Motes, and an item used goes
+to them). Player 2 is Roberta when the story has her waiting (the Player 2 row); players 3 and 4
+are always Tor. Local co-op is off while you host or join online.
+
+**Controllers.** Each player's controller row picks Auto or Controller 1 to 4, numbered in the
+order the controllers were plugged in. Auto: player 1 has the keyboard and every controller no
+other player has; players 2 to 4 take the next free controllers in order. Player 1 always keeps
+the keyboard. In the menus every controller works.
 
 **On two computers (home network).** Both computers need their own copy of the game disc and
 the same build of this game.
@@ -49,9 +58,12 @@ out lost messages and uneven delays.
 **The Multiplayer page.**
 | Row | Choices | What it does |
 |---|---|---|
+| Local co-op | | Start or stop play on this computer (press again to stop) |
+| Players | 2, 3, 4 | How many play on this computer |
+| Player 1 to 4 controller | Auto, Controller 1 to 4 | Each player's controller (shown with the one it has now) |
 | Knocked out | Revive, Game over | Revive: a fallen player gets up when the other stands beside them for 2 seconds, or by themselves after 10. Game over: any fall ends the game |
-| Split screen | Top and bottom, Side by side | How one computer's screen is shared |
-| Player 2 | Partner, Second Tor | Partner: Roberta when the story has her; Second Tor: always Tor |
+| Split screen | Top and bottom, Side by side | How two players share one computer's screen (three or four always have quarters) |
+| Player 2 | Partner, Second Tor | Partner: Roberta when the story has her; Second Tor: always Tor (players 3 and 4 are always Tor) |
 | Host a game | | Host the game you are playing (press again to stop) |
 | Join address | | The host's address |
 | Join a game | | Join that host (press again to leave) |
@@ -111,7 +123,7 @@ No spec covers it; spec requests are only for original behaviour the co-op rules
   help bug reports, but host-hosted online play does not need them.
 
 ### 2. Local co-op prototype with split screen
-- Pressing Start on a second controller adds player 2 beside player 1: Roberta when the story
+- (Replaced on 2026-11-14 by the Local co-op row; see How to play together.) Pressing Start on a second controller adds player 2 beside player 1: Roberta when the story
   has her, otherwise a second Tor (same outfit for now). Pressing Start again in the pause menu
   takes player 2 out.
 - Split screen: two 3D cameras, each with half the window (top and bottom by default; a Display
@@ -612,7 +624,7 @@ stand-in on this computer, and left for the user to switch on.
 ### Joining
 19. [x] An optional password on the Multiplayer page (Default: none); a wrong one is refused
     with a line.
-20. [x] Player names (Default: the computer's name, shortened): "Sam joined.".
+20. [x] Player names (Default: the computer's name, shortened): "Sam joined.". Replaced on 2026-11-14 at the user's word: players are called Player 1 and Player 2, and no name is sent.
 21. [~] (the Multiplayer page's line shows each refusal, where the join starts) The joiner's title screen says "Joining..." and why a join failed (a refusal shows
     on the title screen, not only on the Multiplayer page).
 22. [x] (another protocol version told apart too; not traced with two builds) A friendly refusal for a different build ("The host has a newer build").

@@ -1526,7 +1526,7 @@ pub struct Play {
     /// (no hero switches; a fall is a down, not a game over).
     pub net_apart: bool,
     /// Player 2 stood in the next area last step (it is brought back beside player 1).
-    coop_crossed: bool,
+    coop_crossed: u8,
     /// Diagnostic: ticks player 2 still presses Square (diag_p2_door_at).
     diag_p2_square: u32,
     /// Diagnostic: ticks player 1 still presses Square (diag_door_at, step_sim).
@@ -2559,7 +2559,7 @@ impl Play {
             apart_door: None,
             net_apart: false,
             diag_p2_square: 0,
-            coop_crossed: false,
+            coop_crossed: 0,
             diag_p1_square: 0,
             coop_partner_remote: None,
             coop_lost: false,
@@ -6046,11 +6046,11 @@ impl Play {
     }
 
     /// Co-op (docs/MULTIPLAYER.md): a boss's step with the nearest standing player as its hero.
-    /// Each boss reads "the hero" (player 1) for its aim, grabs and hits; when player 2 stands
-    /// nearer the nearest boss, player 2 is swapped in for that step (as in its own co-op step),
-    /// so the boss turns on player 2 and its hits land there.
+    /// Each boss reads "the hero" (player 1) for its aim, grabs and hits; when another player
+    /// stands nearer the nearest boss, that player is swapped in for that step (as in its own
+    /// co-op step), so the boss turns on it and its hits land there.
     fn with_boss_target(&mut self, step: fn(&mut Self)) {
-        let swap = !self.others.is_empty() && {
+        let seat: Option<usize> = if self.others.is_empty() { None } else {
             let pack = self.world.pack;
             let bosses: Vec<[f32; 3]> = self
                 .characters
@@ -6061,19 +6061,21 @@ impl Play {
                 .collect();
             let near = |p: [f32; 3]| bosses.iter().map(|b| (b[0] - p[0]).hypot(b[2] - p[2])).fold(f32::MAX, f32::min);
             let standing = |p: &Player| p.down.is_none() && p.loco.state != hero_states::DEAD;
-            let o = &self.others[0];
-            let pick = !bosses.is_empty() && standing(o) && (!standing(&self.player) || near(o.loco.position()) < near(self.player.loco.position()));
-            // NEOPETS_TRACE_BOSSTARGET: the choice and both distances every 60 ticks (diagnostic).
+            // The nearest standing other player, if nearer than player 1 (or player 1 is down).
+            let best = self.others.iter().enumerate().filter(|(_, o)| standing(o)).min_by(|a, b| near(a.1.loco.position()).total_cmp(&near(b.1.loco.position())));
+            let pick = best.filter(|(_, o)| !bosses.is_empty() && (!standing(&self.player) || near(o.loco.position()) < near(self.player.loco.position()))).map(|(k, _)| k);
+            // NEOPETS_TRACE_BOSSTARGET: the choice and the distances every 60 ticks (diagnostic).
             if std::env::var_os("NEOPETS_TRACE_BOSSTARGET").is_some() && self.ticks % 60 == 0 && !bosses.is_empty() {
-                println!("BOSSTARGET tick {}: {} bosses; player 1 {:.1} away, player 2 {:.1} away; the boss steps see player {}; hp {} and {}", self.ticks, bosses.len(), near(self.player.loco.position()), near(o.loco.position()), if pick { 2 } else { 1 }, self.player.hero_hp, o.hero_hp);
+                let others: Vec<String> = self.others.iter().map(|o| format!("{:.1}", near(o.loco.position()))).collect();
+                println!("BOSSTARGET tick {}: {} bosses; player 1 {:.1} away, others {:?} away; the boss steps see player {}; hp {} and {:?}", self.ticks, bosses.len(), near(self.player.loco.position()), others, pick.map_or(1, |k| k + 2), self.player.hero_hp, self.others.iter().map(|o| o.hero_hp).collect::<Vec<_>>());
             }
             pick
         };
-        if !swap {
+        let Some(seat) = seat else {
             step(self);
             return;
-        }
-        self.swap_player(0);
+        };
+        self.swap_player(seat);
         let saved = (self.hero_index, self.weapon, self.shield);
         let who = self.player.who.min(1);
         self.hero_index = who;
@@ -6081,7 +6083,7 @@ impl Play {
         self.shield = self.equipment.entries[1][who];
         step(self);
         (self.hero_index, self.weapon, self.shield) = saved;
-        self.swap_player(0);
+        self.swap_player(seat);
     }
 
     /// Diagnostic (NEOPETS_COOP_SWITCH): the story's switch to the other hero (a forced request).
@@ -19555,14 +19557,16 @@ impl Play {
     /// the parked hero when there is one (Roberta while Tor plays), else as a second Tor (a copy
     /// of player 1's hero). False when player 2 is already in.
     pub fn add_player(&mut self) -> bool {
-        if !self.others.is_empty() {
+        if self.others.len() + 1 >= crate::coop::MAX_PLAYERS {
             return false;
         }
+        let seat = self.others.len();
         let mut p = self.player.clone();
         p.hud = self.hud.clone();
         p.hud.rearm_all();
         p.who = self.hero_index;
-        if let Some(r) = self.parked.as_ref().filter(|_| self.p2_partner()) {
+        // Player 2 (only) is the waiting partner when there is one.
+        if let Some(r) = self.parked.as_ref().filter(|_| seat == 0 && self.p2_partner()) {
             p.who = 1 - self.hero_index.min(1);
             p.hero = r.anim.clone();
             p.model = r.model.clone();
@@ -19575,16 +19579,21 @@ impl Play {
         p.hero_trail = None;
         (p.quick, p.mote_panel, p.dpad, p.captions, p.door_confirm) = Default::default();
         (p.rumble, p.motor) = Default::default();
-        self.place_beside(&mut p);
+        self.place_seat(&mut p, seat);
         self.others.push(p);
         true
     }
 
-    /// Puts another player two units to player 1's right, on the ground there, facing as player 1.
-    fn place_beside(&self, p: &mut Player) {
+    /// Puts another player beside player 1 by its seat: player 2 two units to the right, player
+    /// 3 two to the left, player 4 two behind; on the ground there, facing as player 1.
+    fn place_seat(&self, p: &mut Player, seat: usize) {
         let at = self.player.loco.position();
         let f = self.player.loco.facing;
-        let (rx, rz) = (-f[2], f[0]);
+        let (rx, rz) = match seat {
+            1 => (f[2], -f[0]),
+            2 => (-f[0], -f[2]),
+            _ => (-f[2], f[0]),
+        };
         let (x, z) = (at[0] + 2.0 * rx, at[2] + 2.0 * rz);
         let y = self.world.ground_at(x, z, at[1] + 2.5).unwrap_or(at[1]);
         p.loco.teleport([x, y, z], f);
@@ -19593,12 +19602,12 @@ impl Play {
 
     /// Swaps player 2's hero, HUD record and hero index in for its HUD's pass (hud_view.rs)
     /// (`entering`), and back again after it, in the reverse order.
-    pub fn swap_coop_hud(&mut self, entering: bool) {
-        if self.others.is_empty() {
+    pub fn swap_coop_hud(&mut self, seat: usize, entering: bool) {
+        if seat >= self.others.len() {
             return;
         }
         if entering {
-            self.swap_player(0);
+            self.swap_player(seat);
         }
         std::mem::swap(&mut self.hud, &mut self.player.hud);
         std::mem::swap(&mut self.hero_index, &mut self.player.who);
@@ -19611,15 +19620,25 @@ impl Play {
         std::mem::swap(&mut self.save_prompt, &mut c.3);
         std::mem::swap(&mut self.buy_caption, &mut c.4);
         if !entering {
-            self.swap_player(0);
+            self.swap_player(seat);
         }
     }
 
-    /// Player 2 leaves (local co-op).
+    /// Every other player leaves (local co-op).
     pub fn remove_player(&mut self) {
-        self.others.clear();
-        self.diag_p2_square = 0;
-        self.coop_crossed = false;
+        self.keep_players(0);
+    }
+
+    /// The first `n` other players stay; the rest leave (local co-op).
+    pub fn keep_players(&mut self, n: usize) {
+        self.others.truncate(n);
+        if n == 0 {
+            self.diag_p2_square = 0;
+            self.coop_crossed = 0;
+        }
+        if self.menu_player > self.others.len() {
+            self.menu_player = 0;
+        }
     }
 
     /// Local co-op (docs/MULTIPLAYER.md step 2): each other player's tick, after player 1's, with
@@ -19696,10 +19715,12 @@ impl Play {
                     let c = b[1] + neopets_sim::motion::PROBE_CEILING;
                     !self.world.probe(b[0], b[2], c).found && self.other.as_ref().is_none_or(|o| !o.probe(b[0], b[2], c).found)
                 };
-                let crossed = i == 0 && std::mem::take(&mut self.coop_crossed);
+                // (One bit a player: each other player stood in the next area last step.)
+                let crossed = self.coop_crossed & (1 << i) != 0;
+                self.coop_crossed &= !(1u8 << i);
                 if moved_world || deadly || after_cut || far || lost || crossed {
                     let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
-                    self.place_beside(&mut o);
+                    self.place_seat(&mut o, i);
                     self.others[i] = o;
                 }
             }
@@ -19719,7 +19740,7 @@ impl Play {
                     o.loco.state = hero_states::STANCE;
                     if t + 1 >= 600 {
                         let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
-                        self.place_beside(&mut o);
+                        self.place_seat(&mut o, i);
                         self.others[i] = o;
                     }
                 }
@@ -19884,7 +19905,7 @@ impl Play {
                         self.apart_door = Some(WALKED_APART);
                     }
                 } else {
-                    self.coop_crossed = true;
+                    self.coop_crossed |= 1 << i;
                 }
             }
             // Player 2's doors (docs/MULTIPLAYER.md: either player's door moves both), as player
@@ -19958,7 +19979,7 @@ impl Play {
                 let (at, facing) = (self.others[i].loco.position(), self.others[i].loco.facing);
                 self.player.loco.teleport(at, facing);
                 let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
-                self.place_beside(&mut o);
+                self.place_seat(&mut o, i);
                 self.others[i] = o;
                 self.coop_pack = self.world.pack;
                 self.last_door = format!("player 2's door: player 1 brought to ({:.1}, {:.1}, {:.1}) in {}", at[0], at[1], at[2], self.world.pack);
@@ -20023,7 +20044,7 @@ impl Play {
         let (at, facing) = (self.others[i].loco.position(), self.others[i].loco.facing);
         self.player.loco.teleport(at, facing);
         let mut o = std::mem::replace(&mut self.others[i], self.player.clone());
-        self.place_beside(&mut o);
+        self.place_seat(&mut o, i);
         self.others[i] = o;
         let saved = (self.door_prompt.take(), self.talk_prompt);
         self.talk_prompt = false;
@@ -21540,10 +21561,11 @@ impl Play {
     /// with its hero, weapon and shield, its quick and Mote panels and its HUD record (as in its
     /// co-op step), so the item screen shows player 2's hero and an item it uses goes to it.
     pub fn as_menu_player<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        if self.menu_player == 0 || self.others.is_empty() {
+        let seat = self.menu_player.wrapping_sub(1);
+        if self.menu_player == 0 || seat >= self.others.len() {
             return f(self);
         }
-        self.swap_player(0);
+        self.swap_player(seat);
         let saved = (self.hero_index, self.weapon, self.shield);
         let who = self.player.who.min(1);
         self.hero_index = who;
@@ -21557,7 +21579,7 @@ impl Play {
         std::mem::swap(&mut self.mote_panel, &mut self.player.mote_panel);
         std::mem::swap(&mut self.hud, &mut self.player.hud);
         (self.hero_index, self.weapon, self.shield) = saved;
-        self.swap_player(0);
+        self.swap_player(seat);
         r
     }
 

@@ -338,29 +338,30 @@ pub fn sync_hud<const VIEW: u8>(
     // Online (net.rs): one HUD per computer. The joiner's view 0 shows player 2 (its own hero).
     let online = state.as_deref().is_some_and(|s| s.play.net_follow || s.play.coop_remote);
     let swap0 = VIEW == 0 && state.as_deref().is_some_and(|s| s.play.net_follow && !s.play.others.is_empty());
-    if VIEW == 1 {
-        let Some(st) = state.as_deref_mut().filter(|s| !s.play.others.is_empty() && !online) else {
+    let seat = (VIEW as usize).wrapping_sub(1);
+    if VIEW >= 1 {
+        let Some(st) = state.as_deref_mut().filter(|s| s.play.others.len() > seat && !online) else {
             for (e, ..) in &mut canvas {
                 commands.entity(e).despawn();
             }
             return;
         };
-        st.play.swap_coop_hud(true);
+        st.play.swap_coop_hud(seat, true);
     }
     if swap0 {
         if let Some(st) = state.as_deref_mut() {
-            st.play.swap_coop_hud(true);
+            st.play.swap_coop_hud(0, true);
         }
     }
     hud_pass::<VIEW>(commands, state.as_deref_mut(), art, images, windows, canvas, menu, sprites, texts, captions, values, caption_image, value_images, settings, prices);
-    if VIEW == 1 {
+    if VIEW >= 1 {
         if let Some(st) = state.as_deref_mut() {
-            st.play.swap_coop_hud(false);
+            st.play.swap_coop_hud(seat, false);
         }
     }
     if swap0 {
         if let Some(st) = state.as_deref_mut() {
-            st.play.swap_coop_hud(false);
+            st.play.swap_coop_hud(0, false);
         }
     }
 }
@@ -441,24 +442,15 @@ fn hud_pass<const VIEW: u8>(
     let Some(window) = windows.iter().next() else { return };
     let mut fill_points = [None; 2];
     let p = &state.play;
-    // In split screen (local co-op) each player's HUD fits its own half of the window: player
-    // 1's the top half, player 2's the bottom half.
-    let split = !p.others.is_empty() && !p.net_follow && !p.coop_remote;
-    let side = split && settings.coop_split == 1;
-    let (area_w, area) = match (split, side) {
-        (true, true) => (window.width() / 2.0, window.height()),
-        (true, false) => (window.width(), window.height() / 2.0),
-        _ => (window.width(), window.height()),
-    };
+    // In split screen (local co-op) each player's HUD fits its own part of the window
+    // (coop::view_rect: halves for two players, quarters for more).
+    let r = crate::coop::view_rect(crate::coop::on_screen(p), settings.coop_split == 1, VIEW as usize).unwrap_or([0, 0, 2, 2]);
+    let (area_w, area) = (window.width() * r[2] as f32 / 2.0, window.height() * r[3] as f32 / 2.0);
     let s = (area_w / 512.0).min(area / 448.0);
     let (ox, oy) = ((area_w - 512.0 * s) / 2.0, (area - 448.0 * s) / 2.0);
-    // Player 2's canvas root is moved into the second half; its pieces are placed in it as
+    // Another player's canvas root is moved into its part; its pieces are placed in it as
     // player 1's.
-    let (root_dx, root_dy) = match (VIEW, side) {
-        (1, true) => (area_w, 0.0),
-        (1, false) => (0.0, area),
-        _ => (0.0, 0.0),
-    };
+    let (root_dx, root_dy) = (window.width() * r[0] as f32 / 2.0, window.height() * r[1] as f32 / 2.0);
     let Some(bars) = f.key(BARS) else { return };
     let monster = f.key(MONSTER);
     // The button-prompt group: the parent of the HUD page's node gated by predicate slot 25.
@@ -530,8 +522,8 @@ fn hud_pass<const VIEW: u8>(
             let child = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudSprite(n), HudOf::<VIEW>)).id();
             commands.entity(root).add_child(child);
         }
-        // Player 2's HUD is its bars group only: no texts, captions, prices or values.
-        if VIEW == 1 {
+        // Another player's HUD is its bars group only: no texts, captions, prices or values.
+        if VIEW >= 1 {
             return;
         }
         let text = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudText, HudOf::<VIEW>)).id();

@@ -1045,7 +1045,7 @@ fn main() {
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, coop::read_coop, net::type_address, net::net_step, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot, sync_haze, sync_atmos_overlay),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, coop::draw_others, coop::split_cameras, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_aim_marker, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, (hud_view::sync_hud::<0>, hud_view::sync_hud::<1>).chain(), hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, coop::draw_others, coop::split_cameras, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_aim_marker, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, (hud_view::sync_hud::<0>, hud_view::sync_hud::<1>, hud_view::sync_hud::<2>, hud_view::sync_hud::<3>).chain(), hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -1330,7 +1330,7 @@ fn read_input(
     let _span = crate::perf::span("read_input");
     // The bound movement keys, and the gamepads' left sticks (not while the bindings page is up).
     // Player 2's controller (local co-op) moves only player 2.
-    let sticks: Vec<Vec2> = if mute.0 { Vec::new() } else { gamepads.iter().filter(|(e, _)| Some(*e) != exclude.0).map(|(_, g)| g.left_stick()).collect() };
+    let sticks: Vec<Vec2> = if mute.0 { Vec::new() } else { gamepads.iter().filter(|(e, _)| exclude.p1(*e)).map(|(_, g)| g.left_stick()).collect() };
     driver.input = movement(pad.movement, sticks);
 }
 
@@ -1518,7 +1518,7 @@ fn step_sim(
         }
         // The right stick as PS2 pad bytes (X right 255, Y up 0); the bound camera keys and the
         // mouse (bindings.rs) add to it.
-        let mut right = if mute.0 { Vec2::ZERO } else { gamepads.iter().filter(|(e, _)| Some(*e) != exclude.0).map(|(_, g)| g.right_stick()).find(|v| v.length() > 0.2).unwrap_or(Vec2::ZERO) };
+        let mut right = if mute.0 { Vec2::ZERO } else { gamepads.iter().filter(|(e, _)| exclude.p1(*e)).map(|(_, g)| g.right_stick()).find(|v| v.length() > 0.2).unwrap_or(Vec2::ZERO) };
         right += vpad.look;
         let byte = |v: f32| (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round() as u8;
         let r3_held = vpad.held(bindings::R3);
@@ -1819,6 +1819,14 @@ fn step_sim(
                     let k = c.anim.clip_state();
                     println!("NETCHAR {} tick {}: {} ({}, {}) d {:.1} clip {} progress {:.3} rate {:.2}", if p.net_follow { "joiner" } else { "host" }, p.ticks, c.name, c.slot, c.ordinal, d(c).sqrt(), k.action, k.progress, c.anim.rate());
                 }
+            }
+            // NEOPETS_TRACE_COOPPOS (diagnostic): every player's position, hero and camera eye
+            // every 60 ticks (local co-op).
+            if std::env::var_os("NEOPETS_TRACE_COOPPOS").is_some() && play.play.ticks % 60 == 0 && !play.play.others.is_empty() {
+                let p = &play.play;
+                let row = |q: &crate::play::Player| format!("{:?} who {} eye {:?}", q.loco.position().map(|v| v.round()), q.who, q.camera.eye.map(|v| v.round()));
+                let others: Vec<String> = p.others.iter().map(row).collect();
+                println!("COOPPOS tick {}: p1 {} | {}", p.ticks, row(&p.player), others.join(" | "));
             }
             debug_tools::window_replay(&mut play.play, &mut input);
             // NEOPETS_NET_GAMEOVER=T (diagnostic, not on a joiner): every player falls on play
@@ -2168,13 +2176,14 @@ fn step_sim(
                     play.play.add_player();
                 }
                 if !play.play.others.is_empty() {
-                    let p2 = coop.take();
-                    let pl = std::mem::take(&mut coop.panel);
-                    if let Some(o) = play.play.others.first_mut() {
+                    let n = play.play.others.len();
+                    let inputs: Vec<_> = (0..n).map(|i| coop.take(i)).collect();
+                    for (i, o) in play.play.others.iter_mut().enumerate() {
+                        let pl = coop.seats.get_mut(i).map(|s| std::mem::take(&mut s.panel)).unwrap_or_default();
                         let q = &mut o.dpad;
                         (q.up, q.left, q.right, q.down, q.triangle) = (q.up | pl.up, q.left | pl.left, q.right | pl.right, q.down | pl.down, q.triangle | pl.triangle);
                     }
-                    play.play.coop_step(&[p2]);
+                    play.play.coop_step(&inputs);
                 }
                 // Doors take Only you: player 2 took a door alone; it goes off into its own world.
                 if let Some(n) = play.play.apart_door.take() {
@@ -2318,13 +2327,13 @@ fn step_sim(
                     }
                 }
             }
-            // Co-op on one PC: player 2's Start opens the pause page.
-            if std::mem::take(&mut coop.pause) {
+            // Co-op on one PC: another player's Start opens the pause page (its item screen).
+            if let Some(i) = coop.pause.take().filter(|&i| i < play.play.others.len()) {
                 if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                     if m.flow.current == menus::PLAY {
                         m.flow.set(&a.f, menus::PAUSE);
-                        play.play.menu_player = 1;
-                        info!("co-op: player 2 opened the pause page");
+                        play.play.menu_player = i + 1;
+                        info!("co-op: player {} opened the pause page", i + 2);
                     }
                 }
             }
@@ -3147,11 +3156,12 @@ struct ObjectRoot(u32, usize);
 /// Each frame: a placed object's root takes its drawn transform from the play, or hides.
 /// SPEC-0033 Behavior 1C step 4: the motor send of the last tick goes to pad 0's large motor
 /// (the first connected controller's strong motor) for its countdown, replacing what it played.
-fn send_rumble(state: Option<ResMut<PlayState>>, gamepads: Query<Entity, With<Gamepad>>, mut out: MessageWriter<bevy::input::gamepad::GamepadRumbleRequest>, coop: Res<coop::Coop>) {
+fn send_rumble(state: Option<ResMut<PlayState>>, gamepads: Query<Entity, With<Gamepad>>, mut out: MessageWriter<bevy::input::gamepad::GamepadRumbleRequest>, coop: Res<coop::Coop>, exclude: Res<bindings::PadExclude>) {
     let _span = crate::perf::span("send_rumble");
     let Some(mut state) = state else { return };
-    // Co-op on one PC: player 2's send goes to its own controller.
-    if let (Some(send), Some(gamepad)) = (state.play.others.first_mut().and_then(|o| o.motor.take()), coop.pad) {
+    // Co-op on one PC: each other player's send goes to its own controller.
+    for (i, o) in state.play.others.iter_mut().enumerate() {
+        let (Some(send), Some(gamepad)) = (o.motor.take(), coop.seats.get(i).and_then(|s| s.pad)) else { continue };
         out.write(bevy::input::gamepad::GamepadRumbleRequest::Stop { gamepad });
         if send.level > 0 && send.count > 0 {
             out.write(bevy::input::gamepad::GamepadRumbleRequest::Add {
@@ -3162,7 +3172,7 @@ fn send_rumble(state: Option<ResMut<PlayState>>, gamepads: Query<Entity, With<Ga
         }
     }
     let Some(send) = state.play.motor.take() else { return };
-    let Some(gamepad) = gamepads.iter().filter(|g| Some(*g) != coop.pad).min() else { return };
+    let Some(gamepad) = gamepads.iter().filter(|g| exclude.p1(*g)).min() else { return };
     out.write(bevy::input::gamepad::GamepadRumbleRequest::Stop { gamepad });
     if send.level > 0 && send.count > 0 {
         out.write(bevy::input::gamepad::GamepadRumbleRequest::Add {
