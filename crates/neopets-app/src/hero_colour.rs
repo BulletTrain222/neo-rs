@@ -87,7 +87,9 @@ pub fn recolour(rgba: &mut [u8], choice: u8) -> usize {
 fn recolour_rgb(c: [f32; 3], choice: u8) -> Option<[f32; 3]> {
     let k = c[0].max(c[1]).max(c[2]).max(1e-6);
     let (h, s, v) = to_hsv(c[0] / k, c[1] / k, c[2] / k);
-    if !yellow(h, s, v) {
+    // Only a strong yellow tint is fur (the ears, about 50 degrees); the brown straps and belts
+    // of the clothes (25 to 35 degrees, duller) keep theirs.
+    if !((40.0..=70.0).contains(&h) && s > 0.5) {
         return None;
     }
     let (r, g, b) = match target_hue(choice) {
@@ -102,12 +104,16 @@ fn recolour_rgb(c: [f32; 3], choice: u8) -> Option<[f32; 3]> {
 /// Only fur textures are recoloured, so the armour's gold trim, the crowns and the eyes keep
 /// their colours (the user's choice: only his fur).
 pub fn fur_texture(rgba: &[u8]) -> bool {
-    let (mut n, mut bright, mut black, mut other) = (0usize, 0usize, 0usize, 0usize);
+    let (mut n, mut bright, mut black, mut other, mut white, mut pink) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     for px in rgba.chunks_exact(4).filter(|px| px[3] > 0) {
         n += 1;
         let (h, s, v) = to_hsv(px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0);
         if yellow(h, s, v) {
             bright += usize::from(v > 0.55);
+        } else if v > 0.85 && s < 0.3 {
+            white += 1;
+        } else if (h >= 330.0 || h <= 15.0) && s > 0.2 && s < 0.7 && v > 0.6 {
+            pink += 1;
         } else if v < 0.12 {
             black += 1;
         } else if s > 0.45 && v > 0.25 && !((8.0..45.0).contains(&h) && v < 0.65) {
@@ -115,7 +121,10 @@ pub fn fur_texture(rgba: &[u8]) -> bool {
             other += 1;
         }
     }
-    n > 0 && bright * 10 >= n * 3 && black * 100 < n * 8 && other * 100 < n * 8
+    // Fur has the white tips of the tail (about 37% of its texture) or the pink pads of the paws
+    // (about 19%); the yellow cloth of the outfits (the rags' stripes, sashes, an emblem, a gem)
+    // has neither.
+    n > 0 && bright * 10 >= n * 3 && black * 100 < n * 8 && other * 100 < n * 8 && (white * 100 >= n * 15 || pink * 100 >= n * 8)
 }
 
 /// A copy of a hero model with its fur recoloured to `choice`: the fur textures' yellow texels
@@ -179,17 +188,19 @@ mod tests {
     fn only_fur_textures() {
         let tex = |pixels: &[[u8; 3]]| pixels.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect::<Vec<u8>>();
         let (yel, white, red, blue, black, olive) = ([240, 200, 40], [250, 250, 240], [200, 30, 30], [40, 60, 200], [5, 5, 5], [100, 90, 30]);
-        // Fur: yellow fading to white tips.
+        // Fur: yellow fading to white tips; the paws, yellow round pink pads.
         assert!(fur_texture(&tex(&[yel, yel, yel, white, yel, white])));
+        let pad = [235, 150, 160];
+        assert!(fur_texture(&tex(&[yel, yel, yel, pad, yel, yel, yel, yel])));
+        // Plain yellow cloth (no white tips, no pads).
+        assert!(!fur_texture(&tex(&[yel, yel, yel, yel, yel, yel])));
         // The tunic: gold crowns on red and blue.
         assert!(!fur_texture(&tex(&[yel, red, red, blue, blue, red])));
         // The eye: yellow round a black pupil.
         assert!(!fur_texture(&tex(&[yel, yel, black, yel, yel, black])));
         // Dark leather of a yellow hue.
         assert!(!fur_texture(&tex(&[olive, olive, olive, olive])));
-        // Fur fading into brown.
-        let brown = [110, 60, 25];
-        assert!(fur_texture(&tex(&[yel, yel, yel, brown, brown, yel])));
+
     }
 
     #[test]
@@ -198,5 +209,7 @@ mod tests {
         let n = recolour_rgb([1.6, 1.3, 0.2], 1).expect("yellow");
         assert!((n[0] - 1.6).abs() < 1e-3 && n[1] < 0.5 && n[2] < 0.5, "red at the same strength: {n:?}");
         assert!(recolour_rgb([1.0, 1.0, 1.0], 1).is_none());
+        // A brown strap's tint (about 26 degrees) is left alone.
+        assert!(recolour_rgb([15.0, 11.0, 8.0], 1).is_none());
     }
 }

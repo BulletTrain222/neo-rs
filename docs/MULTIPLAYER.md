@@ -68,7 +68,7 @@ out lost messages and uneven delays.
 | Local co-op | | Start or stop play on this computer (press again to stop) |
 | Players | 2, 3, 4 | How many play on this computer |
 | Player 1 to 4 controller | Auto, Controller 1 to 4 | Each player's controller (shown with the one it has now) |
-| Player 1 to 4 colour | Original, Red, Blue, Green, Purple, Pink, White | Tor's yellow fur (ears and tail) in another colour for that player; the armour, clothes and eyes keep theirs. Only while two or more play; Roberta keeps her own colours. The host's choices count online |
+| Player 1 to 4 colour | Original, Red, Blue, Green, Purple, Pink, White | Tor's yellow fur (ears, head, tail; in the rags his arms too) in another colour for that player; the armour, clothes, straps and eyes keep theirs. Only while two or more play; Roberta keeps her own colours. The host's choices count online |
 | Player tags | On, Off | A coloured tag (P1 to P4) over each other player |
 | Knocked out | Revive, Game over | Revive: a fallen player gets up when the other stands beside them for 2 seconds, or by themselves after 10. Game over: any fall ends the game |
 | Split screen | Top and bottom, Side by side | How two players share one computer's screen (three or four always have quarters) |

@@ -2425,6 +2425,45 @@ fn step_sim(
         // SPEC-0021 Outfit items: the active hero wears the outfit its body entry (or the worn
         // cloak) names; a change loads that outfit's model and rig from the disc.
         if let Some(archive) = archive.as_deref_mut() {
+            // NEOPETS_TRACE_OUTFITS (diagnostic, once): each of Tor's outfit models (resources
+            // 504 to 511): every texture saved as private/shots/outfit_R_K.png with its fur
+            // verdict, and the fur ones recoloured blue as outfit_R_K_blue.png (hero_colour.rs).
+            static OUTFITS: std::sync::Once = std::sync::Once::new();
+            if std::env::var_os("NEOPETS_TRACE_OUTFITS").is_some() {
+                OUTFITS.call_once(|| {
+                    for r in 504..=511u32 {
+                        let Ok(Some(m)) = archive_view::model(&mut archive.disc, &archive.index, r) else { continue };
+                        for (k, t) in m.textures.iter().enumerate() {
+                            let fur = hero_colour::fur_texture(&t.image.rgba);
+                            let parts = m.parts.iter().filter(|p| p.texture == Some(k)).count();
+                            if let Ok(png) = neopets_data::png::encode_rgba(t.image.width, t.image.height, &t.image.rgba) {
+                                let _ = std::fs::write(format!("private/shots/outfit_{r}_{k}.png"), png);
+                            }
+                            if fur {
+                                let mut c = t.image.rgba.clone();
+                                hero_colour::recolour(&mut c, 2);
+                                if let Ok(png) = neopets_data::png::encode_rgba(t.image.width, t.image.height, &c) {
+                                    let _ = std::fs::write(format!("private/shots/outfit_{r}_{k}_blue.png"), png);
+                                }
+                            }
+                            info!("OUTFIT {r} texture {k}: {}x{}, {parts} parts, fur {fur}", t.image.width, t.image.height);
+                        }
+                        let tinted: Vec<(usize, Option<usize>, usize, [i32; 3], [i32; 3])> = m.parts.iter().enumerate().filter(|(_, p)| p.colors.iter().any(|c| { let k = c[0].max(c[1]).max(c[2]).max(1e-6); c[2] / k < 0.5 && c[1] / k > 0.5 })).map(|(i, p)| {
+                            let n = p.raw_colors.len().max(1) as i32;
+                            let avg = (0..3).map(|j| p.raw_colors.iter().map(|c| c[j] as i32).sum::<i32>() / n).collect::<Vec<_>>();
+                            let lo = p.positions.iter().fold([f32::MAX; 3], |a, v| [a[0].min(v[0]), a[1].min(v[1]), a[2].min(v[2])]);
+                            let hi = p.positions.iter().fold([f32::MIN; 3], |a, v| [a[0].max(v[0]), a[1].max(v[1]), a[2].max(v[2])]);
+                            (i, p.texture, p.positions.len(), [avg[0], avg[1], avg[2]], [((hi[0] - lo[0]) * 10.0) as i32, ((hi[1] - lo[1]) * 10.0) as i32, ((hi[2] - lo[2]) * 10.0) as i32])
+                        }).collect();
+                        info!("OUTFIT {r} parts with a yellow tint (part, texture): {tinted:?}");
+                    }
+                });
+            }
+            // NEOPETS_OUTFIT=k (diagnostic, 0 to 7): Tor wears body item 119 + k (outfit 504 + k)
+            // once play runs, to picture each outfit.
+            if let Some(k) = std::env::var("NEOPETS_OUTFIT").ok().and_then(|v| v.trim().parse::<u16>().ok()).filter(|&k| k < 8 && play.play.ticks > 30) {
+                play.play.equipment.entries[2][0] = Some(119 + k);
+            }
             let h = play.play.hero_index.min(1);
             let want = play.play.wanted_outfit(h);
             if want != play.play.outfits[h] {
