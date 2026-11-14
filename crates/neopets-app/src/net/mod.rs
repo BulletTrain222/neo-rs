@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 27;
+const PROTOCOL: u16 = 28;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -458,7 +458,7 @@ impl Net {
                     let c = &s.characters[i];
                     let key = (c.pack, c.slot, c.ordinal);
                     let changed = last.get(&key).is_none_or(|p| {
-                        p.clip != c.clip || p.hp != c.hp || p.dead != c.dead || p.inactive != c.inactive || (0..3).any(|j| (p.position[j] - c.position[j]).abs() > 1e-3 || (p.facing[j] - c.facing[j]).abs() > 1e-3)
+                        p.clip != c.clip || (p.rate - c.rate).abs() > 1e-3 || p.hp != c.hp || p.dead != c.dead || p.inactive != c.inactive || (0..3).any(|j| (p.position[j] - c.position[j]).abs() > 1e-3 || (p.facing[j] - c.facing[j]).abs() > 1e-3)
                     });
                     if (changed || k < 4) && sent < CHARS_A_STATE {
                         if changed {
@@ -1962,8 +1962,8 @@ mod tests {
         let mut s = State::default();
         s.heroes[1] = HeroState { who: 1, position: [1234.5, -3.25, 99.0], facing: [0.6, 0.0, -0.8], state: 7, clip: 70_000, hp: 150, hp_max: 40_000, mp: -3, mp_max: 9, flash: 2, down: true, rate: 1.25 };
         s.characters = vec![
-            CharState { pack: 909, slot: 3, ordinal: 70_000, position: [1.0, 2.0, 3.0], facing: [0.0, 1.0, 0.0], clip: 162, hp: 35, dead: true, inactive: false },
-            CharState { pack: 1066, slot: 0, ordinal: 2, position: [-1.5, 0.0, 8.0], facing: [-0.70710678, 0.0, 0.70710678], clip: 0xFFFF, hp: -5, dead: false, inactive: true },
+            CharState { pack: 909, slot: 3, ordinal: 70_000, position: [1.0, 2.0, 3.0], facing: [0.0, 1.0, 0.0], clip: 162, rate: 1.5, hp: 35, dead: true, inactive: false },
+            CharState { pack: 1066, slot: 0, ordinal: 2, position: [-1.5, 0.0, 8.0], facing: [-0.70710678, 0.0, 0.70710678], clip: 0xFFFF, rate: 0.0, hp: -5, dead: false, inactive: true },
         ];
         let b = s.encode();
         let (_, mut r) = Reader::open(&b).unwrap();

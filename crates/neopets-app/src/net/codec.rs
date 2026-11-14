@@ -153,6 +153,8 @@ pub struct CharState {
     pub position: [f32; 3],
     pub facing: [f32; 3],
     pub clip: u32,
+    /// The clip's play rate (an enemy's walk or run speed), so the joiner plays it as fast.
+    pub rate: f32,
     pub hp: i32,
     pub dead: bool,
     pub inactive: bool,
@@ -774,6 +776,7 @@ impl State {
             w.v3(c.position);
             w.dir(c.facing);
             w.id(c.clip);
+            w.u16((c.rate * 1000.0).round().clamp(0.0, 65535.0) as u16);
             w.small(c.hp);
             w.u8(c.dead as u8 | (c.inactive as u8) << 1);
         }
@@ -898,8 +901,8 @@ impl State {
         let mut characters = Vec::with_capacity(n.min(1024));
         for _ in 0..n {
             let pack = *packs.get(r.u8()? as usize)?;
-            let (slot, ordinal, position, facing, clip, hp, bits) = (r.u8()?, r.id()?, r.v3()?, r.dir()?, r.id()?, r.small()?, r.u8()?);
-            characters.push(CharState { pack, slot, ordinal, position, facing, clip, hp, dead: bits & 1 != 0, inactive: bits & 2 != 0 });
+            let (slot, ordinal, position, facing, clip, rate, hp, bits) = (r.u8()?, r.id()?, r.v3()?, r.dir()?, r.id()?, r.u16()?, r.small()?, r.u8()?);
+            characters.push(CharState { pack, slot, ordinal, position, facing, clip, rate: rate as f32 / 1000.0, hp, dead: bits & 1 != 0, inactive: bits & 2 != 0 });
         }
         let story = r.u32()?;
         let has_story = r.u8()? != 0;

@@ -44,6 +44,12 @@ pub struct HeroAnim {
     look: Option<[f32; 3]>,
     /// The neck look's joints and angles for this tick (SPEC-0040 Behavior 23A mode 1).
     neck: Option<(Vec<usize>, [f32; 6])>,
+    /// The play rate last set (a clip start plays at 1 until it is set again).
+    rate: f32,
+    /// Online, joining: the host's clip for this character. Its own game's requests for another
+    /// id and its rate changes are ignored (they restarted the host's clip every tick, so the
+    /// joiner's enemies never moved).
+    pinned: Option<u32>,
 }
 
 /// The head joint of the hero's look (SPEC-0040 Behavior 23A, mode 0).
@@ -83,7 +89,7 @@ impl HeroAnim {
                 state
             })
             .collect();
-        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default(), chains: Vec::new(), last_owner: None, scale_set: 0, look: None, neck: None };
+        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default(), chains: Vec::new(), last_owner: None, scale_set: 0, look: None, neck: None, rate: 1.0, pinned: None };
         hero.play(3);
         hero
     }
@@ -268,6 +274,9 @@ impl HeroAnim {
     /// its layer holds the same clip with the same mirror flag (word A bit 12; SPEC-0005 Clip
     /// start, Mirrored clips). Sub-part and face clips are never mirrored (none is on disc).
     pub fn request(&mut self, action: u32, force: bool) {
+        if self.pinned.is_some() {
+            return;
+        }
         self.action = action;
         // SPEC-0036: an id with no clip is not ignored; it plays clip 0 of the family.
         let main = self.families.first().filter(|f| !f.data.clips.is_empty()).map(|f| f.data.clip_for(action).unwrap_or(0));
@@ -297,10 +306,35 @@ impl HeroAnim {
             f.current = Some(c);
             f.mirror = f.role == 0 && mirror;
         }
+        self.rate = 1.0;
+    }
+
+    /// Online, joining: play the host's clip at the host's rate; this side's own requests for
+    /// other clips (or a restart of this one) are ignored until the next pin (or `unpin`).
+    pub fn pin(&mut self, action: u32, rate: f32) {
+        self.pinned = None;
+        if self.action != action {
+            self.request(action, true);
+        }
+        self.set_rate(rate);
+        self.pinned = Some(action);
+    }
+
+    pub fn unpin(&mut self) {
+        self.pinned = None;
+    }
+
+    /// The play rate last set.
+    pub fn rate(&self) -> f32 {
+        self.rate
     }
 
     /// Set the play rate R of every family (hero clip speeds follow R every pass).
     pub fn set_rate(&mut self, rate: f32) {
+        if self.pinned.is_some() {
+            return;
+        }
+        self.rate = rate;
         // The face record is never re-timed: it keeps the speed of its clip start (SPEC-0005).
         for f in self.families.iter_mut().filter(|f| f.role != 2) {
             f.record.set_rate(rate);

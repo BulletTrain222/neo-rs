@@ -1540,6 +1540,8 @@ pub struct Play {
     /// HUD are player 2's, it takes no hits of its own); `coop_remote`: this side hosts and
     /// player 2 is on the other computer (no split screen here).
     pub net_follow: bool,
+    /// Characters hold the host's clips (net/sync.rs); released when this side stops following.
+    pub net_pinned: bool,
     pub coop_remote: bool,
     /// A joiner: the host's scripted camera view while one runs.
     pub net_cut: Option<([f32; 3], [f32; 3], [f32; 3], f32)>,
@@ -2562,6 +2564,7 @@ impl Play {
             coop_partner_remote: None,
             coop_lost: false,
             net_follow: false,
+            net_pinned: false,
             coop_remote: false,
             net_cut: None,
             net_fx: HashMap::new(),
@@ -11703,6 +11706,14 @@ impl Play {
     /// (ground step with the world swap search, root travel, constraint, gravity, contacts,
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
+        // No longer following the host (left, removed, or gone apart): the characters' own
+        // steps choose their clips again.
+        if self.net_pinned && !self.net_follow {
+            self.net_pinned = false;
+            for c in &mut self.characters {
+                c.anim.unpin();
+            }
+        }
         // NEOPETS_TRACE_LEVELS: the level-state bits whenever they change (diagnostic).
         if std::env::var_os("NEOPETS_TRACE_LEVELS").is_some() {
             static LAST: std::sync::Mutex<Option<Vec<u16>>> = std::sync::Mutex::new(None);

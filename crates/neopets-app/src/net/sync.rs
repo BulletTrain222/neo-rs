@@ -33,7 +33,7 @@ impl crate::play::Play {
             characters: self
                 .characters
                 .iter()
-                .map(|c| CharState { pack: c.pack, slot: c.slot, ordinal: c.ordinal as u32, position: c.position, facing: c.facing, clip: c.anim.clip_state().action, hp: c.hp, dead: c.dying.is_some() || c.enemy.as_ref().is_some_and(|e| e.is_dead()), inactive: c.inactive })
+                .map(|c| CharState { pack: c.pack, slot: c.slot, ordinal: c.ordinal as u32, position: c.position, facing: c.facing, clip: c.anim.clip_state().action, rate: c.anim.rate(), hp: c.hp, dead: c.dying.is_some() || c.enemy.as_ref().is_some_and(|e| e.is_dead()), inactive: c.inactive })
                 .collect(),
             flags: self.state.flags.iter().copied().collect(),
             items,
@@ -156,9 +156,10 @@ impl crate::play::Play {
             if let Some(w) = c.walker.as_mut() {
                 w.body.position = h.position;
             }
-            if c.anim.clip_state().action != h.clip {
-                c.anim.request(h.clip, true);
-            }
+            // The host's clip and rate hold until its next state (this side's own enemy and
+            // townsfolk steps ask for other clips each tick).
+            c.anim.pin(h.clip, h.rate);
+            self.net_pinned = true;
             c.hp = h.hp;
             if h.dead {
                 if let Some(e) = c.enemy.as_mut().filter(|e| !e.is_dead()) {

@@ -1807,6 +1807,19 @@ fn step_sim(
                     }
                 }
             }
+            // NEOPETS_TRACE_NETCHAR (diagnostic, host and joiner): the clip, progress and rate of
+            // the enemy nearest player 1, every 30 ticks (to see the joiner's play as the host's).
+            if std::env::var_os("NEOPETS_TRACE_NETCHAR").is_some() && play.play.ticks % 30 == 0 {
+                let p = &play.play;
+                let h = p.player.loco.position();
+                let d = |c: &crate::play::Character| (c.position[0] - h[0]).powi(2) + (c.position[2] - h[2]).powi(2);
+                let n = p.characters.iter().filter(|c| c.enemy.is_some()).count();
+                println!("NETCHAR {} tick {}: {} characters, {} enemies, world {}", if p.net_follow { "joiner" } else { "host" }, p.ticks, p.characters.len(), n, p.world.pack);
+                if let Some(c) = p.characters.iter().filter(|c| c.enemy.is_some() && !c.inactive).min_by(|a, b| d(a).total_cmp(&d(b))) {
+                    let k = c.anim.clip_state();
+                    println!("NETCHAR {} tick {}: {} ({}, {}) d {:.1} clip {} progress {:.3} rate {:.2}", if p.net_follow { "joiner" } else { "host" }, p.ticks, c.name, c.slot, c.ordinal, d(c).sqrt(), k.action, k.progress, c.anim.rate());
+                }
+            }
             debug_tools::window_replay(&mut play.play, &mut input);
             // NEOPETS_NET_GAMEOVER=T (diagnostic, not on a joiner): every player falls on play
             // tick T (the game-over page); NEOPETS_NET_CONTINUE: Cross on the page every second.
