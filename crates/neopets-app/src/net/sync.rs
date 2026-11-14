@@ -20,6 +20,8 @@ impl crate::play::Play {
             flash: p.hero_flash,
             down: p.down.is_some(),
             rate: p.loco.rate * p.loco.haste_rate(),
+            drawn: p.weapon_drawn,
+            raised: p.shield_raised,
         };
         let p2 = self.others.get(seat);
         let mut items: Vec<(u16, u32)> = self.state.items.iter().map(|(&k, &v)| (k, v)).collect();
@@ -139,6 +141,7 @@ impl crate::play::Play {
             }
             (p.hero_hp, p.hero_max, p.hero_mp, p.hero_mp_max, p.hero_flash) = (h.hp, h.hp_max, h.mp, h.mp_max, h.flash);
             p.hero.set_rate(h.rate);
+            (p.weapon_drawn, p.shield_raised) = (h.drawn, h.raised);
             p.down = h.down.then_some(0);
             // The joiner is not sent the timer: "Down" alone.
             p.down_line = h.down.then(|| b"Down".to_vec());
@@ -170,6 +173,19 @@ impl crate::play::Play {
             let Some(o) = self.others.get_mut(k + 1) else { break };
             put(o, h);
             let _ = o.hero.tick();
+        }
+        // The other players' held items (their weapon and shield as drawn), worked out here as
+        // the host does in their co-op step (before, no other player had a sword here).
+        for i in 0..self.others.len() {
+            self.swap_player(i);
+            let saved = (self.hero_index, self.weapon, self.shield);
+            let who = self.player.who.min(1);
+            self.hero_index = who;
+            self.weapon = self.equipment.entries[0][who];
+            self.shield = self.equipment.entries[1][who];
+            self.player.items_drawn = self.hero_items();
+            (self.hero_index, self.weapon, self.shield) = saved;
+            self.swap_player(i);
         }
         for c in self.characters.iter_mut() {
             // States carry only the characters that changed (and a few in turn); a character the

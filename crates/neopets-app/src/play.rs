@@ -1523,10 +1523,10 @@ pub struct Play {
     /// through a door alone, into a world of its own (`apart_door`; docs/MULTIPLAYER.md, Plan:
     /// players in separate worlds, phase 1).
     pub coop_doors_alone: bool,
-    /// Online, hosting: separate worlds are possible (one joiner, in the first session).
+    /// Online, hosting: separate worlds are possible (a joiner is in).
     pub net_apart_ok: bool,
     /// Host: the door an online player 2 is taking alone this tick (net.rs sends it apart).
-    pub apart_door: Option<usize>,
+    pub apart_door: Option<(usize, usize)>,
     /// Joiner: apart from the host, this side runs its own world with its hero as player 1
     /// (no hero switches; a fall is a down, not a game over).
     pub net_apart: bool,
@@ -19685,6 +19685,11 @@ impl Play {
     /// player 1's alone.
     pub fn coop_step(&mut self, inputs: &[(HeroInput, CameraPad)]) {
         self.same_hero_outfits();
+        // The other players' hit flashes run down one a tick, as player 1's does in its tick
+        // (before, a player 2 to 4 that was hit stayed red for ever).
+        for o in &mut self.others {
+            o.hero_flash = o.hero_flash.saturating_sub(1);
+        }
         // Revive off: another player fell, so player 1 falls too and the game is over (the
         // single-player death).
         if std::mem::take(&mut self.coop_lost) && self.player.loco.state != hero_states::DEAD {
@@ -19939,7 +19944,7 @@ impl Play {
             if self.hero_contacts(false) {
                 if self.coop_remote && self.coop_doors_alone && self.net_apart_ok {
                     if self.apart_door.is_none() {
-                        self.apart_door = Some(WALKED_APART);
+                        self.apart_door = Some((i, WALKED_APART));
                     }
                 } else {
                     self.coop_crossed |= 1 << i;
@@ -19962,8 +19967,8 @@ impl Play {
                         let p = self.player.loco.position();
                         println!("APART tick {}: player 2 door {:?} touched {:?} scripted {} confirm {} square {} prompt {:?}", self.ticks, fired, self.world.touched_door(p), self.world.scripted_doors, self.confirm, self.square_now, self.door_prompt);
                     }
-                    if let Some(n) = fired {
-                        self.apart_door = Some(n);
+                    if let Some(n) = fired.filter(|_| self.apart_door.is_none()) {
+                        self.apart_door = Some((i, n));
                     }
                 } else {
                     self.door_step();

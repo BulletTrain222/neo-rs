@@ -142,6 +142,9 @@ pub struct HeroState {
     pub down: bool,
     /// The clip's playback rate (its walk or run speed), so the joiner plays it as fast.
     pub rate: f32,
+    /// The weapon in hand (not stowed) and the shield raised, for the held items drawn.
+    pub drawn: bool,
+    pub raised: bool,
 }
 
 /// One character in a state message, matched on the joiner by world, slot and ordinal.
@@ -730,7 +733,7 @@ pub struct Talk {
 }
 
 pub(super) fn write_hero(w: &mut Writer, h: &HeroState) {
-    w.u8(h.who | (h.down as u8) << 7);
+    w.u8(h.who & 0x1F | (h.down as u8) << 7 | (h.drawn as u8) << 6 | (h.raised as u8) << 5);
     w.v3(h.position);
     w.dir(h.facing);
     w.u8(h.state);
@@ -745,7 +748,7 @@ pub(super) fn write_hero(w: &mut Writer, h: &HeroState) {
 
 pub(super) fn read_hero(r: &mut Reader) -> Option<HeroState> {
     let who = r.u8()?;
-    Some(HeroState { who: who & 0x7F, down: who & 0x80 != 0, position: r.v3()?, facing: r.dir()?, state: r.u8()?, clip: r.id()?, hp: r.small()?, hp_max: r.small()?, mp: r.small()?, mp_max: r.small()?, flash: r.u8()?, rate: r.u16()? as f32 / 1000.0 })
+    Some(HeroState { who: who & 0x1F, down: who & 0x80 != 0, drawn: who & 0x40 != 0, raised: who & 0x20 != 0, position: r.v3()?, facing: r.dir()?, state: r.u8()?, clip: r.id()?, hp: r.small()?, hp_max: r.small()?, mp: r.small()?, mp_max: r.small()?, flash: r.u8()?, rate: r.u16()? as f32 / 1000.0 })
 }
 
 impl State {

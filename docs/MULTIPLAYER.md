@@ -24,9 +24,9 @@ the keyboard. In the menus every controller works.
 3 and 4), each on their own computer with their own copy of the game disc and the same build of
 this game. The first to join is player 2 (Roberta when they chose Partner and the story has
 her); players 3 and 4 play player 1's hero. If a player leaves, the ones after them move up
-(player 4 becomes player 3). Doors take **Only you** (separate worlds) works only while one
-friend is in; with more, a door takes everyone, and nobody new can join while two players are
-in separate worlds.
+(player 4 becomes player 3). With Doors take **Only you**, any friend can go off into their own
+world; each one comes back when they walk into the host's world (they come back as the next
+player number). Two friends who are both away from the host do not see each other.
 1. The host starts or loads a game, then opens Options, Multiplayer and chooses **Host a game**.
    The help line shows the address to give your friend (for example 192.168.1.20).
 2. The friend opens Options, Multiplayer (from the title screen is fine), types that address

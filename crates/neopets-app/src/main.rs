@@ -1826,11 +1826,21 @@ fn step_sim(
                 netr.request = Some(net::Request::Leave);
                 info!("net: leaving on tick {} (diagnostic)", play.play.ticks);
             }
+            // NEOPETS_NET_HITP="T:k" (diagnostic, hosting or local co-op): on play tick T the
+            // player of seat k (0 is player 2) takes a hit of 5, as an enemy's would.
+            if let Some((t, k)) = std::env::var("NEOPETS_NET_HITP").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<usize>().ok()?))) {
+                if t == play.play.ticks && k < play.play.others.len() && !play.play.net_follow {
+                    play.play.swap_player(k);
+                    play.play.diag_hurt(5.0);
+                    play.play.swap_player(k);
+                    info!("net: player {} hit on tick {t} (diagnostic)", k + 2);
+                }
+            }
             // NEOPETS_TRACE_COOPPOS (diagnostic): every player's position, hero and camera eye
             // every 60 ticks (local co-op).
             if std::env::var_os("NEOPETS_TRACE_COOPPOS").is_some() && play.play.ticks % 60 == 0 && !play.play.others.is_empty() {
                 let p = &play.play;
-                let row = |q: &crate::play::Player| format!("{:?} who {} eye {:?}", q.loco.position().map(|v| v.round()), q.who, q.camera.eye.map(|v| v.round()));
+                let row = |q: &crate::play::Player| format!("{:?} who {} eye {:?} flash {} items {}", q.loco.position().map(|v| v.round()), q.who, q.camera.eye.map(|v| v.round()), q.hero_flash, q.items_drawn.len());
                 let others: Vec<String> = p.others.iter().map(row).collect();
                 println!("COOPPOS tick {}: p1 {} | {}", p.ticks, row(&p.player), others.join(" | "));
             }
@@ -1943,10 +1953,10 @@ fn step_sim(
                 netr.start_story(&play.play.state);
                 info!("net: apart: this side's game took door {n} ({})", play.play.last_door);
             }
-            if netr.apart {
-                netr.story_sync(&mut play.play.state);
+            if netr.any_apart() {
                 // The world is 0 while a load runs (not yet anywhere).
-                netr.apart_me = (if play.play.job.is_some() { 0 } else { play.play.world.pack }, play.play.player.hero_hp, play.play.player.hero_mp, play.play.player.loco.position());
+                let me = (if play.play.job.is_some() { 0 } else { play.play.world.pack }, play.play.player.hero_hp, play.play.player.hero_mp, play.play.player.loco.position());
+                netr.apart_sync(&mut play.play.state, me);
                 if play.play.net_apart {
                     play.play.apart_down_step();
                     if std::env::var_os("NEOPETS_TRACE_APART").is_some() {
@@ -2190,13 +2200,13 @@ fn step_sim(
                 play.play.tick(&input, pad);
                 // Local co-op (coop.rs): player 2's tick after player 1's; online, player 2's input
                 // comes from the joiner (net.rs).
-                play.play.coop_remote = netr.role == net::Role::Host && netr.any_peer() && !netr.apart;
-                // Separate worlds online only with one joiner, in the first session.
-                play.play.net_apart_ok = netr.peer.is_some() && netr.peers() == 1;
+                play.play.coop_remote = netr.role == net::Role::Host && netr.with_host() > 0;
+                // Separate worlds online: any joiner in the host's world may go off alone.
+                play.play.net_apart_ok = play.play.coop_remote;
                 // A game started afresh while hosting (a developer warp) brings the joiners'
                 // players back.
                 if play.play.coop_remote {
-                    let want = netr.peers();
+                    let want = netr.with_host();
                     while play.play.others.len() < want && play.play.add_player() {}
                 }
                 if !play.play.others.is_empty() {
@@ -2209,19 +2219,15 @@ fn step_sim(
                     }
                     play.play.coop_step(&inputs);
                 }
-                // Doors take Only you: player 2 took a door alone; it goes off into its own world.
-                if let Some(n) = play.play.apart_door.take() {
-                    netr.go_apart_host(n, &mut play.play);
+                // Doors take Only you: a joiner's player took a door alone; it goes off into its
+                // own world.
+                if let Some((seat, n)) = play.play.apart_door.take() {
+                    netr.go_apart_seat(seat, n, &mut play.play);
                 }
-                // Apart: the players meet again when the joiner reports this world, or a story
-                // moment here (a movie, a hero switch, game over) calls player 2 back.
-                if netr.apart_settled() {
-                    let met = netr.other_left && netr.other_pack == play.play.world.pack && play.play.job.is_none();
-                    let story = play.play.state.movie_queue.len() > movies || play.play.swap.is_some() || play.play.death.page.is_some() || play.play.death.flag_e;
-                    if met || story {
-                        netr.rejoin_host(&mut play.play, if met { "met in this world" } else { "a story moment" });
-                    }
-                }
+                // Apart: each joiner meets the host again when it reports this world, or a story
+                // moment here (a movie, a hero switch, game over) calls it back.
+                let story = play.play.state.movie_queue.len() > movies || play.play.swap.is_some() || play.play.death.page.is_some() || play.play.death.flag_e;
+                netr.host_rejoins(&mut play.play, story);
                 // NEOPETS_NET_BREAK="first:every" (diagnostic, hosting): from that tick, on each
                 // period, the hero breaks the nearest intact breakable and drops coins (so the
                 // joiner's copy can be checked).

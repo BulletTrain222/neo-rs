@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 29;
+const PROTOCOL: u16 = 30;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -712,11 +712,11 @@ impl Net {
             return;
         }
         keep_p2(self, play);
-        // Player 2's place goes with the door (the host's last state did not have it there
+        // The player's place goes with the door (the host's last state did not have it there
         // yet); a walk into the next area travels as door 0xFFFF.
-        let at = play.others.first().map_or([0.0; 3], |o| o.loco.position());
-        play.remove_player();
-        play.coop_remote = false;
+        let at = play.others.get(self.seat).map_or([0.0; 3], |o| o.loco.position());
+        play.remove_seat(self.seat);
+        self.remote = None;
         self.apart = true;
         self.apart_go = Some((if door == crate::play::WALKED_APART { u16::MAX } else { door as u16 }, play.world.pack, at));
         self.other_pack = play.world.pack;
@@ -725,10 +725,61 @@ impl Net {
         self.start_story(&play.state);
         self.notice = Some(format!("{} went off on their own.", if self.peer_name.is_empty() { "Player 2" } else { self.peer_name.as_str() }));
         if door == crate::play::WALKED_APART {
-            info!("net: player 2 walks into the next area alone; apart");
+            info!("net: {} walks into the next area alone; apart", self.peer_name);
         } else {
-            info!("net: player 2 takes door {door} of {} alone; apart", play.world.pack);
+            info!("net: {} takes door {door} of {} alone; apart", self.peer_name, play.world.pack);
         }
+    }
+
+    /// Host: the joiner of `seat` went through door `door` alone (Doors take Only you): its
+    /// session goes apart and the players after it move up a seat.
+    pub fn go_apart_seat(&mut self, seat: usize, door: usize, play: &mut crate::play::Play) {
+        let mut extra = std::mem::take(&mut self.extra);
+        let found = std::iter::once(&mut *self).chain(extra.iter_mut()).find(|n| n.peer.is_some() && !n.apart && n.seat == seat).map(|n| {
+            n.go_apart_host(door, play);
+        });
+        if found.is_some() {
+            renumber(self, &mut extra, Some(seat));
+        }
+        self.extra = extra;
+    }
+
+    /// Host, each tick: every joiner apart meets the host again when it reports the host's
+    /// world, or a story moment here (a movie, a hero switch, game over) calls it back.
+    pub fn host_rejoins(&mut self, play: &mut crate::play::Play, story: bool) {
+        let mut extra = std::mem::take(&mut self.extra);
+        for n in std::iter::once(&mut *self).chain(extra.iter_mut()) {
+            if n.apart_settled() {
+                let met = n.other_left && n.other_pack == play.world.pack && play.job.is_none();
+                if met || story {
+                    n.rejoin_host(play, if met { "met in this world" } else { "a story moment" });
+                }
+            }
+        }
+        self.extra = extra;
+    }
+
+    /// Each tick while apart: the story changes each way, and this side's world, health, magic
+    /// and place (`me`) for the other side (every joiner apart, on a host).
+    pub fn apart_sync(&mut self, state: &mut neopets_sim::level::GameState, me: (u32, i32, i32, [f32; 3])) {
+        let mut extra = std::mem::take(&mut self.extra);
+        for n in std::iter::once(&mut *self).chain(extra.iter_mut()) {
+            if n.apart {
+                n.story_sync(state);
+                n.apart_me = me;
+            }
+        }
+        self.extra = extra;
+    }
+
+    /// Whether this side (or, on a host, any joiner) is in separate worlds.
+    pub fn any_apart(&self) -> bool {
+        self.apart || self.extra.iter().any(|e| e.apart)
+    }
+
+    /// Host: the joiners playing in the host's world (not apart).
+    pub fn with_host(&self) -> usize {
+        std::iter::once(self).chain(self.extra.iter()).filter(|n| n.peer.is_some() && !n.apart).count()
     }
 
     /// Host: the players meet again (or a story moment calls player 2 back): player 2 comes
@@ -742,16 +793,17 @@ impl Net {
         self.story_base = None;
         self.ops_out.clear();
         play.coop_remote = true;
-        if play.others.is_empty() {
-            play.add_player();
-        }
+        // Back as the next player (after those in the host's world).
+        self.seat = play.others.len();
+        self.peer_name = format!("Player {}", self.seat + 2);
+        play.add_player();
         let (hp, mp) = self.other_vitals;
-        if let Some(o) = play.others.first_mut().filter(|_| hp > 0) {
+        if let Some(o) = play.others.get_mut(self.seat).filter(|_| hp > 0) {
             (o.hero_hp, o.hero_mp) = (hp.min(o.hero_max), mp.max(0).min(o.hero_mp_max));
         }
-        // Met in this world: player 2 stays where it walked in (not put beside player 1).
+        // Met in this world: the player stays where it walked in (not put beside player 1).
         if self.other_pack == play.world.pack && self.other_pos != [0.0; 3] {
-            if let Some(o) = play.others.first_mut() {
+            if let Some(o) = play.others.get_mut(self.seat) {
                 let f = o.loco.facing;
                 o.loco.teleport(self.other_pos, f);
             }
@@ -789,7 +841,7 @@ impl Net {
         let mut slot: Option<neopets_sim::save::Slot> = None;
         let mut extra = std::mem::take(&mut self.extra);
         for n in std::iter::once(&mut *self).chain(extra.iter_mut()) {
-            if n.peer.is_none() {
+            if n.peer.is_none() || n.apart {
                 continue;
             }
             if walked && play.generation == n.welcome_game && play.world.pack != n.welcome_pack && !n.resync {
@@ -1227,15 +1279,6 @@ fn host_route(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, pl
             Some(k) => k,
             None => {
                 let hello = bytes.len() >= 7 && bytes[..4] == MAGIC && bytes[6] == HELLO && u16::from_le_bytes([bytes[4], bytes[5]]) == PROTOCOL;
-                // Players apart (separate worlds) take no third player until they meet.
-                if hello && net.apart {
-                    let mut w = Writer::new(REFUSE);
-                    w.text("the players are in separate worlds just now; join when they meet again");
-                    if let Some(s) = net.socket.as_ref() {
-                        let _ = s.send_to(&w.0, from);
-                    }
-                    continue;
-                }
                 if !hello || net.peer.is_none() {
                     0
                 } else if let Some(k) = extra.iter().position(|e| e.peer.is_none()) {
@@ -1262,8 +1305,8 @@ fn host_route(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, pl
             for _ in 0..3 {
                 n.send(&w.0);
             }
-            let seat = n.seat;
-            if let Some(p) = play.as_deref_mut() {
+            let (seat, apart) = (n.seat, n.apart);
+            if let Some(p) = play.as_deref_mut().filter(|_| !apart) {
                 keep_p2(n, &p.play);
                 p.play.remove_seat(seat);
             }
@@ -1272,10 +1315,13 @@ fn host_route(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, pl
             n.remote = None;
             n.welcome = None;
             n.last_heard = None;
+            n.apart = false;
             net.status = format!("{name} removed. Still hosting.");
             net.notice = Some(format!("{name} was removed."));
             info!("net: {name} removed by the host");
-            renumber(net, &mut extra, Some(seat));
+            if !apart {
+                renumber(net, &mut extra, Some(seat));
+            }
         }
     }
     let linked = |n: &Net| n.peer.is_some() as usize;
@@ -1299,7 +1345,7 @@ fn host_route(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, pl
     // past the last joiner have no input.
     extra.retain(|e| e.peer.is_some());
     net.extra = extra;
-    let seats = net.peers();
+    let seats = net.with_host();
     for c in coop.remote.iter_mut().skip(seats) {
         *c = None;
     }
@@ -1309,7 +1355,7 @@ fn host_route(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, pl
 fn renumber(net: &mut Net, extra: &mut [Net], freed: Option<usize>) {
     let Some(k) = freed else { return };
     for n in std::iter::once(net).chain(extra.iter_mut()) {
-        if n.peer.is_some() && n.seat > k {
+        if n.peer.is_some() && !n.apart && n.seat > k {
             n.seat -= 1;
             n.peer_name = format!("Player {}", n.seat + 2);
         }
@@ -1445,11 +1491,11 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
             (_, BYE) if net.peer == Some(from) || net.target == Some(from) => {
                 let host = net.role == Role::Host;
                 if let Some(p) = play.as_deref_mut() {
-                    if host {
+                    if host && !net.apart {
                         keep_p2(net, &p.play);
                         p.play.remove_seat(net.seat);
                         freed = Some(net.seat);
-                    } else {
+                    } else if !host {
                         p.play.remove_player();
                         p.play.net_follow = false;
                     }
@@ -1817,7 +1863,7 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
     // gave the second none, and the player stood still for it: with four windows on one
     // computer the joiners' players stuttered), and a press stays until a tick takes it (a
     // frame that ran no tick lost the press to the next frame's input).
-    if net.role == Role::Host && net.peer.is_some() && net.seat < coop.remote.len() {
+    if net.role == Role::Host && net.peer.is_some() && !net.apart && net.seat < coop.remote.len() {
         let before = coop.remote[net.seat].map(|(h, _)| (h.jump, h.attack, h.square));
         coop.remote[net.seat] = net.remote.map(|i| {
             let (mut h, c) = i.to_hero(&net.seen);
@@ -1840,11 +1886,11 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
     // Timeouts.
     if net.last_heard.is_some_and(|t| now.duration_since(t) > TIMEOUT) {
         if let Some(p) = play.as_deref_mut() {
-            if net.role == Role::Host {
+            if net.role == Role::Host && !net.apart {
                 keep_p2(net, &p.play);
                 p.play.remove_seat(net.seat);
                 freed = Some(net.seat);
-            } else {
+            } else if net.role != Role::Host {
                 p.play.remove_player();
                 p.play.net_follow = false;
             }
@@ -2151,7 +2197,7 @@ mod tests {
     #[test]
     fn packed_records_round_trip() {
         let mut s = State::default();
-        s.heroes[1] = HeroState { who: 1, position: [1234.5, -3.25, 99.0], facing: [0.6, 0.0, -0.8], state: 7, clip: 70_000, hp: 150, hp_max: 40_000, mp: -3, mp_max: 9, flash: 2, down: true, rate: 1.25 };
+        s.heroes[1] = HeroState { who: 1, position: [1234.5, -3.25, 99.0], facing: [0.6, 0.0, -0.8], state: 7, clip: 70_000, hp: 150, hp_max: 40_000, mp: -3, mp_max: 9, flash: 2, down: true, rate: 1.25, drawn: true, raised: false };
         s.characters = vec![
             CharState { pack: 909, slot: 3, ordinal: 70_000, position: [1.0, 2.0, 3.0], facing: [0.0, 1.0, 0.0], clip: 162, rate: 1.5, hp: 35, dead: true, inactive: false },
             CharState { pack: 1066, slot: 0, ordinal: 2, position: [-1.5, 0.0, 8.0], facing: [-0.70710678, 0.0, 0.70710678], clip: 0xFFFF, rate: 0.0, hp: -5, dead: false, inactive: true },
@@ -2161,6 +2207,7 @@ mod tests {
         let d = State::decode(&mut r).unwrap();
         let h = &d.heroes[1];
         assert_eq!((h.who, h.down, h.position, h.state, h.clip, h.hp, h.hp_max, h.mp, h.flash), (1, true, [1234.5, -3.25, 99.0], 7, 70_000, 150, 32_767, -3, 2));
+        assert_eq!((h.drawn, h.raised), (true, false), "the held items' flags travel");
         assert!((0..3).all(|k| (h.facing[k] - s.heroes[1].facing[k]).abs() <= 1.0 / 32767.0));
         for (a, c) in s.characters.iter().zip(&d.characters) {
             assert_eq!((a.pack, a.slot, a.ordinal, a.position, a.clip, a.hp, a.dead, a.inactive), (c.pack, c.slot, c.ordinal, c.position, c.clip, c.hp, c.dead, c.inactive));
