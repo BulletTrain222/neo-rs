@@ -62,8 +62,10 @@ pub fn read_coop(gamepads: Query<(Entity, &Gamepad)>, keys: Res<bindings::Bindin
         return;
     };
     // The Multiplayer page's options.
-    if (play.play.coop_revive, play.play.coop_partner, play.play.coop_together) != (settings.coop_revive, settings.coop_partner, settings.coop_together) {
-        (play.play.coop_revive, play.play.coop_partner, play.play.coop_together) = (settings.coop_revive, settings.coop_partner, settings.coop_together);
+    // NEOPETS_NET_ALONE (diagnostic): Doors take Only you without the settings file.
+    let alone = settings.coop_doors_alone || std::env::var_os("NEOPETS_NET_ALONE").is_some();
+    if (play.play.coop_revive, play.play.coop_partner, play.play.coop_together, play.play.coop_doors_alone) != (settings.coop_revive, settings.coop_partner, settings.coop_together, alone) {
+        (play.play.coop_revive, play.play.coop_partner, play.play.coop_together, play.play.coop_doors_alone) = (settings.coop_revive, settings.coop_partner, settings.coop_together, alone);
     }
     let first = gamepads.iter().map(|(e, _)| e).min();
     // A new game or a load replaced the play (and its players): player 2 comes back while its

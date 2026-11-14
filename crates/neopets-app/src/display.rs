@@ -24,12 +24,12 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 36;
+pub const ROWS: usize = 37;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 4] = [17, 18, 19, 20];
 /// The rows on the Multiplayer page (local co-op, docs/MULTIPLAYER.md; this build's feature).
-pub const MULTI_ROWS: [usize; 11] = [25, 26, 27, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW, TOGETHER_ROW];
+pub const MULTI_ROWS: [usize; 12] = [25, 26, 27, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW, TOGETHER_ROW, DOORS_ROW];
 /// The Multiplayer page's online rows (net.rs): host, the join address, join.
 pub const HOST_ROW: usize = 28;
 pub const ADDRESS_ROW: usize = 29;
@@ -44,6 +44,8 @@ pub const UPNP_ROW: usize = 33;
 pub const PORT_ROW: usize = 34;
 /// Co-op: player 2 kept near player 1, or free to wander the loaded area.
 pub const TOGETHER_ROW: usize = 35;
+/// Online: a door takes both players, or only the one who goes through it.
+pub const DOORS_ROW: usize = 36;
 /// Split screen layouts.
 pub const SPLITS: [&str; 2] = ["Top and bottom", "Side by side"];
 
@@ -144,11 +146,13 @@ pub struct DisplaySettings {
     pub net_port: u16,
     /// Co-op: player 2 is brought back beside player 1 when far away (on by default).
     pub coop_together: bool,
+    /// Online: a door takes only the player who goes through it (off by default: both).
+    pub coop_doors_alone: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false }
     }
 }
 
@@ -198,6 +202,7 @@ impl DisplaySettings {
                 "coop partner" => s.coop_partner = v == "true",
                 "upnp" => s.upnp = v == "true",
                 "coop together" => s.coop_together = v == "true",
+                "coop doors alone" => s.coop_doors_alone = v == "true",
                 "net port" => s.net_port = v.parse().ok().filter(|&p: &u16| p > 0).unwrap_or(crate::net::PORT),
                 "graphics api" => s.graphics_api = GRAPHICS_APIS.iter().position(|a| a.eq_ignore_ascii_case(v)).unwrap_or(s.graphics_api),
                 _ => {}
@@ -208,7 +213,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\nnet port = {}\ncoop together = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\nmenu edges = {}\noriginal neighbour = {}\ngraphics api = {}\nlight shafts = {}\nwater reflections = {}\ncoop revive = {}\ncoop split = {}\ncoop partner = {}\nupnp = {}\nnet port = {}\ncoop together = {}\ncoop doors alone = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -239,7 +244,8 @@ impl DisplaySettings {
             self.coop_partner,
             self.upnp,
             self.net_port,
-            self.coop_together
+            self.coop_together,
+            self.coop_doors_alone
         )
     }
 
@@ -365,6 +371,7 @@ impl DisplaySettings {
             ("Open the port (UPnP)".into(), if self.upnp { "On".into() } else { "Off".into() }),
             ("Port".into(), if self.net_port == crate::net::PORT { format!("{} (default)", self.net_port) } else { self.net_port.to_string() }),
             ("Stay together".into(), if self.coop_together { "On".into() } else { "Off".into() }),
+            ("Doors take".into(), if self.coop_doors_alone { "Only you".into() } else { "Both".into() }),
         ]
     }
 
@@ -421,6 +428,7 @@ impl DisplaySettings {
             // Left and Right step the port by one (1024 to 65535).
             PORT_ROW => self.net_port = (self.net_port as i32 + delta).clamp(1024, 65535) as u16,
             TOGETHER_ROW => self.coop_together = !self.coop_together,
+            DOORS_ROW => self.coop_doors_alone = !self.coop_doors_alone,
             _ => {}
         }
     }
@@ -718,6 +726,7 @@ const HELP: [&str; ROWS + 1] = [
     "On: while you host, your router is asked to let a friend on the internet in (UPnP). The way in closes when you stop hosting, or by itself after two hours. Some routers have UPnP turned off.",
     "The UDP port the game hosts on, and joins on when the address names none. 47817 unless you change it; both computers should match. Type it with the number keys (Backspace deletes) or step it with Left and Right.",
     "On: player 2 is brought back beside player 1 when more than 60 units away. Off: each player goes where they like in the area around them; a door or a load still takes both, and a fall off the world still brings player 2 back. The host's choice counts online.",
+    "Online: Both, a door either player takes moves both. Only you: player 2 can go through a door alone into another world, and the two meet again when one walks into the other's world (a movie or a hero switch on the host brings player 2 back). The host's choice counts.",
     "Back to Options.",
 ];
 
@@ -908,7 +917,7 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(1), [17, 18, 19, 20]);
-        assert_eq!(page_rows(2), [25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]);
+        assert_eq!(page_rows(2), [25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36]);
         assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));

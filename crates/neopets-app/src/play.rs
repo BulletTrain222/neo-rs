@@ -1516,6 +1516,19 @@ pub struct Play {
     /// The Multiplayer page's Stay together (on by default): player 2 is brought back beside
     /// player 1 when far away; off, each goes where they like in the loaded area.
     pub coop_together: bool,
+    /// The Multiplayer page's Doors take (Both by default): Only you lets an online player 2 go
+    /// through a door alone, into a world of its own (`apart_door`; docs/MULTIPLAYER.md, Plan:
+    /// players in separate worlds, phase 1).
+    pub coop_doors_alone: bool,
+    /// Host: the door an online player 2 is taking alone this tick (net.rs sends it apart).
+    pub apart_door: Option<usize>,
+    /// Joiner: apart from the host, this side runs its own world with its hero as player 1
+    /// (no hero switches; a fall is a down, not a game over).
+    pub net_apart: bool,
+    /// Diagnostic: ticks player 2 still presses Square (diag_p2_door_at).
+    diag_p2_square: u32,
+    /// Diagnostic: ticks player 1 still presses Square (diag_door_at, step_sim).
+    pub diag_p1_square: u32,
     /// Online, hosting: the joiner's own Player 2 choice (partner or second Tor), which decides
     /// its player 2 in place of this side's.
     pub coop_partner_remote: Option<bool>,
@@ -2538,6 +2551,11 @@ impl Play {
             coop_revive: true,
             coop_partner: true,
             coop_together: true,
+            coop_doors_alone: false,
+            apart_door: None,
+            net_apart: false,
+            diag_p2_square: 0,
+            diag_p1_square: 0,
             coop_partner_remote: None,
             coop_lost: false,
             net_follow: false,
@@ -5791,6 +5809,10 @@ impl Play {
     /// SPEC-0053 3.2: a switch request to the other hero. Refused by the mode, a dead partner
     /// (a parked hero with no hit points) or a running task. Returns whether it was accepted.
     pub fn request_switch(&mut self, extra: bool, effects: bool, flash: bool) -> bool {
+        // Apart from the host, the other hero is player 1's, elsewhere.
+        if self.net_apart {
+            return false;
+        }
         // Local co-op (docs/MULTIPLAYER.md): no switch of the player's own while player 2 is in
         // (player 2 may be the parked hero itself); a story's switch (forced) goes ahead, and
         // player 2 as the partner then becomes the other hero (`exchange_heroes`).
@@ -11503,6 +11525,115 @@ impl Play {
 
     /// SPEC-0006 door step after the hero's motion (its trigger step): a touched door of the
     /// current world posts its prompt until confirmed, then travels by the default rule.
+    /// The door the running hero is taking this tick, as `door_step` would take it (its prompt
+    /// posted), without taking it.
+    fn door_fires(&mut self) -> Option<usize> {
+        if self.job.is_some() {
+            return None;
+        }
+        let p = self.player.loco.position();
+        let n = self.world.touched_door(p)?;
+        if self.world.scripted_doors {
+            return match level::teleport_context(self.world.pack, n) {
+                None => None,
+                Some(0) => Some(n),
+                Some(c) => {
+                    self.door_prompt = Some(c);
+                    (self.square_now && self.confirm).then_some(n)
+                }
+            };
+        }
+        if self.world.ground.as_ref().is_none_or(|g| g.cell_value(p[0], p[2]) < 0) {
+            return None;
+        }
+        if self.confirm {
+            self.confirm = false;
+            Some(n)
+        } else {
+            self.door_prompt = Some(if self.world.buffer == Buffer::Exterior { 13 } else { 26 });
+            None
+        }
+    }
+
+    /// Take door `n` of the current world now, as the door step does once it fires.
+    pub fn take_door(&mut self, n: usize) {
+        if self.world.scripted_doors {
+            let actions = level::on_teleport(self.world.pack, n, &mut self.state);
+            self.apply(&actions);
+        } else {
+            self.default_door(n);
+        }
+    }
+
+    /// Joiner, going apart (net.rs): this side's own hero (player 2) becomes player 1 with its
+    /// HUD and panels, the host's hero leaves this game, and this side runs its world itself.
+    pub fn go_apart(&mut self) {
+        if self.others.is_empty() {
+            return;
+        }
+        self.swap_player(0);
+        self.others.clear();
+        std::mem::swap(&mut self.hud, &mut self.player.hud);
+        std::mem::swap(&mut self.quick, &mut self.player.quick);
+        std::mem::swap(&mut self.mote_panel, &mut self.player.mote_panel);
+        let who = self.player.who.min(1);
+        self.hero_index = who;
+        self.weapon = self.equipment.entries[0][who];
+        self.shield = self.equipment.entries[1][who];
+        self.net_follow = false;
+        self.net_apart = true;
+        self.net_cut = None;
+        self.dialogue_open = false;
+        self.textbox.open = false;
+        self.player.down = None;
+        self.player.down_line = None;
+    }
+
+    /// Joiner apart: a fallen hero gets up by itself after 10 seconds (the game goes on with
+    /// player 1 elsewhere), at half health.
+    pub fn apart_down_step(&mut self) {
+        let Some(t) = self.player.down else { return };
+        self.player.down = Some(t + 1);
+        self.player.down_line = Some(format!("Down: up in {} s", (600u32.saturating_sub(t) + 59) / 60).into_bytes());
+        if t + 1 >= 600 {
+            self.player.down = None;
+            self.player.down_line = None;
+            self.player.hero_hp = (self.player.hero_max / 2).max(1);
+            self.player.loco.state = hero_states::STANCE;
+        }
+    }
+
+    /// Diagnostic: player 2 put in door plane `n` of the current world with its door confirmed
+    /// (its own confirm flag), so its next door step takes it.
+    pub fn diag_p2_door_at(&mut self, n: usize) {
+        if self.others.is_empty() {
+            return;
+        }
+        // (A talk box up would keep player 2 from doors: the test closes it.)
+        self.dialogue_open = false;
+        self.textbox.open = false;
+        let saved = self.confirm;
+        self.swap_player(0);
+        self.diag_door_at(n);
+        self.player.door_confirm = true;
+        self.swap_player(0);
+        self.confirm = saved;
+        self.diag_p2_square = 20;
+    }
+
+    /// Diagnostic: the hero put in door plane `n` of the current world with its door confirmed,
+    /// so the door step takes it.
+    pub fn diag_door_at(&mut self, n: usize) {
+        let Some(pl) = self.world.planes.get(n).copied() else { return };
+        // (A talk box up would take the Square presses: the test closes it.)
+        self.dialogue_open = false;
+        self.textbox.open = false;
+        let at = [pl.p[0] + pl.d[0] * pl.w * 0.5 + pl.q[0] * 0.5, pl.p[1] + pl.d[1] * pl.w * 0.5 + pl.q[1] * 0.5, pl.p[2] + pl.d[2] * pl.w * 0.5 + pl.q[2] * 0.5];
+        self.player.loco.teleport(at, [-pl.f[0], 0.0, -pl.f[2]]);
+        self.confirm = true;
+        self.diag_p1_square = 1;
+    }
+
     fn door_step(&mut self) {
         if self.job.is_some() {
             return;
@@ -14281,7 +14412,7 @@ impl Play {
             return Some(c);
         }
         // Co-op: a down player's line takes the caption's place on its own view.
-        if let Some(c) = self.player.down_line.as_deref().filter(|_| !self.others.is_empty()) {
+        if let Some(c) = self.player.down_line.as_deref().filter(|_| !self.others.is_empty() || self.net_apart) {
             return Some(c);
         }
         let id = if self.talk_prompt {
@@ -14936,7 +15067,7 @@ impl Play {
         self.sound.play(neopets_sim::sound::VOICE, if big { 1 } else { 0 }, neopets_sim::sound::Play::default());
         // Local co-op: another player at 0 HP goes down (its death clip; revived in `coop_step`),
         // with no game over.
-        let partner_up = self.coop_revive && !self.coop_running && self.others.iter().any(|o| o.down.is_none());
+        let partner_up = self.coop_revive && !self.coop_running && (self.others.iter().any(|o| o.down.is_none()) || self.net_apart);
         if self.player.hero_hp <= 0 && (self.coop_running || partner_up) {
             self.player.hero_hp = 0;
             // Revive off (Multiplayer page): another player's fall ends the game.
@@ -19497,6 +19628,11 @@ impl Play {
         let cut_ended = std::mem::replace(&mut self.coop_cut, cut_now) && !cut_now;
         for i in 0..self.others.len() {
             let (mut input, pad) = inputs.get(i).copied().unwrap_or_default();
+            // Diagnostic (diag_p2_door_at): player 2 presses Square for a few ticks.
+            if i == 0 && self.diag_p2_square > 0 {
+                self.diag_p2_square -= 1;
+                input.square = true;
+            }
             // Staying together: after a world change (doors, loads) or more than 60 units across
             // or 25 up or down from player 1, player 2 is put beside player 1 again.
             {
@@ -19706,8 +19842,24 @@ impl Play {
             // brings player 1 along after this step.
             let door_from = (self.world.pack, self.player.loco.position());
             let free = !self.dialogue_open && self.player.down.is_none();
+            if std::env::var_os("NEOPETS_TRACE_APART").is_some() && self.diag_p2_square > 0 {
+                println!("APART tick {}: player 2 free {free} (dialogue {} down {:?}) remote {} alone {}", self.ticks, self.dialogue_open, self.player.down, self.coop_remote, self.coop_doors_alone);
+            }
             if free {
-                self.door_step();
+                // Doors take Only you, online: a door player 2 is about to take is not taken
+                // here; the joiner's own game takes it (net.rs, apart).
+                if self.coop_remote && self.coop_doors_alone {
+                    let fired = self.door_fires();
+                    if std::env::var_os("NEOPETS_TRACE_APART").is_some() && (self.diag_p2_square > 0 || fired.is_some()) {
+                        let p = self.player.loco.position();
+                        println!("APART tick {}: player 2 door {:?} touched {:?} scripted {} confirm {} square {} prompt {:?}", self.ticks, fired, self.world.touched_door(p), self.world.scripted_doors, self.confirm, self.square_now, self.door_prompt);
+                    }
+                    if let Some(n) = fired {
+                        self.apart_door = Some(n);
+                    }
+                } else {
+                    self.door_step();
+                }
                 // Player 2's Square rows as player 1's (SPEC-0022 Square chooser): stop climbing
                 // a ladder or panel, let go of an edge, a ledge or a block, grab a block.
                 if std::env::var_os("NEOPETS_TRACE_COOPSQUARE").is_some() && (input.square || self.square_now) {

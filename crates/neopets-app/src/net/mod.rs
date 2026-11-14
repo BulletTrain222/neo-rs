@@ -25,6 +25,7 @@ use neopets_sim::hero::HeroInput;
 
 use crate::PlayState;
 
+pub mod apart;
 mod codec;
 pub mod upnp;
 mod sync;
@@ -35,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 24;
+const PROTOCOL: u16 = 25;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -67,6 +68,8 @@ const EVENTS: u8 = 11;
 const RESYNC: u8 = 12;
 /// The host sent the joiner away (the Multiplayer page's Remove row).
 const REMOVED: u8 = 13;
+/// Players in separate worlds (net/apart.rs): each side's world, vitals and story changes.
+const APART: u8 = 14;
 
 /// This build's identity, checked at joining: the crate version and the build's own number.
 fn build_id() -> String {
@@ -231,6 +234,28 @@ pub struct Net {
     /// Host: the router's answer being waited for (UPnP), and the port it forwards.
     upnp_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<upnp::Outcome>>>,
     pub upnp_port: Option<u16>,
+    /// Players in separate worlds (net/apart.rs): whether this side runs its own world apart
+    /// from the other; host: the door the joiner is to take, until it answers; joiner: the door
+    /// to take now (step_sim); the story as last agreed; the numbered batches of changes not yet
+    /// acknowledged, the next number, the other side's last batch put in and its changes waiting
+    /// for step_sim; the other side's world and vitals; this side's (step_sim fills it); when
+    /// this side last sent.
+    pub apart: bool,
+    apart_go: Option<(u16, u32)>,
+    /// Host: the world apart began in.
+    apart_from: Option<u32>,
+    pub apart_start: Option<u16>,
+    pub story_base: Option<apart::StoryBase>,
+    ops_out: std::collections::VecDeque<(u32, Vec<apart::StoryOp>)>,
+    ops_next: u32,
+    ops_in_last: u32,
+    pub ops_in: Vec<apart::StoryOp>,
+    pub other_pack: u32,
+    /// Host: the joiner has been in another world since going apart (only then can they meet).
+    pub other_left: bool,
+    other_vitals: (i32, i32),
+    pub apart_me: (u32, i32, i32),
+    apart_sent: Option<Instant>,
     /// Joiner: when this join began (a join with no answer gives up after 20 seconds).
     join_started: Option<Instant>,
     /// Host, for the trace: events made since the last trace line, by kind (`kind_of`).
@@ -323,7 +348,7 @@ impl Net {
     /// Host: the state after a tick, sent to the joiner with the events not yet acknowledged
     /// (at most 96, oldest first).
     pub fn send_state(&mut self, s: &State) {
-        if self.role == Role::Host && self.peer.is_some() {
+        if self.role == Role::Host && self.peer.is_some() && !self.apart {
             self.sent_at.push_back((s.tick as u32, Instant::now()));
             while self.sent_at.len() > 240 {
                 self.sent_at.pop_front();
@@ -583,7 +608,7 @@ impl Net {
     /// Host: an event for the joiner (kept while a joiner is in; at most 4,000 waiting, the
     /// oldest dropped).
     pub fn push_event(&mut self, e: Event) {
-        if self.role != Role::Host || self.peer.is_none() {
+        if self.role != Role::Host || self.peer.is_none() || self.apart {
             return;
         }
         self.next_event += 1;
@@ -613,13 +638,88 @@ impl Net {
     }
 
     /// Host: a new welcome (the joiner reloads) when the host's world changed.
+    /// The story as it stands is the agreed one; nothing waits in either direction.
+    pub fn start_story(&mut self, s: &neopets_sim::level::GameState) {
+        self.story_base = Some(apart::StoryBase::of(s));
+        self.ops_out.clear();
+        (self.ops_next, self.ops_in_last) = (0, 0);
+        self.ops_in.clear();
+        self.apart_sent = None;
+    }
+
+    /// Apart, each tick: the other side's story changes put in, this side's since the last
+    /// agreed story queued to go (numbered, sent until acknowledged).
+    pub fn story_sync(&mut self, s: &mut neopets_sim::level::GameState) {
+        let Some(base) = self.story_base.as_mut() else { return };
+        let incoming = std::mem::take(&mut self.ops_in);
+        if !incoming.is_empty() {
+            info!("net: the other world's story changes: {incoming:?}");
+        }
+        apart::apply_ops(&incoming, s, base);
+        let changes = base.changes(s);
+        if !changes.is_empty() {
+            info!("net: this world's story changes: {changes:?}");
+            *base = apart::StoryBase::of(s);
+            self.ops_next += 1;
+            self.ops_out.push_back((self.ops_next, changes));
+        }
+    }
+
+    /// Host: player 2 went through door `door` alone (Doors take Only you): it leaves this game,
+    /// and the joiner is told to take that door with its own game.
+    pub fn go_apart_host(&mut self, door: usize, play: &mut crate::play::Play) {
+        if self.role != Role::Host || self.peer.is_none() || self.apart {
+            return;
+        }
+        keep_p2(self, play);
+        play.remove_player();
+        play.coop_remote = false;
+        self.apart = true;
+        self.apart_go = Some((door as u16, play.world.pack));
+        self.other_pack = play.world.pack;
+        self.other_left = false;
+        self.apart_from = Some(play.world.pack);
+        self.start_story(&play.state);
+        self.notice = Some(format!("{} went off on their own.", if self.peer_name.is_empty() { "Player 2" } else { self.peer_name.as_str() }));
+        info!("net: player 2 takes door {door} of {} alone; apart", play.world.pack);
+    }
+
+    /// Host: the players meet again (or a story moment calls player 2 back): player 2 comes
+    /// back into this game beside player 1 with its health and magic, and a new welcome follows.
+    pub fn rejoin_host(&mut self, play: &mut crate::play::Play, why: &str) {
+        if !self.apart {
+            return;
+        }
+        self.apart = false;
+        self.apart_go = None;
+        self.story_base = None;
+        self.ops_out.clear();
+        play.coop_remote = true;
+        if play.others.is_empty() {
+            play.add_player();
+        }
+        let (hp, mp) = self.other_vitals;
+        if let Some(o) = play.others.first_mut().filter(|_| hp > 0) {
+            (o.hero_hp, o.hero_mp) = (hp.min(o.hero_max), mp.max(0).min(o.hero_mp_max));
+        }
+        // A new welcome on the next tick (the joiner loads this game again).
+        self.welcome_pack = u32::MAX;
+        self.notice = Some(format!("{} is back.", if self.peer_name.is_empty() { "Player 2" } else { self.peer_name.as_str() }));
+        info!("net: player 2 back ({why}); a new welcome");
+    }
+
+    /// Whether the joiner has taken the door it was handed (the host is waiting otherwise).
+    pub fn apart_settled(&self) -> bool {
+        self.apart && self.apart_go.is_none()
+    }
+
     /// The last event a welcome made now covers: the joiner plays the events after it.
     fn event_base(&self) -> u32 {
         self.events.front().map_or(self.next_event, |e| e.0 - 1)
     }
 
     pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32, game: u32, fx: &[neopets_sim::effect::Op]) {
-        if self.role != Role::Host || self.peer.is_none() || (pack == self.welcome_pack && game == self.welcome_game) {
+        if self.role != Role::Host || self.peer.is_none() || self.apart || (pack == self.welcome_pack && game == self.welcome_game) {
             return;
         }
         self.welcome_pack = pack;
@@ -656,6 +756,14 @@ fn take_welcome(net: &mut Net, r: &mut Reader, from: SocketAddr) {
         return;
     }
     let first = net.loaded == 0;
+    // A welcome while apart: the players meet again in the host's game.
+    if net.apart {
+        net.apart = false;
+        net.story_base = None;
+        net.ops_out.clear();
+        net.notice = Some("Back with player 1.".into());
+        info!("net: back in the host's game");
+    }
     net.load = Some(neopets_sim::save::Slot(bytes.to_vec()));
     net.load_fx = match r.u16() {
         Some(n) => (0..n).map_while(|_| read_op(r.u8()?, r)).collect(),
@@ -727,6 +835,59 @@ fn carried(s: &State, p: &State, k: f32) -> State {
         }
     }
     out
+}
+
+/// An apart message from the other side: its world and vitals, its acknowledgement of this
+/// side's changes, its next changes in order, and (from the host) the door the joiner takes.
+fn read_apart(net: &mut Net, r: &mut Reader, host: bool) {
+    let (Some(pack), Some(hp), Some(mp), Some(ack), Some(go)) = (r.u32(), r.i32(), r.i32(), r.u32(), r.u8()) else { return };
+    let door = if go == 1 {
+        match (r.u16(), r.u32()) {
+            (Some(d), Some(p)) => Some((d, p)),
+            _ => return,
+        }
+    } else {
+        None
+    };
+    while net.ops_out.front().is_some_and(|b| b.0 <= ack) {
+        net.ops_out.pop_front();
+    }
+    let n = r.u8().unwrap_or(0);
+    for _ in 0..n {
+        let (Some(num), Some(count)) = (r.u32(), r.u16()) else { break };
+        let mut ops = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let Some(op) = apart::read_op(r) else { return };
+            ops.push(op);
+        }
+        if num == net.ops_in_last + 1 {
+            net.ops_in_last = num;
+            net.ops_in.extend(ops);
+        }
+    }
+    if pack != net.other_pack {
+        info!("net: the other side is now in world {pack}");
+    }
+    net.other_pack = pack;
+    net.other_vitals = (hp, mp);
+    // A world (not 0, which is a load still running) other than the one apart began in.
+    if host && pack != 0 && net.apart_go.is_none() && Some(pack) != net.apart_from {
+        net.other_left = true;
+    }
+    if host {
+        // The joiner answered: it has taken its door.
+        if net.apart_go.take().is_some() {
+            info!("net: player 2 is in its own world ({pack})");
+        }
+    } else if let Some((d, p)) = door {
+        if !net.apart {
+            net.apart = true;
+            net.apart_start = Some(d);
+            net.other_pack = p;
+            net.notice = Some("You went off on your own. Walk into player 1's world to meet again.".into());
+            info!("net: taking door {d} of {p} alone; apart");
+        }
+    }
 }
 
 /// Host: player 2's health and magic kept as it goes (`Net::kept`).
@@ -1086,6 +1247,14 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.stop("The host ended the game.");
                 }
             }
+            (Role::Host, APART) if net.peer == Some(from) => {
+                net.last_heard = Some(now);
+                read_apart(&mut net, &mut r, true);
+            }
+            (Role::Join, APART) if net.target == Some(from) => {
+                net.last_heard = Some(now);
+                read_apart(&mut net, &mut r, false);
+            }
             (Role::Join, REMOVED) if net.target == Some(from) => {
                 if let Some(p) = play.as_deref_mut() {
                     p.play.remove_player();
@@ -1340,6 +1509,46 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         if let Some(i) = net.outgoing.take() {
             net.send_input(i);
         }
+    }
+    // Apart (net/apart.rs): every 100 ms this side's world, vitals and unacknowledged story
+    // changes (and, from the host until the joiner answers, the door to take).
+    let linked_apart = net.apart && ((net.role == Role::Host && net.peer.is_some()) || (net.role == Role::Join && net.target.is_some()));
+    if linked_apart && net.apart_sent.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(100)) {
+        net.apart_sent = Some(now);
+        let mut w = Writer::new(APART);
+        w.u32(net.apart_me.0);
+        w.i32(net.apart_me.1);
+        w.i32(net.apart_me.2);
+        w.u32(net.ops_in_last);
+        match net.apart_go {
+            Some((door, pack)) => {
+                w.u8(1);
+                w.u16(door);
+                w.u32(pack);
+            }
+            None => w.u8(0),
+        }
+        let mut batches = Vec::new();
+        let mut size = 0;
+        for (num, ops) in net.ops_out.iter() {
+            let mut b = Writer(Vec::new());
+            b.u32(*num);
+            b.u16(ops.len() as u16);
+            for op in ops {
+                apart::write_op(&mut b, op);
+            }
+            if size + b.0.len() > 900 && !batches.is_empty() {
+                break;
+            }
+            size += b.0.len();
+            batches.push(b.0);
+        }
+        w.u8(batches.len() as u8);
+        for b in batches {
+            w.0.extend_from_slice(&b);
+        }
+        let bytes = w.0;
+        net.send(&bytes);
     }
     // Once a second while linked: the traffic each way, and the Multiplayer page's line with the
     // round trip and the traffic.
@@ -1645,7 +1854,7 @@ mod tests {
                 x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 b.push((x >> 56) as u8);
             }
-            for kind in [HELLO, WELCOME, REFUSE, INPUT, STATE, BYE, PING, WELCOME_PART, PART_ACK, BLOB_PART, EVENTS, RESYNC, REMOVED] {
+            for kind in [HELLO, WELCOME, REFUSE, INPUT, STATE, BYE, PING, WELCOME_PART, PART_ACK, BLOB_PART, EVENTS, RESYNC, REMOVED, APART] {
                 b[6] = kind;
                 if let Some((_, mut r)) = Reader::open(&b) {
                     let _ = State::decode(&mut r);
@@ -1659,6 +1868,11 @@ mod tests {
                 }
                 if let Some((_, mut r)) = Reader::open(&b) {
                     let _ = WorldSync::read(&mut r);
+                }
+                for host in [true, false] {
+                    if let Some((_, mut r)) = Reader::open(&b) {
+                        read_apart(&mut Net::default(), &mut r, host);
+                    }
                 }
             }
         }

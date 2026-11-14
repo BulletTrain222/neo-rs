@@ -1898,6 +1898,55 @@ fn step_sim(
                     }
                 }
             }
+            // Players in separate worlds (net/apart.rs): the joiner going apart takes the door the
+            // host handed over with its own game; while apart, each side's story changes go out
+            // and the other's come in, and a fallen joiner gets up by itself.
+            if let Some(n) = netr.apart_start.take() {
+                play.play.go_apart();
+                play.play.take_door(n as usize);
+                netr.start_story(&play.play.state);
+                info!("net: apart: this side's game took door {n} ({})", play.play.last_door);
+            }
+            if netr.apart {
+                netr.story_sync(&mut play.play.state);
+                // The world is 0 while a load runs (not yet anywhere).
+                netr.apart_me = (if play.play.job.is_some() { 0 } else { play.play.world.pack }, play.play.player.hero_hp, play.play.player.hero_mp);
+                if play.play.net_apart {
+                    play.play.apart_down_step();
+                    if std::env::var_os("NEOPETS_TRACE_APART").is_some() {
+                        static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+                        if let Ok(mut l) = LAST.lock() {
+                            if *l != play.play.last_door {
+                                info!("net: apart door line on tick {}: {} (world {}, buffer {:?})", play.play.ticks, play.play.last_door, play.play.world.pack, play.play.world.buffer);
+                                *l = play.play.last_door.clone();
+                            }
+                        }
+                    }
+                    if std::env::var_os("NEOPETS_TRACE_APART").is_some() && play.play.ticks % 300 == 0 {
+                        let p = &play.play;
+                        info!("net: apart tick {}: world {} job {:?} at {:?} state {} dialogue {} cut {} | {}", p.ticks, p.world.pack, p.job.is_some(), p.player.loco.position().map(|v| v.round()), p.player.loco.state, p.dialogue_open, p.cut.is_some_and(|c| c.state != 0), p.last_door);
+                    }
+                }
+            }
+            // NEOPETS_NET_P2DOOR="T:n" (diagnostic, hosting): on play tick T player 2 is put in door
+            // n of the current world with its door confirmed. NEOPETS_NET_DOORAT="T:n" (not
+            // following): player 1 the same.
+            for (key, p2) in [("NEOPETS_NET_P2DOOR", true), ("NEOPETS_NET_DOORAT", false)] {
+                if let Some((t, n)) = std::env::var(key).ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<usize>().ok()?))) {
+                    if t == play.play.ticks && !play.play.net_follow {
+                        if p2 {
+                            play.play.diag_p2_door_at(n);
+                        } else {
+                            play.play.diag_door_at(n);
+                        }
+                        info!("net: {} put in door {n} of {} on tick {t}", if p2 { "player 2" } else { "player 1" }, play.play.world.pack);
+                    }
+                }
+            }
+            if play.play.diag_p1_square > 0 {
+                play.play.diag_p1_square -= 1;
+                input.square = true;
+            }
             if netr.following() && play.play.net_follow {
                 // Online, joining (net.rs): this side's controller goes to the host as player 2's;
                 // this side's game runs without it and is then put where the host's is.
@@ -2074,7 +2123,7 @@ fn step_sim(
                 play.play.tick(&input, pad);
                 // Local co-op (coop.rs): player 2's tick after player 1's; online, player 2's input
                 // comes from the joiner (net.rs).
-                play.play.coop_remote = netr.role == net::Role::Host && netr.peer.is_some();
+                play.play.coop_remote = netr.role == net::Role::Host && netr.peer.is_some() && !netr.apart;
                 // A game started afresh while hosting (a developer warp) brings player 2 back.
                 if play.play.coop_remote && play.play.others.is_empty() {
                     play.play.add_player();
@@ -2087,6 +2136,19 @@ fn step_sim(
                         (q.up, q.left, q.right, q.down, q.triangle) = (q.up | pl.up, q.left | pl.left, q.right | pl.right, q.down | pl.down, q.triangle | pl.triangle);
                     }
                     play.play.coop_step(&[p2]);
+                }
+                // Doors take Only you: player 2 took a door alone; it goes off into its own world.
+                if let Some(n) = play.play.apart_door.take() {
+                    netr.go_apart_host(n, &mut play.play);
+                }
+                // Apart: the players meet again when the joiner reports this world, or a story
+                // moment here (a movie, a hero switch, game over) calls player 2 back.
+                if netr.apart_settled() {
+                    let met = netr.other_left && netr.other_pack == play.play.world.pack && play.play.job.is_none();
+                    let story = play.play.state.movie_queue.len() > movies || play.play.swap.is_some() || play.play.death.page.is_some() || play.play.death.flag_e;
+                    if met || story {
+                        netr.rejoin_host(&mut play.play, if met { "met in this world" } else { "a story moment" });
+                    }
                 }
                 // NEOPETS_NET_BREAK="first:every" (diagnostic, hosting): from that tick, on each
                 // period, the hero breaks the nearest intact breakable and drops coins (so the

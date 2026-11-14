@@ -60,6 +60,7 @@ out lost messages and uneven delays.
 | Open the port (UPnP) | Off, On | While hosting, ask the router to let a friend on the internet in |
 | Port | 47817 (default) | The UDP port to host on, and to join on when the address has none; type it or step it with Left and Right |
 | Stay together | On, Off | On: player 2 is brought back when more than 60 units away. Off: each goes where they like in the area; doors and loads still take both |
+| Doors take | Both, Only you | Online: Only you lets player 2 go through a door alone into its own world; the two meet again when one walks into the other's world |
 
 **What the two players share.** One world and story, one bag of items and Neopoints, the
 enemies, talk boxes (either player's Square moves a box on; only player 1 answers questions,
@@ -734,7 +735,7 @@ its HUD. So both players are always in the same world: a door or a load takes bo
    own, which today only follows the host. While apart, it would run its own world instead.
 3. **Stay as today.** Both players in one world, roaming it freely with Stay together Off.
 
-### Phase 1: online (way 2), about one or two nights
+### Phase 1: online (way 2), built 2026-11-14 (steps 1 to 7 and 9; the whereabouts line is a notice for now)
 1. A **Doors take** row on the Multiplayer page: Both (as today) or Only you. With Only you and
    Stay together Off, a door player 2 takes leads only player 2 out.
 2. **Apart:** the joiner's game takes charge of its own world. Its scripts, doors, triggers,
