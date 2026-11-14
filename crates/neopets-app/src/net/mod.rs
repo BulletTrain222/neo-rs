@@ -61,6 +61,8 @@ const STATE_LIMIT: usize = 1150;
 const EVENTS: u8 = 11;
 /// The joiner's world has differed from the host's for a while: a new welcome, please.
 const RESYNC: u8 = 12;
+/// The host sent the joiner away (the Multiplayer page's Remove row).
+const REMOVED: u8 = 13;
 
 /// This build's identity, checked at joining: the crate version and the build's own number.
 fn build_id() -> String {
@@ -184,6 +186,24 @@ pub struct Net {
     /// The other side's page: 0 in play, 1 a menu (paused), 2 game over.
     pub peer_page: u8,
     last_any: Option<Instant>,
+    /// Host: when each recent state tick went out, and the last one the joiner reported seen.
+    /// Both: the round trip (milliseconds, smoothed), the traffic each way a second (bytes) and
+    /// when it was last sampled, and the hosting line with the address to type.
+    sent_at: std::collections::VecDeque<(u32, Instant)>,
+    last_seen: u32,
+    pub seen_tick: u32,
+    pub rtt_ms: f32,
+    pub rate: (f32, f32),
+    rate_at: Option<(Instant, u64, u64)>,
+    host_line: String,
+    /// Joiner: the address joined (for joining again after the host is lost), the address to
+    /// join again next frame, and until when a join again waits for the host.
+    join_text: String,
+    pub retry: Option<String>,
+    retry_until: Option<Instant>,
+    /// Host: player 2's health and magic when it went (the game generation, HP, MP): a player 2
+    /// joining the same game again gets them back (docs/MULTIPLAYER.md, Default).
+    kept: Option<(u32, i32, i32)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -191,6 +211,8 @@ pub enum Request {
     Host,
     Join(String),
     Leave,
+    /// Host: send player 2 away and keep hosting.
+    Remove,
 }
 
 impl Net {
@@ -200,6 +222,9 @@ impl Net {
     }
 
     fn send(&mut self, bytes: &[u8]) {
+        if outage() {
+            return;
+        }
         if let (Some(s), Some(p)) = (self.socket.as_ref(), self.peer.or(self.target)) {
             let _ = s.send_to(bytes, p);
             self.bytes_out += bytes.len() as u64 + 28;
@@ -207,23 +232,53 @@ impl Net {
         }
     }
 
+    /// Host: a new joiner starts every channel afresh (events from 1, the story, the world sync
+    /// and the characters sent again, the round trip measured again). Before, a joiner coming
+    /// back to the same host waited for event 1 while the host's numbering went on, and the
+    /// events piled up unplayed.
+    fn reset_peer(&mut self) {
+        self.remote = None;
+        self.seen = Input::default();
+        self.events.clear();
+        self.next_event = 0;
+        self.acked = 0;
+        self.story_last = None;
+        self.story_acked = 0;
+        self.world_last = None;
+        self.world_acked = 0;
+        self.chars_last.clear();
+        self.moving_last.clear();
+        self.cursor = (0, 0);
+        self.blob_sent = Default::default();
+        self.sent_at.clear();
+        self.last_seen = 0;
+        self.rtt_ms = 0.0;
+        self.resync = false;
+        self.rate_at = None;
+    }
+
     fn stop(&mut self, status: &str) {
         if self.socket.is_some() && self.peer.is_some() {
             let w = Writer::new(BYE);
             self.send(&w.0);
         }
-        *self = Self { disc: self.disc, status: status.to_string(), notice: self.notice.take(), ended: self.ended, ..Default::default() };
+        *self = Self { disc: self.disc, status: status.to_string(), notice: self.notice.take(), ended: self.ended, kept: self.kept, ..Default::default() };
     }
 
     /// Host: the state after a tick, sent to the joiner with the events not yet acknowledged
     /// (at most 96, oldest first).
     pub fn send_state(&mut self, s: &State) {
         if self.role == Role::Host && self.peer.is_some() {
+            self.sent_at.push_back((s.tick as u32, Instant::now()));
+            while self.sent_at.len() > 240 {
+                self.sent_at.pop_front();
+            }
             let acked = self.acked;
             while self.events.front().is_some_and(|e| e.0 <= acked) {
                 self.events.pop_front();
             }
             let mut s = s.clone();
+            s.rtt = self.rtt_ms.round().clamp(0.0, 65535.0) as u16;
             let story = (s.flags.clone(), s.items.clone(), s.neopoints);
             if self.story_last.as_ref() != Some(&story) {
                 self.story_rev += 1;
@@ -370,7 +425,7 @@ impl Net {
                 self.send(&m);
             }
             if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && s.tick % 300 == 0 {
-                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting; state {} bytes ({} characters, {} flags, {} items, {} events, {} moving, {} shots, talk {}); sent {} received {} bytes", s.tick, self.next_event, self.acked, self.events.len(), bytes.len(), s.characters.len(), s.flags.len(), s.items.len(), s.events.len(), s.moving.len(), s.shots.len(), s.talk.is_some(), self.bytes_out, self.bytes_in);
+                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting; state {} bytes ({} characters, {} flags, {} items, {} events, {} moving, {} shots, talk {}); sent {} received {} bytes; round trip {:.1} ms; {}", s.tick, self.next_event, self.acked, self.events.len(), bytes.len(), s.characters.len(), s.flags.len(), s.items.len(), s.events.len(), s.moving.len(), s.shots.len(), s.talk.is_some(), self.bytes_out, self.bytes_in, self.rtt_ms, self.status);
             }
             self.send(&bytes);
         }
@@ -515,6 +570,30 @@ pub fn host_port() -> u16 {
         .unwrap_or(PORT)
 }
 
+/// NEOPETS_NET_OUTAGE="from:seconds" (diagnostic): nothing sent or received from `from`
+/// seconds after this program started, for that long (a cable pulled).
+fn outage() -> bool {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    static WINDOW: std::sync::OnceLock<Option<(f32, f32)>> = std::sync::OnceLock::new();
+    let start = *START.get_or_init(Instant::now);
+    let Some((a, len)) = *WINDOW.get_or_init(|| {
+        let v = std::env::var("NEOPETS_NET_OUTAGE").ok()?;
+        let (a, b) = v.split_once(':')?;
+        Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+    }) else {
+        return false;
+    };
+    let t = start.elapsed().as_secs_f32();
+    t >= a && t < a + len
+}
+
+/// Host: player 2's health and magic kept as it goes (`Net::kept`).
+fn keep_p2(net: &mut Net, play: &crate::play::Play) {
+    if let Some(o) = play.others.first() {
+        net.kept = Some((play.generation, o.hero_hp, o.hero_mp));
+    }
+}
+
 /// The local addresses of this computer (for the Host line), from the route a UDP socket would
 /// take; none when there is no network.
 pub fn local_address() -> Option<std::net::IpAddr> {
@@ -553,6 +632,11 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             }
         }
     }
+    // Joining again after the host was lost (Default: for up to a minute; the Join row stops it).
+    let retrying = net.retry.take();
+    if let Some(a) = retrying.as_ref().filter(|_| net.role == Role::Off && net.request.is_none()) {
+        net.request = Some(Request::Join(a.clone()));
+    }
     match net.request.take() {
         Some(Request::Host) => {
             net.stop("");
@@ -567,7 +651,12 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                         Some(ip) => format!("Hosting. Your friend joins with {}.", shown(ip)),
                         None => format!("Hosting on port {port}."),
                     };
+                    net.host_line = net.status.clone();
                     info!("net: hosting on port {port}");
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                    net.status = format!("Could not host: port {port} is in use (is another copy of the game hosting on this computer?). Put port=N in private/net.txt to use another port.");
+                    info!("net: could not host: port {port} in use");
                 }
                 Err(e) => net.status = format!("Could not host: {e}"),
             }
@@ -580,11 +669,32 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.socket = Some(s);
                     net.role = Role::Join;
                     net.target = Some(a);
+                    net.join_text = text.clone();
                     net.status = format!("Joining {a}...");
                     info!("net: joining {a}");
                 }
                 (None, _) => net.status = format!("\"{text}\" is not an address."),
                 (_, Err(e)) => net.status = format!("Could not join: {e}"),
+            }
+        }
+        Some(Request::Remove) => {
+            if net.role == Role::Host && net.peer.is_some() {
+                // Sent three times (no acknowledgement; the joiner's timeout covers a loss).
+                let w = Writer::new(REMOVED);
+                for _ in 0..3 {
+                    net.send(&w.0);
+                }
+                if let Some(p) = play.as_deref_mut() {
+                    keep_p2(&mut net, &p.play);
+                    p.play.remove_player();
+                }
+                net.peer = None;
+                net.remote = None;
+                net.welcome = None;
+                net.last_heard = None;
+                net.status = "Player 2 removed. Still hosting.".into();
+                net.notice = Some("Player 2 was removed.".into());
+                info!("net: player 2 removed by the host");
             }
         }
         Some(Request::Leave) => {
@@ -603,6 +713,11 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         }
         None => {}
     }
+    if retrying.is_some() && net.role == Role::Join {
+        net.retry_until = Some(Instant::now() + Duration::from_secs(60));
+        net.status = "Lost the host. Joining again (the Join row stops)...".into();
+        info!("net: joining the host again");
+    }
     if net.role == Role::Off {
         return;
     }
@@ -616,6 +731,9 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     while let Some(s) = net.socket.as_ref() {
         let Ok((n, from)) = s.recv_from(&mut buf) else { break };
         net.bytes_in += n as u64 + 28;
+        if outage() {
+            continue;
+        }
         if drop > 0 {
             net.lossy = net.lossy.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             if ((net.lossy >> 33) % 100) < drop as u64 {
@@ -656,11 +774,19 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 }
                 let Some(p) = play.as_deref_mut() else { continue };
                 if net.peer.is_none() {
+                    net.reset_peer();
                     net.peer = Some(from);
                     net.last_heard = Some(now);
                     // Player 2 is the joiner's (a local second controller lets go of it).
                     if p.play.others.is_empty() {
                         p.play.add_player();
+                    }
+                    // The same game's player 2 back: its health and magic as it left them.
+                    if let (Some((g, hp, mp)), Some(o)) = (net.kept, p.play.others.first_mut()) {
+                        if g == p.play.generation && hp > 0 {
+                            (o.hero_hp, o.hero_mp) = (hp.min(o.hero_max), mp.min(o.hero_mp_max));
+                            info!("net: player 2 back with {hp} health and {mp} magic");
+                        }
                     }
                     coop.pad = None;
                     net.generation += 1;
@@ -681,6 +807,14 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     if i.generation == net.generation {
                         net.welcome = None;
                     }
+                    // The round trip: the state tick the joiner last saw, against when it went.
+                    if i.seen > net.last_seen {
+                        net.last_seen = i.seen;
+                        if let Some(&(_, t)) = net.sent_at.iter().find(|e| e.0 == i.seen) {
+                            let ms = now.duration_since(t).as_secs_f32() * 1000.0;
+                            net.rtt_ms = if net.rtt_ms == 0.0 { ms } else { net.rtt_ms * 0.9 + ms * 0.1 };
+                        }
+                    }
                     net.acked = net.acked.max(i.ack);
                     net.story_acked = net.story_acked.max(i.story);
                     net.world_acked = net.world_acked.max(i.world);
@@ -690,6 +824,9 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             (_, BYE) if net.peer == Some(from) || net.target == Some(from) => {
                 let host = net.role == Role::Host;
                 if let Some(p) = play.as_deref_mut() {
+                    if host {
+                        keep_p2(&mut net, &p.play);
+                    }
                     p.play.remove_player();
                     p.play.net_follow = false;
                 }
@@ -698,6 +835,8 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.peer = None;
                     net.remote = None;
                     net.welcome = None;
+                    // No timeout for a joiner that said goodbye.
+                    net.last_heard = None;
                     net.status = "Your friend left. Still hosting.".into();
                     net.notice = Some("Player 2 left.".into());
                     info!("net: the joiner left");
@@ -709,6 +848,18 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     info!("net: the host left");
                     net.stop("The host ended the game.");
                 }
+            }
+            (Role::Join, REMOVED) if net.target == Some(from) => {
+                if let Some(p) = play.as_deref_mut() {
+                    p.play.remove_player();
+                    p.play.net_follow = false;
+                }
+                if net.loaded > 0 {
+                    net.ended = true;
+                }
+                net.notice = Some("The host removed you from the game.".into());
+                info!("net: removed by the host");
+                net.stop("The host removed you from the game.");
             }
             (_, PING) if net.peer == Some(from) || net.target == Some(from) => {
                 net.last_heard = Some(now);
@@ -853,6 +1004,8 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     }
                     net.peer_paused = s.page != 0;
                     net.peer_page = s.page;
+                    net.seen_tick = s.tick as u32;
+                    net.rtt_ms = s.rtt as f32;
                     // The host's events in order, each once (a gap waits for the resend).
                     for (n, e) in std::mem::take(&mut s.events) {
                         if n == net.applied + 1 {
@@ -939,6 +1092,25 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             net.send_input(i);
         }
     }
+    // Once a second while linked: the traffic each way, and the Multiplayer page's line with the
+    // round trip and the traffic.
+    let linked_now = (net.role == Role::Host && net.peer.is_some()) || net.following();
+    if linked_now && net.rate_at.is_none_or(|r| now.duration_since(r.0) >= Duration::from_secs(1)) {
+        if let Some((t, o, i)) = net.rate_at {
+            let secs = now.duration_since(t).as_secs_f32().max(0.001);
+            net.rate = ((net.bytes_out - o) as f32 / secs, (net.bytes_in - i) as f32 / secs);
+            let (out, inn) = (net.rate.0 / 1024.0, net.rate.1 / 1024.0);
+            let rtt = net.rtt_ms.round();
+            net.status = if net.role == Role::Host {
+                format!("{} Player 2 is in: round trip about {rtt} ms; sending {out:.0} KB/s, receiving {inn:.0} KB/s.", net.host_line)
+            } else {
+                format!("Joined. Round trip about {rtt} ms; receiving {inn:.0} KB/s, sending {out:.0} KB/s.")
+            };
+        }
+        net.rate_at = Some((now, net.bytes_out, net.bytes_in));
+    } else if !linked_now {
+        net.rate_at = None;
+    }
     // Nothing sent for 200 ms (a paused game): a ping, with whether this side is paused.
     let quiet = net.last_any.is_none_or(|t| now.duration_since(t) > Duration::from_millis(200));
     let linked = (net.role == Role::Host && net.peer.is_some()) || (net.role == Role::Join && net.loaded > 0);
@@ -969,6 +1141,9 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     // Timeouts.
     if net.last_heard.is_some_and(|t| now.duration_since(t) > TIMEOUT) {
         if let Some(p) = play.as_deref_mut() {
+            if net.role == Role::Host {
+                keep_p2(&mut net, &p.play);
+            }
             p.play.remove_player();
             p.play.net_follow = false;
         }
@@ -984,10 +1159,19 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             info!("net: the host timed out");
             if net.loaded > 0 {
                 net.ended = true;
-                net.notice = Some("Lost the host.".into());
+                net.notice = Some("Lost the host. Joining again...".into());
             }
+            let again = std::mem::take(&mut net.join_text);
             net.stop("Lost the host.");
+            if !again.is_empty() {
+                net.retry = Some(again);
+            }
         }
+    }
+    // A join again that has not reached the host within its minute stops.
+    if net.role == Role::Join && net.loaded == 0 && net.retry_until.is_some_and(|t| now > t) {
+        info!("net: the host did not come back");
+        net.stop("Could not reach the host again.");
     } else if net.role == Role::Join && net.loaded == 0 && net.last_heard.is_none() {
         // Still waiting for an answer.
     }
@@ -1049,6 +1233,7 @@ mod tests {
             world: Some(WorldSync { pack: 909, breakables: vec![1, 2, 0], items: vec![(909, 3, NetItem { id: 160, position: [1.0, 2.0, 3.0], state: 1, angle: 0.5, scale: 1.0, direction: [0.0, 0.0, 1.0], price: -2, reference: 0.2 })], chars: vec![(909, 1, 0), (909, 2, 3)], objects: vec![(4, 2, 1.5, 3)] }),
             anim_times: vec![(4, 0.75)],
             page: 2,
+            rtt: 31,
             moving: vec![(909, 4, [0.0, 1.0, 0.0], 0.25)],
             flags: vec![1, 500],
             items: vec![(57, 2)],
@@ -1144,7 +1329,7 @@ mod tests {
 
     #[test]
     fn input_round_trips_with_ack() {
-        let i = Input { generation: 4, ack: 99, story: 6, world: 2, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5] };
+        let i = Input { generation: 4, ack: 99, story: 6, world: 2, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5], seen: 7 };
         let bytes = i.encode();
         let (kind, mut r) = Reader::open(&bytes).expect("header");
         assert_eq!(kind, INPUT);

@@ -1823,6 +1823,19 @@ fn step_sim(
                         }
                     }
                 }
+                // NEOPETS_NET_P2HP="T:hp": player 2's health set on play tick T.
+                if let Some((t, hp)) = std::env::var("NEOPETS_NET_P2HP").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<i32>().ok()?))) {
+                    if t == play.play.ticks {
+                        if let Some(o) = play.play.others.first_mut() {
+                            o.hero_hp = hp;
+                            info!("net: player 2's health set to {hp}");
+                        }
+                    }
+                }
+                // NEOPETS_NET_REMOVE=T: the Multiplayer page's Remove player 2 on play tick T.
+                if std::env::var("NEOPETS_NET_REMOVE").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) && netr.peer.is_some() {
+                    netr.request = Some(net::Request::Remove);
+                }
                 // NEOPETS_NET_NOTICE=T: the saved notice sent on play tick T, as a save would.
                 if std::env::var("NEOPETS_NET_NOTICE").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) && netr.peer.is_some() {
                     netr.push_event(net::Event::Notice(net::NOTICE_SAVED));
@@ -1868,6 +1881,7 @@ fn step_sim(
                 let mut out = net::Input::from_hero(&input, &pad, generation, counts, ack);
                 out.dpad = netr.dpad;
                 out.world = netr.world_held.as_ref().map_or(0, |h| h.0);
+                out.seen = netr.seen_tick;
                 netr.outgoing = Some(out);
                 let sounds = play.play.sound.requests.len();
                 let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());

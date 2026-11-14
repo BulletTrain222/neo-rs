@@ -6,7 +6,7 @@ welcomes, the events made and acknowledged, the effect objects and music on each
 state sizes, and any panic. Exits 1 on a failed check.
 
     python scripts/net_check.py [--seconds 60] [--still] [--drop 20] [--delay 100]
-        [--host-env K=V ...] [--join-env K=V ...] [--host-args "--pack 909 ..."]
+        [--host-env K=V ...] [--join-env K=V ...] [--host-args "--pack 909 ..."] [--outage 40:8]
 
 Logs go to private/nettest/host.log and join.log. Opens game windows (they need not be seen).
 """
@@ -61,9 +61,12 @@ def main():
     ap.add_argument('--delay', type=int, default=0, help='milliseconds each received message is held (both sides)')
     ap.add_argument('--host-env', nargs='*')
     ap.add_argument('--join-env', nargs='*')
+    ap.add_argument('--outage', default='', help='"from:seconds" after the joiner starts: nothing gets through (the joiner must join again)')
     ap.add_argument('--host-args', default='', help='more arguments for the host, for example "--pack 909 --flag 110"')
     a = ap.parse_args()
 
+    if a.outage:
+        a.join_env = (a.join_env or []) + ['NEOPETS_NET_OUTAGE=' + a.outage]
     os.makedirs(OUT, exist_ok=True)
     host_log, join_log = os.path.join(OUT, 'host.log'), os.path.join(OUT, 'join.log')
     common = {'NEOPETS_TRACE_NETEV': '1', 'NEOPETS_NO_MOVIES': '1'}
@@ -148,6 +151,11 @@ def main():
     miss = re.findall(r'NETFX joiner tick \d+ \(missing Some\((\d+)\)\)', j)
     if miss:
         report.append(f'characters missing on the joiner at the end: {miss[-1]}')
+    if a.outage:
+        again = 'joining the host again' in j and len(welcomes) >= 2
+        report.append('outage: the joiner ' + ('joined again' if again else 'did not join again'))
+        if not again:
+            failures.append('the joiner did not join again after the outage')
     for line in re.findall(r'net: [^\n]*', h + '\n' + j):
         if 'timed out' in line or 'left' in line:
             report.append('note: ' + line)

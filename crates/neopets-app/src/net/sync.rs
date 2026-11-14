@@ -100,6 +100,7 @@ impl crate::play::Play {
                 shake: self.shake_now.map(|o| (o.side, o.up, o.aim)),
             },
             page: if self.death.page.is_some() || self.death.flag_e { 2 } else { 0 },
+            rtt: 0,
         }
     }
 

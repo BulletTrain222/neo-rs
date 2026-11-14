@@ -168,6 +168,8 @@ pub struct State {
     /// The host's page while its states run: 0 play, 2 the game-over page (a paused host
     /// sends pings instead).
     pub page: u8,
+    /// The round trip the host measures, in milliseconds (shown on both sides).
+    pub rtt: u16,
 }
 
 /// The breakables of the current world (their states) and the live items of each resident world
@@ -801,6 +803,7 @@ impl State {
             w.f32(t);
         }
         w.u8(self.page);
+        w.u16(self.rtt);
         w.0
     }
 
@@ -875,7 +878,8 @@ impl State {
             anim_times.push((r.u16()?, r.f32()?));
         }
         let page = r.u8()?;
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page })
+        let rtt = r.u16()?;
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, rtt })
     }
 }
 
@@ -898,6 +902,8 @@ pub struct Input {
     pub squares: u8,
     /// Press counters of the D-pad (up, left, right, down) and Triangle, for player 2's panels.
     pub dpad: [u8; 5],
+    /// The last host state tick received here (the host times the round trip by it).
+    pub seen: u32,
 }
 
 pub(super) const RUN: u16 = 1;
@@ -925,6 +931,7 @@ impl Input {
             attacks: counts.1,
             squares: counts.2,
             dpad: [0; 5],
+            seen: 0,
         }
     }
 
@@ -970,11 +977,12 @@ impl Input {
         w.u8(self.attacks);
         w.u8(self.squares);
         w.0.extend_from_slice(&self.dpad);
+        w.u32(self.seen);
         w.0
     }
 
     pub(super) fn decode(r: &mut Reader) -> Option<Self> {
-        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?] })
+        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?], seen: r.u32()? })
     }
 }
 

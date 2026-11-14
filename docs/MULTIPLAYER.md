@@ -436,13 +436,13 @@ second controller or a second computer are marked and left for the morning.
 18. [x] After a cutscene, player 2 stands beside player 1.
 
 ### Menus
-19. [ ] Pause page rows: "Leave game" on the joiner and "Stop hosting" on the host.
-20. [ ] The Multiplayer page shows this computer's home-network address while hosting.
-21. [ ] The Multiplayer page shows the connection while online: round trip in ms and traffic.
-22. [ ] The host can send player 2 away ("Remove player 2" row).
-23. [ ] After "Lost the host", the title screen offers to join the same address again
+19. [~] (the pause page keeps the original rows, its Quit ends the session; the Multiplayer page's Host and Join rows stop and leave) Pause page rows: "Leave game" on the joiner and "Stop hosting" on the host.
+20. [x] (built in plan 2; now with the connection) The Multiplayer page shows this computer's home-network address while hosting.
+21. [x] The Multiplayer page shows the connection while online: round trip in ms and traffic.
+22. [x] The host can send player 2 away ("Remove player 2" row).
+23. [x] (it joins again by itself for up to a minute) After "Lost the host", the title screen offers to join the same address again
     (**Default**).
-24. [ ] A joiner that drops and rejoins in the same session gets player 2's health and magic
+24. [x] A joiner that drops and rejoins in the same session gets player 2's health and magic
     back (**Default**).
 
 ### Smoothness
@@ -454,11 +454,11 @@ second controller or a second computer are marked and left for the morning.
 ### Holding up
 28. [ ] A long session: 20 minutes online on the autopilot with no stall, a steady buffer and
     steady memory.
-29. [ ] An outage: 3 seconds with nothing getting through; the session comes back by itself.
+29. [x] (8 seconds; also fixed the event numbering for a returning joiner) An outage: 3 seconds with nothing getting through; the session comes back by itself.
 30. [ ] Joining late: in the middle of a talk box, a cutscene and a boss fight.
 31. [ ] The host pauses while the joiner is in a menu; the host quits while the joiner loads.
 32. [ ] The broken-message test covers the newer messages (parts, events, resync).
-33. [ ] Two hosts on one computer: the second gets a clear notice (port in use).
+33. [x] Two hosts on one computer: the second gets a clear notice (port in use).
 
 ### Split screen
 34. [ ] Frame time with split screen measured against one player (perf views).
