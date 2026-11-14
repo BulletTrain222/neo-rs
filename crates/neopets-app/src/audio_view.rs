@@ -187,7 +187,9 @@ pub fn sync_effects(
     if !link.spawned {
         link.spawned = true;
         let h = sources.add(EffectsSource { engine: link.engine.clone() });
-        commands.spawn((AudioPlayer(h), PlaybackSettings::LOOP));
+        // Once, not LOOP: the source never ends, and a looping player keeps a copy of every
+        // sample to start over from (it grew about 21 MB a minute for good).
+        commands.spawn((AudioPlayer(h), PlaybackSettings::ONCE));
     }
     let p = &mut state.play;
     let mut wanted: Vec<u32> = p.sound.slots.iter().flatten().copied().collect();
@@ -369,7 +371,8 @@ pub fn sync_bank(
     if !link.spawned {
         link.spawned = true;
         let h = sources.add(MusicSource { engine: link.engine.clone() });
-        commands.spawn((AudioPlayer(h), PlaybackSettings::LOOP));
+        // Once: an endless source (a looping player would keep every sample for good).
+        commands.spawn((AudioPlayer(h), PlaybackSettings::ONCE));
     }
     let bm = p.bank_music;
     let want = bm.playing;

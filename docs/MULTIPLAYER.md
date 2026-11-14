@@ -468,7 +468,7 @@ second controller or a second computer are marked and left for the morning.
 27. [x] (2 to 6 states over 20 minutes) Clock drift: the joiner's buffer depth over a long session stays steady.
 
 ### Holding up
-28. [~] (no stall of play; found and fixed the event channel stopping after an overflow; found memory growing about 45 MB a minute in any window, not fixed) A long session: 20 minutes online on the autopilot with no stall, a steady buffer and
+28. [x] (found and fixed: the event channel stopping after an overflow, sounds never started piling up, and memory growing about 45 MB a minute in any window) A long session: 20 minutes online on the autopilot with no stall, a steady buffer and
     steady memory.
 29. [x] (8 seconds; also fixed the event numbering for a returning joiner) An outage: 3 seconds with nothing getting through; the session comes back by itself.
 30. [x] Joining late: in the middle of a talk box, a cutscene and a boss fight.

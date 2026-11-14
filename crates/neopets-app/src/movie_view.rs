@@ -312,7 +312,9 @@ pub fn sync_sound(mut commands: Commands, movies: Option<ResMut<Movies>>, mut so
             commands.entity(e).despawn();
         }
         let h = sources.add(MovieSound { queue: mv.sound.clone(), rate, channels: channels.max(1) });
-        commands.spawn((AudioPlayer(h), PlaybackSettings::LOOP, MovieVoice));
+        // Once: the source never ends (silence when no samples wait), and a looping player
+        // would keep a copy of the whole movie's sound.
+        commands.spawn((AudioPlayer(h), PlaybackSettings::ONCE, MovieVoice));
     } else if mv.current.is_none() && mv.queue.is_empty() {
         for e in &voices {
             commands.entity(e).despawn();

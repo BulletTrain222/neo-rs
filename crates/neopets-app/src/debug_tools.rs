@@ -622,6 +622,7 @@ pub fn trace_assets(
     entities: Query<Entity>,
     players: Query<(), With<bevy::audio::AudioSink>>,
     time: Res<Time<Real>>,
+    frames: Res<bevy::diagnostic::FrameCount>,
     mut last: Local<f32>,
 ) {
     if std::env::var_os("NEOPETS_TRACE_ASSETS").is_none() {
@@ -632,5 +633,5 @@ pub fn trace_assets(
         return;
     }
     *last = now;
-    println!("ASSETS {now:.0} s: meshes {}, images {}, materials {}, sound buffers {}, entities {}, audio sinks {}", meshes.len(), images.len(), materials.len(), pcms.len(), entities.iter().count(), players.iter().count());
+    println!("ASSETS {now:.0} s, frame {}: meshes {}, images {}, materials {}, sound buffers {}, entities {}, audio sinks {}", frames.0, meshes.len(), images.len(), materials.len(), pcms.len(), entities.iter().count(), players.iter().count());
 }
