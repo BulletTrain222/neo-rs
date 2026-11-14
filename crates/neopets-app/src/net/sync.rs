@@ -101,6 +101,8 @@ impl crate::play::Play {
             },
             page: if self.death.page.is_some() || self.death.flag_e { 2 } else { 0 },
             rtt: 0,
+            cmd_ack: 0,
+            equip: (self.equipment.entries, self.equipment.motes, self.cloak_worn),
         }
     }
 
@@ -295,6 +297,8 @@ impl crate::play::Play {
                 *slot = Some(*sh);
             }
         }
+        // The party's equipment and cloak (the joiner's item screen shows them).
+        (self.equipment.entries, self.equipment.motes, self.cloak_worn) = s.equip;
         self.state.flags = s.flags.iter().copied().collect();
         self.state.items = s.items.iter().copied().collect();
         self.state.neopoints = s.neopoints;

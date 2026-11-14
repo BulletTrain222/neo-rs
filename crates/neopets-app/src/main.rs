@@ -1036,6 +1036,7 @@ fn main() {
         // The developer and settings windows are made while open (ui_lazy.rs).
         .add_systems(First, ui_lazy::sync_windows)
         .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
+        .add_systems(Update, debug_tools::trace_assets)
         .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
         .add_systems(
             Update,
@@ -1619,6 +1620,10 @@ fn step_sim(
                 if m.flow.current == menus::PLAY {
                     play.play.menu_player = 0;
                 }
+                // A joiner's menus are player 2's (its own hero is player 2 here).
+                if play.play.net_follow {
+                    play.play.menu_player = 1;
+                }
                 let grid = m.flow.grid_ids;
                 m.flow.view = play.play.as_menu_player(|p| p.item_view(&grid));
                 m.flow.map_view = play.play.map_view();
@@ -1663,6 +1668,13 @@ fn step_sim(
                         // to the title screen; a joiner leaves the host's game).
                         if netr.role != net::Role::Off {
                             netr.request = Some(net::Request::Leave);
+                        }
+                    }
+                    // Online, joining: the command goes to the host (its game is the one kept).
+                    Some(c) if netr.following() && play.play.net_follow => {
+                        if let Some(k) = net::cmd_of(&c) {
+                            netr.cmds.push_back(k);
+                            info!("net: item-screen command {c:?} sent to the host");
                         }
                     }
                     Some(c) => {
@@ -1873,6 +1885,10 @@ fn step_sim(
                 }
                 let c = &mut netr.counts;
                 c.0 = c.0.wrapping_add(input.jump as u8);
+                // NEOPETS_TRACE_NETINPUT (diagnostic): each jump press as it leaves this side.
+                if input.jump && std::env::var_os("NEOPETS_TRACE_NETINPUT").is_some() {
+                    info!("net: jump {} pressed", c.0);
+                }
                 c.1 = c.1.wrapping_add(input.attack as u8);
                 c.2 = c.2.wrapping_add(input.square as u8);
                 let counts = netr.counts;
@@ -1882,6 +1898,20 @@ fn step_sim(
                 out.dpad = netr.dpad;
                 out.world = netr.world_held.as_ref().map_or(0, |h| h.0);
                 out.seen = netr.seen_tick;
+                // NEOPETS_NET_ITEMCMD="T:kind:a:b" (diagnostic): an item-screen command from this
+                // side on play tick T (net::cmd_of's numbering).
+                if let Some(v) = std::env::var("NEOPETS_NET_ITEMCMD").ok() {
+                    let n: Vec<u64> = v.split(':').filter_map(|x| x.trim().parse().ok()).collect();
+                    if let [t, k, a, b] = n[..] {
+                        if t == play.play.ticks {
+                            netr.cmds.push_back((k as u8, a as u16, b as u16));
+                            info!("net: item-screen command {k} {a} {b} sent to the host (diagnostic)");
+                        }
+                    }
+                }
+                if let Some(&(k, a, b)) = netr.cmds.front() {
+                    out.cmd = (netr.cmds_done.wrapping_add(1), k, a, b);
+                }
                 netr.outgoing = Some(out);
                 let sounds = play.play.sound.requests.len();
                 let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());
@@ -1911,8 +1941,10 @@ fn step_sim(
                 // The joiner hears the host's sounds, not its own game's (net.rs events).
                 // NEOPETS_TRACE_NETEV: the events played so far, every 300 ticks (diagnostic).
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
-                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats);
+                    println!("NETEV joiner tick {}: {} host events played, {} own sound requests dropped this tick; {} states since the last line, largest gap {} ms, {} ticks with no new state; the host's hero stalled {} times, largest step {:.2}; buffer {} (most {})", play.play.ticks, netr.applied, play.play.sound.requests.len() - sounds, netr.gap_states, netr.gap_max, netr.repeats, netr.smooth.2, netr.smooth.3, netr.queue.len(), netr.queue_most);
+                    netr.queue_most = 0;
                     (netr.gap_states, netr.gap_max, netr.repeats) = (0, 0, 0);
+                    (netr.smooth.2, netr.smooth.3) = (0, 0.0);
                 }
                 play.play.sound.requests.truncate(sounds);
                 play.play.stinger_requests.truncate(clips.0);
@@ -1949,8 +1981,23 @@ fn step_sim(
                     }
                 }
                 // Only a state of the world loaded here (one from before a world change waits).
+                netr.queue_most = netr.queue_most.max(netr.queue.len());
                 if let Some(s) = netr.next_state().filter(|s| s.generation == netr.loaded) {
                     play.play.apply_net_state(&s);
+                    // NEOPETS_TRACE_NETEV: the host's hero here, a tick with no movement after one
+                    // with (a stall) and the largest one-tick step, counted for the trace line.
+                    {
+                        let at = play.play.player.loco.position();
+                        let d = netr.smooth.0.map_or(0.0, |b: [f32; 3]| ((at[0] - b[0]).powi(2) + (at[2] - b[2]).powi(2)).sqrt());
+                        if d < 0.001 && netr.smooth.1 > 0.05 {
+                            netr.smooth.2 += 1;
+                        }
+                        if d < 2.0 {
+                            netr.smooth.3 = netr.smooth.3.max(d);
+                        }
+                        netr.smooth.0 = Some(at);
+                        netr.smooth.1 = d;
+                    }
                     // The host walked on into a world this side's game did not: after 1.5 seconds
                     // (no load running here) ask for a new welcome.
                     if s.pack != play.play.world.pack && play.play.job.is_none() {

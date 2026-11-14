@@ -19666,7 +19666,9 @@ impl Play {
             if free {
                 self.door_step();
                 let p1 = self.others[i].loco.position();
-                self.coop_square_step(input.square, p1);
+                // Only while player 1 can be brought over: standing, not held by a scene, no load.
+                let p1_free = self.others[i].down.is_none() && self.others[i].loco.state != hero_states::DEAD && self.cut.is_none_or(|c| c.state == 0) && self.job.is_none();
+                self.coop_square_step(input.square && p1_free, p1);
             }
             self.player.door_confirm = self.confirm;
             self.player.captions.0 = self.door_prompt.take().filter(|_| free);

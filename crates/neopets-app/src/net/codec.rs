@@ -170,6 +170,11 @@ pub struct State {
     pub page: u8,
     /// The round trip the host measures, in milliseconds (shown on both sides).
     pub rtt: u16,
+    /// The last joiner item-screen command the host carried out (its number).
+    pub cmd_ack: u8,
+    /// The party's equipment (each hero's weapon, shield and armour, each hero's Motes) and the
+    /// cloak, for the joiner's item screen.
+    pub equip: ([[Option<u16>; 2]; 3], [[Option<u16>; 3]; 2], bool),
 }
 
 /// The breakables of the current world (their states) and the live items of each resident world
@@ -804,6 +809,19 @@ impl State {
         }
         w.u8(self.page);
         w.u16(self.rtt);
+        w.u8(self.cmd_ack);
+        let opt = |w: &mut Writer, v: Option<u16>| w.u16(v.unwrap_or(u16::MAX));
+        for row in self.equip.0 {
+            for v in row {
+                opt(&mut w, v);
+            }
+        }
+        for row in self.equip.1 {
+            for v in row {
+                opt(&mut w, v);
+            }
+        }
+        w.u8(self.equip.2 as u8);
         w.0
     }
 
@@ -879,7 +897,22 @@ impl State {
         }
         let page = r.u8()?;
         let rtt = r.u16()?;
-        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, rtt })
+        let cmd_ack = r.u8()?;
+        let mut opt = || r.u16().map(|v| (v != u16::MAX).then_some(v));
+        let mut entries = [[None; 2]; 3];
+        for row in entries.iter_mut() {
+            for v in row.iter_mut() {
+                *v = opt()?;
+            }
+        }
+        let mut motes = [[None; 3]; 2];
+        for row in motes.iter_mut() {
+            for v in row.iter_mut() {
+                *v = opt()?;
+            }
+        }
+        let equip = (entries, motes, r.u8()? != 0);
+        Some(Self { tick, generation, pack, heroes, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, rtt, cmd_ack, equip })
     }
 }
 
@@ -904,6 +937,37 @@ pub struct Input {
     pub dpad: [u8; 5],
     /// The last host state tick received here (the host times the round trip by it).
     pub seen: u32,
+    /// The item-screen command waiting for the host (number, kind, two values; `ItemCmd`),
+    /// sent with every input until a state acknowledges its number.
+    pub cmd: (u8, u8, u16, u16),
+}
+
+/// A joiner's item-screen command as it travels (kind, two values).
+pub fn cmd_of(c: &crate::menus::Command) -> Option<(u8, u16, u16)> {
+    use crate::menus::Command;
+    Some(match *c {
+        Command::UseItem(id) => (1, id, 0),
+        Command::Marker(m) => (2, m as i16 as u16, 0),
+        Command::EquipMote { word, id } => (3, word as u16, id),
+        Command::MoteSelect(s) => (4, s as u16, 0),
+        Command::ClearMote(word) => (5, word as u16, 0),
+        Command::Cloak => (6, 0, 0),
+        _ => return None,
+    })
+}
+
+/// The item-screen command a joiner sent (`cmd_of` back).
+pub fn command_of(kind: u8, a: u16, b: u16) -> Option<crate::menus::Command> {
+    use crate::menus::Command;
+    Some(match kind {
+        1 => Command::UseItem(a),
+        2 => Command::Marker(a as i16 as i32),
+        3 => Command::EquipMote { word: a as usize, id: b },
+        4 => Command::MoteSelect(a as u8),
+        5 => Command::ClearMote(a as usize),
+        6 => Command::Cloak,
+        _ => return None,
+    })
 }
 
 pub(super) const RUN: u16 = 1;
@@ -932,6 +996,7 @@ impl Input {
             squares: counts.2,
             dpad: [0; 5],
             seen: 0,
+            cmd: (0, 0, 0, 0),
         }
     }
 
@@ -978,11 +1043,15 @@ impl Input {
         w.u8(self.squares);
         w.0.extend_from_slice(&self.dpad);
         w.u32(self.seen);
+        w.u8(self.cmd.0);
+        w.u8(self.cmd.1);
+        w.u16(self.cmd.2);
+        w.u16(self.cmd.3);
         w.0
     }
 
     pub(super) fn decode(r: &mut Reader) -> Option<Self> {
-        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?], seen: r.u32()? })
+        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?], seen: r.u32()?, cmd: (r.u8()?, r.u8()?, r.u16()?, r.u16()?) })
     }
 }
 

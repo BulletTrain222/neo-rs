@@ -34,7 +34,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 19;
+const PROTOCOL: u16 = 20;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -113,6 +113,13 @@ pub struct Net {
     /// The welcome's running effects, applied once its game is loaded.
     pub load_fx: Vec<neopets_sim::effect::Op>,
     pub state: Option<State>,
+    /// Joiner: the state applied before `state` (the movement a missing state carries on).
+    prev_state: Option<State>,
+    /// Joiner, for the trace: the host's hero's last place and step here, the stalls and the
+    /// largest step since the last trace line.
+    pub smooth: (Option<[f32; 3]>, f32, u32, f32),
+    /// Joiner, for the trace: the most states waiting in the buffer since the last line.
+    pub queue_most: usize,
     pub loaded: u32,
     pub counts: (u8, u8, u8),
     pub dpad: [u8; 5],
@@ -204,6 +211,34 @@ pub struct Net {
     /// Host: player 2's health and magic when it went (the game generation, HP, MP): a player 2
     /// joining the same game again gets them back (docs/MULTIPLAYER.md, Default).
     kept: Option<(u32, i32, i32)>,
+    /// Joiner: item-screen commands waiting for the host, and how many the host has carried
+    /// out. Host: the number of the joiner's last command carried out.
+    pub cmds: std::collections::VecDeque<(u8, u16, u16)>,
+    pub cmds_done: u8,
+    cmd_done: u8,
+    /// Joiner: when this join began (a join with no answer gives up after 20 seconds).
+    join_started: Option<Instant>,
+    /// Host, for the trace: events made since the last trace line, by kind (`kind_of`).
+    kinds: [u32; 10],
+}
+
+/// An event's kind for the trace: sound play, set, stop; effect add, one-shot, update, other;
+/// voice; music and movies; rumble and notices.
+fn kind_of(e: &Event) -> usize {
+    use neopets_sim::effect::Op;
+    use neopets_sim::sound::Request;
+    match e {
+        Event::Sound(Request::Play { .. }) => 0,
+        Event::Sound(Request::Set { .. }) => 1,
+        Event::Sound(Request::Stop { .. }) => 2,
+        Event::Fx(Op::Add { .. }) => 3,
+        Event::Fx(Op::OneShot { .. }) => 4,
+        Event::Fx(Op::Update { .. }) => 5,
+        Event::Fx(_) => 6,
+        Event::Voice { .. } => 7,
+        Event::Stinger(_) | Event::Emote(..) | Event::Movie(_) => 8,
+        Event::Rumble(..) | Event::Notice(_) => 9,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -255,6 +290,7 @@ impl Net {
         self.rtt_ms = 0.0;
         self.resync = false;
         self.rate_at = None;
+        self.cmd_done = 0;
     }
 
     fn stop(&mut self, status: &str) {
@@ -279,6 +315,7 @@ impl Net {
             }
             let mut s = s.clone();
             s.rtt = self.rtt_ms.round().clamp(0.0, 65535.0) as u16;
+            s.cmd_ack = self.cmd_done;
             let story = (s.flags.clone(), s.items.clone(), s.neopoints);
             if self.story_last.as_ref() != Some(&story) {
                 self.story_rev += 1;
@@ -425,7 +462,7 @@ impl Net {
                 self.send(&m);
             }
             if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && s.tick % 300 == 0 {
-                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting; state {} bytes ({} characters, {} flags, {} items, {} events, {} moving, {} shots, talk {}); sent {} received {} bytes; round trip {:.1} ms; {}", s.tick, self.next_event, self.acked, self.events.len(), bytes.len(), s.characters.len(), s.flags.len(), s.items.len(), s.events.len(), s.moving.len(), s.shots.len(), s.talk.is_some(), self.bytes_out, self.bytes_in, self.rtt_ms, self.status);
+                println!("NETEV host tick {}: {} events made, {} acknowledged, {} waiting; state {} bytes ({} characters, {} flags, {} items, {} events, {} moving, {} shots, talk {}); sent {} received {} bytes; round trip {:.1} ms; {}; made by kind (play set stop add oneshot update fx voice clip other) {:?}", s.tick, self.next_event, self.acked, self.events.len(), bytes.len(), s.characters.len(), s.flags.len(), s.items.len(), s.events.len(), s.moving.len(), s.shots.len(), s.talk.is_some(), self.bytes_out, self.bytes_in, self.rtt_ms, self.status, std::mem::take(&mut self.kinds));
             }
             self.send(&bytes);
         }
@@ -443,11 +480,20 @@ impl Net {
             self.queue.pop_front();
         }
         if self.queue.len() >= 2 || (!self.queue.is_empty() && self.starve >= 1) {
-            self.state = self.queue.pop_front();
+            let next = self.queue.pop_front();
+            self.prev_state = std::mem::replace(&mut self.state, next);
             self.starve = 0;
         } else {
             self.starve += 1;
             self.repeats += 1;
+            // No state for this tick: the heroes and characters carry on by their last tick's
+            // movement (at most 4 ticks, and only movement under 2 units a tick), and the next
+            // state puts them right. NEOPETS_NET_NOSMOOTH (diagnostic) holds them instead.
+            if self.starve <= 4 && std::env::var_os("NEOPETS_NET_NOSMOOTH").is_none() {
+                if let (Some(s), Some(p)) = (self.state.as_ref(), self.prev_state.as_ref()) {
+                    return Some(carried(s, p, self.starve as f32));
+                }
+            }
         }
         self.state.clone()
     }
@@ -494,9 +540,19 @@ impl Net {
         }
         self.next_event += 1;
         let n = self.next_event;
+        self.kinds[kind_of(&e)] += 1;
         self.events.push_back((n, e));
-        if self.events.len() > 4000 {
-            self.events.pop_front();
+        // More waiting than the channel can carry: dropping the oldest would leave the joiner
+        // waiting for it for ever (the 20-minute test's event channel stopped this way), so the
+        // queue is emptied and the joiner gets a new welcome (its game and running effects as
+        // now), counting events on from there.
+        // NEOPETS_NET_QUEUE=n (diagnostic): a smaller limit, to test it.
+        static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        let limit = *LIMIT.get_or_init(|| std::env::var("NEOPETS_NET_QUEUE").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(4000));
+        if self.events.len() > limit {
+            self.events.clear();
+            self.resync = true;
+            info!("net: more than {limit} events waiting: a new welcome instead");
         }
     }
 
@@ -509,6 +565,11 @@ impl Net {
     }
 
     /// Host: a new welcome (the joiner reloads) when the host's world changed.
+    /// The last event a welcome made now covers: the joiner plays the events after it.
+    fn event_base(&self) -> u32 {
+        self.events.front().map_or(self.next_event, |e| e.0 - 1)
+    }
+
     pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32, game: u32, fx: &[neopets_sim::effect::Op]) {
         if self.role != Role::Host || self.peer.is_none() || (pack == self.welcome_pack && game == self.welcome_game) {
             return;
@@ -516,7 +577,7 @@ impl Net {
         self.welcome_pack = pack;
         self.welcome_game = game;
         self.generation += 1;
-        self.welcome = Some(welcome(self.generation, slot, fx));
+        self.welcome = Some(welcome(self.generation, slot, fx, self.event_base()));
         self.welcome_mask = 0;
         self.last_sent = None;
         info!("net: world {pack}, welcome {}", self.generation);
@@ -525,7 +586,7 @@ impl Net {
 
 /// A welcome: the generation, the host's game as a save slot, and its gameplay effects running
 /// now (effect operations, applied after the load).
-fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::effect::Op]) -> Vec<u8> {
+fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::effect::Op], base: u32) -> Vec<u8> {
     let mut w = Writer::new(WELCOME);
     w.u32(generation);
     w.bytes(&slot.0);
@@ -533,6 +594,7 @@ fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::e
     for op in fx.iter().take(512) {
         write_op(&mut w, op);
     }
+    w.u32(base);
     w.0
 }
 
@@ -549,6 +611,13 @@ fn take_welcome(net: &mut Net, r: &mut Reader, from: SocketAddr) {
         Some(n) => (0..n).map_while(|_| read_op(r.u8()?, r)).collect(),
         None => Vec::new(),
     };
+    // The events this welcome covers (its game and effects are as after them).
+    if let Some(base) = r.u32() {
+        if base > net.applied {
+            info!("net: events {}..={base} covered by the welcome", net.applied + 1);
+            net.applied = base;
+        }
+    }
     net.loaded = generation;
     net.state = None;
     net.queue.clear();
@@ -585,6 +654,25 @@ fn outage() -> bool {
     };
     let t = start.elapsed().as_secs_f32();
     t >= a && t < a + len
+}
+
+/// State `s` carried on `k` ticks by the movement from `p` to `s` (heroes and characters; a
+/// step of 2 units or more is a teleport and is not carried).
+fn carried(s: &State, p: &State, k: f32) -> State {
+    let step = |a: [f32; 3], b: [f32; 3]| {
+        let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 4.0 { [a[0] + d[0] * k, a[1] + d[1] * k, a[2] + d[2] * k] } else { a }
+    };
+    let mut out = s.clone();
+    for (h, q) in out.heroes.iter_mut().zip(p.heroes.iter()) {
+        h.position = step(h.position, q.position);
+    }
+    for c in out.characters.iter_mut() {
+        if let Some(q) = p.characters.iter().find(|q| (q.pack, q.slot, q.ordinal) == (c.pack, c.slot, c.ordinal)) {
+            c.position = step(c.position, q.position);
+        }
+    }
+    out
 }
 
 /// Host: player 2's health and magic kept as it goes (`Net::kept`).
@@ -670,6 +758,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.role = Role::Join;
                     net.target = Some(a);
                     net.join_text = text.clone();
+                    net.join_started = Some(Instant::now());
                     net.status = format!("Joining {a}...");
                     info!("net: joining {a}");
                 }
@@ -794,7 +883,8 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.welcome_game = p.play.generation;
                     let mut slot = neopets_sim::save::Slot::empty();
                     p.play.write_slot(&mut slot, b"NETPLAY");
-                    net.welcome = Some(welcome(net.generation, &slot, &p.play.effects.snapshot()));
+                    let base = net.event_base();
+                    net.welcome = Some(welcome(net.generation, &slot, &p.play.effects.snapshot(), base));
                     net.welcome_mask = 0;
                     net.status = format!("{from} joined.");
                     net.notice = Some("Player 2 joined.".into());
@@ -813,6 +903,16 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                         if let Some(&(_, t)) = net.sent_at.iter().find(|e| e.0 == i.seen) {
                             let ms = now.duration_since(t).as_secs_f32() * 1000.0;
                             net.rtt_ms = if net.rtt_ms == 0.0 { ms } else { net.rtt_ms * 0.9 + ms * 0.1 };
+                        }
+                    }
+                    // The joiner's item-screen command, once: run as player 2's item screen.
+                    if i.cmd.0 == net.cmd_done.wrapping_add(1) {
+                        net.cmd_done = i.cmd.0;
+                        if let (Some(c), Some(p)) = (command_of(i.cmd.1, i.cmd.2, i.cmd.3), play.as_deref_mut()) {
+                            let was = std::mem::replace(&mut p.play.menu_player, 1);
+                            p.play.as_menu_player(|q| q.item_command(&c));
+                            p.play.menu_player = was;
+                            info!("net: player 2's item screen: {c:?}");
                         }
                     }
                     net.acked = net.acked.max(i.ack);
@@ -1005,6 +1105,11 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.peer_paused = s.page != 0;
                     net.peer_page = s.page;
                     net.seen_tick = s.tick as u32;
+                    // The host carried out the item-screen command sent: the next one goes.
+                    if !net.cmds.is_empty() && s.cmd_ack == net.cmds_done.wrapping_add(1) {
+                        net.cmds.pop_front();
+                        net.cmds_done = net.cmds_done.wrapping_add(1);
+                    }
                     net.rtt_ms = s.rtt as f32;
                     // The host's events in order, each once (a gap waits for the resend).
                     for (n, e) in std::mem::take(&mut s.events) {
@@ -1129,6 +1234,10 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     if net.role == Role::Host {
         coop.remote = net.remote.map(|i| {
             let (h, c) = i.to_hero(&net.seen);
+            // NEOPETS_TRACE_NETINPUT (diagnostic): each jump press as it reaches the host.
+            if h.jump && std::env::var_os("NEOPETS_TRACE_NETINPUT").is_some() {
+                info!("net: jump {} arrived", i.jumps);
+            }
             (h, c)
         });
         if let Some(i) = net.remote {
@@ -1167,6 +1276,12 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 net.retry = Some(again);
             }
         }
+    }
+    // A first join with no answer at all for 20 seconds stops (before, it waited for ever).
+    if net.role == Role::Join && net.loaded == 0 && net.last_heard.is_none() && net.retry_until.is_none() && net.join_started.is_some_and(|t| now.duration_since(t) > Duration::from_secs(20)) {
+        info!("net: no answer from the host");
+        let at = net.target.map_or(String::new(), |a| a.to_string());
+        net.stop(&format!("No answer from {at}. Check the address, and that the host chose Host a game (and allowed the game through the firewall)."));
     }
     // A join again that has not reached the host within its minute stops.
     if net.role == Role::Join && net.loaded == 0 && net.retry_until.is_some_and(|t| now > t) {
@@ -1234,6 +1349,8 @@ mod tests {
             anim_times: vec![(4, 0.75)],
             page: 2,
             rtt: 31,
+            cmd_ack: 3,
+            equip: ([[Some(1), None], [None, Some(2)], [None, None]], [[Some(160), None, Some(161)], [None; 3]], true),
             moving: vec![(909, 4, [0.0, 1.0, 0.0], 0.25)],
             flags: vec![1, 500],
             items: vec![(57, 2)],
@@ -1297,7 +1414,7 @@ mod tests {
                 x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 b.push((x >> 56) as u8);
             }
-            for kind in [HELLO, WELCOME, REFUSE, INPUT, STATE, BYE, PING] {
+            for kind in [HELLO, WELCOME, REFUSE, INPUT, STATE, BYE, PING, WELCOME_PART, PART_ACK, BLOB_PART, EVENTS, RESYNC, REMOVED] {
                 b[6] = kind;
                 if let Some((_, mut r)) = Reader::open(&b) {
                     let _ = State::decode(&mut r);
@@ -1305,6 +1422,22 @@ mod tests {
                 if let Some((_, mut r)) = Reader::open(&b) {
                     let _ = Input::decode(&mut r);
                 }
+                // The newer messages' records: an events list, and the world sync of a blob.
+                if let Some((_, mut r)) = Reader::open(&b) {
+                    while Event::read(&mut r).is_some() {}
+                }
+                if let Some((_, mut r)) = Reader::open(&b) {
+                    let _ = WorldSync::read(&mut r);
+                }
+            }
+        }
+        // Every cut of a world sync is refused too.
+        let ws = WorldSync { pack: 909, breakables: vec![1, 2], items: vec![(909, 3, NetItem { id: 5, ..Default::default() })], chars: vec![(909, 1, 0)], objects: vec![(4, 2, 1.5, 3)] };
+        let mut w = Writer::new(BLOB_PART);
+        ws.write(&mut w);
+        for cut in 7..w.0.len() {
+            if let Some((_, mut r)) = Reader::open(&w.0[..cut]) {
+                assert!(WorldSync::read(&mut r).is_none(), "a world sync cut at {cut} decoded");
             }
         }
     }
@@ -1327,9 +1460,40 @@ mod tests {
         assert!(voices.is_empty());
     }
 
+    /// A missing state carries the heroes and characters on by their last step (k ticks), and
+    /// leaves a teleport (2 units or more in a tick) where it is.
+    #[test]
+    fn a_missing_state_carries_movement_on() {
+        let mut p = State::default();
+        let mut s = State::default();
+        p.heroes[0].position = [0.0, 0.0, 0.0];
+        s.heroes[0].position = [0.5, 0.0, 0.0];
+        p.heroes[1].position = [0.0; 3];
+        s.heroes[1].position = [5.0, 0.0, 0.0];
+        p.characters = vec![CharState { pack: 9, slot: 1, ordinal: 2, position: [1.0, 0.0, 1.0], ..Default::default() }];
+        s.characters = vec![CharState { pack: 9, slot: 1, ordinal: 2, position: [1.0, 0.0, 1.25], ..Default::default() }];
+        let c = carried(&s, &p, 2.0);
+        assert_eq!(c.heroes[0].position, [1.5, 0.0, 0.0]);
+        assert_eq!(c.heroes[1].position, [5.0, 0.0, 0.0], "a teleport is not carried");
+        assert_eq!(c.characters[0].position, [1.0, 0.0, 1.75]);
+    }
+
+    /// A new joiner starts the host's channels afresh: events from 1, nothing acknowledged, the
+    /// story and world sync to send again.
+    #[test]
+    fn a_new_joiner_starts_the_channels_afresh() {
+        let mut n = Net { role: Role::Host, ..Default::default() };
+        n.events.push_back((41, Event::Stinger(1)));
+        (n.next_event, n.acked, n.story_acked, n.world_acked, n.last_seen, n.rtt_ms) = (41, 40, 3, 2, 900, 20.0);
+        n.reset_peer();
+        assert!(n.events.is_empty());
+        assert_eq!((n.next_event, n.acked, n.story_acked, n.world_acked, n.last_seen), (0, 0, 0, 0, 0));
+        assert_eq!(n.rtt_ms, 0.0);
+    }
+
     #[test]
     fn input_round_trips_with_ack() {
-        let i = Input { generation: 4, ack: 99, story: 6, world: 2, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5], seen: 7 };
+        let i = Input { generation: 4, ack: 99, story: 6, world: 2, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5], seen: 7, cmd: (2, 3, 1, 160) };
         let bytes = i.encode();
         let (kind, mut r) = Reader::open(&bytes).expect("header");
         assert_eq!(kind, INPUT);

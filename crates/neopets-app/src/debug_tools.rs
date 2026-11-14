@@ -610,3 +610,27 @@ impl Replay {
         }
     }
 }
+
+/// NEOPETS_TRACE_ASSETS (diagnostic): every 10 seconds, the counts of the loaded meshes, images,
+/// standard materials, sound buffers and entities (a leak shows as a count that only grows).
+#[allow(clippy::too_many_arguments)]
+pub fn trace_assets(
+    meshes: Res<Assets<Mesh>>,
+    images: Res<Assets<Image>>,
+    materials: Res<Assets<StandardMaterial>>,
+    pcms: Res<Assets<crate::audio_view::Pcm>>,
+    entities: Query<Entity>,
+    players: Query<(), With<bevy::audio::AudioSink>>,
+    time: Res<Time<Real>>,
+    mut last: Local<f32>,
+) {
+    if std::env::var_os("NEOPETS_TRACE_ASSETS").is_none() {
+        return;
+    }
+    let now = time.elapsed_secs();
+    if now - *last < 10.0 {
+        return;
+    }
+    *last = now;
+    println!("ASSETS {now:.0} s: meshes {}, images {}, materials {}, sound buffers {}, entities {}, audio sinks {}", meshes.len(), images.len(), materials.len(), pcms.len(), entities.iter().count(), players.iter().count());
+}

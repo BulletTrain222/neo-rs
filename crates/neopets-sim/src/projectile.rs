@@ -778,6 +778,37 @@ mod tests {
         assert_eq!(hits, vec![63, 123]);
     }
 
+    /// The hero contact on its own (each co-op player runs it with its own facing, guard and
+    /// shield): a guarding player facing a matching shot sends it back at the owner, or straight
+    /// back with no owner; facing away or not guarding, the shot hits and ends.
+    #[test]
+    fn hero_contact_for_any_player() {
+        let mut rng = Rng::seeded(1);
+        let mut s = spawn(&archer(), 0, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], (false, false), &mut rng).unwrap();
+        s.element = 1;
+        let mut pool = Pool::default();
+        pool.submit(s);
+        let mut shot = pool.slots[0].unwrap();
+        // In flight, 10 along from its start.
+        shot.position = [0.0, 2.0, 10.0];
+        let toward = [0.0, 0.0, -1.0];
+        let mut out = Vec::new();
+        let mut p = shot;
+        assert!(!hero_contact(&mut p, toward, true, Some(1), Some([0.0, 0.0, 0.0]), &mut out));
+        assert!(p.at_owner && p.velocity[2] < 0.0, "sent back toward the owner");
+        assert!(out.contains(&Event::Reflected { element: 1 }));
+        let mut p = shot;
+        out.clear();
+        assert!(!hero_contact(&mut p, toward, true, Some(1), None, &mut out));
+        assert!(p.velocity[2] < 0.0 && (p.velocity[2] + shot.velocity[2]).abs() < 1e-4, "straight back with no owner");
+        for (facing, guard) in [([0.0, 0.0, 1.0], true), (toward, false)] {
+            let mut p = shot;
+            out.clear();
+            assert!(hero_contact(&mut p, facing, guard, Some(1), Some([0.0; 3]), &mut out));
+            assert!(out.contains(&Event::Hero { damage: 10.0, owner: Some(7), blocked: false, element: 1 }));
+        }
+    }
+
     #[test]
     fn guard_blocks_and_reflects() {
         let mut rng = Rng::seeded(1);

@@ -6,7 +6,7 @@ welcomes, the events made and acknowledged, the effect objects and music on each
 state sizes, and any panic. Exits 1 on a failed check.
 
     python scripts/net_check.py [--seconds 60] [--still] [--drop 20] [--delay 100]
-        [--host-env K=V ...] [--join-env K=V ...] [--host-args "--pack 909 ..."] [--outage 40:8]
+        [--host-env K=V ...] [--join-env K=V ...] [--host-args "--pack 909 ..."] [--outage 40:8] [--join-delay 60]
 
 Logs go to private/nettest/host.log and join.log. Opens game windows (they need not be seen).
 """
@@ -44,6 +44,16 @@ def wait_for(path, text, limit):
     return False
 
 
+def working_set(pid):
+    """A process's memory in MB (Windows tasklist), or None."""
+    try:
+        out = subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/FO', 'CSV', '/NH'], capture_output=True, text=True).stdout
+        kb = out.strip().split('","')[-1].strip('"').replace(' K', '').replace(',', '').replace(' ', '').replace('.', '')
+        return int(kb) // 1024
+    except (ValueError, IndexError, OSError):
+        return None
+
+
 def env_with(pairs, base):
     env = dict(os.environ)
     env.update(base)
@@ -61,6 +71,7 @@ def main():
     ap.add_argument('--delay', type=int, default=0, help='milliseconds each received message is held (both sides)')
     ap.add_argument('--host-env', nargs='*')
     ap.add_argument('--join-env', nargs='*')
+    ap.add_argument('--join-delay', type=int, default=0, help='seconds the joiner waits after the host starts hosting (joining late)')
     ap.add_argument('--outage', default='', help='"from:seconds" after the joiner starts: nothing gets through (the joiner must join again)')
     ap.add_argument('--host-args', default='', help='more arguments for the host, for example "--pack 909 --flag 110"')
     a = ap.parse_args()
@@ -78,17 +89,25 @@ def main():
     time.sleep(1)
     host_args = [EXE, '--play'] + ([] if a.still else ['--autoplay']) + a.host_args.split()
     with open(host_log, 'w') as hf:
-        subprocess.Popen(host_args, cwd=ROOT, stdout=hf, stderr=subprocess.STDOUT, env=env_with(a.host_env, dict(common, NEOPETS_NET_HOST='1')))
+        host = subprocess.Popen(host_args, cwd=ROOT, stdout=hf, stderr=subprocess.STDOUT, env=env_with(a.host_env, dict(common, NEOPETS_NET_HOST='1')))
     failures = []
+    memory = []
     if not wait_for(host_log, 'net: hosting', 240):
         failures.append('the host never started hosting')
     else:
+        time.sleep(a.join_delay)
         with open(join_log, 'w') as jf:
-            subprocess.Popen([EXE, '--play', '--title'], cwd=ROOT, stdout=jf, stderr=subprocess.STDOUT, env=env_with(a.join_env, dict(common, NEOPETS_NET_JOIN='127.0.0.1')))
+            joiner = subprocess.Popen([EXE, '--play', '--title'], cwd=ROOT, stdout=jf, stderr=subprocess.STDOUT, env=env_with(a.join_env, dict(common, NEOPETS_NET_JOIN='127.0.0.1')))
         if not wait_for(join_log, 'net: welcome 1', 60):
             failures.append('the joiner was never welcomed')
         else:
-            time.sleep(a.seconds)
+            # Each window's memory once a minute (and at the start and end).
+            end = time.time() + a.seconds
+            while True:
+                memory.append((round(a.seconds - (end - time.time())), working_set(host.pid), working_set(joiner.pid)))
+                if time.time() >= end:
+                    break
+                time.sleep(min(60, max(0, end - time.time())))
     kill_all()
     time.sleep(1)
 
@@ -151,6 +170,11 @@ def main():
     miss = re.findall(r'NETFX joiner tick \d+ \(missing Some\((\d+)\)\)', j)
     if miss:
         report.append(f'characters missing on the joiner at the end: {miss[-1]}')
+    if len(memory) >= 2:
+        report.append('memory (seconds, host MB, joiner MB): ' + ', '.join(f'{t}: {hm}/{jm}' for t, hm, jm in memory))
+    buf = [(int(x), int(y)) for x, y in re.findall(r'buffer (\d+) \(most (\d+)\)', j)]
+    if buf:
+        report.append(f'joiner buffer: now {buf[-1][0]}, most {max(b[1] for b in buf)}; last minute most {max(b[1] for b in buf[-12:])}')
     if a.outage:
         again = 'joining the host again' in j and len(welcomes) >= 2
         report.append('outage: the joiner ' + ('joined again' if again else 'did not join again'))
