@@ -361,12 +361,12 @@ chosen without the user.
 15. [x] Moving objects (gates, lifts, platforms): the host's object animations sent when they
     change, the moving ones' times every tick.
 16. [x] Characters sent only when changed (positions every tick only for those that move).
-17. [ ] The petpet online: compared on both sides.
+17. [~] (travels as a character; a test petpet did not take in the window) The petpet online: compared on both sides.
 
 ### Keeping it tidy
-18. [ ] net.rs split into parts (messages and codecs, the session, the state sync) with no
+18. [x] net.rs split into parts (messages and codecs, the session, the state sync) with no
     change in behaviour (net_check and the codec tests the same before and after).
-19. [ ] net_check.py checks more by itself: world revisions equal on both sides, object lists
+19. [x] net_check.py checks more by itself: world revisions equal on both sides, object lists
     equal, events all played.
-20. [ ] A short multiplayer summary entry in docs/STATUS.md pointing at each increment.
+20. [x] A short multiplayer summary entry in docs/STATUS.md pointing at each increment.
 21. [ ] The morning report.

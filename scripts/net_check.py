@@ -124,6 +124,29 @@ def main():
             # The last lines may straddle a change; compare the set of music seen.
             if not set(x[2] for x in hf) & set(x[2] for x in jf):
                 failures.append('the music never matched')
+    # The world sync: every revision the joiner received must equal the host's of that number.
+    hr = {int(m.group(1)): (m.group(2), m.group(3)) for m in re.finditer(r'NETREV host (\d+) items Some\((\d+)\) broken Some\((\d+)\)', h)}
+    jr = {int(m.group(1)): (m.group(2), m.group(3)) for m in re.finditer(r'NETREV joiner (\d+) items (\d+) broken (\d+)', j)}
+    if hr and jr:
+        common = set(hr) & set(jr)
+        bad = [k for k in common if hr[k] != jr[k]]
+        report.append(f'world revisions: host {len(hr)}, joiner received {len(jr)}, {len(common) - len(bad)} of {len(common)} equal')
+        if bad:
+            failures.append(f'world revisions differ: {sorted(bad)[:5]}')
+        if max(hr) != max(jr) and a.drop == 0:
+            failures.append(f'the last world revision ({max(hr)}) never reached the joiner (it has {max(jr)})')
+    # The animated objects: the joiner's last list must be one the host had.
+    ho = [m.group(1) for m in re.finditer(r'NETFX host tick \d+:[^\n]*objects (\[.*?\]), monster', h)]
+    jo = [m.group(1) for m in re.finditer(r'NETFX joiner tick \d+[^:]*:[^\n]*objects (\[.*?\]), monster', j)]
+    if ho and jo:
+        if jo[-1] not in set(ho):
+            failures.append('the joiner ended with an object list the host never had')
+        else:
+            report.append('animated objects: the joiner\'s match the host\'s')
+    # Characters the host has and the joiner lacks.
+    miss = re.findall(r'NETFX joiner tick \d+ \(missing Some\((\d+)\)\)', j)
+    if miss:
+        report.append(f'characters missing on the joiner at the end: {miss[-1]}')
     for line in re.findall(r'net: [^\n]*', h + '\n' + j):
         if 'timed out' in line or 'left' in line:
             report.append('note: ' + line)
