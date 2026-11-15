@@ -331,8 +331,8 @@ pub struct Flow {
     /// The window shows the Gameplay page's rows rather than the Display page's.
     /// The page the Display window shows: 0 Display, 1 Gameplay, 2 Multiplayer.
     pub display_page: u8,
-    /// The Multiplayer page's tab (display.rs `MULTI_TABS`) and how many players play (its
-    /// controller rows).
+    /// The tab of a tabbed page (display.rs `tabs`: the Display and Multiplayer pages) and how
+    /// many players play (the Multiplayer page's controller rows).
     pub display_tab: u8,
     pub display_players: usize,
     pub display_requests: Vec<(usize, i32)>,
@@ -643,17 +643,18 @@ impl Flow {
             self.enter(fe, OPTIONS, &ctx);
             self.focus = items(fe, OPTIONS).len() + 3;
             self.controls_request = true;
-        } else if page == "display" || page == "gameplay" || page.starts_with("multiplayer") {
+        } else if page.starts_with("display") || page == "gameplay" || page.starts_with("multiplayer") {
             self.enter(fe, OPTIONS, &ctx);
             self.open_display(match page {
                 "gameplay" => 1,
                 p if p.starts_with("multiplayer") => 2,
                 _ => 0,
             });
-            // "multiplayer1" or "multiplayer2": that tab of the Multiplayer page.
-            if let Some(t) = page.strip_prefix("multiplayer").and_then(|t| t.parse::<u8>().ok()) {
-                self.display_tab = t.min(2);
-                let rows = crate::display::visible_rows(2, self.display_tab, self.display_players);
+            // "multiplayer1", "display2" and so on: that tab of the page.
+            if let Some(t) = page.strip_prefix("multiplayer").or_else(|| page.strip_prefix("display")).and_then(|t| t.parse::<u8>().ok()) {
+                let n = crate::display::tabs(self.display_page).len().max(1) as u8;
+                self.display_tab = t.min(n - 1);
+                let rows = crate::display::visible_rows(self.display_page, self.display_tab, self.display_players);
                 self.display_focus = rows.get(1).copied().unwrap_or(crate::display::TAB_FOCUS);
             }
         } else if let Some(tab) = page.strip_prefix("items") {
@@ -677,10 +678,8 @@ impl Flow {
         self.current = DISPLAY;
         self.pass = 0;
         self.display_page = page;
-        // The Multiplayer page opens on its first tab's first row.
-        if page == 2 {
-            self.display_tab = 0;
-        }
+        // A tabbed page opens on its first tab's first row.
+        self.display_tab = 0;
         let rows = crate::display::visible_rows(page, self.display_tab, self.display_players);
         self.display_focus = rows.iter().copied().find(|&r| r != crate::display::TAB_FOCUS).unwrap_or(rows[0]);
     }
@@ -693,9 +692,10 @@ impl Flow {
         let page = crate::display::visible_rows(self.display_page, self.display_tab, self.display_players);
         let at = page.iter().position(|&r| r == self.display_focus).unwrap_or(0);
         if self.pass >= 2 {
-            // The Multiplayer page's tabs: L1 and R1 anywhere, Left and Right on the tab bar.
+            // A tabbed page's tabs: L1 and R1 anywhere, Left and Right on the tab bar.
             let on_tabs = self.display_focus == crate::display::TAB_FOCUS;
-            let tab_step = if self.display_page != 2 {
+            let n = crate::display::tabs(self.display_page).len() as i32;
+            let tab_step = if n == 0 {
                 0
             } else if edge & L1 != 0 || (on_tabs && edge & LEFT != 0) {
                 -1
@@ -705,10 +705,9 @@ impl Flow {
                 0
             };
             if tab_step != 0 {
-                let n = crate::display::MULTI_TABS.len() as i32;
                 self.display_tab = (self.display_tab as i32 + tab_step).rem_euclid(n) as u8;
                 if !on_tabs {
-                    let rows = crate::display::visible_rows(2, self.display_tab, self.display_players);
+                    let rows = crate::display::visible_rows(self.display_page, self.display_tab, self.display_players);
                     self.display_focus = rows.get(1).copied().unwrap_or(crate::display::TAB_FOCUS);
                 }
                 self.sounds.push(0x9A);

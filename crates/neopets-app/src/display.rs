@@ -33,15 +33,41 @@ pub const ATTACK_TURN_ROW: usize = 44;
 /// The rows on the Multiplayer page (docs/MULTIPLAYER.md; this build's feature), in the order
 /// shown: the tabs' rows in turn (This computer, Online, Players).
 pub const MULTI_ROWS: [usize; 22] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], HOST_ROW, REMOVE_ROW, UPNP_ROW, ADDRESS_ROW, JOIN_ROW, PASSWORD_ROW, PORT_ROW, DOORS_ROW, COLOUR_ROWS[0], COLOUR_ROWS[1], COLOUR_ROWS[2], COLOUR_ROWS[3], TAGS_ROW, 25, TOGETHER_ROW];
-/// The Multiplayer page's tabs and their rows, in the order shown.
-pub const MULTI_TABS: [&str; 3] = ["This computer", "Online", "Players"];
-pub const TAB_ROWS: [&[usize]; 3] = [
-    &[COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3]],
-    &[HOST_ROW, REMOVE_ROW, UPNP_ROW, ADDRESS_ROW, JOIN_ROW, PASSWORD_ROW, PORT_ROW, DOORS_ROW],
-    &[COLOUR_ROWS[0], COLOUR_ROWS[1], COLOUR_ROWS[2], COLOUR_ROWS[3], TAGS_ROW, 25, TOGETHER_ROW],
+/// A page's tabs: each tab's name and its rows, in the order shown.
+pub type Tabs = [(&'static str, &'static [usize])];
+/// The Display page's tabs: the window and speed; the preset and the picture; shadows and how far
+/// things are drawn.
+pub static DISPLAY_TABS: [(&str, &[usize]); 3] = [
+    ("Screen", &[0, 1, 2, 3, 4, 16, 22]),
+    ("Graphics", &[5, 6, 7, 10, 9, 24]),
+    ("Shadows & distance", &[12, 13, 14, 15, 11, 21]),
 ];
-/// The headings over groups of the Multiplayer page's rows: (the row they come before, text).
-pub const HEADINGS: [(usize, &str); 7] = [
+/// The Multiplayer page's tabs.
+pub static MULTI_TABS: [(&str, &[usize]); 3] = [
+    ("This computer", &[COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3]]),
+    ("Online", &[HOST_ROW, REMOVE_ROW, UPNP_ROW, ADDRESS_ROW, JOIN_ROW, PASSWORD_ROW, PORT_ROW, DOORS_ROW]),
+    ("Players", &[COLOUR_ROWS[0], COLOUR_ROWS[1], COLOUR_ROWS[2], COLOUR_ROWS[3], TAGS_ROW, 25, TOGETHER_ROW]),
+];
+/// The most tabs a page has (the tab bar's chips).
+pub const MAX_TABS: usize = 3;
+/// A page's tabs (none on the Gameplay page).
+pub fn tabs(page: u8) -> &'static Tabs {
+    match page {
+        0 => &DISPLAY_TABS,
+        2 => &MULTI_TABS,
+        _ => &[],
+    }
+}
+/// The headings over groups of a tabbed page's rows: (the row they come before, text).
+pub const HEADINGS: [(usize, &str); 15] = [
+    (0, "Window"),
+    (3, "Picture"),
+    (16, "Speed"),
+    (5, "Preset"),
+    (6, "Detail"),
+    (9, "Look"),
+    (12, "Shadows"),
+    (11, "Distance"),
     (COOP_ROW, "Split screen co-op"),
     (PAD_ROWS[0], "Controllers"),
     (HOST_ROW, "Host"),
@@ -55,15 +81,17 @@ pub const HEADINGS: [(usize, &str); 7] = [
 pub const ACTION_ROWS: [usize; 4] = [COOP_ROW, HOST_ROW, JOIN_ROW, REMOVE_ROW];
 /// The rows typed into, drawn as a text box (the join address, the password, the port).
 pub const TEXT_ROWS: [usize; 3] = [ADDRESS_ROW, PASSWORD_ROW, PORT_ROW];
-/// The focus value of the Multiplayer page's tab bar (Left and Right change the tab).
+/// The focus value of a tabbed page's tab bar (Left and Right change the tab).
 pub const TAB_FOCUS: usize = ROWS + 1;
 
-/// The rows a page shows, in order, with Back at the end; the Multiplayer page shows its tab
-/// bar first and its current tab's rows, and a controller row only for as many players as play.
+/// The rows a page shows, in order, with Back at the end; a tabbed page shows its tab bar first
+/// and its current tab's rows, and the Multiplayer page a controller row only for as many players
+/// as play.
 pub fn visible_rows(page: u8, tab: u8, players: usize) -> Vec<usize> {
-    let mut v = if page == 2 {
+    let t = tabs(page);
+    let mut v = if !t.is_empty() {
         let mut v = vec![TAB_FOCUS];
-        v.extend(TAB_ROWS[tab.min(2) as usize].iter().copied().filter(|r| !PAD_ROWS.iter().position(|p| p == r).is_some_and(|k| k >= players)));
+        v.extend(t[(tab as usize).min(t.len() - 1)].1.iter().copied().filter(|r| !PAD_ROWS.iter().position(|p| p == r).is_some_and(|k| k >= players)));
         v
     } else {
         page_rows(page)
@@ -73,6 +101,7 @@ pub fn visible_rows(page: u8, tab: u8, players: usize) -> Vec<usize> {
 }
 /// Rows no page shows any more (27, the Player 2 partner choice: every player starts as Tor and
 /// switches on its own; 8 and 23, Bloom and Light shafts, always off now).
+#[cfg_attr(not(test), allow(dead_code))]
 pub const RETIRED_ROWS: [usize; 3] = [27, 8, 23];
 /// Local co-op on this computer: start or stop it.
 pub const COOP_ROW: usize = 37;
@@ -111,7 +140,7 @@ pub fn page_rows(page: u8) -> Vec<usize> {
     match page {
         1 => GAMEPLAY_ROWS.to_vec(),
         2 => MULTI_ROWS.to_vec(),
-        _ => (0..ROWS).filter(|k| !GAMEPLAY_ROWS.contains(k) && !MULTI_ROWS.contains(k) && !RETIRED_ROWS.contains(k)).collect(),
+        _ => DISPLAY_TABS.iter().flat_map(|t| t.1.iter().copied()).collect(),
     }
 }
 /// Character shadows: off, the original volumes as the game draws them (blocky hulls, a drop of
@@ -803,11 +832,19 @@ pub struct DispValue(usize);
 pub struct DispStep(usize, i32);
 #[derive(Component)]
 pub struct DispHelp;
-/// The Multiplayer page's tab bar and its tabs, and a heading over a group of rows.
+/// A tabbed page's tab bar, its tabs and their names, and a heading over a group of rows.
 #[derive(Component)]
 pub struct DispTabs;
 #[derive(Component)]
 pub struct DispTab(u8);
+#[derive(Component)]
+pub struct DispTabText(u8);
+/// An action button's text (its colour follows the button's state).
+#[derive(Component)]
+pub struct DispActionText;
+/// The keys line under the title.
+#[derive(Component)]
+pub struct DispKeys;
 #[derive(Component)]
 pub struct DispHeading(usize);
 /// An action row's button.
@@ -826,19 +863,21 @@ const ARROW_HOVER: Color = Color::srgba(0.95, 0.75, 0.25, 0.65);
 const GOLD: Color = Color::srgb(0.98, 0.80, 0.35);
 const TEXT: Color = Color::srgb(0.92, 0.93, 0.96);
 const DIM: Color = Color::srgb(0.60, 0.63, 0.70);
-/// The Multiplayer page's own accent (its tabs and headings).
-const ACCENT: Color = Color::srgb(0.55, 0.78, 1.0);
+/// Headings over groups of rows: a muted gold, under the title's.
+const ACCENT: Color = Color::srgb(0.80, 0.66, 0.40);
+/// A tab: not chosen, chosen, and chosen with the cursor on the tab bar.
 const TAB: Color = Color::srgba(1.0, 1.0, 1.0, 0.05);
-const TAB_ON: Color = Color::srgba(0.35, 0.60, 0.95, 0.45);
-/// An action button: ready, ready and selected or hovered, stopping (it ends something), and
-/// not available now.
-const ACTION: Color = Color::srgb(0.20, 0.42, 0.78);
-const ACTION_HOT: Color = Color::srgb(0.30, 0.56, 0.98);
-const ACTION_STOP: Color = Color::srgb(0.62, 0.20, 0.22);
-const ACTION_STOP_HOT: Color = Color::srgb(0.80, 0.28, 0.30);
-const ACTION_OFF: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
+const TAB_ON: Color = Color::srgba(0.95, 0.75, 0.25, 0.22);
+const TAB_ON_HOT: Color = Color::srgba(0.95, 0.75, 0.25, 0.45);
+/// An action button (square, in the menu's gold): its fill, edge and text when ready; selected or
+/// hovered; when it stops something (a muted red); and when not available now (grey).
+const ACTION: (Color, Color, Color) = (Color::srgba(0.95, 0.75, 0.25, 0.12), Color::srgba(0.98, 0.80, 0.35, 0.55), GOLD);
+const ACTION_HOT: (Color, Color, Color) = (Color::srgba(0.95, 0.75, 0.25, 0.38), GOLD, Color::srgb(1.0, 0.96, 0.85));
+const ACTION_STOP: (Color, Color, Color) = (Color::srgba(0.70, 0.25, 0.20, 0.22), Color::srgba(0.85, 0.42, 0.35, 0.60), Color::srgb(0.95, 0.68, 0.60));
+const ACTION_STOP_HOT: (Color, Color, Color) = (Color::srgba(0.70, 0.25, 0.20, 0.50), Color::srgb(0.92, 0.50, 0.42), Color::srgb(1.0, 0.90, 0.86));
+const ACTION_OFF: (Color, Color, Color) = (Color::srgba(1.0, 1.0, 1.0, 0.03), Color::srgba(1.0, 1.0, 1.0, 0.14), Color::srgb(0.45, 0.47, 0.52));
 /// A text box: its field and edge, and the edge while it is being typed into or hovered.
-const INPUT: Color = Color::srgb(0.02, 0.03, 0.06);
+const INPUT: Color = Color::srgb(0.03, 0.03, 0.04);
 const INPUT_EDGE: Color = Color::srgba(1.0, 1.0, 1.0, 0.30);
 const INPUT_HOT: Color = Color::srgb(0.98, 0.80, 0.35);
 
@@ -849,7 +888,7 @@ const HELP: [&str; ROWS + 1] = [
     "The shape of the game picture; bars fill the rest of the window.",
     "How sharp the 3D world is drawn. Higher looks better and costs speed.",
     "How the world picture is scaled to the window: Sharp keeps pixels crisp, Smooth blends them.",
-    "Sets the costly options at once. Low runs best on slower computers; High adds shadows from everything. Changing an option below shows Custom.",
+    "Sets the costly options on every tab at once. Low runs best on slower computers; High adds shadows from everything. Changing one of them shows Custom.",
     "Smooths jagged edges. SMAA also smooths leaves and fences; MSAA turns to SMAA while ambient occlusion is on.",
     "Keeps ground and walls crisp at a distance and at an angle, without shimmer.",
     "A soft glow around bright light, magic and sky.",
@@ -922,12 +961,13 @@ pub fn spawn_window(mut commands: Commands) {
         ))
         .with_children(|ui| {
             ui.spawn((Text::new("Display"), font(22.0), TextColor(GOLD), DispTitle));
-            ui.spawn((Text::new("Up and down pick, left and right or a click change. Esc or B go back."), font(12.0), TextColor(DIM), Node { margin: UiRect::bottom(px(8)), ..default() }));
-            // The Multiplayer page's tabs (L1 and R1, or Left and Right on the bar, or a click).
-            ui.spawn((Node { flex_direction: FlexDirection::Row, column_gap: px(6), padding: UiRect::all(px(4)), margin: UiRect::bottom(px(4)), display: Display::None, ..default() }, BackgroundColor(ROW), DispTabs)).with_children(|bar| {
-                for (t, name) in MULTI_TABS.iter().enumerate() {
-                    bar.spawn((Button, Node { flex_grow: 1.0, justify_content: JustifyContent::Center, padding: UiRect::axes(px(8), px(5)), ..default() }, BackgroundColor(TAB), DispTab(t as u8))).with_children(|b| {
-                        b.spawn((Text::new(*name), font(15.0), TextColor(TEXT), TextLayout::no_wrap()));
+            ui.spawn((Text::default(), font(12.0), TextColor(DIM), Node { margin: UiRect::bottom(px(8)), ..default() }, DispKeys));
+            // A tabbed page's tabs (L1 and R1, or Left and Right on the bar, or a click); the
+            // chosen tab is gold with a gold line under it.
+            ui.spawn((Node { flex_direction: FlexDirection::Row, column_gap: px(4), margin: UiRect::bottom(px(2)), display: Display::None, ..default() }, DispTabs)).with_children(|bar| {
+                for t in 0..MAX_TABS as u8 {
+                    bar.spawn((Button, Node { flex_grow: 1.0, justify_content: JustifyContent::Center, padding: UiRect::axes(px(8), px(5)), border: UiRect::bottom(px(2)), ..default() }, BackgroundColor(TAB), BorderColor::all(Color::NONE), DispTab(t))).with_children(|b| {
+                        b.spawn((Text::default(), font(15.0), TextColor(TEXT), TextLayout::no_wrap(), DispTabText(t)));
                     });
                 }
             });
@@ -935,7 +975,7 @@ pub fn spawn_window(mut commands: Commands) {
             for k in order {
                 let back = k == ROWS;
                 if let Some(&(_, text)) = HEADINGS.iter().find(|h| h.0 == k) {
-                    ui.spawn((Text::new(text), font(13.0), TextColor(ACCENT), Node { margin: UiRect { top: px(6), bottom: px(1), left: px(4), ..default() }, display: Display::None, ..default() }, DispHeading(k)));
+                    ui.spawn((Text::new(text.to_uppercase()), font(12.0), TextColor(ACCENT), Node { margin: UiRect { top: px(8), bottom: px(1), left: px(4), ..default() }, display: Display::None, ..default() }, DispHeading(k)));
                 }
                 ui.spawn((
                     Button,
@@ -951,7 +991,7 @@ pub fn spawn_window(mut commands: Commands) {
                     if TEXT_ROWS.contains(&k) {
                         row.spawn((
                             Button,
-                            Node { width: px(290), height: px(28), justify_content: JustifyContent::FlexStart, align_items: AlignItems::Center, padding: UiRect::horizontal(px(10)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() },
+                            Node { width: px(290), height: px(28), justify_content: JustifyContent::FlexStart, align_items: AlignItems::Center, padding: UiRect::horizontal(px(10)), border: UiRect::all(px(1)), ..default() },
                             BackgroundColor(INPUT),
                             BorderColor::all(INPUT_EDGE),
                             DispInput(k),
@@ -964,13 +1004,13 @@ pub fn spawn_window(mut commands: Commands) {
                     if ACTION_ROWS.contains(&k) {
                         row.spawn((
                             Button,
-                            Node { width: px(290), height: px(28), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() },
-                            BackgroundColor(ACTION),
-                            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.35)),
+                            Node { width: px(290), height: px(28), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::all(px(1)), ..default() },
+                            BackgroundColor(ACTION.0),
+                            BorderColor::all(ACTION.1),
                             DispAction(k),
                         ))
                         .with_children(|b| {
-                            b.spawn((Text::default(), font(15.0), TextColor(TEXT), TextLayout::no_wrap(), DispValue(k)));
+                            b.spawn((Text::default(), font(15.0), TextColor(ACTION.2), TextLayout::no_wrap(), DispValue(k), DispActionText));
                         });
                         return;
                     }
@@ -988,7 +1028,7 @@ pub fn spawn_window(mut commands: Commands) {
                     });
                 });
             }
-            ui.spawn((Text::default(), font(13.0), TextColor(TEXT), Node { margin: UiRect::top(px(10)), min_height: px(18), ..default() }, DispHelp));
+            ui.spawn((Text::default(), font(13.0), TextColor(TEXT), Node { margin: UiRect::top(px(10)), min_height: px(54), ..default() }, DispHelp));
         });
 }
 
@@ -1062,10 +1102,15 @@ pub fn show_window(
     (net, address, password): (Res<crate::net::Net>, Res<crate::net::JoinAddress>, Res<crate::net::NetPassword>),
     (coop, play, gamepads): (Res<crate::coop::Coop>, Option<Res<crate::PlayState>>, Query<Entity, With<Gamepad>>),
     mut tab_bar: Query<&mut Node, (With<DispTabs>, Without<DispWindow>, Without<DispRow>, Without<DispHeading>)>,
-    mut tab_chips: Query<(&DispTab, &Interaction, &mut BackgroundColor), (Without<DispRow>, Without<DispStep>, Without<DispAction>)>,
+    mut tab_chips: Query<(&DispTab, &Interaction, &mut BackgroundColor, &mut BorderColor), (Without<DispRow>, Without<DispStep>, Without<DispAction>, Without<DispInput>)>,
     mut headings: Query<(&DispHeading, &mut Node), (Without<DispWindow>, Without<DispRow>, Without<DispTabs>)>,
-    mut actions: Query<(&DispAction, &Interaction, &mut BackgroundColor), (Without<DispRow>, Without<DispStep>, Without<DispTab>)>,
-    mut boxes: Query<(&DispInput, &Interaction, &mut BorderColor)>,
+    mut actions: Query<(&DispAction, &Interaction, &mut BackgroundColor, &mut BorderColor), (Without<DispRow>, Without<DispStep>, Without<DispTab>, Without<DispInput>)>,
+    (mut boxes, mut action_text, mut tab_text, mut keys): (
+        Query<(&DispInput, &Interaction, &mut BorderColor), (Without<DispAction>, Without<DispTab>)>,
+        Query<(&DispValue, &mut TextColor), (With<DispActionText>, Without<DispLabel>, Without<DispTabText>)>,
+        Query<(&DispTabText, &mut Text, &mut TextColor), (Without<DispLabel>, Without<DispValue>, Without<DispHelp>, Without<DispTitle>, Without<DispKeys>)>,
+        Query<&mut Text, (With<DispKeys>, Without<DispLabel>, Without<DispValue>, Without<DispHelp>, Without<DispTitle>)>,
+    ),
 ) {
     let _span = crate::perf::span("show_window");
     let flow = menu.as_ref().map(|m| &m.flow);
@@ -1079,6 +1124,7 @@ pub fn show_window(
     let Some(flow) = flow.filter(|_| open) else { return };
     let focus = if flow.display_focus == TAB_FOCUS { TAB_FOCUS } else { flow.display_focus.min(ROWS) };
     let mut shown = settings.rows();
+    let mut action_colours: Vec<(usize, Color)> = Vec::new();
     {
         use crate::net::Role;
         shown[HOST_ROW].1 = match net.role {
@@ -1109,7 +1155,7 @@ pub fn show_window(
         } else {
             "Start".into()
         };
-        // The action buttons: blue ready, red when it stops something, dim when not available.
+        // The action buttons: gold ready, red when it stops something, grey when not available.
         let state = |row: usize| -> u8 {
             match row {
                 COOP_ROW if net.role != Role::Off => 0,
@@ -1129,7 +1175,7 @@ pub fn show_window(
                 *edge = want;
             }
         }
-        for (a, i, mut bg) in &mut actions {
+        for (a, i, mut bg, mut edge) in &mut actions {
             let hot = a.0 == focus || *i != Interaction::None;
             let want = match (state(a.0), hot) {
                 (0, _) => ACTION_OFF,
@@ -1138,9 +1184,14 @@ pub fn show_window(
                 (_, false) => ACTION,
                 (_, true) => ACTION_HOT,
             };
-            if bg.0 != want {
-                bg.0 = want;
+            if bg.0 != want.0 {
+                bg.0 = want.0;
             }
+            let e = BorderColor::all(want.1);
+            if *edge != e {
+                *edge = e;
+            }
+            action_colours.push((a.0, want.2));
         }
         let mut connected: Vec<Entity> = gamepads.iter().collect();
         connected.sort();
@@ -1173,17 +1224,19 @@ pub fn show_window(
             node.display = d;
         }
     }
-    // The Multiplayer page's tab bar and headings.
-    let multi = flow.display_page == 2;
+    // A tabbed page's tab bar and headings.
+    let page_tabs = tabs(flow.display_page);
+    let tabbed = !page_tabs.is_empty();
     for mut n in &mut tab_bar {
-        let d = if multi { Display::Flex } else { Display::None };
+        let d = if tabbed { Display::Flex } else { Display::None };
         if n.display != d {
             n.display = d;
         }
     }
-    for (t, i, mut bg) in &mut tab_chips {
-        let want = if t.0 == flow.display_tab {
-            if focus == TAB_FOCUS { Color::srgba(0.45, 0.70, 1.0, 0.70) } else { TAB_ON }
+    for (t, i, mut bg, mut edge) in &mut tab_chips {
+        let on = t.0 == flow.display_tab;
+        let want = if on {
+            if focus == TAB_FOCUS { TAB_ON_HOT } else { TAB_ON }
         } else if *i == Interaction::Hovered {
             ROW_HOVER
         } else {
@@ -1192,9 +1245,26 @@ pub fn show_window(
         if bg.0 != want {
             bg.0 = want;
         }
+        let e = BorderColor::all(if on { GOLD } else { Color::NONE });
+        if *edge != e {
+            *edge = e;
+        }
+    }
+    for (t, mut text, mut colour) in &mut tab_text {
+        let name = page_tabs.get(t.0 as usize).map_or("", |p| p.0);
+        if text.0 != name {
+            text.0 = name.to_string();
+        }
+        colour.0 = if t.0 == flow.display_tab { GOLD } else { DIM };
+    }
+    let keys_line = if tabbed { "Up/down pick, left/right change, L1/R1 switch tabs, Esc or B go back." } else { "Up and down pick, left and right or a click change. Esc or B go back." };
+    for mut t in &mut keys {
+        if t.0 != keys_line {
+            t.0 = keys_line.to_string();
+        }
     }
     for (h, mut n) in &mut headings {
-        let d = if multi && page.contains(&h.0) { Display::Flex } else { Display::None };
+        let d = if tabbed && page.contains(&h.0) { Display::Flex } else { Display::None };
         if n.display != d {
             n.display = d;
         }
@@ -1221,8 +1291,20 @@ pub fn show_window(
             t.0 = s;
         }
     }
+    // An action button's text: gold when ready, light while selected, grey when not available.
+    for (v, mut c) in &mut action_text {
+        if let Some(&(_, want)) = action_colours.iter().find(|a| a.0 == v.0) {
+            if c.0 != want {
+                c.0 = want;
+            }
+        }
+    }
     // On the Multiplayer page the session's status follows the help line.
-    let help_text = if focus == TAB_FOCUS { "This computer: split screen and controllers. Online: host or join. Players: colours and the rules for everyone. Left and right (or L1 and R1) change the tab." } else { HELP[focus] };
+    let help_text = match (focus == TAB_FOCUS, flow.display_page) {
+        (true, 0) => "Screen: the window, picture size and frame rate. Graphics: the preset and the picture's detail and look. Shadows & distance: shadows and how far things are drawn.",
+        (true, _) => "This computer: split screen and controllers. Online: host or join. Players: colours and the rules for everyone.",
+        _ => HELP[focus],
+    };
     let line = if flow.display_page == 2 && !net.status.is_empty() && flow.display_tab == 1 { format!("{}\n{}", help_text, net.status_line()) } else { help_text.to_string() };
     for mut t in &mut help {
         if t.0 != line {
@@ -1242,14 +1324,21 @@ mod tests {
         assert_eq!(page_rows(1), [17, 18, 19, 20, 44]);
         assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 28, 31, 33, 29, 30, 32, 34, 36, 45, 46, 47, 48, 43, 25, 35]);
         // Every Multiplayer row is in one tab; two players show two controller rows.
-        let mut all: Vec<usize> = TAB_ROWS.iter().flat_map(|t| t.iter().copied()).collect();
+        let mut all: Vec<usize> = MULTI_TABS.iter().flat_map(|t| t.1.iter().copied()).collect();
         all.sort();
         let mut want = page_rows(2);
         want.sort();
         assert_eq!(all, want);
         assert_eq!(visible_rows(2, 0, 2), [TAB_FOCUS, 37, 38, 26, 39, 40, ROWS]);
         assert_eq!(visible_rows(2, 0, 4).len(), 9);
-        assert_eq!(page_rows(0), (0..17).filter(|&k| k != 8).chain([21, 22, 24]).collect::<Vec<_>>());
+        // The Display page's tabs hold every row no other page has, once each.
+        let mut display = page_rows(0);
+        display.sort();
+        assert_eq!(display, (0..ROWS).filter(|k| !GAMEPLAY_ROWS.contains(k) && !MULTI_ROWS.contains(k) && !RETIRED_ROWS.contains(k)).collect::<Vec<_>>());
+        assert_eq!(visible_rows(0, 1, 2), [TAB_FOCUS, 5, 6, 7, 10, 9, 24, ROWS]);
+        assert!(tabs(1).is_empty() && visible_rows(1, 0, 2)[0] == 17);
+        // Every heading comes before a row of a tabbed page.
+        assert!(HEADINGS.iter().all(|h| page_rows(0).contains(&h.0) || page_rows(2).contains(&h.0)));
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));
         // 21:9 in a 16:9 window: letterbox 823 high.
