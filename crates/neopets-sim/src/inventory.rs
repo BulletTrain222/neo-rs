@@ -43,7 +43,8 @@ impl Equipment {
 
     /// Set Mote word k of a hero: returns whether it changed (setting the held id does nothing).
     pub fn set_mote(&mut self, hero: usize, word: usize, id: u16) -> bool {
-        let w = &mut self.motes[hero][word];
+        // A hero or word out of range (a damaged message online) changes nothing.
+        let Some(w) = self.motes.get_mut(hero).and_then(|m| m.get_mut(word)) else { return false };
         if *w == Some(id) {
             return false;
         }
@@ -53,7 +54,7 @@ impl Equipment {
 
     /// Clear Mote word k: returns whether it held an id.
     pub fn clear_mote(&mut self, hero: usize, word: usize) -> bool {
-        self.motes[hero][word].take().is_some()
+        self.motes.get_mut(hero).and_then(|m| m.get_mut(word)).and_then(Option::take).is_some()
     }
 }
 

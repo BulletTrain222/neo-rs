@@ -76,7 +76,7 @@ pub fn apply_to(op: StoryOp, flags: &mut BTreeSet<u16>, items: &mut HashMap<u16,
             }
         }
         // The purse never goes below 0 (both sides spending at once: the host's order).
-        StoryOp::Neopoints(d) => *neopoints = (*neopoints + d).max(0),
+        StoryOp::Neopoints(d) => *neopoints = neopoints.saturating_add(d).max(0),
         StoryOp::Collected(c) => {
             collected.insert(c);
         }

@@ -55,8 +55,18 @@ player number). Two friends who are both away from the host do not see each othe
 through the host's router:
 1. Easiest: before hosting, set **Open the port (UPnP)** to On. While you host, the game asks
    the router to let your friend in, and the help line shows the internet address to give them.
-   The way in closes when you stop hosting, or by itself after two hours. Some routers have
-   UPnP turned off; then the help line says the router could not open the port.
+   The way in closes when hosting ends in any way (Stop hosting, or closing the game while
+   hosting), or by itself after two hours. Some routers have UPnP turned off; then the help
+   line says the router could not open the port.
+
+**What the open port lets in.** Only the game's own messages: the game reads them as game data
+(where players are, what they pressed, what happened), never as programs or files, and it runs
+no other program and writes no file from them. Every number in a message is checked before use,
+and a message that still makes the game fail sends that joiner away (or, on a joiner, leaves
+the host's game) instead of closing the game. What another player can do is play: a modified
+copy could change the shared game's items, Neopoints and story (and a host's world is the one a
+joiner saves). The host answers strangers at most ten times a second. NEOPETS_NET_FUZZ=percent
+(diagnostic) sends that share of messages damaged, to test this.
 2. By hand: in the router's settings, forward **UDP port 47817** (or the Port row's) to the host's computer (the
    address the help line shows, for example 192.168.1.20). The friend then joins with the
    host's internet address (search "what is my IP" on the host's computer).

@@ -529,7 +529,8 @@ pub fn sync_stingers(
     }
     let p = &mut state.play;
     for k in std::mem::take(&mut p.stinger_requests) {
-        if playing {
+        // Stingers 0 to 18 only (SPEC-0009; online, the host's request is checked here too).
+        if playing || !(0..19).contains(&k) {
             continue;
         }
         let handle = cache.entry(k).or_insert_with(|| {
@@ -546,7 +547,9 @@ pub fn sync_stingers(
     // Emote clips share the handle: a VAG-headed clip at its directory position (2,048-byte
     // units) of bank 144 or 145, at volume trunc(1024 x Voice gain) (gain 1.0 here).
     for (bank, start, len) in std::mem::take(&mut p.emote_requests) {
-        if playing {
+        // Banks 144 and 145 only (online, a host's request for any other file of the disc, which
+        // would be read whole and kept, is passed over).
+        if playing || !(144..=145).contains(&bank) || start.checked_add(len).is_none_or(|e| e > 1 << 20) {
             continue;
         }
         let bytes = banks.entry(bank).or_insert_with(|| {

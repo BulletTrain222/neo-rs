@@ -458,6 +458,9 @@ impl EffectObject {
     }
 }
 
+/// The most effect objects the host's operations may make here (online; far above any game's).
+pub const MAX_NET_OBJECTS: usize = 4096;
+
 /// The shared pools of group 3 and the effect objects that hold spawners.
 #[derive(Clone, Debug, Default)]
 pub struct Effects {
@@ -610,10 +613,20 @@ impl Effects {
     }
 
     /// The joiner: one of the host's operations, its handles mapped to this side's through `map`
+    /// (an add with an unknown definition, or past MAX_NET_OBJECTS, is passed over)
     /// (an add records its new handle; a release forgets it).
     pub fn apply(&mut self, table: &EffectTable, op: &Op, map: &mut std::collections::HashMap<usize, usize>, r: &mut impl Uniform) {
         match *op {
             Op::Add { handle, def, position, frame, state, cull, scale } => {
+                // Online, a damaged or hostile message: a definition this table lacks, or more
+                // objects than any game makes, is passed over.
+                if def.is_some_and(|d| d >= table.definitions.len()) || (self.objects.len() >= MAX_NET_OBJECTS && self.objects.iter().all(Option::is_some)) {
+                    return;
+                }
+                // A handle added again: the older object goes first.
+                if let Some(old) = map.remove(&handle) {
+                    self.release_raw(old);
+                }
                 let o = EffectObject { def, position, frame, state, slots: [None; 5], cull, scale };
                 let h = self.add_object_raw(o);
                 self.share.local_handles.remove(&h);

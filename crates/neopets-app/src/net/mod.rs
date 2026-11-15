@@ -243,7 +243,10 @@ pub struct Net {
     /// has loaded).
     pub load_interior: Option<u32>,
     /// Host: the router's answer being waited for (UPnP), and the port it forwards.
-    upnp_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<upnp::Outcome>>>,
+    upnp_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<(u16, upnp::Outcome)>>>,
+    /// Host: refusals sent to strangers in the current second (at most REFUSALS_A_SECOND, so the
+    /// game cannot be used to send floods at a third party's address).
+    refusals: (Option<Instant>, u32),
     pub upnp_port: Option<u16>,
     /// Players in separate worlds (net/apart.rs): whether this side runs its own world apart
     /// from the other; host: the door the joiner is to take, until it answers; joiner: the door
@@ -290,6 +293,71 @@ pub struct Net {
 
 /// The most joiners a host takes (players 2 to 4).
 pub const MAX_JOINERS: usize = crate::coop::MAX_PLAYERS - 1;
+/// The most refusals the host sends a second (to all strangers together).
+const REFUSALS_A_SECOND: u32 = 10;
+
+/// NEOPETS_NET_FUZZ=percent (diagnostic): the share of messages sent damaged.
+fn fuzz_percent() -> Option<u64> {
+    static P: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *P.get_or_init(|| std::env::var("NEOPETS_NET_FUZZ").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|&p| p > 0))
+}
+
+impl Net {
+    /// A pseudo-random number (the diagnostic loss and damage).
+    fn next_random(&mut self) -> u64 {
+        self.lossy = self.lossy.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.lossy >> 33
+    }
+
+    /// A damaged copy of a message (diagnostic): its header kept so it is read, then a few bytes
+    /// changed, a run set to 0xFF (huge lengths and indices), cut short, or junk to the end.
+    fn damage(&mut self, bytes: &[u8]) -> Vec<u8> {
+        let mut b = bytes.to_vec();
+        if b.len() <= 7 {
+            return b;
+        }
+        match self.next_random() % 10 {
+            0..=5 => {
+                for _ in 0..1 + self.next_random() % 4 {
+                    let at = 7 + (self.next_random() as usize) % (b.len() - 7);
+                    b[at] = self.next_random() as u8;
+                }
+            }
+            6 | 7 => {
+                let at = 7 + (self.next_random() as usize) % (b.len() - 7);
+                for x in b.iter_mut().skip(at).take(4) {
+                    *x = 0xFF;
+                }
+            }
+            8 => {
+                let n = 7 + (self.next_random() as usize) % (b.len() - 7);
+                b.truncate(n);
+            }
+            _ => {
+                let n = 7 + (self.next_random() as usize) % 1400;
+                b.truncate(7);
+                while b.len() < n {
+                    b.push(self.next_random() as u8);
+                }
+            }
+        }
+        b
+    }
+}
+
+/// When the game closes while online: the others are told (a goodbye), and a router forward
+/// this game opened is closed before the game ends (waiting up to a few seconds).
+pub fn leave_on_exit(mut exit: MessageReader<AppExit>, mut net: ResMut<Net>) {
+    if exit.read().next().is_none() || net.role == Role::Off {
+        return;
+    }
+    let (port, pending) = (net.upnp_port.take(), net.upnp_rx.take().and_then(|m| m.into_inner().ok()));
+    net.stop("");
+    if port.is_some() || pending.is_some() {
+        info!("net: closing the router's forward before the game ends");
+        upnp::release(port, pending, true);
+    }
+}
 
 /// An event's kind for the trace: sound play, set, stop; effect add, one-shot, update, other;
 /// voice; music and movies; rumble and notices.
@@ -325,10 +393,50 @@ impl Net {
         self.role == Role::Join && self.loaded > 0
     }
 
+    /// Host: a refusal to a hello, at most REFUSALS_A_SECOND a second (a hello's sender
+    /// address is not checked, so unlimited answers could be aimed at someone else).
+    fn refuse(&mut self, to: SocketAddr, why: &str) {
+        let now = Instant::now();
+        if self.refusals.0.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1)) {
+            self.refusals = (Some(now), 0);
+        }
+        if self.refusals.1 >= REFUSALS_A_SECOND {
+            return;
+        }
+        self.refusals.1 += 1;
+        let mut w = Writer::new(REFUSE);
+        w.text(why);
+        if let Some(s) = self.socket.as_ref() {
+            let _ = s.send_to(&w.0, to);
+        }
+    }
+
+    /// Joiner: the host sent something this game could not use (main.rs caught it): leave its
+    /// game for the title screen.
+    pub fn drop_host(&mut self) {
+        warn!("net: the host sent something this game could not use; leaving its game");
+        if self.loaded > 0 {
+            self.ended = true;
+        }
+        self.notice = Some("The host sent something this game could not use. You left the game.".into());
+        self.stop("Left: the host sent something this game could not use.");
+    }
+
     fn send(&mut self, bytes: &[u8]) {
         if outage() {
             return;
         }
+        // NEOPETS_NET_FUZZ=percent (diagnostic): that share of the messages sent go out damaged,
+        // to show the other side passes them over without harm.
+        let damaged;
+        let bytes = match fuzz_percent() {
+            // (A hello goes whole, so the damaged messages reach a session.)
+            Some(p) if bytes.get(6) != Some(&HELLO) && self.next_random() % 100 < p => {
+                damaged = self.damage(bytes);
+                &damaged[..]
+            }
+            _ => bytes,
+        };
         if let (Some(s), Some(p)) = (self.socket.as_ref(), self.peer.or(self.target)) {
             let _ = s.send_to(bytes, p);
             self.bytes_out += bytes.len() as u64 + 28;
@@ -371,6 +479,10 @@ impl Net {
             let w = Writer::new(BYE);
             self.send(&w.0);
         }
+        // The router's forward ends with the hosting, however it ended (an answer still on its
+        // way closes the forward it reports), on its own thread.
+        let (port, pending) = (self.upnp_port.take(), self.upnp_rx.take().and_then(|m| m.into_inner().ok()));
+        upnp::release(port, pending, false);
         *self = Self { disc: self.disc, status: status.to_string(), notice: self.notice.take(), ended: self.ended, kept: self.kept, ..Default::default() };
     }
 
@@ -1148,7 +1260,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                         if let Some(ip) = local_address() {
                             let (tx, rx) = std::sync::mpsc::channel();
                             std::thread::spawn(move || {
-                                let _ = tx.send(upnp::open(port, ip));
+                                let _ = tx.send((port, upnp::open(port, ip)));
                             });
                             net.upnp_rx = Some(std::sync::Mutex::new(rx));
                             net.status = format!("{} Asking the router to open the port...", net.host_line);
@@ -1189,13 +1301,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
             }
         }
         Some(Request::Leave) => {
-            // The router's forward ends with the hosting (on its own thread).
-            if let Some(port) = net.upnp_port.take() {
-                std::thread::spawn(move || {
-                    let r = upnp::close(port);
-                    info!("net: the router's forward of port {port}: {r:?}");
-                });
-            }
+            // (The router's forward ends with the hosting: `stop`.)
             if net.role == Role::Join {
                 if let Some(p) = play.as_deref_mut() {
                     p.play.remove_player();
@@ -1220,9 +1326,8 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         return;
     }
     // The router's answer (UPnP).
-    if let Some(r) = net.upnp_rx.as_ref().and_then(|rx| rx.lock().ok()?.try_recv().ok()) {
+    if let Some((port, r)) = net.upnp_rx.as_ref().and_then(|rx| rx.lock().ok()?.try_recv().ok()) {
         net.upnp_rx = None;
-        let port = host_port(settings.net_port);
         match r {
             upnp::Outcome::Opened(ip) => {
                 net.upnp_port = Some(port);
@@ -1282,7 +1387,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     due.sort_by_key(|m| m.0);
     ready.extend(due.into_iter().map(|(_, b, from)| (b, from)));
     if net.role != Role::Host {
-        session_step(&mut net, ready, now, &mut play, &mut coop, &menu, &password, &settings, 0);
+        guarded_step(&mut net, ready, now, &mut play, &mut coop, &menu, &password, &settings, 0);
         return;
     }
     host_route(&mut net, ready, now, &mut play, &mut coop, &menu, &password, &settings);
@@ -1349,12 +1454,12 @@ fn host_route(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, pl
     let linked = |n: &Net| n.peer.is_some() as usize;
     let others = extra.iter().map(linked).sum();
     let mine = std::mem::take(&mut inbox[0]);
-    let freed = session_step(net, mine, now, play, coop, menu, password, settings, others);
+    let freed = guarded_step(net, mine, now, play, coop, menu, password, settings, others);
     renumber(net, &mut extra, freed);
     for k in 0..extra.len() {
         let others = linked(net) + extra.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, e)| linked(e)).sum::<usize>();
         let mine = std::mem::take(&mut inbox[k + 1]);
-        let freed = session_step(&mut extra[k], mine, now, play, coop, menu, password, settings, others);
+        let freed = guarded_step(&mut extra[k], mine, now, play, coop, menu, password, settings, others);
         renumber(net, &mut extra, freed);
         if let Some(n) = extra[k].notice.take() {
             net.notice = Some(match net.notice.take() {
@@ -1384,6 +1489,40 @@ fn renumber(net: &mut Net, extra: &mut [Net], freed: Option<usize>) {
     }
 }
 
+/// A session's step, with a safety net: should a message from the other side make it fail (a
+/// damaged or hostile message this game's checks missed), the game goes on. The host sends that
+/// joiner away (its seat freed); a joiner leaves the host's game.
+#[allow(clippy::too_many_arguments)]
+fn guarded_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, play: &mut Option<ResMut<PlayState>>, coop: &mut crate::coop::Coop, menu: &Option<Res<crate::menu_view::Menu>>, password: &NetPassword, settings: &crate::display::DisplaySettings, others: usize) -> Option<usize> {
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session_step(net, ready, now, play, coop, menu, password, settings, others)));
+    match r {
+        Ok(freed) => freed,
+        Err(_) if net.role == Role::Join => {
+            net.drop_host();
+            None
+        }
+        Err(_) => {
+            let name = if net.peer_name.is_empty() { "A player".to_string() } else { net.peer_name.clone() };
+            warn!("net: {name} sent something this game could not use; sent away");
+            let w = Writer::new(REMOVED);
+            net.send(&w.0);
+            let (seat, apart) = (net.seat, net.apart);
+            net.peer = None;
+            net.remote = None;
+            net.welcome = None;
+            net.last_heard = None;
+            net.apart = false;
+            net.notice = Some(format!("{name} was sent away (a message this game could not use)."));
+            if apart || net.seat == usize::MAX {
+                return None;
+            }
+            let p = play.as_deref_mut()?;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| p.play.remove_seat(seat))).ok()?;
+            Some(seat)
+        }
+    }
+}
+
 /// One session's step: its messages, its sending and its timeouts. Returns the seat freed when
 /// a host's joiner left. `others`: how many other joiners are in (host).
 #[allow(clippy::too_many_arguments)]
@@ -1397,11 +1536,7 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                 info!("net: the host runs another version of the game");
                 net.stop("The host's game is a different build of this game. Use the same build on both computers.");
             } else if net.role == Role::Host && bytes[6] == HELLO {
-                let mut w = Writer::new(REFUSE);
-                w.text("a different build");
-                if let Some(s) = net.socket.as_ref() {
-                    let _ = s.send_to(&w.0, from);
-                }
+                net.refuse(from, "a different build");
             }
             continue;
         }
@@ -1425,11 +1560,7 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                     None
                 };
                 if let Some(why) = refuse {
-                    let mut w = Writer::new(REFUSE);
-                    w.text(&why);
-                    if let Some(s) = net.socket.as_ref() {
-                        let _ = s.send_to(&w.0, from);
-                    }
+                    net.refuse(from, &why);
                     continue;
                 }
                 let Some(p) = play.as_deref_mut() else { continue };
@@ -2212,6 +2343,50 @@ mod tests {
         assert_eq!(password_hash("apple7"), password_hash("apple7"));
         assert_ne!(password_hash("apple7"), password_hash("pear"));
         assert_ne!(password_hash("a"), 0);
+    }
+
+    /// Junk, and damaged copies of real messages, are read without a panic by every reader of
+    /// the other side's messages, and the item-screen commands they carry stay in range.
+    #[test]
+    fn junk_messages_are_harmless() {
+        let mut n = Net::default();
+        let mut s = State::default();
+        s.characters = vec![CharState { pack: 909, slot: 3, ordinal: 7, position: [1.0, 2.0, 3.0], ..Default::default() }];
+        s.events = vec![(1, Event::Sound(Request::Play { id: 1, block: 2, cue: 3, volume: 4, pan: Some(5) })), (2, Event::Movie(7)), (3, Event::Stinger(2))];
+        let real = [s.encode(), Input::default().encode()];
+        for k in 0..40_000u32 {
+            let b = if k % 2 == 0 {
+                let len = (n.next_random() % 300) as usize;
+                let mut b: Vec<u8> = MAGIC.to_vec();
+                b.extend(PROTOCOL.to_le_bytes());
+                b.push((n.next_random() % 32) as u8);
+                b.extend((0..len).map(|_| n.next_random() as u8));
+                b
+            } else {
+                let r = real[(k / 2 % 2) as usize].clone();
+                n.damage(&r)
+            };
+            let Some((_, r)) = Reader::open(&b) else { continue };
+            let _ = State::decode(&mut r.clone());
+            let _ = Input::decode(&mut r.clone());
+            let _ = Event::read(&mut r.clone());
+            let _ = WorldSync::read(&mut r.clone());
+            let _ = read_op((k % 20) as u8, &mut r.clone());
+            let _ = apart::read_op(&mut r.clone());
+            let mut w = Net { role: Role::Join, ..Default::default() };
+            take_welcome(&mut w, &mut r.clone(), "127.0.0.1:1".parse().unwrap());
+            read_apart(&mut w, &mut r.clone(), k % 3 == 0);
+            if let Some(i) = Input::decode(&mut r.clone()) {
+                assert!(i.side.abs() <= 1.0 && i.forward.abs() <= 1.0);
+                match command_of(i.cmd.1, i.cmd.2, i.cmd.3) {
+                    Some(crate::menus::Command::EquipMote { word, .. } | crate::menus::Command::ClearMote(word)) => assert!(word < 3),
+                    _ => {}
+                }
+            }
+        }
+        // A mote word out of range changes nothing.
+        let mut e = neopets_sim::inventory::Equipment::default();
+        assert!(!e.set_mote(0, 9, 3) && !e.clear_mote(5, 0));
     }
 
     /// The packed records come back within their step: a facing within 1/32767, a large clip

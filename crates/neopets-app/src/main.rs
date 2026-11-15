@@ -1051,6 +1051,8 @@ fn main() {
                 .chain(),
         );
     app.add_systems(Update, sync_breakables.after(sync_objects));
+    // Closing the game while online: a goodbye, and the router's forward closed (net.rs).
+    app.add_systems(Last, net::leave_on_exit);
     app.add_systems(Update, sync_blocks.after(sync_objects));
     app.add_systems(Update, send_rumble);
     app.add_systems(Update, sync_uv_flip);
@@ -2149,7 +2151,12 @@ fn step_sim(
                         play.play.sound.requests.push(r);
                     }
                 }
-                for e in std::mem::take(&mut netr.incoming) {
+                // The host's events and state, with a safety net: should one make this side fail
+                // (a damaged or hostile message the checks missed), this side leaves the host's
+                // game rather than the game closing.
+                let incoming = std::mem::take(&mut netr.incoming);
+                let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                for e in incoming {
                     match e {
                         net::Event::Voice { id, emitter, base, r, r0 } => {
                             netr.voices.insert(id as usize, (emitter, base, r, r0));
@@ -2172,11 +2179,15 @@ fn step_sim(
                         }
                     }
                 }
+                }));
+                let mut bad_host = applied.is_err();
                 // Only a state of the world loaded here (one from before a world change waits).
                 netr.queue_most = netr.queue_most.max(netr.queue.len());
                 if let Some(s) = netr.next_state().filter(|s| s.generation == netr.loaded) {
                     let started = std::time::Instant::now();
-                    play.play.apply_net_state(&s);
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| play.play.apply_net_state(&s))).is_err() {
+                        bad_host = true;
+                    }
                     // NEOPETS_TRACE_NETCLIP (diagnostic): the host's hero's clip here every 30 ticks.
                     if std::env::var_os("NEOPETS_TRACE_NETCLIP").is_some() && play.play.ticks % 30 == 0 {
                         println!("NETCLIP joiner tick {}: host hero state {} clip {:?}", play.play.ticks, play.play.player.loco.state, play.play.player.hero.clip_state());
@@ -2222,6 +2233,9 @@ fn step_sim(
                         netr.mismatch = 0;
                         netr.ask_resync();
                     }
+                }
+                if bad_host {
+                    netr.drop_host();
                 }
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                     let p = &play.play;

@@ -65,6 +65,7 @@ impl Writer {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Reader<'a> {
     pub(super) b: &'a [u8],
     pub(super) at: usize,
@@ -98,8 +99,10 @@ impl<'a> Reader<'a> {
     pub(super) fn i32(&mut self) -> Option<i32> {
         Some(i32::from_le_bytes(self.take(4)?.try_into().ok()?))
     }
+    /// A float; a damaged message's NaN or infinity reads as 0 (no game sends either).
     pub(super) fn f32(&mut self) -> Option<f32> {
-        Some(f32::from_le_bytes(self.take(4)?.try_into().ok()?))
+        let v = f32::from_le_bytes(self.take(4)?.try_into().ok()?);
+        Some(if v.is_finite() { v } else { 0.0 })
     }
     pub(super) fn v3(&mut self) -> Option<[f32; 3]> {
         Some([self.f32()?, self.f32()?, self.f32()?])
@@ -1062,12 +1065,14 @@ pub fn cmd_of(c: &crate::menus::Command) -> Option<(u8, u16, u16)> {
 /// The item-screen command a joiner sent (`cmd_of` back).
 pub fn command_of(kind: u8, a: u16, b: u16) -> Option<crate::menus::Command> {
     use crate::menus::Command;
+    // Only what the item screen can send: three Mote words, 14 Motes (or none, 255), a marker of
+    // -1 or an item id. Anything else (a damaged or hostile message) is passed over.
     Some(match kind {
         1 => Command::UseItem(a),
-        2 => Command::Marker(a as i16 as i32),
-        3 => Command::EquipMote { word: a as usize, id: b },
-        4 => Command::MoteSelect(a as u8),
-        5 => Command::ClearMote(a as usize),
+        2 if a as i16 >= -1 => Command::Marker(a as i16 as i32),
+        3 if a < 3 => Command::EquipMote { word: a as usize, id: b },
+        4 if a < 14 || a == 255 => Command::MoteSelect(a as u8),
+        5 if a < 3 => Command::ClearMote(a as usize),
         6 => Command::Cloak,
         _ => return None,
     })
@@ -1154,7 +1159,8 @@ impl Input {
     }
 
     pub(super) fn decode(r: &mut Reader) -> Option<Self> {
-        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?, forward: r.f32()?, held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?], seen: r.u32()?, cmd: (r.u8()?, r.u8()?, r.u16()?, r.u16()?) })
+        // The stick reads within its range whatever the message says.
+        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?.clamp(-1.0, 1.0), forward: r.f32()?.clamp(-1.0, 1.0), held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?], seen: r.u32()?, cmd: (r.u8()?, r.u8()?, r.u16()?, r.u16()?) })
     }
 }
 

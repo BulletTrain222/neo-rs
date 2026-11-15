@@ -39,7 +39,13 @@ pub fn discover() -> Result<Gateway, String> {
     let msg = format!("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: {SEARCH_TARGET}\r\n\r\n");
     s.send_to(msg.as_bytes(), to).map_err(|e| e.to_string())?;
     let mut buf = [0u8; 2048];
-    let (n, _) = s.recv_from(&mut buf).map_err(|_| "no router answered (UPnP may be off on it)".to_string())?;
+    // Only an answer from this home network (another device answering is passed over).
+    let n = loop {
+        let (n, from) = s.recv_from(&mut buf).map_err(|_| "no router answered (UPnP may be off on it)".to_string())?;
+        if on_this_network(from.ip()) {
+            break n;
+        }
+    };
     let text = String::from_utf8_lossy(&buf[..n]);
     let location = header(&text, "location").ok_or("the router's answer had no address")?;
     let desc = http(&location, None)?;
@@ -83,6 +89,11 @@ fn http(url: &str, soap: Option<(&str, &str)>) -> Result<String, String> {
     let rest = url.strip_prefix("http://").ok_or("not an http address")?;
     let (host, path) = rest.split_once('/').map(|(h, p)| (h, format!("/{p}"))).unwrap_or((rest, "/".into()));
     let addr = host.to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("no address")?;
+    // The router is on this home network: an address elsewhere (named in a device's answer) is
+    // not contacted.
+    if !on_this_network(addr.ip()) {
+        return Err("the router named an address outside this network".into());
+    }
     let mut t = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|e| e.to_string())?;
     t.set_read_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
     let req = match soap {
@@ -90,8 +101,9 @@ fn http(url: &str, soap: Option<(&str, &str)>) -> Result<String, String> {
         Some((action, body)) => format!("POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: text/xml; charset=\"utf-8\"\r\nSOAPAction: \"{action}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
     };
     t.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    // At most 256 KB of answer (a router's description is a few KB).
     let mut out = Vec::new();
-    let _ = t.read_to_end(&mut out);
+    let _ = t.take(256 * 1024).read_to_end(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
     let ok = head.lines().next().is_some_and(|l| l.contains(" 200"));
@@ -135,6 +147,39 @@ pub fn open(port: u16, local: std::net::IpAddr) -> Outcome {
     Outcome::Opened(ip)
 }
 
+/// An address on this home network (private, link-local or this computer).
+pub fn on_this_network(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v) => v.is_private() || v.is_link_local() || v.is_loopback(),
+        std::net::IpAddr::V6(v) => v.is_loopback() || (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
+
+/// End a forward: close `port` if one is open, and wait for an answer still on its way and
+/// close the forward it reports. On its own thread, or here when `wait` (the game is closing).
+pub fn release(port: Option<u16>, pending: Option<std::sync::mpsc::Receiver<(u16, Outcome)>>, wait: bool) {
+    if port.is_none() && pending.is_none() {
+        return;
+    }
+    let job = move || {
+        if let Some(p) = port {
+            let r = close(p);
+            bevy::log::info!("net: the router's forward of port {p}: {r:?}");
+        }
+        if let Some(rx) = pending {
+            if let Ok((p, Outcome::Opened(_))) = rx.recv_timeout(Duration::from_secs(if wait { 8 } else { 30 })) {
+                let r = close(p);
+                bevy::log::info!("net: the router's forward of port {p} (opened as hosting ended): {r:?}");
+            }
+        }
+    };
+    if wait {
+        job();
+    } else {
+        std::thread::spawn(job);
+    }
+}
+
 /// Remove the forward of UDP `port`.
 pub fn close(port: u16) -> Outcome {
     match discover().and_then(|g| call(&g, "DeletePortMapping", &[("NewRemoteHost", String::new()), ("NewExternalPort", port.to_string()), ("NewProtocol", "UDP".into())])) {
@@ -159,5 +204,10 @@ mod tests {
         assert_eq!(gateway("http://192.168.1.1:5000/x.xml", &based).unwrap().control, "http://10.0.0.1:80/ctl/IPConn");
         assert!(gateway("http://h/x", "<root></root>").is_none());
         assert_eq!(header("HTTP/1.1 200 OK\r\nLOCATION: http://a/b\r\n", "location").as_deref(), Some("http://a/b"));
+        // Only this home network's addresses are contacted.
+        for (ip, ok) in [("192.168.1.1", true), ("10.0.0.138", true), ("172.20.1.1", true), ("127.0.0.1", true), ("169.254.3.4", true), ("8.8.8.8", false), ("172.32.0.1", false), ("fe80::1", true), ("2001:db8::1", false)] {
+            assert_eq!(on_this_network(ip.parse().unwrap()), ok, "{ip}");
+        }
+        assert!(http("http://8.8.8.8:80/x", None).is_err());
     }
 }
