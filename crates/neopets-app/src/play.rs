@@ -13385,6 +13385,28 @@ impl Play {
         }
     }
 
+    /// Online, the host: the reeds not standing in the resident worlds' patches, for the world
+    /// sync (net codec `WorldSync::reeds`), in pack and patch order.
+    pub fn net_reeds(&self) -> Vec<(u32, u16, u16, Vec<u8>)> {
+        let mut out = Vec::new();
+        let resident = |pack: u32| pack == self.world.pack || self.other.as_ref().is_some_and(|o| o.pack == pack);
+        let mut packs: Vec<u32> = self.foliage.keys().copied().filter(|&p| resident(p)).collect();
+        packs.sort_unstable();
+        for pack in packs {
+            for (i, p) in self.foliage[&pack].iter().enumerate() {
+                if p.reeds.iter().all(|r| r.state == 0) {
+                    continue;
+                }
+                let mut states = vec![0u8; p.reeds.len().div_ceil(4)];
+                for (k, r) in p.reeds.iter().enumerate() {
+                    states[k / 4] |= r.state.min(2) << (2 * (k % 4));
+                }
+                out.push((pack, i as u16, p.reeds.len() as u16, states));
+            }
+        }
+        out
+    }
+
     /// The world this build makes, for a joiner to make too (net.rs welcome): 0 a world of the
     /// disc, 1 the flat test stage, 2 the reed field, 3 the test stage's Cloud Beast fight.
     pub fn made_world(&self) -> u8 {
@@ -17414,7 +17436,9 @@ impl Play {
                             if dh < 2.5 && std::env::var_os("NEOPETS_TRACE_REEDS").is_some() {
                                 println!("      reed tick {}: d {dh:.2} base y {:.2} hero y {:.2} tilt {:.0} latch {}", self.ticks, q.position[1], hero[1], r.up[1].clamp(-1.0, 1.0).acos().to_degrees(), r.latch);
                             }
-                            if cuttable {
+                            // Online, a joiner following the host cuts no reed itself: the host's
+                            // game cuts them for every player and its world sync brings them.
+                            if cuttable && !self.net_follow {
                                 let reed = neopets_sim::combat::Cylinder::from_base(q.position, r.up, 0.5, 6.0);
                                 for (_, _, weapon, _, _, launch, roberta) in &players {
                                     let Some(w) = weapon.as_ref() else { continue };

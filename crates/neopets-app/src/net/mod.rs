@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 35;
+const PROTOCOL: u16 = 36;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -2431,7 +2431,7 @@ mod tests {
             panels: (true, [57, -1, 3, 9], 1, 57, false, 255),
             p2_prompt: Some(13),
             world_rev: 4,
-            world: Some(WorldSync { pack: 909, breakables: vec![1, 2, 0], items: vec![(909, 3, NetItem { id: 160, position: [1.0, 2.0, 3.0], state: 1, angle: 0.5, scale: 1.0, direction: [0.0, 0.0, 1.0], price: -2, reference: 0.2 })], chars: vec![(909, 1, 0), (909, 2, 3)], objects: vec![(4, 2, 1.5, 3)] }),
+            world: Some(WorldSync { pack: 909, breakables: vec![1, 2, 0], items: vec![(909, 3, NetItem { id: 160, position: [1.0, 2.0, 3.0], state: 1, angle: 0.5, scale: 1.0, direction: [0.0, 0.0, 1.0], price: -2, reference: 0.2 })], chars: vec![(909, 1, 0), (909, 2, 3)], objects: vec![(4, 2, 1.5, 3)], reeds: vec![(909, 2, 5, vec![0b1001_0001, 0b10])] }),
             anim_times: vec![(4, 0.75)],
             page: 2,
             rtt: 31,
@@ -2526,7 +2526,7 @@ mod tests {
             }
         }
         // Every cut of a world sync is refused too.
-        let ws = WorldSync { pack: 909, breakables: vec![1, 2], items: vec![(909, 3, NetItem { id: 5, ..Default::default() })], chars: vec![(909, 1, 0)], objects: vec![(4, 2, 1.5, 3)] };
+        let ws = WorldSync { pack: 909, breakables: vec![1, 2], items: vec![(909, 3, NetItem { id: 5, ..Default::default() })], chars: vec![(909, 1, 0)], objects: vec![(4, 2, 1.5, 3)], reeds: vec![(909, 2, 5, vec![0b1001_0001, 0b10])] };
         let mut w = Writer::new(BLOB_PART);
         ws.write(&mut w);
         for cut in 7..w.0.len() {

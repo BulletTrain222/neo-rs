@@ -248,6 +248,9 @@ pub struct WorldSync {
     /// The current world's animated objects (SPEC-0028): index, state, speed, drawn and scripted
     /// flags (a gate player 2 opened opens on the joiner too).
     pub objects: Vec<(u16, i32, f32, u8)>,
+    /// The reeds not standing (SPEC-0060 Behavior 9), by patch: (pack, patch, each reed's state
+    /// in two bits, four a byte: 0 standing, 1 cut and falling, 2 gone). Only patches with one.
+    pub reeds: Vec<(u32, u16, u16, Vec<u8>)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -294,6 +297,13 @@ impl WorldSync {
             w.f32(speed);
             w.u8(bits);
         }
+        w.u16(self.reeds.len() as u16);
+        for (pack, patch, n, states) in &self.reeds {
+            w.u32(*pack);
+            w.u16(*patch);
+            w.u16(*n);
+            w.bytes(states);
+        }
     }
 
     pub(super) fn read(r: &mut Reader) -> Option<Self> {
@@ -316,7 +326,12 @@ impl WorldSync {
         for _ in 0..n {
             objects.push((r.u16()?, r.i32()?, r.f32()?, r.u8()?));
         }
-        Some(Self { pack, breakables, items, chars, objects })
+        let n = r.u16()? as usize;
+        let mut reeds = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            reeds.push((r.u32()?, r.u16()?, r.u16()?, r.bytes()?.to_vec()));
+        }
+        Some(Self { pack, breakables, items, chars, objects, reeds })
     }
 }
 

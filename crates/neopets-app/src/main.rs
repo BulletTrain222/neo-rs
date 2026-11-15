@@ -1768,8 +1768,13 @@ fn step_sim(
             input.attack = std::mem::take(&mut play.play.attack_latch);
             // NEOPETS_HOST_WALK (diagnostic, not on a joiner): this side runs round in circles
             // (R1 held), running into whatever is in the way.
-            if std::env::var_os("NEOPETS_HOST_WALK").is_some() && !play.play.net_follow {
+            if let Some(v) = std::env::var_os("NEOPETS_HOST_WALK").filter(|_| !play.play.net_follow) {
                 (input.forward, input.side, input.run) = (1.0, 0.35, true);
+                // NEOPETS_HOST_WALK=slash: a swing every 40 ticks as well (and not running).
+                if v == "slash" {
+                    input.run = false;
+                    input.attack = play.play.ticks % 40 == 0;
+                }
             }
             let pad = neopets_sim::camera::CameraPad {
                 // SPEC-0035 Behavior 3: the invert flags complement the right-stick bytes.
@@ -2070,6 +2075,10 @@ fn step_sim(
                     // the response trace), no jumps.
                     if v == "pulse" {
                         input.forward = if (play.play.ticks / 60) % 2 == 0 { 1.0 } else { 0.0 };
+                    } else if v == "slash" {
+                        // NEOPETS_NET_WALK=slash: round in circles, a swing every 40 ticks.
+                        input.side = 0.5;
+                        input.attack = play.play.ticks % 40 == 20;
                     } else {
                         input.jump = play.play.ticks % 90 == 45;
                     }
@@ -2285,6 +2294,7 @@ fn step_sim(
                 if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                     let p = &play.play;
                     println!("NETFX joiner tick {} (missing {:?}) (told {:?}): {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}, world items {} broken {} hidden {}, objects {:?}, monster bar {:?}, boss hp {:?}, pet {:?}", p.ticks, netr.world_held.as_ref().map(|h| h.1.chars.iter().filter(|k| !p.characters.iter().any(|c| (c.pack, c.slot, c.ordinal as u32) == **k)).count()), netr.world_held.as_ref().map(|h| (h.0, h.1.items.len(), h.1.items.iter().filter(|e| e.0 == p.world.pack || p.other.as_ref().is_some_and(|o| o.pack == e.0)).count(), h.1.pack)), p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints, p.pools.iter().filter(|(k, _)| **k == p.world.pack || p.other.as_ref().is_some_and(|o| o.pack == **k)).map(|(_, pl)| pl.live()).sum::<usize>(), p.world.breakables.iter().filter(|b| b.state == 2).count(), p.characters.iter().filter(|c| c.inactive).count(), p.world.object_anims.iter().enumerate().filter(|(_, o)| o.state != 3).map(|(i, o)| (i, o.state, o.drawn)).collect::<Vec<_>>(), p.monster_bar.target.map(|_| (p.monster_bar.name.clone(), p.monster_bar.fill)), p.characters.iter().filter(|c| c.boss.is_some() || c.gnarfas.is_some() || c.knight.is_some() || c.gelert.is_some() || c.ixi.is_some() || c.serpent.is_some()).map(|c| c.hp).collect::<Vec<_>>(), p.pet_char.and_then(|id| p.characters.iter().find(|c| c.id == id)).map(|c| (c.pack, c.slot, c.ordinal, c.position.map(|v| (v * 10.0).round() / 10.0))));
+                    println!("NETREEDS joiner tick {}: {} reeds down", play.play.ticks, play.play.net_reeds().iter().map(|e| (0..e.2 as usize).filter(|k| e.3[k / 4] >> (2 * (k % 4)) & 3 != 0).count()).sum::<usize>());
                 }
             } else {
                 let sounds = play.play.sound.requests.len();
@@ -2398,6 +2408,7 @@ fn step_sim(
                             println!("NETP2 host tick {}: p2 quick open {} mote open {} selection {}", p.ticks, o.quick.open, o.mote_panel.open, o.mote_panel.selection);
                         }
                         println!("NETFX host tick {}: {} sound voices; {} particles, {} spawners, {} objects, {} shots, music {:?} bank {:?}, fade {}, bars {:.2}, message {:?}, flags {} items {} NP {}, world items {} broken {} hidden {}, objects {:?}, monster bar {:?}, boss hp {:?}, pet {:?}", p.ticks, p.sound.voices(), p.effects.live_particles(), p.effects.live_spawners(), p.effects.objects.iter().flatten().count(), p.shots.slots.iter().flatten().count(), p.music.channels.map(|c| (c.stream, c.volume)), p.bank_music.playing, p.fade.alpha, p.bars.progress, p.message.map(|m| m.0), p.state.flags.len(), p.state.items.len(), p.state.neopoints, p.pools.iter().filter(|(k, _)| **k == p.world.pack || p.other.as_ref().is_some_and(|o| o.pack == **k)).map(|(_, pl)| pl.live()).sum::<usize>(), p.world.breakables.iter().filter(|b| b.state == 2).count(), p.characters.iter().filter(|c| c.inactive).count(), p.world.object_anims.iter().enumerate().filter(|(_, o)| o.state != 3).map(|(i, o)| (i, o.state, o.drawn)).collect::<Vec<_>>(), p.monster_bar.target.map(|_| (p.monster_bar.name.clone(), p.monster_bar.fill)), p.characters.iter().filter(|c| c.boss.is_some() || c.gnarfas.is_some() || c.knight.is_some() || c.gelert.is_some() || c.ixi.is_some() || c.serpent.is_some()).map(|c| c.hp).collect::<Vec<_>>(), p.pet_char.and_then(|id| p.characters.iter().find(|c| c.id == id)).map(|c| (c.pack, c.slot, c.ordinal, c.position.map(|v| (v * 10.0).round() / 10.0))));
+                    println!("NETREEDS host tick {}: {} reeds down", play.play.ticks, play.play.net_reeds().iter().map(|e| (0..e.2 as usize).filter(|k| e.3[k / 4] >> (2 * (k % 4)) & 3 != 0).count()).sum::<usize>());
                     }
                 }
             }

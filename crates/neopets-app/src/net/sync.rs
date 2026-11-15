@@ -85,6 +85,7 @@ impl crate::play::Play {
                     c
                 },
                 objects: self.world.object_anims.iter().enumerate().map(|(i, o)| (i as u16, o.state, o.speed, o.drawn as u8 | (o.scripted as u8) << 1)).collect(),
+                reeds: self.net_reeds(),
             }),
             anim_times: self.world.object_anims.iter().enumerate().filter(|(_, o)| o.animating()).map(|(i, o)| (i as u16, o.time)).collect(),
             moving: self
@@ -420,6 +421,29 @@ impl crate::play::Play {
                         price: it.price,
                         reserved: false,
                     });
+                }
+            }
+        }
+        // The host's reeds (any player's cut, the host's own game deciding it): a reed the host
+        // has falling falls here too, launched away from the nearest player, and one the host
+        // has gone is gone (a joiner arriving after the cut).
+        if let Some(ws) = s.world.as_ref() {
+            let players: Vec<[f32; 3]> = std::iter::once(self.player.loco.position()).chain(self.others.iter().map(|o| o.loco.position())).collect();
+            for (pack, patch, n, states) in &ws.reeds {
+                let Some(p) = self.foliage.get_mut(pack).and_then(|v| v.get_mut(*patch as usize)) else { continue };
+                for k in 0..(*n as usize).min(p.reeds.len()).min(p.plants.len()) {
+                    let host = states.get(k / 4).map_or(0, |b| (b >> (2 * (k % 4))) & 3);
+                    let r = &mut p.reeds[k];
+                    if host == 0 || r.state >= host {
+                        continue;
+                    }
+                    if host >= 2 {
+                        r.state = 2;
+                        continue;
+                    }
+                    let at = p.plants[k].position;
+                    let near = players.iter().copied().min_by(|a, b| (at[0] - a[0]).hypot(at[2] - a[2]).total_cmp(&(at[0] - b[0]).hypot(at[2] - b[2]))).unwrap_or(at);
+                    r.cut([at[0] - near[0], 0.0, at[2] - near[2]]);
                 }
             }
         }
