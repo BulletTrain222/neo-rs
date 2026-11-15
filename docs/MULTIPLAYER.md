@@ -21,7 +21,8 @@ order the controllers were plugged in. Auto: player 1 has the keyboard and every
 other player has; players 2 to 4 take the next free controllers in order. Player 1 always keeps
 the keyboard. In the menus every controller works. To give a player a controller, select that player's
 row and press Cross (or click it), then press any button on the controller: the row reads
-"Press a button..." until one is pressed. A player who had that controller chosen takes the
+"Waiting for a button..." until one is pressed (a player with no controller shows "Press a
+button"). A player who had that controller chosen takes the
 other's old choice. Esc, Backspace, a click or ten seconds cancel.
 
 **On two to four computers (home network).** Up to three friends can join one host (players 2,

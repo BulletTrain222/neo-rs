@@ -1268,13 +1268,13 @@ pub fn show_window(
                 _ if k >= count => format!("{} (not playing)", pad_name(choice)),
                 (0, 0, _) => "Auto (keyboard + rest)".into(),
                 (_, 0, Some(n)) => format!("Auto (Controller {n})"),
-                (_, 0, None) => "Auto (none free)".into(),
+                // A player with no controller: Cross or a click, then a button on one, gives it.
+                (_, _, None) => "Press a button".into(),
                 (_, c, Some(_)) => pad_name(c),
-                (_, c, None) => format!("{} (not connected)", pad_name(c)),
             };
         }
         if let Some(k) = flow.display_listen.filter(|&k| k < PAD_ROWS.len()) {
-            shown[PAD_ROWS[k]].1 = "Press a button...".into();
+            shown[PAD_ROWS[k]].1 = "Waiting for a button...".into();
         }
         shown[PASSWORD_ROW].1 = match (password.0.is_empty(), focus == PASSWORD_ROW) {
             (true, false) => "None (click to type one)".into(),
