@@ -171,7 +171,8 @@ impl crate::play::Play {
         // knockback or a door, put right at once). Otherwise (an attack, a hit, a fall, a scene)
         // the host's player is shown as before.
         let h1 = s.heroes[1];
-        let host_free = crate::play::free_move(h1.state) && !h1.down && s.cut.is_none();
+        // The host's attack state agrees with a swing this side started (instant attacks).
+        let host_free = (crate::play::free_move(h1.state) || (h1.state == neopets_sim::hero::ATTACK && (self.predict.attacking || self.predict.attack_grace > 0))) && !h1.down && s.cut.is_none();
         self.predict.host_busy = !host_free;
         let predicting = self.predict.active && host_free;
         if let Some(o) = self.others.first_mut().filter(|_| predicting) {
@@ -215,7 +216,8 @@ impl crate::play::Play {
                 }
             }
             (o.hero_hp, o.hero_max, o.hero_mp, o.hero_mp_max, o.hero_flash) = (h1.hp, h1.hp_max, h1.mp, h1.mp_max, h1.flash);
-            (o.weapon_drawn, o.shield_raised) = (h1.drawn, h1.raised);
+            // (The weapon stays out while this side's swing goes on.)
+            (o.weapon_drawn, o.shield_raised) = (h1.drawn || self.predict.attacking, h1.raised);
             o.down = None;
             o.down_line = None;
         } else if let Some(o) = self.others.first_mut() {

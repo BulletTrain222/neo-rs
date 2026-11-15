@@ -19931,13 +19931,20 @@ impl Play {
     /// a box, a scene or a fade holds the players. Returns whether it moved the player.
     pub fn predict_own(&mut self, input: &HeroInput, pad: CameraPad, seq: u32) -> bool {
         let ready = !self.others.is_empty() && self.net_follow && !self.predict.host_busy && !self.dialogue_open && !self.held && self.cut.is_none_or(|c| c.state == 0) && !self.fade.moving();
-        let free_here = self.others.first().is_some_and(|o| free_move(o.loco.state) && o.down.is_none() && o.loco.air_sub == 0);
+        // (A swing this side started is its own too: `predict.attacking`.)
+        let free_here = self.others.first().is_some_and(|o| (free_move(o.loco.state) || (o.loco.state == hero_states::ATTACK && o.attack.is_some())) && o.down.is_none() && o.loco.air_sub == 0);
         if self.predict.cooldown > 0 {
             self.predict.cooldown -= 1;
         }
         // Not in the first PREDICT_SETTLE ticks of the host's game here (the game catches up
         // after its load, many ticks a frame, and the two sides' places agree only after).
         if !ready || !free_here || self.ticks < PREDICT_SETTLE || self.predict.cooldown > 0 || std::env::var("NEOPETS_NET_PREDICT").is_ok_and(|v| v.trim() == "0") {
+            self.predict.attacking = false;
+            if let Some(o) = self.others.first_mut() {
+                if o.attack.is_some() && o.loco.state != hero_states::ATTACK {
+                    o.attack = None;
+                }
+            }
             if self.predict.active && std::env::var_os("NEOPETS_TRACE_PREDICT").is_some() {
                 let o = self.others.first();
                 println!("PREDICT tick {} paused: host busy {} box {} held {} scene {} fade {} state {:?} down {:?} air {:?} cooldown {}", self.ticks, self.predict.host_busy, self.dialogue_open, self.held, self.cut.is_some_and(|c| c.state != 0), self.fade.moving(), o.map(|o| o.loco.state), o.map(|o| o.down.is_some()), o.map(|o| o.loco.air_sub), self.predict.cooldown);
@@ -19946,7 +19953,6 @@ impl Play {
             self.predict.history.clear();
             return false;
         }
-        let mv = HeroInput { side: input.side, forward: input.forward, run: input.run, jump: input.jump, cross_held: input.cross_held, guard: input.guard, l2: input.l2, ..HeroInput::default() };
         self.swap_player(0);
         let saved = (self.hero_index, self.weapon, self.shield);
         self.coop_running = true;
@@ -19954,6 +19960,10 @@ impl Play {
         self.hero_index = who;
         self.weapon = self.equipment.entries[0][who];
         self.shield = self.equipment.entries[1][who];
+        // Tor's swings start here at once too (the host's game decides what they hit): with a
+        // weapon, not stunned. Roberta's attacks and the air attacks stay the host's.
+        let swings = who == 0 && self.weapon.is_some() && !self.player.statuses.active(neopets_sim::status::STUN) && std::env::var("NEOPETS_NET_PREDICT_ATTACK").map_or(true, |v| v.trim() != "0");
+        let mv = HeroInput { side: input.side, forward: input.forward, run: input.run, jump: input.jump, cross_held: input.cross_held, guard: input.guard, l2: input.l2, attack: input.attack && swings, attack_held: input.attack_held && swings, ..HeroInput::default() };
         self.camera_step(pad);
         let (forward, left) = self.player.camera.rows();
         self.player.l1_held = mv.guard;
@@ -19963,11 +19973,15 @@ impl Play {
         // No air attack here (the host's).
         self.player.loco.air_ok = false;
         self.player.loco.stick_step = neopets_sim::hero::StickStep::Off;
+        // The swing (its moves and its animation; no hit here: `hero_swing` is not run).
+        let repeat = mv.attack_held && !mv.attack && self.player.weapon_drawn;
+        self.player.attack_repeat = repeat;
+        let force = if swings || self.player.attack.is_some() { self.attack_step(&mv, repeat) } else { false };
         let clip = self.player.hero.clip_state();
         self.player.loco.update(&mv, forward, left, clip);
         self.held_step();
         let id = self.player.loco.action();
-        self.player.hero.request(id, false);
+        self.player.hero.request(id, force);
         self.player.hero.set_rate(self.player.loco.rate);
         if !self.cheats.noclip {
             self.ride_step();
@@ -19983,6 +19997,12 @@ impl Play {
         self.coop_running = false;
         self.swap_player(0);
         self.predict.active = true;
+        let was = self.predict.attacking;
+        self.predict.attacking = self.others[0].attack.is_some();
+        // The host's copy of the swing began later and ends later: its attack state is taken
+        // as agreeing for a while after this side's swing ended (else the swing's end shows
+        // twice).
+        self.predict.attack_grace = if was && !self.predict.attacking { PREDICT_ATTACK_GRACE } else { self.predict.attack_grace.saturating_sub(1) };
         let at = self.others[0].loco.position();
         self.predict.history.push_back((seq, at));
         while self.predict.history.len() > 240 {
@@ -21920,10 +21940,18 @@ impl Play {
     /// The map and journal's view of the game this pass. The hero map area is the current
     /// world's, else the transition map (SPEC-0051 section 1), else -1.
     pub fn map_view(&self) -> crate::menus::MapView {
+        // Every player on the map (multiplayer): this side's own player as the hero marker
+        // (player 2 on a joiner, the menu's player at home), the rest with their numbers.
+        let mut all: Vec<(usize, [f32; 3], [f32; 3])> = vec![(1, self.player.loco.position(), self.player.loco.facing)];
+        all.extend(self.others.iter().enumerate().map(|(i, o)| (self.player_number(i), o.loco.position(), o.loco.facing)));
+        let me = if self.net_follow { self.net_seat + 2 } else { self.menu_player + 1 };
+        let mine = all.iter().position(|e| e.0 == me).unwrap_or(0);
+        let (_, hero, facing) = all.remove(mine);
         crate::menus::MapView {
             hero_area: self.world.map_area.or(self.state.transition_map).unwrap_or(-1),
-            hero: self.player.loco.position(),
-            facing: self.player.loco.facing,
+            hero,
+            facing,
+            others: all,
             flags: self.state.flags.iter().copied().collect(),
             maps: self.state.maps.iter().copied().collect(),
             collected: self.state.collected.iter().copied().collect(),
@@ -23084,6 +23112,7 @@ pub const PREDICT_STUCK_OFF: f32 = 0.4;
 pub const PREDICT_STUCK_STATES: u32 = 30;
 pub const PREDICT_COOLDOWN: u32 = 60;
 pub const PREDICT_SETTLE: u64 = 150;
+pub const PREDICT_ATTACK_GRACE: u32 = 40;
 
 /// The share of a difference `d` eased away in one state: 0.2 when close, up to 0.6 at a unit
 /// or more (a ledge or a slope taken a little differently is put right quickly).
@@ -23098,6 +23127,10 @@ pub fn predict_ease(d: f32) -> f32 {
 pub struct Predict {
     pub active: bool,
     pub host_busy: bool,
+    /// This side started a swing that is still going (the host's attack state then agrees).
+    pub attacking: bool,
+    /// Ticks left of the host's attack state agreeing after this side's swing ended.
+    pub attack_grace: u32,
     pub history: std::collections::VecDeque<(u32, [f32; 3])>,
     pub corrections: u32,
     pub snaps: u32,
@@ -23105,6 +23138,8 @@ pub struct Predict {
     /// The response trace: when the stick was pressed, where the player stood, and whether the
     /// stick was pushed last tick.
     pub response: (Option<u64>, [f32; 3], bool),
+    /// The response trace: when an attack was pressed.
+    pub attack_response: Option<u64>,
     /// States in a row with the two places apart (more than PREDICT_STUCK_OFF), and the ticks
     /// left showing the host's player as it is (after PREDICT_STUCK_STATES such states: the two
     /// sides disagree, say the host's player caught on something this side's is not, and

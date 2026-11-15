@@ -114,7 +114,13 @@ pub fn perf_overlay(
     mut panels: Query<&mut Node, (With<PerfPanel>, Without<PerfBar>)>,
     mut bodies: Query<(&mut Text, &PerfBody)>,
     mut bars: Query<(&mut Node, &mut BackgroundColor, &PerfBar), Without<PerfPanel>>,
+    net: Option<Res<crate::net::Net>>,
+    mut started: Local<bool>,
 ) {
+    // NEOPETS_F3=1 (diagnostic): the view on from the start (for a screenshot).
+    if !std::mem::replace(&mut *started, true) && std::env::var_os("NEOPETS_F3").is_some() {
+        overlay.on = true;
+    }
     if keys.just_pressed(KeyCode::F3) {
         overlay.on = !overlay.on;
     }
@@ -159,6 +165,10 @@ pub fn perf_overlay(
         String::new(),
         String::new(),
     ];
+    // Online: the connection's quality (net.rs `quality_lines`).
+    if let Some(q) = net.as_deref().and_then(|n| n.quality_lines()) {
+        text[0] = format!("{}\n{q}", text[0]);
+    }
     if let Some(p) = play.as_deref() {
         let p = &p.play;
         let pos = p.player.loco.position();

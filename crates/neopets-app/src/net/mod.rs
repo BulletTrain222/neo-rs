@@ -370,6 +370,16 @@ pub struct Net {
     /// after loading a welcome.
     welcome_made: u8,
     pub load_made: u8,
+    /// The connection's quality, sampled each second (net_step): updates heard in the last
+    /// second (states on a joiner, inputs on the host) and the bytes each way a second.
+    q_count: u32,
+    /// Joiner: this side's seat (players 2 to 4 are seats 0 to 2), from the host's states.
+    pub my_seat: usize,
+    pub q_rate: f32,
+    q_at: Option<Instant>,
+    q_bytes: (u64, u64),
+    pub rate_in: f32,
+    pub rate_out: f32,
     /// Host: when the host was last told of a refused join (at most one line every 10 seconds).
     refuse_note: Option<Instant>,
     /// Host: this hosting's number (the game finder tells one game seen twice apart).
@@ -520,6 +530,52 @@ impl Net {
     /// Whether this side follows a host (a joiner with a loaded game).
     pub fn following(&self) -> bool {
         self.role == Role::Join && self.loaded > 0
+    }
+
+    /// The F3 view's lines on the connection: each other side's round trip, updates a second,
+    /// when it was last heard and a word for the whole (Good, OK, Poor), and the data each way.
+    pub fn quality_lines(&self) -> Option<String> {
+        // By the round trip and the silence only: while a menu pauses play no updates go (the
+        // pings still do), which is not a poor connection.
+        let word = |rtt: f32, _rate: f32, quiet_ms: u128| {
+            if quiet_ms > 1500 || rtt >= 250.0 {
+                "Poor"
+            } else if rtt >= 120.0 || quiet_ms > 600 {
+                "OK"
+            } else {
+                "Good"
+            }
+        };
+        let quiet = |n: &Net| n.last_heard.map_or(0, |t| t.elapsed().as_millis());
+        // "Good, 34 ms, 60/s" (and how long since the last message when that is long).
+        let line = |rtt: f32, rate: f32, q: u128| {
+            let mut l = format!("{}, {:.0} ms, {:.0}/s", word(rtt, rate, q), rtt, rate);
+            if q > 300 {
+                l += &format!(", silent {:.1} s", q as f32 / 1000.0);
+            }
+            l
+        };
+        let mut out = match self.role {
+            Role::Off => return None,
+            Role::Host => {
+                let mut s = format!("Online: hosting, {} joined", self.peers());
+                for n in std::iter::once(self).chain(self.extra.iter()).filter(|n| n.peer.is_some()) {
+                    let name = if n.peer_name.is_empty() { "Player 2" } else { n.peer_name.as_str() };
+                    s += &format!("\n  {name}: {}", line(n.rtt_ms, n.q_rate, quiet(n)));
+                }
+                s
+            }
+            Role::Join => {
+                let at = self.target.map_or(String::new(), |a| if a.port() == PORT { a.ip().to_string() } else { a.to_string() });
+                if self.loaded == 0 {
+                    format!("Online: joining {at}")
+                } else {
+                    format!("Online: joined {at} as Player {}\n  Host: {}\n  Updates waiting: {}", self.my_seat + 2, line(self.rtt_ms, self.q_rate, quiet(self)), self.queue.len())
+                }
+            }
+        };
+        out += &format!("\n  Data {:.1} KB/s out, {:.1} KB/s in", self.rate_out / 1024.0, self.rate_in / 1024.0);
+        Some(out)
     }
 
     /// Host: a refusal to a hello, at most REFUSALS_A_SECOND a second (a hello's sender
@@ -1507,6 +1563,24 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
     if net.role == Role::Off {
         return;
     }
+    // The connection's quality, once a second (the F3 view).
+    let now_q = Instant::now();
+    let since = net.q_at.map_or(1.0, |t| now_q.duration_since(t).as_secs_f32());
+    if net.q_at.is_none() || since >= 1.0 {
+        let (bi, bo) = (net.bytes_in, net.bytes_out);
+        if net.q_at.is_some() {
+            net.rate_in = bi.saturating_sub(net.q_bytes.0) as f32 / since;
+            net.rate_out = bo.saturating_sub(net.q_bytes.1) as f32 / since;
+            net.q_rate = net.q_count as f32 / since;
+            for e in net.extra.iter_mut() {
+                e.q_rate = e.q_count as f32 / since;
+                e.q_count = 0;
+            }
+        }
+        net.q_count = 0;
+        net.q_bytes = (bi, bo);
+        net.q_at = Some(now_q);
+    }
     // The router's answer (UPnP).
     if let Some((port, r)) = net.upnp_rx.as_ref().and_then(|rx| rx.lock().ok()?.try_recv().ok()) {
         net.upnp_rx = None;
@@ -1821,6 +1895,7 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                 }
             }
             (Role::Host, INPUT) if net.peer == Some(from) => {
+                net.q_count += 1;
                 net.last_heard = Some(now);
                 if let Some(i) = Input::decode(&mut r) {
                     if i.generation == net.generation {
@@ -2035,6 +2110,7 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                 net.stop(&line);
             }
             (Role::Join, STATE) if net.target == Some(from) => {
+                net.q_count += 1;
                 net.last_heard = Some(now);
                 if let Some(t) = net.last_state_at {
                     net.gap_max = net.gap_max.max(now.duration_since(t).as_millis() as u32);
@@ -2050,6 +2126,7 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                     net.peer_paused = s.page != 0;
                     net.peer_page = s.page;
                     net.seen_tick = s.tick as u32;
+                    net.my_seat = s.seat as usize;
                     // The host carried out the item-screen command sent: the next one goes.
                     if !net.cmds.is_empty() && s.cmd_ack == net.cmds_done.wrapping_add(1) {
                         net.cmds.pop_front();

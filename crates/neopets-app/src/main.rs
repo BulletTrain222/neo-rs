@@ -189,6 +189,16 @@ fn save_file() -> String {
     std::env::var("NEOPETS_SAVE_FILE").unwrap_or_else(|_| SAVE_FILE.to_string())
 }
 
+/// Where a joiner's save screen reads and writes while it follows the host's game online: a
+/// file of its own (the host's game saved over the joiner's own slots before; the user's
+/// request to protect them). NEOPETS_COOP_SAVE_FILE (diagnostic) in its place.
+const COOP_SAVE_FILE: &str = "private/saves/coop-savegame.bin";
+
+/// The save screen's file: the co-op one while following a host, else the player's own.
+fn save_file_for(following: bool) -> String {
+    if following { std::env::var("NEOPETS_COOP_SAVE_FILE").unwrap_or_else(|_| COOP_SAVE_FILE.to_string()) } else { save_file() }
+}
+
 fn write_save(path: &str, file: &neopets_sim::save::SaveFile) -> Result<(), String> {
     if let Some(dir) = std::path::Path::new(path).parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -1643,7 +1653,7 @@ fn step_sim(
                 // the write job writes the whole file at once.
                 match m.flow.tick(&a.f, std::mem::take(&mut edge), std::mem::take(&mut buttons), &ctx) {
                     Some(menus::Command::Scan) => {
-                        m.flow.scanned(read_save(&save_file()));
+                        m.flow.scanned(read_save(&save_file_for(netr.following())));
                         // NEOPETS_TRACE_PICKER_CURSOR=k: the picker's cursor on slot k after the
                         // scan (diagnostic, for a screenshot of the scrolled list).
                         if let Some(k) = std::env::var("NEOPETS_TRACE_PICKER_CURSOR").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
@@ -1657,7 +1667,10 @@ fn step_sim(
                         play.play.snapshot = Some(m.flow.picker.file.slots[k].clone());
                     }
                     Some(menus::Command::Write) => {
-                        let ok = write_save(&save_file(), &m.flow.picker.file);
+                        let ok = write_save(&save_file_for(netr.following()), &m.flow.picker.file);
+                        if netr.following() {
+                            info!("net: saved the host's game to the co-op saves ({})", save_file_for(true));
+                        }
                         if let Err(e) = &ok {
                             error!("Save failed: {e}");
                         }
@@ -2139,13 +2152,28 @@ fn step_sim(
                 // one frame had one number before, and the host's place was compared with a move
                 // up to 12 ticks old).
                 let seq = play.play.ticks as u32;
+                let swing_before = play.play.others.first().is_some_and(|o| o.loco.state == neopets_sim::hero::ATTACK);
+                if input.attack && !swing_before && play.play.predict.attack_response.is_none() {
+                    play.play.predict.attack_response = Some(play.play.ticks);
+                }
                 let _ = play.play.predict_own(&input, pad, seq);
                 if let Some(o) = netr.outgoing.as_mut() {
                     o.seq = seq;
                 }
                 // NEOPETS_TRACE_PREDICT (diagnostic): how many ticks from a press of the stick
-                // to this side's own player moving.
+                // to this side's own player moving, and from an attack press to its swing.
                 if std::env::var_os("NEOPETS_TRACE_PREDICT").is_some() {
+                    let now = play.play.ticks;
+                    let swinging = play.play.others.first().is_some_and(|o| o.loco.state == neopets_sim::hero::ATTACK);
+                    let a = &mut play.play.predict.attack_response;
+                    if let Some(t) = *a {
+                        if swinging {
+                            println!("PREDICT attack response {} ticks", now - t);
+                            *a = None;
+                        } else if now - t > 120 {
+                            *a = None;
+                        }
+                    }
                     let pushing = input.forward != 0.0 || input.side != 0.0;
                     if let Some(at) = play.play.others.first().map(|o| o.loco.position()) {
                         let now = play.play.ticks;
@@ -2416,6 +2444,10 @@ fn step_sim(
             if std::mem::take(&mut play.play.save_open) {
                 if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                     m.flow.open_save(&a.f);
+                }
+                // A joiner saves the host's game to its co-op saves, never over its own.
+                if netr.following() {
+                    dev.toast = Some(("Online: this saves the host's game to your co-op saves. Your own saves are not changed.".into(), 600));
                 }
             }
             if std::mem::take(&mut play.play.reload_wanted) {

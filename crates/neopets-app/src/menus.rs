@@ -207,6 +207,9 @@ pub struct MapView {
     pub hero_area: i32,
     pub hero: [f32; 3],
     pub facing: [f32; 3],
+    /// The other players (multiplayer): number (1 to 4), place and facing, drawn as markers
+    /// in their tag colours with their number.
+    pub others: Vec<(usize, [f32; 3], [f32; 3])>,
     pub flags: Vec<u16>,
     pub maps: Vec<u32>,
     pub collected: Vec<u32>,
@@ -214,7 +217,7 @@ pub struct MapView {
 
 impl Default for MapView {
     fn default() -> Self {
-        Self { hero_area: -1, hero: [0.0; 3], facing: [0.0, 0.0, 1.0], flags: Vec::new(), maps: Vec::new(), collected: Vec::new() }
+        Self { hero_area: -1, hero: [0.0; 3], facing: [0.0, 0.0, 1.0], others: Vec::new(), flags: Vec::new(), maps: Vec::new(), collected: Vec::new() }
     }
 }
 
@@ -1951,6 +1954,9 @@ fn objective_font(fe: &Frontend) -> Option<(usize, i32)> {
     Some((font, fe.fonts.get(font).map_or(14, |f| f.line_height())))
 }
 
+/// The players' tag colours on the map (coop.rs tags; 128 is full), players 1 to 4.
+const PLAYER_MAP_COLOURS: [[u8; 3]; 4] = [[58, 96, 128], [128, 64, 83], [70, 128, 70], [128, 115, 51]];
+
 /// The map page's own parts (SPEC-0051 sections 4, 7 and 8): the icons at their projected
 /// points (the cursor icon scaled by the integer pulse), the cursor icon's label 14 pixels above
 /// it, the hero marker when the hero's area is shown, and the area name. The icon, marker and
@@ -1976,6 +1982,20 @@ pub fn map_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
             let alpha = fe.sprite(node).map_or(128, |s| s.colour[3]);
             let angle = mappage::marker_angle(area, mappage::facing_angle(v.facing));
             out.push(Draw::Marker { node, x: x as f32, y: y as f32, angle, colour: [c, c, c, alpha] });
+        }
+        // The other players (this build's multiplayer): the same marker in each one's tag colour
+        // (P1 blue, P2 pink, P3 green, P4 yellow), with its number above it.
+        if let Some(node) = fe.key(26) {
+            let alpha = fe.sprite(node).map_or(128, |s| s.colour[3]);
+            for &(number, at, facing) in &v.others {
+                let Some((x, y)) = mappage::project(area, at[0], at[2]) else { continue };
+                let rgb = PLAYER_MAP_COLOURS[(number.max(1) - 1).min(3)];
+                let angle = mappage::marker_angle(area, mappage::facing_angle(facing));
+                out.push(Draw::Marker { node, x: x as f32, y: y as f32, angle, colour: [rgb[0], rgb[1], rgb[2], alpha] });
+                let text = format!("P{number}").into_bytes();
+                let w = fe.fonts.get(2).map_or(0, |f| f.measure(&text, 0));
+                out.push(Draw::Text { font: 2, text, spacing: 0, x: (x - w / 2) as f32, y: (y - 18) as f32, colour: [rgb[0], rgb[1], rgb[2], 128] });
+            }
         }
     }
     // The icons (section 4): the art of kind k is child k of the group node with key 210, drawn
