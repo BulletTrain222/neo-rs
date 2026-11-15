@@ -341,8 +341,12 @@ impl crate::play::Play {
                         spin: 0.0,
                         vy: 0.0,
                         hs: 0.0,
-                        life: 0.0,
-                        lifetime: 0.0,
+                        // Fully shown (life is the item's fade, drawn as its opacity: 0 drew the
+                        // host's dropped Neopoints invisible here), and never expiring on this
+                        // side (a lifetime of 0 had this side's own tick remove it each tick):
+                        // the host's list removes it.
+                        life: 1.0,
+                        lifetime: f32::INFINITY,
                         age: 10.0,
                         reference: it.reference,
                         angle: it.angle,

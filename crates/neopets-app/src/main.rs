@@ -2298,6 +2298,16 @@ fn step_sim(
                         }
                     }
                 }
+                // NEOPETS_NET_COINS="first:every" (diagnostic, hosting): from that tick, on each
+                // period, coins dropped ahead of the host's hero (so a joiner beside it sees them).
+                if play.play.coop_remote {
+                    if let Some((a, b)) = std::env::var("NEOPETS_NET_COINS").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u64>().ok()?))) {
+                        if play.play.ticks >= a && (play.play.ticks - a) % b.max(1) == 0 {
+                            let n = play.play.dev_drop(160, 6.0);
+                            info!("net test: dropped coins ahead of the host ({n} world items)");
+                        }
+                    }
+                }
                 // Online, hosting: the state after this tick, and a new welcome after a world change.
                 if play.play.coop_remote {
                     // A world change, or a new game or load here (Continue after a game over): a
