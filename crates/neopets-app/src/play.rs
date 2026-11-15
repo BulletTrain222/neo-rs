@@ -1559,6 +1559,8 @@ pub struct Play {
     /// HUD are player 2's, it takes no hits of its own); `coop_remote`: this side hosts and
     /// player 2 is on the other computer (no split screen here).
     pub net_follow: bool,
+    /// Joining: this side's own player moved at once from its controller (`predict_own`).
+    pub predict: Predict,
     /// Characters hold the host's clips (net/sync.rs); released when this side stops following.
     pub net_pinned: bool,
     pub coop_remote: bool,
@@ -2889,6 +2891,7 @@ impl Play {
             foot_frame: None,
             last_state: 1,
             stinger_requests: Vec::new(),
+            predict: Predict::default(),
             emote_requests: Vec::new(),
             hero_emotes: Default::default(),
             stinger_playing: false,
@@ -19871,6 +19874,73 @@ impl Play {
     /// hits; its movement from its own input relative to its own camera; the motion record's
     /// contacts and its animation. Pickups, doors, triggers, talking and the item panels are
     /// player 1's alone.
+    /// Joining (online): this side's own player (player 2 here) moved at once from this side's
+    /// controller, as the host's co-op step moves it, the movement only (walk, run, jump, guard,
+    /// strafe, ledges, ladders, platforms, the camera). Attacks, items, doors and talk stay the
+    /// host's. Not while the host has the player busy (an attack, a hit, a fall, down), nor while
+    /// a box, a scene or a fade holds the players. Returns whether it moved the player.
+    pub fn predict_own(&mut self, input: &HeroInput, pad: CameraPad, seq: u32) -> bool {
+        let ready = !self.others.is_empty() && self.net_follow && !self.predict.host_busy && !self.dialogue_open && !self.held && self.cut.is_none_or(|c| c.state == 0) && !self.fade.moving();
+        let free_here = self.others.first().is_some_and(|o| free_move(o.loco.state) && o.down.is_none() && o.loco.air_sub == 0);
+        if self.predict.cooldown > 0 {
+            self.predict.cooldown -= 1;
+        }
+        // Not in the first PREDICT_SETTLE ticks of the host's game here (the game catches up
+        // after its load, many ticks a frame, and the two sides' places agree only after).
+        if !ready || !free_here || self.ticks < PREDICT_SETTLE || self.predict.cooldown > 0 || std::env::var("NEOPETS_NET_PREDICT").is_ok_and(|v| v.trim() == "0") {
+            if self.predict.active && std::env::var_os("NEOPETS_TRACE_PREDICT").is_some() {
+                let o = self.others.first();
+                println!("PREDICT tick {} paused: host busy {} box {} held {} scene {} fade {} state {:?} down {:?} air {:?} cooldown {}", self.ticks, self.predict.host_busy, self.dialogue_open, self.held, self.cut.is_some_and(|c| c.state != 0), self.fade.moving(), o.map(|o| o.loco.state), o.map(|o| o.down.is_some()), o.map(|o| o.loco.air_sub), self.predict.cooldown);
+            }
+            self.predict.active = false;
+            self.predict.history.clear();
+            return false;
+        }
+        let mv = HeroInput { side: input.side, forward: input.forward, run: input.run, jump: input.jump, cross_held: input.cross_held, guard: input.guard, l2: input.l2, ..HeroInput::default() };
+        self.swap_player(0);
+        let saved = (self.hero_index, self.weapon, self.shield);
+        self.coop_running = true;
+        let who = self.player.who.min(1);
+        self.hero_index = who;
+        self.weapon = self.equipment.entries[0][who];
+        self.shield = self.equipment.entries[1][who];
+        self.camera_step(pad);
+        let (forward, left) = self.player.camera.rows();
+        self.player.l1_held = mv.guard;
+        self.player.loco.shield = self.shield.is_some();
+        self.player.loco.p1 = self.player.weapon_drawn;
+        self.player.loco.roberta = who == 1;
+        // No air attack here (the host's).
+        self.player.loco.air_ok = false;
+        self.player.loco.stick_step = neopets_sim::hero::StickStep::Off;
+        let clip = self.player.hero.clip_state();
+        self.player.loco.update(&mv, forward, left, clip);
+        self.held_step();
+        let id = self.player.loco.action();
+        self.player.hero.request(id, false);
+        self.player.hero.set_rate(self.player.loco.rate);
+        if !self.cheats.noclip {
+            self.ride_step();
+        }
+        let _ = self.hero_contacts(false);
+        self.player.root_step = self.player.hero.tick();
+        if std::env::var_os("NEOPETS_NO_CHAINS").is_none() {
+            let (at, facing) = (self.player.loco.position(), self.player.loco.facing);
+            self.player.hero.chain_step(at, facing);
+        }
+        self.player.items_drawn = self.hero_items();
+        (self.hero_index, self.weapon, self.shield) = saved;
+        self.coop_running = false;
+        self.swap_player(0);
+        self.predict.active = true;
+        let at = self.others[0].loco.position();
+        self.predict.history.push_back((seq, at));
+        while self.predict.history.len() > 240 {
+            self.predict.history.pop_front();
+        }
+        true
+    }
+
     pub fn coop_step(&mut self, inputs: &[(HeroInput, CameraPad)]) {
         self.same_hero_outfits();
         // The other players' hit flashes run down one a tick, as player 1's does in its tick
@@ -22950,3 +23020,53 @@ fn keep_fx(effects: &mut neopets_sim::effect::Effects, table: &neopets_sim::effe
     }
 }
 
+/// The hero states a player moves in freely (stance, walks, runs, jumps and falls, guard,
+/// sneak, strafe): a joiner moves its own player at once in these (`Play::predict_own`).
+pub fn free_move(state: u8) -> bool {
+    matches!(state, 1..=12 | 20 | 22 | 32 | 39 | 40)
+}
+
+/// A difference from the host's place larger than this puts the joiner's own player where the
+/// host has it at once (a knockback, a door, a ledge taken differently); a smaller one is eased
+/// away, a share a state growing with the difference (`predict_ease`).
+pub const PREDICT_SNAP: f32 = 2.5;
+pub const PREDICT_STUCK_OFF: f32 = 0.4;
+pub const PREDICT_STUCK_STATES: u32 = 30;
+pub const PREDICT_COOLDOWN: u32 = 60;
+pub const PREDICT_SETTLE: u64 = 150;
+
+/// The share of a difference `d` eased away in one state: 0.2 when close, up to 0.6 at a unit
+/// or more (a ledge or a slope taken a little differently is put right quickly).
+pub fn predict_ease(d: f32) -> f32 {
+    (0.2 + 0.4 * d).min(0.6)
+}
+
+/// Joining: the joiner's own player's moves made at once (`Play::predict_own`): whether it ran
+/// this tick, whether the host has the player busy, each input's place (by input number), and
+/// counts for the trace.
+#[derive(Clone, Debug, Default)]
+pub struct Predict {
+    pub active: bool,
+    pub host_busy: bool,
+    pub history: std::collections::VecDeque<(u32, [f32; 3])>,
+    pub corrections: u32,
+    pub snaps: u32,
+    pub largest: f32,
+    /// The response trace: when the stick was pressed, where the player stood, and whether the
+    /// stick was pushed last tick.
+    pub response: (Option<u64>, [f32; 3], bool),
+    /// States in a row with the two places apart (more than PREDICT_STUCK_OFF), and the ticks
+    /// left showing the host's player as it is (after PREDICT_STUCK_STATES such states: the two
+    /// sides disagree, say the host's player caught on something this side's is not, and
+    /// easing back and forth would shake the player).
+    pub stuck: u32,
+    pub cooldown: u32,
+    pub cooldowns: u32,
+}
+
+impl Predict {
+    /// This side's place after input `seq` (None when it is no longer kept).
+    pub fn at(&self, seq: u32) -> Option<[f32; 3]> {
+        self.history.iter().find(|e| e.0 == seq).map(|e| e.1)
+    }
+}

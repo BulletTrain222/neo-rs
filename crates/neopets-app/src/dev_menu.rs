@@ -1239,25 +1239,43 @@ fn fit(s: String, t: f64) -> String {
 #[derive(Component)]
 pub struct ViewToast;
 
-pub fn show_toast(mut commands: Commands, dev: Res<DevMenu>, mut toasts: Query<(Entity, &mut Text), With<ViewToast>>) {
+/// The row the toast sits in, across the window's top (the toast centred in it).
+#[derive(Component)]
+pub struct ViewToastRow;
+
+pub fn show_toast(mut commands: Commands, dev: Res<DevMenu>, mut toasts: Query<&mut Text, With<ViewToast>>, rows: Query<Entity, With<ViewToastRow>>) {
     match (&dev.toast, toasts.iter_mut().next()) {
-        (Some((msg, _)), Some((_, mut t))) => {
+        (Some((msg, _)), Some(mut t)) => {
             if t.0 != *msg {
                 t.0 = msg.clone();
             }
         }
         (Some((msg, _)), None) => {
-            commands.spawn((
-                Text::new(msg.clone()),
-                TextFont { font_size: bevy::text::FontSize::Px(26.0), ..default() },
-                TextColor(Color::srgb(1.0, 0.9, 0.4)),
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
-                Node { position_type: PositionType::Absolute, top: px(16), left: percent(42), padding: UiRect::all(px(8)), ..default() },
-                GlobalZIndex(1000),
-                ViewToast,
-            ));
+            // Centred at the top, a long line wrapping within 80% of the window (before, it began
+            // at 42% across and a long line ran off the right edge).
+            commands
+                .spawn((
+                    Node { position_type: PositionType::Absolute, top: px(16), left: px(0), width: percent(100), justify_content: JustifyContent::Center, ..default() },
+                    GlobalZIndex(1000),
+                    ViewToastRow,
+                ))
+                .with_children(|row| {
+                    row.spawn((
+                        Text::new(msg.clone()),
+                        TextFont { font_size: bevy::text::FontSize::Px(26.0), ..default() },
+                        TextColor(Color::srgb(1.0, 0.9, 0.4)),
+                        TextLayout::justify(bevy::text::Justify::Center),
+                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+                        Node { padding: UiRect::all(px(8)), max_width: percent(80), ..default() },
+                        ViewToast,
+                    ));
+                });
         }
-        (None, Some((e, _))) => commands.entity(e).despawn(),
+        (None, Some(_)) => {
+            for e in &rows {
+                commands.entity(e).despawn();
+            }
+        }
         (None, None) => {}
     }
 }

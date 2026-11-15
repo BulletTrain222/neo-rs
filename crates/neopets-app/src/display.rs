@@ -24,7 +24,7 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 49;
+pub const ROWS: usize = 53;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 5] = [17, 18, 19, 20, ATTACK_TURN_ROW];
@@ -32,7 +32,7 @@ pub const GAMEPLAY_ROWS: [usize; 5] = [17, 18, 19, 20, ATTACK_TURN_ROW];
 pub const ATTACK_TURN_ROW: usize = 44;
 /// The rows on the Multiplayer page (docs/MULTIPLAYER.md; this build's feature), in the order
 /// shown: the tabs' rows in turn (This computer, Online, Players).
-pub const MULTI_ROWS: [usize; 22] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], HOST_ROW, REMOVE_ROW, UPNP_ROW, ADDRESS_ROW, JOIN_ROW, PASSWORD_ROW, PORT_ROW, DOORS_ROW, COLOUR_ROWS[0], COLOUR_ROWS[1], COLOUR_ROWS[2], COLOUR_ROWS[3], TAGS_ROW, 25, TOGETHER_ROW];
+pub const MULTI_ROWS: [usize; 26] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], HOST_ROW, REMOVE_ROW, UPNP_ROW, GAME_ROWS[0], GAME_ROWS[1], GAME_ROWS[2], GAME_ROWS[3], ADDRESS_ROW, JOIN_ROW, PASSWORD_ROW, PORT_ROW, DOORS_ROW, COLOUR_ROWS[0], COLOUR_ROWS[1], COLOUR_ROWS[2], COLOUR_ROWS[3], TAGS_ROW, 25, TOGETHER_ROW];
 /// A page's tabs: each tab's name and its rows, in the order shown.
 pub type Tabs = [(&'static str, &'static [usize])];
 /// The Display page's tabs: the window and speed; the preset and the picture; shadows and how far
@@ -45,7 +45,7 @@ pub static DISPLAY_TABS: [(&str, &[usize]); 3] = [
 /// The Multiplayer page's tabs.
 pub static MULTI_TABS: [(&str, &[usize]); 3] = [
     ("This computer", &[COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3]]),
-    ("Online", &[HOST_ROW, REMOVE_ROW, UPNP_ROW, ADDRESS_ROW, JOIN_ROW, PASSWORD_ROW, PORT_ROW, DOORS_ROW]),
+    ("Online", &[HOST_ROW, REMOVE_ROW, UPNP_ROW, GAME_ROWS[0], GAME_ROWS[1], GAME_ROWS[2], GAME_ROWS[3], ADDRESS_ROW, JOIN_ROW, PASSWORD_ROW, PORT_ROW, DOORS_ROW]),
     ("Players", &[COLOUR_ROWS[0], COLOUR_ROWS[1], COLOUR_ROWS[2], COLOUR_ROWS[3], TAGS_ROW, 25, TOGETHER_ROW]),
 ];
 /// The most tabs a page has (the tab bar's chips).
@@ -59,7 +59,7 @@ pub fn tabs(page: u8) -> &'static Tabs {
     }
 }
 /// The headings over groups of a tabbed page's rows: (the row they come before, text).
-pub const HEADINGS: [(usize, &str); 15] = [
+pub const HEADINGS: [(usize, &str); 16] = [
     (0, "Window"),
     (3, "Picture"),
     (16, "Speed"),
@@ -71,14 +71,18 @@ pub const HEADINGS: [(usize, &str); 15] = [
     (COOP_ROW, "Split screen co-op"),
     (PAD_ROWS[0], "Controllers"),
     (HOST_ROW, "Host"),
-    (ADDRESS_ROW, "Join"),
+    (GAME_ROWS[0], "Games on this network"),
+    (ADDRESS_ROW, "Join by address"),
     (PASSWORD_ROW, "Both"),
     (COLOUR_ROWS[0], "Look"),
     (25, "Rules"),
 ];
 /// The rows drawn as a button (an action, not a choice): start or stop local co-op, host, join,
 /// remove the last joiner.
-pub const ACTION_ROWS: [usize; 4] = [COOP_ROW, HOST_ROW, JOIN_ROW, REMOVE_ROW];
+pub const ACTION_ROWS: [usize; 8] = [COOP_ROW, HOST_ROW, JOIN_ROW, REMOVE_ROW, GAME_ROWS[0], GAME_ROWS[1], GAME_ROWS[2], GAME_ROWS[3]];
+/// The game finder's rows (net.rs `Finder`): a game hosting on this home network each, a click
+/// joining it; the first row says "Looking..." while none has answered.
+pub const GAME_ROWS: [usize; 4] = [49, 50, 51, 52];
 /// The rows typed into, drawn as a text box (the join address, the password, the port).
 pub const TEXT_ROWS: [usize; 3] = [ADDRESS_ROW, PASSWORD_ROW, PORT_ROW];
 /// The focus value of a tabbed page's tab bar (Left and Right change the tab).
@@ -87,11 +91,13 @@ pub const TAB_FOCUS: usize = ROWS + 1;
 /// The rows a page shows, in order, with Back at the end; a tabbed page shows its tab bar first
 /// and its current tab's rows, and the Multiplayer page a controller row only for as many players
 /// as play.
-pub fn visible_rows(page: u8, tab: u8, players: usize) -> Vec<usize> {
+pub fn visible_rows(page: u8, tab: u8, players: usize, found: usize) -> Vec<usize> {
     let t = tabs(page);
     let mut v = if !t.is_empty() {
         let mut v = vec![TAB_FOCUS];
-        v.extend(t[(tab as usize).min(t.len() - 1)].1.iter().copied().filter(|r| !PAD_ROWS.iter().position(|p| p == r).is_some_and(|k| k >= players)));
+        // A game finder row for each game found (the first shows while none has).
+        let shown = |r: &usize| !PAD_ROWS.iter().position(|p| p == r).is_some_and(|k| k >= players) && !GAME_ROWS.iter().position(|g| g == r).is_some_and(|k| k > 0 && k >= found);
+        v.extend(t[(tab as usize).min(t.len() - 1)].1.iter().copied().filter(shown));
         v
     } else {
         page_rows(page)
@@ -501,6 +507,11 @@ impl DisplaySettings {
             ("Player 2 colour".into(), crate::hero_colour::COLOURS[self.coop_colours[1] as usize].into()),
             ("Player 3 colour".into(), crate::hero_colour::COLOURS[self.coop_colours[2] as usize].into()),
             ("Player 4 colour".into(), crate::hero_colour::COLOURS[self.coop_colours[3] as usize].into()),
+            // The game finder's rows (their words come from what it found: show_window).
+            ("Game 1".into(), String::new()),
+            ("Game 2".into(), String::new()),
+            ("Game 3".into(), String::new()),
+            ("Game 4".into(), String::new()),
         ]
     }
 
@@ -676,15 +687,19 @@ pub fn take_requests(
     mut settings: ResMut<DisplaySettings>,
     monitors: Query<&bevy::window::Monitor, With<bevy::window::PrimaryMonitor>>,
     mut net: ResMut<crate::net::Net>,
-    address: Res<crate::net::JoinAddress>,
+    mut address: ResMut<crate::net::JoinAddress>,
     mut coop: ResMut<crate::coop::Coop>,
 ) {
     let _span = crate::perf::span("take_requests");
     let Some(mut menu) = menu else { return };
-    // The Multiplayer page shows a controller row per player.
+    // The Multiplayer page shows a controller row per player, and a game row per game found.
     let players = settings.coop_players.clamp(2, 4);
     if menu.flow.display_players != players {
         menu.flow.display_players = players;
+    }
+    let found = net.finder.found.len();
+    if menu.flow.display_found != found {
+        menu.flow.display_found = found;
     }
     if menu.flow.display_requests.is_empty() {
         return;
@@ -703,6 +718,15 @@ pub fn take_requests(
             }
             ADDRESS_ROW => {}
             PASSWORD_ROW => {}
+            // A game the finder found: its address goes in the Join address box, and it is joined.
+            r if GAME_ROWS.contains(&r) => {
+                let game = net.finder.found.get(r - GAME_ROWS[0]).filter(|g| g.joinable()).map(|g| g.join_text());
+                if let (Some(a), crate::net::Role::Off) = (game, net.role) {
+                    address.0 = a.clone();
+                    let _ = std::fs::write("private/join.txt", &a);
+                    net.request = Some(crate::net::Request::Join(a));
+                }
+            }
             // Local co-op: Cross (or Left and Right) starts it, or stops it while on.
             COOP_ROW => coop.request = Some(!coop.wanted),
             REMOVE_ROW => {
@@ -984,6 +1008,10 @@ const HELP: [&str; ROWS + 1] = [
     "Player 2's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow.",
     "Player 3's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow.",
     "Player 4's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow.",
+    "Games hosting on this home network, found by themselves while this tab shows. Press or click a game to join it.",
+    "Games hosting on this home network. Press or click a game to join it.",
+    "Games hosting on this home network. Press or click a game to join it.",
+    "Games hosting on this home network. Press or click a game to join it.",
     "Back to Options.",
 ];
 
@@ -1229,6 +1257,7 @@ pub fn show_window(
                 JOIN_ROW if net.role == Role::Join => 2,
                 REMOVE_ROW if !(net.role == Role::Host && net.any_peer()) => 0,
                 REMOVE_ROW => 2,
+                r if GAME_ROWS.contains(&r) => net.finder.found.get(r - GAME_ROWS[0]).is_some_and(|g| g.joinable() && net.role == Role::Off) as u8,
                 _ => 1,
             }
         };
@@ -1273,6 +1302,25 @@ pub fn show_window(
                 (_, c, Some(_)) => pad_name(c),
             };
         }
+        // The game finder's rows: each game's address and players, and what its button does.
+        for (k, &row) in GAME_ROWS.iter().enumerate() {
+            shown[row] = match net.finder.found.get(k) {
+                Some(g) => (
+                    format!("Game at {}", g.join_text()),
+                    if !g.same_build {
+                        "Another version".into()
+                    } else if !g.ready {
+                        "Not playing yet".into()
+                    } else if g.players >= g.max {
+                        format!("Full ({} of {})", g.players, g.max)
+                    } else {
+                        format!("Join ({} of {}{})", g.players, g.max, if g.password { ", password" } else { "" })
+                    },
+                ),
+                None if net.role != Role::Off => ("Games found".into(), "Not while online".into()),
+                None => ("Games found".into(), "Looking...".into()),
+            };
+        }
         if let Some(k) = flow.display_listen.filter(|&k| k < PAD_ROWS.len()) {
             shown[PAD_ROWS[k]].1 = "Waiting for a button...".into();
         }
@@ -1282,7 +1330,7 @@ pub fn show_window(
             (false, f) => "*".repeat(password.0.len()) + if f { "_" } else { "" },
         };
     }
-    let page = visible_rows(flow.display_page, flow.display_tab, flow.display_players);
+    let page = visible_rows(flow.display_page, flow.display_tab, flow.display_players, flow.display_found);
     for (i, r, mut bg, mut node) in &mut rows {
         bg.0 = if r.0 == focus { ROW_CURSOR } else if *i == Interaction::Hovered { ROW_HOVER } else { ROW };
         let d = if page.contains(&r.0) { Display::Flex } else { Display::None };
@@ -1390,21 +1438,24 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(1), [17, 18, 19, 20, 44]);
-        assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 28, 31, 33, 29, 30, 32, 34, 36, 45, 46, 47, 48, 43, 25, 35]);
+        assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 28, 31, 33, 49, 50, 51, 52, 29, 30, 32, 34, 36, 45, 46, 47, 48, 43, 25, 35]);
         // Every Multiplayer row is in one tab; two players show two controller rows.
         let mut all: Vec<usize> = MULTI_TABS.iter().flat_map(|t| t.1.iter().copied()).collect();
         all.sort();
         let mut want = page_rows(2);
         want.sort();
         assert_eq!(all, want);
-        assert_eq!(visible_rows(2, 0, 2), [TAB_FOCUS, 37, 38, 26, 39, 40, ROWS]);
-        assert_eq!(visible_rows(2, 0, 4).len(), 9);
+        assert_eq!(visible_rows(2, 0, 2, 0), [TAB_FOCUS, 37, 38, 26, 39, 40, ROWS]);
+        assert_eq!(visible_rows(2, 0, 4, 0).len(), 9);
+        // The game finder: one row while none is found, a row a game after.
+        assert_eq!(visible_rows(2, 1, 2, 0).iter().filter(|r| GAME_ROWS.contains(r)).count(), 1);
+        assert_eq!(visible_rows(2, 1, 2, 3).iter().filter(|r| GAME_ROWS.contains(r)).count(), 3);
         // The Display page's tabs hold every row no other page has, once each.
         let mut display = page_rows(0);
         display.sort();
         assert_eq!(display, (0..ROWS).filter(|k| !GAMEPLAY_ROWS.contains(k) && !MULTI_ROWS.contains(k) && !RETIRED_ROWS.contains(k)).collect::<Vec<_>>());
-        assert_eq!(visible_rows(0, 1, 2), [TAB_FOCUS, 5, 6, 7, 10, 9, 24, ROWS]);
-        assert!(tabs(1).is_empty() && visible_rows(1, 0, 2)[0] == 17);
+        assert_eq!(visible_rows(0, 1, 2, 0), [TAB_FOCUS, 5, 6, 7, 10, 9, 24, ROWS]);
+        assert!(tabs(1).is_empty() && visible_rows(1, 0, 2, 0)[0] == 17);
         // Every heading comes before a row of a tabbed page.
         assert!(HEADINGS.iter().all(|h| page_rows(0).contains(&h.0) || page_rows(2).contains(&h.0)));
         // 4:3 in a 16:9 window: pillarbox 1440 wide.

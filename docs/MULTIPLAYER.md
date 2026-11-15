@@ -34,10 +34,17 @@ world; each one comes back when they walk into the host's world (they come back 
 player number). Two friends who are both away from the host do not see each other.
 1. The host starts or loads a game, then opens Options, Multiplayer and chooses **Host a game**.
    The help line shows the address to give your friend (for example 192.168.1.20).
-2. The friend opens Options, Multiplayer (from the title screen is fine), types that address
-   on **Join address** with the number keys and the dot (Backspace deletes), and chooses
-   **Join a game**. They go straight into the host's game as the next player, full screen.
-   More friends join the same way.
+2. The friend opens Options, Multiplayer (from the title screen is fine) and the **Online** tab.
+   Games hosting on the home network show by themselves under **Games on this network** (each
+   with its address and players, "Join (1 of 4)"); pressing or clicking one joins it. Or type
+   the address on **Join address** with the number keys and the dot (Backspace deletes) and
+   choose **Join a game**. They go straight into the host's game as the next player, full
+   screen. More friends join the same way. While joining, a line at the top of the screen says
+   what is happening ("Joining 192.168.1.20... (3 s)", "Loading the host's game (2 of 5)..."),
+   and if the join fails it says why in plain words (the host's game has a password, the
+   password is wrong, the game is full, the host is not playing yet, a different version or disc
+   image, no answer from that address). The host is told when someone could not join because of
+   the password or the version.
 3. The first time the host does this, Windows asks whether to let the game through the
    firewall: allow it on **Private networks**.
 4. To stop, either player can Quit from the pause page. If the host quits, the friend goes back
@@ -50,6 +57,15 @@ player number). Two friends who are both away from the host do not see each othe
 6. If the host's computer says the port is in use, another copy of the game is hosting there.
    Change the **Port** row (for example to 47818). The address to give your friend then ends in
    `:47818`, or the friend sets the same port on their Port row and types the address alone.
+
+**Moving at once (joiners).** A joiner's own player moves as soon as the stick moves, from the
+joiner's own controller, with its camera; the host's game still decides attacks, hits,
+knockbacks, falls, doors, scenes and talk, and the joiner's player is shown as the host has it
+during those. Each of the host's messages says which of the joiner's moves it had; the two
+places are compared and a small difference eased away (a large one put right at once). If the
+two sides keep disagreeing (say the host's player caught on something), the joiner shows the
+host's player as it is for a second, then moves at once again. Not in the first 2.5 seconds after
+joining. NEOPETS_NET_PREDICT=0 (diagnostic) turns it off.
 
 **Over the internet (not tried yet).** The friend needs a way in to the host's computer
 through the host's router:

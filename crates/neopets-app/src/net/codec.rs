@@ -219,6 +219,11 @@ pub struct State {
     pub rtt: u16,
     /// The last joiner item-screen command the host carried out (its number).
     pub cmd_ack: u8,
+    /// The number of the receiving joiner's input the host last applied (`Input::seq`).
+    pub input_seq: u32,
+    /// How many ticks more the host applied that input (none came in time for them), so the
+    /// joiner compares with its own place that many inputs later.
+    pub input_extra: u8,
     /// The party's equipment (each hero's weapon, shield and armour, each hero's Motes) and the
     /// cloak, for the joiner's item screen.
     pub equip: ([[Option<u16>; 2]; 3], [[Option<u16>; 3]; 2], bool),
@@ -883,6 +888,8 @@ impl State {
         w.u8(self.seat);
         w.u16(self.rtt);
         w.u8(self.cmd_ack);
+        w.u32(self.input_seq);
+        w.u8(self.input_extra);
         let opt = |w: &mut Writer, v: Option<u16>| w.u16(v.unwrap_or(u16::MAX));
         for row in self.equip.0 {
             for v in row {
@@ -997,6 +1004,8 @@ impl State {
         let seat = r.u8()?;
         let rtt = r.u16()?;
         let cmd_ack = r.u8()?;
+        let input_seq = r.u32()?;
+        let input_extra = r.u8()?;
         let mut opt = || r.u16().map(|v| (v != u16::MAX).then_some(v));
         let mut entries = [[None; 2]; 3];
         for row in entries.iter_mut() {
@@ -1018,7 +1027,7 @@ impl State {
         let n = r.u8()? as usize;
         let blocks = (0..n).map(|_| Some((r.u16()?, r.v3()?))).collect::<Option<Vec<_>>>()?;
         let colours = [r.u8()?, r.u8()?, r.u8()?, r.u8()?];
-        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, seat, rtt, cmd_ack, equip, pet, blocks, colours })
+        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, seat, rtt, cmd_ack, input_seq, input_extra, equip, pet, blocks, colours })
     }
 }
 
@@ -1046,6 +1055,9 @@ pub struct Input {
     /// The item-screen command waiting for the host (number, kind, two values; `ItemCmd`),
     /// sent with every input until a state acknowledges its number.
     pub cmd: (u8, u8, u16, u16),
+    /// This input's number (the joiner's play tick): the host's state says which it applied,
+    /// so the joiner's own moves (made at once on its side) are compared with the host's.
+    pub seq: u32,
 }
 
 /// A joiner's item-screen command as it travels (kind, two values).
@@ -1105,6 +1117,7 @@ impl Input {
             dpad: [0; 5],
             seen: 0,
             cmd: (0, 0, 0, 0),
+            seq: 0,
         }
     }
 
@@ -1155,12 +1168,13 @@ impl Input {
         w.u8(self.cmd.1);
         w.u16(self.cmd.2);
         w.u16(self.cmd.3);
+        w.u32(self.seq);
         w.0
     }
 
     pub(super) fn decode(r: &mut Reader) -> Option<Self> {
         // The stick reads within its range whatever the message says.
-        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?.clamp(-1.0, 1.0), forward: r.f32()?.clamp(-1.0, 1.0), held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?], seen: r.u32()?, cmd: (r.u8()?, r.u8()?, r.u16()?, r.u16()?) })
+        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?.clamp(-1.0, 1.0), forward: r.f32()?.clamp(-1.0, 1.0), held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?], seen: r.u32()?, cmd: (r.u8()?, r.u8()?, r.u16()?, r.u16()?), seq: r.u32()? })
     }
 }
 

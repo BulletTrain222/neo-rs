@@ -335,6 +335,8 @@ pub struct Flow {
     /// many players play (the Multiplayer page's controller rows).
     pub display_tab: u8,
     pub display_players: usize,
+    /// How many games the game finder lists (the Online tab's game rows).
+    pub display_found: usize,
     pub display_requests: Vec<(usize, i32)>,
     /// The Multiplayer page waits for a button on a controller to give to this player (0 to 3;
     /// display.rs `listen_pads`); the page takes no other input meanwhile.
@@ -414,7 +416,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, style_masks: Vec::new(), display_focus: 0, display_page: 0, display_tab: 0, display_players: 2, display_requests: Vec::new(), display_listen: None, controls_request: false, display_back: false };
+        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, style_masks: Vec::new(), display_focus: 0, display_page: 0, display_tab: 0, display_players: 2, display_found: 0, display_requests: Vec::new(), display_listen: None, controls_request: false, display_back: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -657,7 +659,7 @@ impl Flow {
             if let Some(t) = page.strip_prefix("multiplayer").or_else(|| page.strip_prefix("display")).and_then(|t| t.parse::<u8>().ok()) {
                 let n = crate::display::tabs(self.display_page).len().max(1) as u8;
                 self.display_tab = t.min(n - 1);
-                let rows = crate::display::visible_rows(self.display_page, self.display_tab, self.display_players);
+                let rows = crate::display::visible_rows(self.display_page, self.display_tab, self.display_players, self.display_found);
                 self.display_focus = rows.get(1).copied().unwrap_or(crate::display::TAB_FOCUS);
             }
             // NEOPETS_TRACE_LISTEN=k (diagnostic): the page waits for a controller for player k+1.
@@ -689,7 +691,7 @@ impl Flow {
         // A tabbed page opens on its first tab's first row.
         self.display_tab = 0;
         self.display_listen = None;
-        let rows = crate::display::visible_rows(page, self.display_tab, self.display_players);
+        let rows = crate::display::visible_rows(page, self.display_tab, self.display_players, self.display_found);
         self.display_focus = rows.iter().copied().find(|&r| r != crate::display::TAB_FOCUS).unwrap_or(rows[0]);
     }
 
@@ -698,7 +700,7 @@ impl Flow {
     /// row. Changes are silent, as the option rows' are (SPEC-0035 Behavior 3).
     fn display_tick(&mut self, fe: &Frontend, edge: u16, ctx: &Ctx) {
         // The page's settings rows, then Back.
-        let page = crate::display::visible_rows(self.display_page, self.display_tab, self.display_players);
+        let page = crate::display::visible_rows(self.display_page, self.display_tab, self.display_players, self.display_found);
         let at = page.iter().position(|&r| r == self.display_focus).unwrap_or(0);
         // Waiting for a controller's button (display.rs `listen_pads` ends it): no other input.
         if self.display_listen.is_some() {
@@ -721,7 +723,7 @@ impl Flow {
             if tab_step != 0 {
                 self.display_tab = (self.display_tab as i32 + tab_step).rem_euclid(n) as u8;
                 if !on_tabs {
-                    let rows = crate::display::visible_rows(self.display_page, self.display_tab, self.display_players);
+                    let rows = crate::display::visible_rows(self.display_page, self.display_tab, self.display_players, self.display_found);
                     self.display_focus = rows.get(1).copied().unwrap_or(crate::display::TAB_FOCUS);
                 }
                 self.sounds.push(0x9A);

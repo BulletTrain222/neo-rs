@@ -108,6 +108,8 @@ impl crate::play::Play {
             page: if self.death.page.is_some() || self.death.flag_e { 2 } else { 0 },
             rtt: 0,
             cmd_ack: 0,
+            input_seq: 0,
+            input_extra: 0,
             equip: (self.equipment.entries, self.equipment.motes, self.cloak_worn),
             pet: self.petpet.as_ref().map(|p| (p.type_id, p.t, p.f)),
             colours: self.player_colours,
@@ -162,14 +164,70 @@ impl crate::play::Play {
             self.add_player();
         }
         self.net_who(0, s.heroes[1].who as usize);
-        if let Some(o) = self.others.first_mut() {
-            put(o, &s.heroes[1]);
+        // This side's own player moved at once from this side's controller (`predict_own`) while
+        // the host has it moving freely: the host's place for the input it applied is compared
+        // with this side's for that input, and the difference eased away (a large one, as a
+        // knockback or a door, put right at once). Otherwise (an attack, a hit, a fall, a scene)
+        // the host's player is shown as before.
+        let h1 = s.heroes[1];
+        let host_free = crate::play::free_move(h1.state) && !h1.down && s.cut.is_none();
+        self.predict.host_busy = !host_free;
+        let predicting = self.predict.active && host_free;
+        if let Some(o) = self.others.first_mut().filter(|_| predicting) {
+            let seq = s.input_seq.wrapping_add(s.input_extra as u32);
+            if let Some(at) = self.predict.at(seq).or_else(|| self.predict.at(s.input_seq)) {
+                let err = [h1.position[0] - at[0], h1.position[1] - at[1], h1.position[2] - at[2]];
+                let d = (err[0] * err[0] + err[1] * err[1] + err[2] * err[2]).sqrt();
+                if d > 0.02 {
+                    // The whole difference at once past PREDICT_SNAP, else a share: added to
+                    // where the player is now (and to the moves kept), not a move to the host's
+                    // place, which is some ticks old (moving there put the player behind again
+                    // and again). Moved, not teleported: a teleport stands the player still.
+                    let ease = if d > crate::play::PREDICT_SNAP { 1.0 } else { crate::play::predict_ease(d) };
+                    if ease >= 1.0 {
+                        self.predict.snaps += 1;
+                    }
+                    let c = err.map(|e| e * ease);
+                    for k in 0..3 {
+                        o.loco.body.position[k] += c[k];
+                    }
+                    for e in self.predict.history.iter_mut() {
+                        for k in 0..3 {
+                            e.1[k] += c[k];
+                        }
+                    }
+                    self.predict.corrections += 1;
+                }
+                self.predict.largest = self.predict.largest.max(d);
+                // Apart for a while (not a jump: a snap takes those): show the host's player as
+                // it is for a second.
+                self.predict.stuck = if d > crate::play::PREDICT_STUCK_OFF { self.predict.stuck + 1 } else { 0 };
+                if self.predict.stuck >= crate::play::PREDICT_STUCK_STATES {
+                    self.predict.stuck = 0;
+                    self.predict.cooldown = crate::play::PREDICT_COOLDOWN;
+                    self.predict.cooldowns += 1;
+                    o.loco.body.position = h1.position;
+                }
+                if std::env::var_os("NEOPETS_TRACE_PREDICT").is_some() {
+                    let here = o.loco.position();
+                    println!("PREDICT tick {} input {} off by {:.3} (host {:?} state {}, here then {:?}, here now {:?} state {})", self.ticks, s.input_seq, d, h1.position.map(|v| (v * 100.0).round() / 100.0), h1.state, at.map(|v| (v * 100.0).round() / 100.0), here.map(|v| (v * 100.0).round() / 100.0), o.loco.state);
+                }
+            }
+            (o.hero_hp, o.hero_max, o.hero_mp, o.hero_mp_max, o.hero_flash) = (h1.hp, h1.hp_max, h1.mp, h1.mp_max, h1.flash);
+            (o.weapon_drawn, o.shield_raised) = (h1.drawn, h1.raised);
+            o.down = None;
+            o.down_line = None;
+        } else if let Some(o) = self.others.first_mut() {
+            self.predict.history.clear();
+            put(o, &h1);
             o.camera.eye = s.eye;
             o.camera.focus = s.focus;
             // Player 2 is not run on this side: its animation steps here (player 1's in the tick),
             // and its pendulum chains (Roberta's head tails) after the pose.
             let _ = o.hero.tick();
             o.hero.chain_step(o.loco.position(), o.loco.facing);
+        }
+        if let Some(o) = self.others.first_mut() {
             // Player 2's panels as the host has them (the joiner's HUD shows them).
             let pn = &s.panels;
             (o.quick.open, o.quick.entries, o.quick.selection, o.quick.marker) = (pn.0, pn.1, pn.2 as usize, pn.3);

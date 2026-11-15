@@ -1571,8 +1571,16 @@ fn step_sim(
         let mut pending: Option<neopets_sim::save::Slot> = None;
         // Online (net.rs): a joined, left or lost line for the player; the host paused; a
         // joiner whose host left goes back to the title screen.
+        // (About 5 seconds at 120 frames a second: a "Could not join" line is long.)
         if let Some(n) = netr.notice.take() {
-            dev.toast = Some((n, 300));
+            info!("net notice: {n}");
+            dev.toast = Some((n, 600));
+        }
+        // While joining: what is happening (asking the host, loading its game), on any screen.
+        if let Some(line) = netr.join_line() {
+            if dev.toast.as_ref().is_none_or(|t| t.1 < 20 || t.0.starts_with("Joining") || t.0.starts_with("Loading the host") || t.0.starts_with("Lost the host")) {
+                dev.toast = Some((line, 20));
+            }
         }
         if netr.following() && netr.peer_paused && dev.toast.as_ref().is_none_or(|t| t.1 < 20) {
             let line = if netr.peer_page == 2 { "Game over. The host chooses what happens next." } else { "The host paused the game." };
@@ -2058,7 +2066,13 @@ fn step_sim(
                     if v == "circle" {
                         input.side = 0.6;
                     }
-                    input.jump = play.play.ticks % 90 == 45;
+                    // NEOPETS_NET_WALK=pulse: a second walking, a second standing, in turn (for
+                    // the response trace), no jumps.
+                    if v == "pulse" {
+                        input.forward = if (play.play.ticks / 60) % 2 == 0 { 1.0 } else { 0.0 };
+                    } else {
+                        input.jump = play.play.ticks % 90 == 45;
+                    }
                 }
                 // This side's D-pad and Triangle go to the host for player 2's panels (this side's
                 // own game opens none).
@@ -2095,6 +2109,7 @@ fn step_sim(
                 if let Some(&(k, a, b)) = netr.cmds.front() {
                     out.cmd = (netr.cmds_done.wrapping_add(1), k, a, b);
                 }
+                out.seq = play.play.ticks as u32;
                 netr.outgoing = Some(out);
                 let sounds = play.play.sound.requests.len();
                 let clips = (play.play.stinger_requests.len(), play.play.emote_requests.len());
@@ -2108,6 +2123,36 @@ fn step_sim(
                     (s.flags.clone(), s.items.clone(), s.neopoints, s.collected.clone(), s.maps.clone(), play.play.job.is_some(), play.play.world.pack)
                 });
                 play.play.tick(&neopets_sim::hero::HeroInput::default(), neopets_sim::camera::CameraPad::default());
+                // This side's own player moves at once from this side's controller (the host's
+                // state then corrects it; play.rs `predict_own`).
+                // Each tick's move numbered by this side's play tick, and the input sent (the
+                // last of a frame's ticks) carries the number of its last move (several ticks in
+                // one frame had one number before, and the host's place was compared with a move
+                // up to 12 ticks old).
+                let seq = play.play.ticks as u32;
+                let _ = play.play.predict_own(&input, pad, seq);
+                if let Some(o) = netr.outgoing.as_mut() {
+                    o.seq = seq;
+                }
+                // NEOPETS_TRACE_PREDICT (diagnostic): how many ticks from a press of the stick
+                // to this side's own player moving.
+                if std::env::var_os("NEOPETS_TRACE_PREDICT").is_some() {
+                    let pushing = input.forward != 0.0 || input.side != 0.0;
+                    if let Some(at) = play.play.others.first().map(|o| o.loco.position()) {
+                        let now = play.play.ticks;
+                        let r = &mut play.play.predict.response;
+                        if pushing && !r.2 {
+                            (r.0, r.1) = (Some(now), at);
+                        }
+                        r.2 = pushing;
+                        if let Some(t) = r.0 {
+                            if (at[0] - r.1[0]).hypot(at[2] - r.1[2]) > 0.1 {
+                                println!("PREDICT response {} ticks", now - t);
+                                r.0 = None;
+                            }
+                        }
+                    }
+                }
                 if let Some((flags, items, np, collected, maps, job, pack)) = own {
                     let s = &play.play.state;
                     let added: Vec<u16> = s.flags.difference(&flags).copied().collect();

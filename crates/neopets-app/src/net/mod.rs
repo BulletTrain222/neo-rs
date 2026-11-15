@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 33;
+const PROTOCOL: u16 = 34;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -70,6 +70,10 @@ const RESYNC: u8 = 12;
 const REMOVED: u8 = 13;
 /// Players in separate worlds (net/apart.rs): each side's world, vitals and story changes.
 const APART: u8 = 14;
+/// The game finder: a search for games on this home network (sent to everyone on it), and a
+/// hosting game's answer (its version, players, password and port).
+const FIND: u8 = 15;
+const HERE: u8 = 16;
 
 /// This build's identity, checked at joining: the crate version and the build's own number.
 fn build_id() -> String {
@@ -82,6 +86,117 @@ pub enum Role {
     Off,
     Host,
     Join,
+}
+
+/// A game the finder heard of: where, its players, whether it needs a password, whether its
+/// version is this one, whether it is in a game yet, and when it last answered.
+#[derive(Clone, Debug)]
+pub struct Found {
+    pub addr: SocketAddr,
+    pub players: u8,
+    pub max: u8,
+    pub password: bool,
+    pub same_build: bool,
+    pub ready: bool,
+    pub id: u64,
+    pub seen: Instant,
+}
+
+impl Found {
+    /// The address to join it with (the port only when not the usual one).
+    pub fn join_text(&self) -> String {
+        if self.addr.port() == PORT { self.addr.ip().to_string() } else { self.addr.to_string() }
+    }
+    /// Joinable now (the same version, in a game, not full).
+    pub fn joinable(&self) -> bool {
+        self.same_build && self.ready && self.players < self.max
+    }
+}
+
+/// The game finder: its socket, the games heard of, and when it last asked.
+#[derive(Default)]
+pub struct Finder {
+    socket: Option<UdpSocket>,
+    pub found: Vec<Found>,
+    asked: Option<Instant>,
+}
+
+/// How often the finder asks, and how long a game that stops answering stays listed.
+const FIND_EVERY: Duration = Duration::from_secs(2);
+const FIND_KEEP: Duration = Duration::from_secs(7);
+
+impl Finder {
+    /// One step: while `on`, ask everyone on this home network every FIND_EVERY (and this
+    /// computer, for a game hosted here), and list the games that answer; off, close.
+    pub fn step(&mut self, on: bool, port: u16) {
+        if !on {
+            self.socket = None;
+            self.found.clear();
+            self.asked = None;
+            return;
+        }
+        if self.socket.is_none() {
+            let s = UdpSocket::bind("0.0.0.0:0").and_then(|s| s.set_nonblocking(true).and(s.set_broadcast(true)).map(|_| s));
+            match s {
+                Ok(s) => self.socket = Some(s),
+                Err(e) => {
+                    info!("net: the game finder could not start: {e}");
+                    return;
+                }
+            }
+        }
+        let Some(s) = self.socket.as_ref() else { return };
+        let now = Instant::now();
+        if self.asked.is_none_or(|t| now.duration_since(t) >= FIND_EVERY) {
+            self.asked = Some(now);
+            let mut w = Writer::new(FIND);
+            w.text(&build_id());
+            let mut to: Vec<SocketAddr> = vec![SocketAddr::from(([255, 255, 255, 255], port)), SocketAddr::from(([127, 0, 0, 1], port))];
+            // This network's own broadcast address too (some systems send 255.255.255.255 out of
+            // one network card only); a home network is nearly always x.y.z.0 to x.y.z.255.
+            if let Some(std::net::IpAddr::V4(ip)) = local_address() {
+                let o = ip.octets();
+                to.push(SocketAddr::from(([o[0], o[1], o[2], 255], port)));
+            }
+            for a in to {
+                let _ = s.send_to(&w.0, a);
+            }
+        }
+        let mut buf = [0u8; 512];
+        while let Ok((n, from)) = s.recv_from(&mut buf) {
+            let b = &buf[..n];
+            if !upnp::on_this_network(from.ip()) || b.len() < 7 || b[..4] != MAGIC || b[6] != HERE {
+                continue;
+            }
+            let other_version = u16::from_le_bytes([b[4], b[5]]) != PROTOCOL;
+            let parsed = if other_version {
+                None
+            } else {
+                Reader::open(b).and_then(|(_, mut r)| Some((r.text()?, r.u8()?, r.u8()?, r.u8()?, r.u16()?, r.u8()?, r.u64()?)))
+            };
+            let (same_build, players, max, password, port, ready, id) = match parsed {
+                Some((build, players, max, password, port, ready, id)) => (build == build_id(), players, max.max(1), password != 0, port, ready != 0, id),
+                None => (false, 0, 4, false, from.port(), true, u64::from(from.port()) ^ u64::from(u32::from(match from.ip() { std::net::IpAddr::V4(v) => v, _ => std::net::Ipv4Addr::UNSPECIFIED }))),
+            };
+            let addr = SocketAddr::new(from.ip(), port);
+            let f = Found { addr, players, max, password, same_build, ready, id, seen: now };
+            // One game heard at two addresses (this computer's own game answers both its
+            // network address and 127.0.0.1): the network address is kept.
+            match self.found.iter_mut().find(|g| g.id == f.id) {
+                Some(g) => {
+                    let keep_addr = if g.addr.ip().is_loopback() { f.addr } else { g.addr };
+                    *g = Found { addr: keep_addr, ..f };
+                }
+                None => {
+                    info!("net: the game finder heard of a game at {addr}");
+                    self.found.push(f);
+                }
+            }
+        }
+        self.found.retain(|g| now.duration_since(g.seen) < FIND_KEEP);
+        self.found.sort_by_key(|g| (!g.joinable(), g.addr));
+        self.found.truncate(crate::display::GAME_ROWS.len());
+    }
 }
 
 /// The session: this side's role, its socket, the peer, and what each side has to hand on.
@@ -244,9 +359,19 @@ pub struct Net {
     pub load_interior: Option<u32>,
     /// Host: the router's answer being waited for (UPnP), and the port it forwards.
     upnp_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<(u16, upnp::Outcome)>>>,
-    /// Host: refusals sent to strangers in the current second (at most REFUSALS_A_SECOND, so the
-    /// game cannot be used to send floods at a third party's address).
+    /// Host: refusals and finder answers sent to strangers in the current second (at most
+    /// REFUSALS_A_SECOND, so the game cannot be used to send floods at a third party's address).
     refusals: (Option<Instant>, u32),
+    /// Host: the joiner's input number last applied, and how many ticks more it was applied
+    /// (a state's `input_extra`).
+    input_last: u32,
+    input_repeats: u8,
+    /// Host: when the host was last told of a refused join (at most one line every 10 seconds).
+    refuse_note: Option<Instant>,
+    /// Host: this hosting's number (the game finder tells one game seen twice apart).
+    host_id: u64,
+    /// The game finder (net_step): games hosting on this home network.
+    pub finder: Finder,
     pub upnp_port: Option<u16>,
     /// Players in separate worlds (net/apart.rs): whether this side runs its own world apart
     /// from the other; host: the door the joiner is to take, until it answers; joiner: the door
@@ -396,6 +521,14 @@ impl Net {
     /// Host: a refusal to a hello, at most REFUSALS_A_SECOND a second (a hello's sender
     /// address is not checked, so unlimited answers could be aimed at someone else).
     fn refuse(&mut self, to: SocketAddr, why: &str) {
+        let mut w = Writer::new(REFUSE);
+        w.text(why);
+        self.answer_stranger(to, &w.0);
+    }
+
+    /// Host: a message to someone not in the game (a refusal, a finder's answer), within the
+    /// budget of REFUSALS_A_SECOND.
+    fn answer_stranger(&mut self, to: SocketAddr, bytes: &[u8]) {
         let now = Instant::now();
         if self.refusals.0.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1)) {
             self.refusals = (Some(now), 0);
@@ -404,11 +537,36 @@ impl Net {
             return;
         }
         self.refusals.1 += 1;
-        let mut w = Writer::new(REFUSE);
-        w.text(why);
         if let Some(s) = self.socket.as_ref() {
-            let _ = s.send_to(&w.0, to);
+            let _ = s.send_to(bytes, to);
         }
+    }
+
+    /// Host: a line to the host that someone could not join (at most one every 10 seconds).
+    fn note_refusal(&mut self, line: &str) {
+        let now = Instant::now();
+        if self.refuse_note.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(10)) {
+            self.refuse_note = Some(now);
+            self.notice = Some(line.to_string());
+        }
+    }
+
+    /// Joiner, while joining (not yet in the host's game): what is happening, for the line on
+    /// screen.
+    pub fn join_line(&self) -> Option<String> {
+        if self.role != Role::Join || self.loaded > 0 {
+            return None;
+        }
+        let at = self.target.map_or(String::new(), |a| if a.port() == PORT { a.ip().to_string() } else { a.to_string() });
+        if let Some((_, parts)) = self.parts.as_ref() {
+            let have = parts.iter().filter(|p| p.is_some()).count();
+            return Some(format!("Loading the host's game ({have} of {})...", parts.len()));
+        }
+        if self.retry_until.is_some() {
+            return Some(format!("Lost the host. Joining {at} again..."));
+        }
+        let secs = self.join_started.map_or(0, |t| t.elapsed().as_secs());
+        Some(if self.last_heard.is_some() { format!("Joining {at}: the host answered...") } else { format!("Joining {at}... ({secs} s)") })
     }
 
     /// Joiner: the host sent something this game could not use (main.rs caught it): leave its
@@ -483,7 +641,7 @@ impl Net {
         // way closes the forward it reports), on its own thread.
         let (port, pending) = (self.upnp_port.take(), self.upnp_rx.take().and_then(|m| m.into_inner().ok()));
         upnp::release(port, pending, false);
-        *self = Self { disc: self.disc, status: status.to_string(), notice: self.notice.take(), ended: self.ended, kept: self.kept, ..Default::default() };
+        *self = Self { disc: self.disc, status: status.to_string(), notice: self.notice.take(), ended: self.ended, kept: self.kept, finder: std::mem::take(&mut self.finder), ..Default::default() };
     }
 
     /// Host: the state after a tick, sent to the joiner with the events not yet acknowledged
@@ -501,6 +659,11 @@ impl Net {
             let mut s = s.clone();
             s.rtt = self.rtt_ms.round().clamp(0.0, 65535.0) as u16;
             s.cmd_ack = self.cmd_done;
+            let seq = self.remote.map_or(0, |i| i.seq);
+            self.input_repeats = if seq == self.input_last { self.input_repeats.saturating_add(1) } else { 0 };
+            self.input_last = seq;
+            s.input_seq = seq;
+            s.input_extra = self.input_repeats;
             let story = (s.flags.clone(), s.items.clone(), s.neopoints);
             if self.story_last.as_ref() != Some(&story) {
                 self.story_rev += 1;
@@ -1247,6 +1410,7 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                 Ok(s) => {
                     net.socket = Some(s);
                     net.role = Role::Host;
+                    net.host_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) ^ u64::from(port);
                     // Another port than the usual one goes in the address the friend types.
                     let shown = |ip: std::net::IpAddr| if port == PORT { ip.to_string() } else { format!("{ip}:{port}") };
                     net.status = match local_address() {
@@ -1291,7 +1455,10 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
                     net.status = format!("Joining {a}...");
                     info!("net: joining {a}");
                 }
-                (None, _) => net.status = format!("\"{text}\" is not an address."),
+                (None, _) => {
+                    net.status = format!("\"{text}\" is not an address. Type it like 192.168.1.20 (or 192.168.1.20:47818 for another port).");
+                    net.notice = Some(net.status.clone());
+                }
                 (_, Err(e)) => net.status = format!("Could not join: {e}"),
             }
         }
@@ -1322,6 +1489,11 @@ pub fn net_step(mut net: ResMut<Net>, mut play: Option<ResMut<PlayState>>, mut a
         net.status = "Lost the host. Joining again (the Join row stops)...".into();
         info!("net: joining the host again");
     }
+    // The game finder: while the Multiplayer page's Online tab shows and this computer neither
+    // hosts nor joins (NEOPETS_NET_FIND=1, diagnostic: always, with each game heard printed).
+    let online_tab = menu.as_ref().is_some_and(|m| m.flow.current == crate::menus::DISPLAY && m.flow.display_page == 2 && m.flow.display_tab == 1);
+    let find = net.role == Role::Off && (online_tab || std::env::var_os("NEOPETS_NET_FIND").is_some());
+    net.finder.step(find, host_port(settings.net_port));
     if net.role == Role::Off {
         return;
     }
@@ -1401,6 +1573,24 @@ fn host_route(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, pl
     let mut extra = std::mem::take(&mut net.extra);
     let mut inbox: Vec<Vec<(Vec<u8>, SocketAddr)>> = vec![Vec::new(); 1 + extra.len()];
     for (bytes, from) in ready {
+        // The game finder's question from this home network: this game's version, players,
+        // password, port and whether it is in a game (an internet stranger is not answered).
+        if bytes.len() >= 7 && bytes[..4] == MAGIC && bytes[6] == FIND {
+            if upnp::on_this_network(from.ip()) {
+                let players = 1 + net.peer.is_some() as u8 + extra.iter().filter(|e| e.peer.is_some()).count() as u8;
+                let mut w = Writer::new(HERE);
+                w.text(&build_id());
+                w.u8(players);
+                w.u8(crate::coop::MAX_PLAYERS as u8);
+                w.u8(!password.0.is_empty() as u8);
+                w.u16(net.socket.as_ref().and_then(|s| s.local_addr().ok()).map_or(PORT, |a| a.port()));
+                w.u8(play.as_ref().is_some_and(|p| p.play.spawned) as u8);
+                w.u64(net.host_id);
+                let b = w.0;
+                net.answer_stranger(from, &b);
+            }
+            continue;
+        }
         let known = if net.peer == Some(from) { Some(0) } else { extra.iter().position(|e| e.peer == Some(from)).map(|k| k + 1) };
         let k = match known {
             Some(k) => k,
@@ -1534,9 +1724,11 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
         if bytes.len() >= 7 && bytes[..4] == MAGIC && u16::from_le_bytes([bytes[4], bytes[5]]) != PROTOCOL {
             if net.role == Role::Join && net.target == Some(from) {
                 info!("net: the host runs another version of the game");
-                net.stop("The host's game is a different build of this game. Use the same build on both computers.");
+                let line = "Could not join: your game is a different version from the host's. Use the same version on both computers.";
+                net.notice = Some(line.into());
+                net.stop(line);
             } else if net.role == Role::Host && bytes[6] == HELLO {
-                net.refuse(from, "a different build");
+                net.refuse(from, "your game is a different version from the host's. Use the same version on both computers");
             }
             continue;
         }
@@ -1546,21 +1738,30 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                 let (build, disc) = (r.text(), r.u64());
                 let (name, pass) = (r.text().unwrap_or_default(), r.u64().unwrap_or(0));
                 let partner = r.u8().map(|v| v != 0);
-                let refuse = if build.as_deref() != Some(build_id().as_str()) {
-                    Some(format!("your game is a different build ({} there, {} here); use the same build on both computers", build.unwrap_or_default(), build_id()))
+                // Each reason as the joiner reads it ("Could not join: ..."), and the host's own
+                // line for the ones the host can help with.
+                let (refuse, note) = if build.as_deref() != Some(build_id().as_str()) {
+                    (Some(format!("your game is a different version from the host's ({} there, {} here). Use the same version on both computers", build.unwrap_or_default(), build_id())), Some("Someone could not join: their game is a different version."))
                 } else if pass != password_hash(&password.0) {
-                    Some("the password is not the one on the host's Multiplayer page".to_string())
+                    if pass == 0 {
+                        (Some("the host's game has a password. Type it in Password on the Multiplayer page (Online tab), then join again".to_string()), Some("Someone tried to join without the password."))
+                    } else {
+                        (Some("the password is wrong. Check it with the host, type it in Password on the Multiplayer page, then join again".to_string()), Some("Someone tried to join with a wrong password."))
+                    }
                 } else if disc != net.disc {
-                    Some("different discs".to_string())
+                    (Some("your disc image is not the same as the host's (both need the same game disc)".to_string()), Some("Someone could not join: their disc image is different."))
                 } else if net.peer.is_some_and(|p| p != from) {
-                    Some("the game is full (4 players)".to_string())
+                    (Some("the host's game is full (4 players)".to_string()), None)
                 } else if play.as_ref().is_none_or(|p| !p.play.spawned) {
-                    Some("the host is not in a game yet".to_string())
+                    (Some("the host is not playing yet. Ask them to start or load a game, then join again".to_string()), Some("Someone is trying to join: start or load a game to let them in."))
                 } else {
-                    None
+                    (None, None)
                 };
                 if let Some(why) = refuse {
                     net.refuse(from, &why);
+                    if let Some(n) = note {
+                        net.note_refusal(n);
+                    }
                     continue;
                 }
                 let Some(p) = play.as_deref_mut() else { continue };
@@ -1818,7 +2019,9 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
             (Role::Join, REFUSE) if net.target == Some(from) => {
                 let why = r.text().unwrap_or_default();
                 info!("net: refused: {why}");
-                net.stop(&format!("The host said no: {why}."));
+                let line = format!("Could not join: {why}.");
+                net.notice = Some(line.clone());
+                net.stop(&line);
             }
             (Role::Join, STATE) if net.target == Some(from) => {
                 net.last_heard = Some(now);
@@ -2072,12 +2275,15 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
     // A first join with no answer at all for 20 seconds stops (before, it waited for ever).
     if net.role == Role::Join && net.loaded == 0 && net.last_heard.is_none() && net.retry_until.is_none() && net.join_started.is_some_and(|t| now.duration_since(t) > Duration::from_secs(20)) {
         info!("net: no answer from the host");
-        let at = net.target.map_or(String::new(), |a| a.to_string());
-        net.stop(&format!("No answer from {at}. Check the address, and that the host chose Host a game (and allowed the game through the firewall)."));
+        let at = net.target.map_or(String::new(), |a| if a.port() == PORT { a.ip().to_string() } else { a.to_string() });
+        let line = format!("Could not join {at}: no answer. Check the address, that the host chose Host, and that the host's firewall lets the game in.");
+        net.notice = Some(line.clone());
+        net.stop(&line);
     }
     // A join again that has not reached the host within its minute stops.
     if net.role == Role::Join && net.loaded == 0 && net.retry_until.is_some_and(|t| now > t) {
         info!("net: the host did not come back");
+        net.notice = Some("Could not reach the host again. You can join again from the Multiplayer page.".into());
         net.stop("Could not reach the host again.");
     } else if net.role == Role::Join && net.loaded == 0 && net.last_heard.is_none() {
         // Still waiting for an answer.
@@ -2219,6 +2425,8 @@ mod tests {
             page: 2,
             rtt: 31,
             cmd_ack: 3,
+            input_seq: 9,
+            input_extra: 2,
             pet: Some((450, 30, 40)),
             equip: ([[Some(1), None], [None, Some(2)], [None, None]], [[Some(160), None, Some(161)], [None; 3]], true),
             moving: vec![(909, 4, [0.0, 1.0, 0.0], 0.25)],
@@ -2345,6 +2553,39 @@ mod tests {
         assert_ne!(password_hash("a"), 0);
     }
 
+    /// The game finder: a hosting socket answers a search sent to this computer, and the game
+    /// is listed once with its version, players and password.
+    #[test]
+    fn the_finder_lists_a_game() {
+        let host = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = host.local_addr().unwrap().port();
+        let mut f = Finder::default();
+        f.step(true, port);
+        let mut buf = [0u8; 512];
+        host.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let (n, from) = host.recv_from(&mut buf).unwrap();
+        assert_eq!((&buf[..4], buf[6]), (&MAGIC[..], FIND));
+        let _ = n;
+        let mut w = Writer::new(HERE);
+        w.text(&build_id());
+        w.u8(2);
+        w.u8(4);
+        w.u8(1);
+        w.u16(port);
+        w.u8(1);
+        w.u64(77);
+        host.send_to(&w.0, from).unwrap();
+        host.send_to(&w.0, from).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        f.step(true, port);
+        assert_eq!(f.found.len(), 1, "one game, heard twice");
+        let g = &f.found[0];
+        assert_eq!((g.players, g.max, g.password, g.same_build, g.ready, g.joinable()), (2, 4, true, true, true, true));
+        assert_eq!(g.join_text(), format!("127.0.0.1:{port}"));
+        f.step(false, port);
+        assert!(f.found.is_empty());
+    }
+
     /// Junk, and damaged copies of real messages, are read without a panic by every reader of
     /// the other side's messages, and the item-screen commands they carry stay in range.
     #[test]
@@ -2463,7 +2704,7 @@ mod tests {
 
     #[test]
     fn input_round_trips_with_ack() {
-        let i = Input { generation: 4, ack: 99, story: 6, world: 2, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5], seen: 7, cmd: (2, 3, 1, 160) };
+        let i = Input { generation: 4, ack: 99, story: 6, world: 2, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5], seen: 7, cmd: (2, 3, 1, 160), seq: 12_345 };
         let bytes = i.encode();
         let (kind, mut r) = Reader::open(&bytes).expect("header");
         assert_eq!(kind, INPUT);
