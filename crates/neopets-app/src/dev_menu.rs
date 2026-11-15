@@ -638,6 +638,15 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
                 dev.free = Some(FreeCam { pos, yaw: to.x.atan2(to.z), pitch: (to.y / to.length()).asin() });
             }
         }
+        // "hero=d" (diagnostic): the free camera d in front of player 1, looking at its face.
+        if let Some(d) = v.split(',').find_map(|t| t.trim().strip_prefix("hero=")).and_then(|d| d.parse::<f32>().ok()) {
+            let p = Vec3::from(play.play.player.loco.position());
+            let f = Vec3::from(play.play.player.loco.facing);
+            let f = Vec3::new(f.x, 0.0, f.z).normalize_or(Vec3::Z);
+            let pos = p + f * d + Vec3::Y * 2.4;
+            let to = p + Vec3::Y * 2.0 - pos;
+            dev.free = Some(FreeCam { pos, yaw: to.x.atan2(to.z), pitch: (to.y / to.length()).asin() });
+        }
         if let Some(arg) = v.split(',').find_map(|t| t.trim().strip_prefix("view=")) {
             let (name, d) = arg.split_once(':').map_or((arg, 4.0), |(n, d)| (n, d.parse().unwrap_or(4.0)));
             if let Some(c) = play.play.characters.iter().find(|c| c.name == name) {
