@@ -364,6 +364,10 @@ pub(crate) struct HeroRoot;
 pub(crate) struct PlayState {
     pub(crate) play: play::Play,
     skinned: Vec<(Handle<Mesh>, usize)>,
+    /// Player 1's model as drawn when recoloured (multiplayer colours, hero_colour.rs): its
+    /// skinned parts are relit from it each tick (relit from the game's model, Roberta's
+    /// recoloured skin, a vertex tint, went back to blue).
+    coloured: Option<neopets_data::model::ModelData>,
 }
 
 /// Game logic runs a fixed 1/60 s step, one input snapshot per tick (SPEC-0007).
@@ -2543,7 +2547,7 @@ fn step_sim(
             static OUTFITS: std::sync::Once = std::sync::Once::new();
             if std::env::var_os("NEOPETS_TRACE_OUTFITS").is_some() {
                 OUTFITS.call_once(|| {
-                    for r in 504..=511u32 {
+                    for r in 504..=519u32 {
                         let Ok(Some(m)) = archive_view::model(&mut archive.disc, &archive.index, r) else { continue };
                         for (k, t) in m.textures.iter().enumerate() {
                             let fur = hero_colour::fur_texture(&t.image.rgba);
@@ -8067,7 +8071,7 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                 Ok(second) => commands.insert_resource(Streamer::start(second, index.clone(), play.boot.clone())),
                 Err(e) => error!("No loader thread, streaming is off: {e}"),
             }
-            commands.insert_resource(PlayState { play, skinned: Vec::new() })
+            commands.insert_resource(PlayState { play, skinned: Vec::new(), coloured: None })
         }
         Err(e) => error!("Play mode could not start: {e}"),
     }
@@ -8104,7 +8108,7 @@ fn play_frame(
     }
     if !state.play.spawned {
         state.play.spawned = true;
-        info!("hero model built: hero {} ({} parts)", state.play.hero_index, state.play.player.model.parts.len());
+        info!("hero model built: hero {} ({} parts), colour {colour}", state.play.hero_index, state.play.player.model.parts.len());
         // A hero switch re-spawns the hero with the incoming model.
         for e in &hero_roots {
             commands.entity(e).despawn();
@@ -8135,8 +8139,17 @@ fn play_frame(
             }
             let tinted = m.parts.iter().enumerate().filter(|(_, p)| p.colors.iter().any(|c| { let k = c[0].max(c[1]).max(c[2]).max(1e-6); c[2] / k < 0.5 && c[1] / k > 0.5 })).map(|(i, p)| (i, p.texture)).collect::<Vec<_>>();
             info!("hero parts with a yellow vertex tint (part, texture): {tinted:?}");
+            for (i, p) in m.parts.iter().enumerate() {
+                let lo = p.positions.iter().fold([f32::MAX; 3], |a, v| [a[0].min(v[0]), a[1].min(v[1]), a[2].min(v[2])]);
+                let hi = p.positions.iter().fold([f32::MIN; 3], |a, v| [a[0].max(v[0]), a[1].max(v[1]), a[2].max(v[2])]);
+                let n = p.raw_colors.len().max(1) as u32;
+                let avg: Vec<u32> = (0..3).map(|j| p.raw_colors.iter().map(|c| c[j] as u32).sum::<u32>() / n).collect();
+                let blue = p.raw_colors.iter().filter(|c| c[2] > c[0] + 40 && c[2] > c[1] + 20).count();
+                info!("hero part {i}: texture {:?}, {} vertices, from {:?} to {:?}, mean colour {avg:?}, {blue} blue vertices", p.texture, p.positions.len(), lo.map(|v| (v * 10.0).round() / 10.0), hi.map(|v| (v * 10.0).round() / 10.0));
+            }
         }
-        let coloured = (colour != 0).then(|| hero_colour::recoloured(&state.play.player.model, colour));
+        state.coloured = (colour != 0).then(|| hero_colour::recoloured(&state.play.player.model, colour));
+        let coloured = state.coloured.clone();
         let drawn = coloured.as_ref().unwrap_or(&state.play.player.model);
         let parts = part_assets(drawn, &mut meshes, &mut materials, &mut images);
         // SPEC-0003 How a pass is drawn: two-pass parts' second layer, skinned with pass 0.
@@ -8147,7 +8160,8 @@ fn play_frame(
         let gpu = gpu_skin::enabled() && gpu_skin::fits(bones);
         if gpu {
             for (i, mesh) in second.iter().map(|(i, m, _, _)| (*i, m)).chain(parts.iter().map(|(i, m, _)| (*i, m))) {
-                let part = &state.play.player.model.parts[i];
+                // (The recoloured copy: GPU skinning takes its vertex colours from it.)
+                let part = &drawn.parts[i];
                 if !part.weights.is_empty() {
                     if let Some(mut m) = meshes.get_mut(mesh) {
                         gpu_skin::prepare_mesh(&mut m, part, bones);
@@ -8223,7 +8237,7 @@ fn play_frame(
         }
     }
     for (handle, i) in state.skinned.iter().filter(|_| fresh) {
-        let part = &state.play.player.model.parts[*i];
+        let part = &state.coloured.as_ref().unwrap_or(&state.play.player.model).parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
         let flash = (state.play.player.hero_flash > 0).then_some(&play::FLASH_COLOUR);
         let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint, flash);

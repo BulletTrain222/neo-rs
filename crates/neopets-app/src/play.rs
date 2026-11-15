@@ -19830,9 +19830,8 @@ impl Play {
             None => (self.hero_index, 1),
             Some(i) => (self.others.get(i).map_or(1, |o| o.who), self.player_number(i)),
         };
-        if who.min(1) != 0 {
-            return 0;
-        }
+        // Tor's fur or Roberta's skin (hero_colour.rs).
+        let _ = who;
         self.player_colours.get(number - 1).copied().unwrap_or(0)
     }
 
