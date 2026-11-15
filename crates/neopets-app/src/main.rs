@@ -2615,6 +2615,13 @@ fn step_sim(
                     // Online (net.rs): the joiner follows the host's game from here, in play.
                     if net_load.is_some() {
                         play.play.net_follow = true;
+                        // A world this build makes (the reed field, the test stage): made here
+                        // too.
+                        let made = std::mem::take(&mut netr.load_made);
+                        if made != 0 {
+                            play.play.make_world(made);
+                            info!("net: the host is in a world this build makes ({made}); made it here");
+                        }
                         // The host is in an interior: enter it (the slot loaded the outdoor world;
                         // user report 148).
                         if let Some(p) = netr.load_interior.take() {

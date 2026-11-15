@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 34;
+const PROTOCOL: u16 = 35;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -366,6 +366,10 @@ pub struct Net {
     /// (a state's `input_extra`).
     input_last: u32,
     input_repeats: u8,
+    /// Host: the made world (`Play::made_world`) the last welcome had; joiner: the one to make
+    /// after loading a welcome.
+    welcome_made: u8,
+    pub load_made: u8,
     /// Host: when the host was last told of a refused join (at most one line every 10 seconds).
     refuse_note: Option<Instant>,
     /// Host: this hosting's number (the game finder tells one game seen twice apart).
@@ -1155,7 +1159,7 @@ impl Net {
                     s
                 });
                 let fx = play.effects.snapshot();
-                n.rewelcome(slot, play.world.pack, play.generation, &fx, play.interior_pack());
+                n.rewelcome(slot, play.world.pack, play.generation, &fx, play.interior_pack(), play.made_world());
             }
             // Each joiner's rumble goes to it alone.
             if let Some(s) = play.others.get_mut(n.seat).and_then(|o| o.motor.take()) {
@@ -1175,14 +1179,15 @@ impl Net {
         if more.is_empty() { self.status.clone() } else { format!("{} Also in: {}.", self.status, more.join(", ")) }
     }
 
-    pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32, game: u32, fx: &[neopets_sim::effect::Op], interior: u32) {
-        if self.role != Role::Host || self.peer.is_none() || self.apart || (pack == self.welcome_pack && game == self.welcome_game) {
+    pub fn rewelcome(&mut self, slot: &neopets_sim::save::Slot, pack: u32, game: u32, fx: &[neopets_sim::effect::Op], interior: u32, made: u8) {
+        if self.role != Role::Host || self.peer.is_none() || self.apart || (pack == self.welcome_pack && game == self.welcome_game && made == self.welcome_made) {
             return;
         }
         self.welcome_pack = pack;
         self.welcome_game = game;
+        self.welcome_made = made;
         self.generation += 1;
-        self.welcome = Some(welcome(self.generation, slot, fx, self.event_base(), interior));
+        self.welcome = Some(welcome(self.generation, slot, fx, self.event_base(), interior, made));
         self.welcome_mask = 0;
         self.last_sent = None;
         info!("net: world {pack}, welcome {}", self.generation);
@@ -1191,7 +1196,7 @@ impl Net {
 
 /// A welcome: the generation, the host's game as a save slot, and its gameplay effects running
 /// now (effect operations, applied after the load).
-fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::effect::Op], base: u32, interior: u32) -> Vec<u8> {
+fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::effect::Op], base: u32, interior: u32, made: u8) -> Vec<u8> {
     let host = my_name();
     let mut w = Writer::new(WELCOME);
     w.u32(generation);
@@ -1204,6 +1209,7 @@ fn welcome(generation: u32, slot: &neopets_sim::save::Slot, fx: &[neopets_sim::e
     w.text(&host);
     // The interior the host is in (0 outdoors): a slot loads the outdoor world.
     w.u32(interior);
+    w.u8(made);
     w.0
 }
 
@@ -1239,6 +1245,10 @@ fn take_welcome(net: &mut Net, r: &mut Reader, from: SocketAddr) {
     let _ = r.text();
     net.peer_name = "Player 1".into();
     net.load_interior = r.u32().filter(|&p| p != 0);
+    // A world this build makes (the test stage, the reed field, the stage's Cloud Beast fight;
+    // `Play::made_world`): the joiner makes it too (a save slot cannot carry it, and the disc
+    // has no such world: the joiner saw an empty world before).
+    net.load_made = r.u8().unwrap_or(0);
     net.loaded = generation;
     net.state = None;
     net.queue.clear();
@@ -1799,7 +1809,8 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                     let mut slot = neopets_sim::save::Slot::empty();
                     p.play.write_slot(&mut slot, b"NETPLAY");
                     let base = net.event_base();
-                    net.welcome = Some(welcome(net.generation, &slot, &p.play.effects.snapshot(), base, p.play.interior_pack()));
+                    net.welcome_made = p.play.made_world();
+                    net.welcome = Some(welcome(net.generation, &slot, &p.play.effects.snapshot(), base, p.play.interior_pack(), net.welcome_made));
                     net.welcome_mask = 0;
                     // Players are called by number (Player 2), not by the computer's name.
                     let _ = name;

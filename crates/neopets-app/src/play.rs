@@ -13385,6 +13385,32 @@ impl Play {
         }
     }
 
+    /// The world this build makes, for a joiner to make too (net.rs welcome): 0 a world of the
+    /// disc, 1 the flat test stage, 2 the reed field, 3 the test stage's Cloud Beast fight.
+    pub fn made_world(&self) -> u8 {
+        match self.world.pack {
+            STAGE_PACK if self.cloud_on => 3,
+            STAGE_PACK => 1,
+            FIELD_PACK => 2,
+            _ => 0,
+        }
+    }
+
+    /// Joining: make the world `made_world` named (after the welcome's slot loaded).
+    pub fn make_world(&mut self, made: u8) {
+        match made {
+            1 => self.enter_test_stage(),
+            2 => {
+                let _ = self.enter_reed_field();
+            }
+            3 => {
+                self.enter_test_stage();
+                self.dev_cloud_fight();
+            }
+            _ => {}
+        }
+    }
+
     /// Developer menu: make the flat test stage (`World::test_stage`, this build's own world)
     /// current in place of the loaded one, dropping that world, its characters, scenes and
     /// threads, and put the hero at the stage's origin facing +Z.

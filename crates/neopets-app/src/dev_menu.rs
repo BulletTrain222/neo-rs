@@ -680,6 +680,14 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             info!("warp loop {}: to {}", n + 1, packs[n % packs.len()]);
         }
     }
+    // NEOPETS_DEV_REEDAT=T: the developer menu's Reed field once play reaches tick T
+    // (diagnostic, for the reed field online).
+    if let Some(t) = std::env::var("NEOPETS_DEV_REEDAT").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+        static REED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if play.play.ticks >= t && !REED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            info!("{}", play.play.enter_reed_field());
+        }
+    }
     // NEOPETS_DEV_BOSS=n: the boss fight request for boss n, once, a second in (diagnostic).
     if *frames == 60 {
         if let Some(n) = std::env::var("NEOPETS_DEV_BOSS").ok().and_then(|v| v.parse::<usize>().ok()).filter(|&n| n < crate::play::BOSSES.len()) {
@@ -1266,7 +1274,7 @@ pub fn show_toast(mut commands: Commands, dev: Res<DevMenu>, mut toasts: Query<&
                         TextColor(Color::srgb(1.0, 0.9, 0.4)),
                         TextLayout::justify(bevy::text::Justify::Center),
                         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
-                        Node { padding: UiRect::all(px(8)), max_width: percent(80), ..default() },
+                        Node { padding: UiRect::all(px(8)), max_width: Val::Vw(80.0), ..default() },
                         ViewToast,
                     ));
                 });
