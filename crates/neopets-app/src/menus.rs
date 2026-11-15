@@ -331,6 +331,10 @@ pub struct Flow {
     /// The window shows the Gameplay page's rows rather than the Display page's.
     /// The page the Display window shows: 0 Display, 1 Gameplay, 2 Multiplayer.
     pub display_page: u8,
+    /// The Multiplayer page's tab (display.rs `MULTI_TABS`) and how many players play (its
+    /// controller rows).
+    pub display_tab: u8,
+    pub display_players: usize,
     pub display_requests: Vec<(usize, i32)>,
     /// The Options page's "Keyboard & Gamepad" row was chosen: the host opens the bindings page
     /// (this build; controls_page.rs).
@@ -407,7 +411,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, style_masks: Vec::new(), display_focus: 0, display_page: 0, display_requests: Vec::new(), controls_request: false, display_back: false };
+        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, style_masks: Vec::new(), display_focus: 0, display_page: 0, display_tab: 0, display_players: 2, display_requests: Vec::new(), controls_request: false, display_back: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -639,13 +643,19 @@ impl Flow {
             self.enter(fe, OPTIONS, &ctx);
             self.focus = items(fe, OPTIONS).len() + 3;
             self.controls_request = true;
-        } else if page == "display" || page == "gameplay" || page == "multiplayer" {
+        } else if page == "display" || page == "gameplay" || page.starts_with("multiplayer") {
             self.enter(fe, OPTIONS, &ctx);
             self.open_display(match page {
                 "gameplay" => 1,
-                "multiplayer" => 2,
+                p if p.starts_with("multiplayer") => 2,
                 _ => 0,
             });
+            // "multiplayer1" or "multiplayer2": that tab of the Multiplayer page.
+            if let Some(t) = page.strip_prefix("multiplayer").and_then(|t| t.parse::<u8>().ok()) {
+                self.display_tab = t.min(2);
+                let rows = crate::display::visible_rows(2, self.display_tab, self.display_players);
+                self.display_focus = rows.get(1).copied().unwrap_or(crate::display::TAB_FOCUS);
+            }
         } else if let Some(tab) = page.strip_prefix("items") {
             // "items", "items1" or "items2": the item page's tab.
             self.item_tab = tab.parse::<usize>().unwrap_or(0).min(2);
@@ -667,7 +677,12 @@ impl Flow {
         self.current = DISPLAY;
         self.pass = 0;
         self.display_page = page;
-        self.display_focus = crate::display::page_rows(page)[0];
+        // The Multiplayer page opens on its first tab's first row.
+        if page == 2 {
+            self.display_tab = 0;
+        }
+        let rows = crate::display::visible_rows(page, self.display_tab, self.display_players);
+        self.display_focus = rows.iter().copied().find(|&r| r != crate::display::TAB_FOCUS).unwrap_or(rows[0]);
     }
 
     /// One pass of the Display page: Up and Down move between the rows, Left and Right (or
@@ -675,10 +690,31 @@ impl Flow {
     /// row. Changes are silent, as the option rows' are (SPEC-0035 Behavior 3).
     fn display_tick(&mut self, fe: &Frontend, edge: u16, ctx: &Ctx) {
         // The page's settings rows, then Back.
-        let mut page = crate::display::page_rows(self.display_page);
-        page.push(crate::display::ROWS);
+        let page = crate::display::visible_rows(self.display_page, self.display_tab, self.display_players);
         let at = page.iter().position(|&r| r == self.display_focus).unwrap_or(0);
         if self.pass >= 2 {
+            // The Multiplayer page's tabs: L1 and R1 anywhere, Left and Right on the tab bar.
+            let on_tabs = self.display_focus == crate::display::TAB_FOCUS;
+            let tab_step = if self.display_page != 2 {
+                0
+            } else if edge & L1 != 0 || (on_tabs && edge & LEFT != 0) {
+                -1
+            } else if edge & R1 != 0 || (on_tabs && edge & RIGHT != 0) {
+                1
+            } else {
+                0
+            };
+            if tab_step != 0 {
+                let n = crate::display::MULTI_TABS.len() as i32;
+                self.display_tab = (self.display_tab as i32 + tab_step).rem_euclid(n) as u8;
+                if !on_tabs {
+                    let rows = crate::display::visible_rows(2, self.display_tab, self.display_players);
+                    self.display_focus = rows.get(1).copied().unwrap_or(crate::display::TAB_FOCUS);
+                }
+                self.sounds.push(0x9A);
+                self.pass = (self.pass + 1).min(9999);
+                return;
+            }
             let on_back = self.display_focus == crate::display::ROWS;
             if std::mem::take(&mut self.display_back) || edge & (TRIANGLE | SELECT | CIRCLE) != 0 || (on_back && edge & CROSS != 0) {
                 self.sounds.push(0x99);
@@ -697,7 +733,7 @@ impl Flow {
             } else if edge & UP != 0 {
                 self.display_focus = page[(at + page.len() - 1) % page.len()];
                 self.sounds.push(0x9A);
-            } else if on_back {
+            } else if on_back || on_tabs {
             } else if edge & LEFT != 0 {
                 self.display_requests.push((self.display_focus, -1));
             } else if edge & (RIGHT | CROSS) != 0 {

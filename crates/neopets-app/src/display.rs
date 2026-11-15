@@ -31,8 +31,44 @@ pub const GAMEPLAY_ROWS: [usize; 5] = [17, 18, 19, 20, ATTACK_TURN_ROW];
 /// The Gameplay page's Attack turn row (this build's option).
 pub const ATTACK_TURN_ROW: usize = 44;
 /// The rows on the Multiplayer page (docs/MULTIPLAYER.md; this build's feature), in the order
-/// shown: local co-op first, then the shared rules, then online.
-pub const MULTI_ROWS: [usize; 22] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], COLOUR_ROWS[0], COLOUR_ROWS[1], COLOUR_ROWS[2], COLOUR_ROWS[3], 25, TOGETHER_ROW, TAGS_ROW, HOST_ROW, ADDRESS_ROW, JOIN_ROW, REMOVE_ROW, PASSWORD_ROW, UPNP_ROW, PORT_ROW, DOORS_ROW];
+/// shown: the tabs' rows in turn (This computer, Online, Players).
+pub const MULTI_ROWS: [usize; 22] = [COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3], HOST_ROW, REMOVE_ROW, UPNP_ROW, ADDRESS_ROW, JOIN_ROW, PASSWORD_ROW, PORT_ROW, DOORS_ROW, COLOUR_ROWS[0], COLOUR_ROWS[1], COLOUR_ROWS[2], COLOUR_ROWS[3], TAGS_ROW, 25, TOGETHER_ROW];
+/// The Multiplayer page's tabs and their rows, in the order shown.
+pub const MULTI_TABS: [&str; 3] = ["This computer", "Online", "Players"];
+pub const TAB_ROWS: [&[usize]; 3] = [
+    &[COOP_ROW, PLAYERS_ROW, 26, PAD_ROWS[0], PAD_ROWS[1], PAD_ROWS[2], PAD_ROWS[3]],
+    &[HOST_ROW, REMOVE_ROW, UPNP_ROW, ADDRESS_ROW, JOIN_ROW, PASSWORD_ROW, PORT_ROW, DOORS_ROW],
+    &[COLOUR_ROWS[0], COLOUR_ROWS[1], COLOUR_ROWS[2], COLOUR_ROWS[3], TAGS_ROW, 25, TOGETHER_ROW],
+];
+/// The headings over groups of the Multiplayer page's rows: (the row they come before, text).
+pub const HEADINGS: [(usize, &str); 7] = [
+    (COOP_ROW, "Split screen co-op"),
+    (PAD_ROWS[0], "Controllers"),
+    (HOST_ROW, "Host"),
+    (ADDRESS_ROW, "Join"),
+    (PASSWORD_ROW, "Both"),
+    (COLOUR_ROWS[0], "Look"),
+    (25, "Rules"),
+];
+/// The rows drawn as a button (an action, not a choice): start or stop local co-op, host, join,
+/// remove the last joiner.
+pub const ACTION_ROWS: [usize; 4] = [COOP_ROW, HOST_ROW, JOIN_ROW, REMOVE_ROW];
+/// The focus value of the Multiplayer page's tab bar (Left and Right change the tab).
+pub const TAB_FOCUS: usize = ROWS + 1;
+
+/// The rows a page shows, in order, with Back at the end; the Multiplayer page shows its tab
+/// bar first and its current tab's rows, and a controller row only for as many players as play.
+pub fn visible_rows(page: u8, tab: u8, players: usize) -> Vec<usize> {
+    let mut v = if page == 2 {
+        let mut v = vec![TAB_FOCUS];
+        v.extend(TAB_ROWS[tab.min(2) as usize].iter().copied().filter(|r| !PAD_ROWS.iter().position(|p| p == r).is_some_and(|k| k >= players)));
+        v
+    } else {
+        page_rows(page)
+    };
+    v.push(ROWS);
+    v
+}
 /// Rows no page shows any more (27, the Player 2 partner choice: every player starts as Tor and
 /// switches on its own).
 pub const RETIRED_ROWS: [usize; 1] = [27];
@@ -612,6 +648,11 @@ pub fn take_requests(
 ) {
     let _span = crate::perf::span("take_requests");
     let Some(mut menu) = menu else { return };
+    // The Multiplayer page shows a controller row per player.
+    let players = settings.coop_players.clamp(2, 4);
+    if menu.flow.display_players != players {
+        menu.flow.display_players = players;
+    }
     if menu.flow.display_requests.is_empty() {
         return;
     }
@@ -620,6 +661,8 @@ pub fn take_requests(
         // The online rows act on the session (net.rs): host, join, or leave the one running.
         let leave = net.role != crate::net::Role::Off;
         match row {
+            // A dimmed button does nothing: hosting while joined, or joining while hosting.
+            HOST_ROW | JOIN_ROW if (row == HOST_ROW && net.role == crate::net::Role::Join) || (row == JOIN_ROW && net.role == crate::net::Role::Host) => {}
             HOST_ROW => net.request = Some(if leave && net.role == crate::net::Role::Host { crate::net::Request::Leave } else { crate::net::Request::Host }),
             JOIN_ROW => {
                 net.request = Some(if leave && net.role == crate::net::Role::Join { crate::net::Request::Leave } else { crate::net::Request::Join(address.0.clone()) });
@@ -756,6 +799,16 @@ pub struct DispValue(usize);
 pub struct DispStep(usize, i32);
 #[derive(Component)]
 pub struct DispHelp;
+/// The Multiplayer page's tab bar and its tabs, and a heading over a group of rows.
+#[derive(Component)]
+pub struct DispTabs;
+#[derive(Component)]
+pub struct DispTab(u8);
+#[derive(Component)]
+pub struct DispHeading(usize);
+/// An action row's button.
+#[derive(Component)]
+pub struct DispAction(usize);
 
 const PANEL: Color = Color::srgb(0.05, 0.06, 0.10);
 const ROW: Color = Color::srgba(1.0, 1.0, 1.0, 0.04);
@@ -766,6 +819,17 @@ const ARROW_HOVER: Color = Color::srgba(0.95, 0.75, 0.25, 0.65);
 const GOLD: Color = Color::srgb(0.98, 0.80, 0.35);
 const TEXT: Color = Color::srgb(0.92, 0.93, 0.96);
 const DIM: Color = Color::srgb(0.60, 0.63, 0.70);
+/// The Multiplayer page's own accent (its tabs and headings).
+const ACCENT: Color = Color::srgb(0.55, 0.78, 1.0);
+const TAB: Color = Color::srgba(1.0, 1.0, 1.0, 0.05);
+const TAB_ON: Color = Color::srgba(0.35, 0.60, 0.95, 0.45);
+/// An action button: ready, ready and selected or hovered, stopping (it ends something), and
+/// not available now.
+const ACTION: Color = Color::srgb(0.20, 0.42, 0.78);
+const ACTION_HOT: Color = Color::srgb(0.30, 0.56, 0.98);
+const ACTION_STOP: Color = Color::srgb(0.62, 0.20, 0.22);
+const ACTION_STOP_HOT: Color = Color::srgb(0.80, 0.28, 0.30);
+const ACTION_OFF: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
 
 /// What each setting does, shown under the rows.
 const HELP: [&str; ROWS + 1] = [
@@ -802,11 +866,11 @@ const HELP: [&str; ROWS + 1] = [
     "Join the host's game. Each player needs their own copy of the game disc.",
     "Hosting: sends the last player who joined back to their title screen. You keep hosting, and they can join again.",
     "Optional. The host types one before hosting; a friend must type the same before joining. Letters and digits; Backspace deletes.",
-    "On: while you host, your router is asked to let a friend on the internet in (UPnP). The way in closes when you stop hosting, or by itself after two hours. Some routers have UPnP turned off.",
-    "The UDP port the game hosts on, and joins on when the address names none. 47817 unless you change it; both computers should match. Type it with the number keys (Backspace deletes) or step it with Left and Right.",
-    "On: player 2 is brought back beside player 1 when more than 60 units away. Off: each player goes where they like in the area around them; a door or a load still takes both, and a fall off the world still brings player 2 back. The host's choice counts online.",
-    "Online: Both, a door either player takes moves both. Only you: player 2 can go through a door alone into another world, and the two meet again when one walks into the other's world (a movie or a hero switch on the host brings player 2 back). The host's choice counts.",
-    "Cross starts or stops play on this computer. Players 2 to 4 join beside player 1, each with a part of the screen. Not while online.",
+    "On: while you host, your router is asked to let a friend on the internet in (UPnP). It closes when you stop hosting. Some routers have UPnP off.",
+    "The UDP port to host and join on (47817 by default; both computers should match). Type it, or step it with Left and Right.",
+    "On: other players are brought back beside player 1 when more than 60 units away. Off: everyone roams the area; doors and loads still take everyone.",
+    "Both: a door anyone takes moves everyone. Only you: a joiner can go through a door alone into a world of its own, and comes back when they walk into the host's world.",
+    "Starts (or stops) play on this computer: players 2 to 4 join beside player 1, each with a part of the screen. Not while online.",
     "Players on this computer: 2, 3 or 4. Three or four share the screen in quarters (with three, player 1 has the top half).",
     "Player 1's controller. Auto: the keyboard and every controller no other player has. Player 1 always has the keyboard.",
     "Player 2's controller. Auto: the next free one. Controllers are numbered in the order they were plugged in.",
@@ -814,7 +878,7 @@ const HELP: [&str; ROWS + 1] = [
     "Player 4's controller (4 players). Auto: the next free controller.",
     "On: a coloured tag (P1 to P4) over each other player, so you can tell who is who. Not in the original game.",
     "Steady: an attack turns your hero toward the enemy's body. Original: toward the game's aim point, which on some enemies (the Swamp Tentacle) swings with them and can turn a swing away.",
-    "Player 1's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow. The host's choices count online. Not in the original game.",
+    "Player 1's Tor fur colour in multiplayer (Original keeps it yellow). The host's choices count online.",
     "Player 2's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow.",
     "Player 3's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow.",
     "Player 4's colour in multiplayer: Tor's yellow fur in another colour. Original keeps it yellow.",
@@ -848,9 +912,20 @@ pub fn spawn_window(mut commands: Commands) {
         .with_children(|ui| {
             ui.spawn((Text::new("Display"), font(22.0), TextColor(GOLD), DispTitle));
             ui.spawn((Text::new("Up and down pick, left and right or a click change. Esc or B go back."), font(12.0), TextColor(DIM), Node { margin: UiRect::bottom(px(8)), ..default() }));
+            // The Multiplayer page's tabs (L1 and R1, or Left and Right on the bar, or a click).
+            ui.spawn((Node { flex_direction: FlexDirection::Row, column_gap: px(6), padding: UiRect::all(px(4)), margin: UiRect::bottom(px(4)), display: Display::None, ..default() }, BackgroundColor(ROW), DispTabs)).with_children(|bar| {
+                for (t, name) in MULTI_TABS.iter().enumerate() {
+                    bar.spawn((Button, Node { flex_grow: 1.0, justify_content: JustifyContent::Center, padding: UiRect::axes(px(8), px(5)), ..default() }, BackgroundColor(TAB), DispTab(t as u8))).with_children(|b| {
+                        b.spawn((Text::new(*name), font(15.0), TextColor(TEXT), TextLayout::no_wrap()));
+                    });
+                }
+            });
             let order: Vec<usize> = (0..3u8).flat_map(page_rows).chain([ROWS]).collect();
             for k in order {
                 let back = k == ROWS;
+                if let Some(&(_, text)) = HEADINGS.iter().find(|h| h.0 == k) {
+                    ui.spawn((Text::new(text), font(13.0), TextColor(ACCENT), Node { margin: UiRect { top: px(6), bottom: px(1), left: px(4), ..default() }, display: Display::None, ..default() }, DispHeading(k)));
+                }
                 ui.spawn((
                     Button,
                     Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(px(10), px(3)), min_height: px(25), margin: UiRect::top(px(if back { 8.0 } else { 0.0 })), ..default() },
@@ -860,6 +935,19 @@ pub fn spawn_window(mut commands: Commands) {
                 .with_children(|row| {
                     row.spawn((Text::new(if back { "Back" } else { "" }), font(15.0), TextColor(TEXT), TextLayout::no_wrap(), DispLabel(k)));
                     if back {
+                        return;
+                    }
+                    if ACTION_ROWS.contains(&k) {
+                        row.spawn((
+                            Button,
+                            Node { width: px(290), height: px(28), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() },
+                            BackgroundColor(ACTION),
+                            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.35)),
+                            DispAction(k),
+                        ))
+                        .with_children(|b| {
+                            b.spawn((Text::default(), font(15.0), TextColor(TEXT), TextLayout::no_wrap(), DispValue(k)));
+                        });
                         return;
                     }
                     row.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|r| {
@@ -882,14 +970,28 @@ pub fn spawn_window(mut commands: Commands) {
 
 /// The mouse on the Display window: hovering a row focuses it, a click on < or > changes it (a
 /// click on the row steps it forward), and Back returns to Options.
-pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&Interaction, &DispRow), Changed<Interaction>>, steps: Query<(&Interaction, &DispStep), Changed<Interaction>>) {
+pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&Interaction, &DispRow), Changed<Interaction>>, steps: Query<(&Interaction, &DispStep), Changed<Interaction>>, (tabs, actions): (Query<(&Interaction, &DispTab), Changed<Interaction>>, Query<(&Interaction, &DispAction), Changed<Interaction>>)) {
     let _span = crate::perf::span("window_mouse");
     let Some(mut menu) = menu else { return };
     let flow = &mut menu.flow;
     if flow.current != crate::menus::DISPLAY {
         return;
     }
-    let mut stepped = false;
+    let mut stepped_action = false;
+    for (i, t) in &tabs {
+        if *i == Interaction::Pressed {
+            flow.display_tab = t.0;
+            flow.display_focus = TAB_FOCUS;
+        }
+    }
+    for (i, a) in &actions {
+        if *i == Interaction::Pressed {
+            flow.display_focus = a.0;
+            flow.display_requests.push((a.0, 1));
+            stepped_action = true;
+        }
+    }
+    let mut stepped = stepped_action;
     for (i, s) in &steps {
         if *i == Interaction::Pressed {
             flow.display_focus = s.0;
@@ -927,6 +1029,10 @@ pub fn show_window(
     mut titles: Query<&mut Text, (With<DispTitle>, Without<DispHelp>, Without<DispLabel>, Without<DispValue>)>,
     (net, address, password): (Res<crate::net::Net>, Res<crate::net::JoinAddress>, Res<crate::net::NetPassword>),
     (coop, play, gamepads): (Res<crate::coop::Coop>, Option<Res<crate::PlayState>>, Query<Entity, With<Gamepad>>),
+    mut tab_bar: Query<&mut Node, (With<DispTabs>, Without<DispWindow>, Without<DispRow>, Without<DispHeading>)>,
+    mut tab_chips: Query<(&DispTab, &Interaction, &mut BackgroundColor), (Without<DispRow>, Without<DispStep>, Without<DispAction>)>,
+    mut headings: Query<(&DispHeading, &mut Node), (Without<DispWindow>, Without<DispRow>, Without<DispTabs>)>,
+    mut actions: Query<(&DispAction, &Interaction, &mut BackgroundColor), (Without<DispRow>, Without<DispStep>, Without<DispTab>)>,
 ) {
     let _span = crate::perf::span("show_window");
     let flow = menu.as_ref().map(|m| &m.flow);
@@ -938,21 +1044,23 @@ pub fn show_window(
         }
     }
     let Some(flow) = flow.filter(|_| open) else { return };
-    let focus = flow.display_focus.min(ROWS);
+    let focus = if flow.display_focus == TAB_FOCUS { TAB_FOCUS } else { flow.display_focus.min(ROWS) };
     let mut shown = settings.rows();
     {
         use crate::net::Role;
         shown[HOST_ROW].1 = match net.role {
-            Role::Host => "Hosting (Cross stops)".into(),
-            _ => "Press to host".into(),
+            Role::Host => "Stop hosting".into(),
+            Role::Join => "Leave first to host".into(),
+            _ => "Host".into(),
         };
         shown[ADDRESS_ROW].1 = format!("{}{}", address.0, if focus == ADDRESS_ROW { "_" } else { "" });
         shown[JOIN_ROW].1 = match net.role {
-            Role::Join if net.following() => "Joined (Cross leaves)".into(),
-            Role::Join => "Joining...".into(),
-            _ => "Press to join".into(),
+            Role::Join if net.following() => "Leave".into(),
+            Role::Join => "Joining... (cancel)".into(),
+            Role::Host => "Stop hosting to join".into(),
+            _ => "Join".into(),
         };
-        shown[REMOVE_ROW].1 = if net.role == Role::Host && net.any_peer() { format!("Press to remove Player {}", net.peers() + 1) } else { "No one online".into() };
+        shown[REMOVE_ROW].1 = if net.role == Role::Host && net.any_peer() { format!("Remove Player {}", net.peers() + 1) } else { "No one online".into() };
         if focus == PORT_ROW {
             shown[PORT_ROW].1 = format!("{}_", if settings.net_port == 0 { String::new() } else { settings.net_port.to_string() });
         }
@@ -961,10 +1069,37 @@ pub fn show_window(
         shown[COOP_ROW].1 = if net.role != Role::Off {
             "Not while online".into()
         } else if coop.wanted {
-            if here == 0 { "On (starts in play)".into() } else { format!("On, {} players", here + 1) }
+            if here == 0 { "Stop (starts in play)".into() } else { format!("Stop ({} playing)", here + 1) }
         } else {
-            "Press to start".into()
+            "Start".into()
         };
+        // The action buttons: blue ready, red when it stops something, dim when not available.
+        let state = |row: usize| -> u8 {
+            match row {
+                COOP_ROW if net.role != Role::Off => 0,
+                COOP_ROW if coop.wanted => 2,
+                HOST_ROW if net.role == Role::Join => 0,
+                HOST_ROW if net.role == Role::Host => 2,
+                JOIN_ROW if net.role == Role::Host => 0,
+                JOIN_ROW if net.role == Role::Join => 2,
+                REMOVE_ROW if !(net.role == Role::Host && net.any_peer()) => 0,
+                REMOVE_ROW => 2,
+                _ => 1,
+            }
+        };
+        for (a, i, mut bg) in &mut actions {
+            let hot = a.0 == focus || *i != Interaction::None;
+            let want = match (state(a.0), hot) {
+                (0, _) => ACTION_OFF,
+                (2, false) => ACTION_STOP,
+                (2, true) => ACTION_STOP_HOT,
+                (_, false) => ACTION,
+                (_, true) => ACTION_HOT,
+            };
+            if bg.0 != want {
+                bg.0 = want;
+            }
+        }
         let mut connected: Vec<Entity> = gamepads.iter().collect();
         connected.sort();
         // While on, as many as are playing (a test switch can ask for another number).
@@ -988,12 +1123,38 @@ pub fn show_window(
             (false, f) => "*".repeat(password.0.len()) + if f { "_" } else { "" },
         };
     }
-    let page = page_rows(flow.display_page);
+    let page = visible_rows(flow.display_page, flow.display_tab, flow.display_players);
     for (i, r, mut bg, mut node) in &mut rows {
         bg.0 = if r.0 == focus { ROW_CURSOR } else if *i == Interaction::Hovered { ROW_HOVER } else { ROW };
-        let d = if r.0 == ROWS || page.contains(&r.0) { Display::Flex } else { Display::None };
+        let d = if page.contains(&r.0) { Display::Flex } else { Display::None };
         if node.display != d {
             node.display = d;
+        }
+    }
+    // The Multiplayer page's tab bar and headings.
+    let multi = flow.display_page == 2;
+    for mut n in &mut tab_bar {
+        let d = if multi { Display::Flex } else { Display::None };
+        if n.display != d {
+            n.display = d;
+        }
+    }
+    for (t, i, mut bg) in &mut tab_chips {
+        let want = if t.0 == flow.display_tab {
+            if focus == TAB_FOCUS { Color::srgba(0.45, 0.70, 1.0, 0.70) } else { TAB_ON }
+        } else if *i == Interaction::Hovered {
+            ROW_HOVER
+        } else {
+            TAB
+        };
+        if bg.0 != want {
+            bg.0 = want;
+        }
+    }
+    for (h, mut n) in &mut headings {
+        let d = if multi && page.contains(&h.0) { Display::Flex } else { Display::None };
+        if n.display != d {
+            n.display = d;
         }
     }
     let title = ["Display", "Gameplay", "Multiplayer"][flow.display_page.min(2) as usize];
@@ -1019,7 +1180,8 @@ pub fn show_window(
         }
     }
     // On the Multiplayer page the session's status follows the help line.
-    let line = if flow.display_page == 2 && !net.status.is_empty() { format!("{}\n{}", HELP[focus], net.status_line()) } else { HELP[focus].to_string() };
+    let help_text = if focus == TAB_FOCUS { "This computer: split screen and controllers. Online: host or join. Players: colours and the rules for everyone. Left and right (or L1 and R1) change the tab." } else { HELP[focus] };
+    let line = if flow.display_page == 2 && !net.status.is_empty() && flow.display_tab == 1 { format!("{}\n{}", help_text, net.status_line()) } else { help_text.to_string() };
     for mut t in &mut help {
         if t.0 != line {
             t.0 = line.clone();
@@ -1036,7 +1198,15 @@ mod tests {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
         // The two pages share the rows between them.
         assert_eq!(page_rows(1), [17, 18, 19, 20, 44]);
-        assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 45, 46, 47, 48, 25, 35, 43, 28, 29, 30, 31, 32, 33, 34, 36]);
+        assert_eq!(page_rows(2), [37, 38, 26, 39, 40, 41, 42, 28, 31, 33, 29, 30, 32, 34, 36, 45, 46, 47, 48, 43, 25, 35]);
+        // Every Multiplayer row is in one tab; two players show two controller rows.
+        let mut all: Vec<usize> = TAB_ROWS.iter().flat_map(|t| t.iter().copied()).collect();
+        all.sort();
+        let mut want = page_rows(2);
+        want.sort();
+        assert_eq!(all, want);
+        assert_eq!(visible_rows(2, 0, 2), [TAB_FOCUS, 37, 38, 26, 39, 40, ROWS]);
+        assert_eq!(visible_rows(2, 0, 4).len(), 9);
         assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));
