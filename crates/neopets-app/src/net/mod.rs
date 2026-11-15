@@ -36,7 +36,7 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 36;
+const PROTOCOL: u16 = 37;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -373,8 +373,10 @@ pub struct Net {
     /// The connection's quality, sampled each second (net_step): updates heard in the last
     /// second (states on a joiner, inputs on the host) and the bytes each way a second.
     q_count: u32,
-    /// Joiner: this side's seat (players 2 to 4 are seats 0 to 2), from the host's states.
+    /// Joiner: this side's seat (players 2 to 4 are seats 0 to 2), from the host's states, and
+    /// every player's ping by number (`State::pings`).
     pub my_seat: usize,
+    pub pings: [u16; 4],
     pub q_rate: f32,
     q_at: Option<Instant>,
     q_bytes: (u64, u64),
@@ -558,10 +560,12 @@ impl Net {
         let mut out = match self.role {
             Role::Off => return None,
             Role::Host => {
-                let mut s = format!("Online: hosting, {} joined", self.peers());
-                for n in std::iter::once(self).chain(self.extra.iter()).filter(|n| n.peer.is_some()) {
-                    let name = if n.peer_name.is_empty() { "Player 2" } else { n.peer_name.as_str() };
-                    s += &format!("\n  {name}: {}", line(n.rtt_ms, n.q_rate, quiet(n)));
+                // Every player by number: P1 (you, the host), then each joiner's ping.
+                let mut s = format!("Online: hosting, {} joined\n  P1 (you, host)", self.peers());
+                let mut joiners: Vec<&Net> = std::iter::once(self).chain(self.extra.iter()).filter(|n| n.peer.is_some()).collect();
+                joiners.sort_by_key(|n| n.seat);
+                for n in joiners {
+                    s += &format!("\n  P{}: {}", n.seat + 2, line(n.rtt_ms, n.q_rate, quiet(n)));
                 }
                 s
             }
@@ -570,7 +574,22 @@ impl Net {
                 if self.loaded == 0 {
                     format!("Online: joining {at}")
                 } else {
-                    format!("Online: joined {at} as Player {}\n  Host: {}\n  Updates waiting: {}", self.my_seat + 2, line(self.rtt_ms, self.q_rate, quiet(self)), self.queue.len())
+                {
+                    // Every player by number: P1 (the host), this side (you) with the link's
+                    // quality, and the other joiners' pings to the host.
+                    let me = self.my_seat + 2;
+                    let mut s = format!("Online: joined {at}\n  P1 (host)");
+                    for (k, &p) in self.pings.iter().enumerate().skip(1) {
+                        let number = k + 1;
+                        if number == me {
+                            s += &format!("\n  P{number} (you): {}", line(self.rtt_ms, self.q_rate, quiet(self)));
+                        } else if p != u16::MAX {
+                            s += &format!("\n  P{number}: {p} ms");
+                        }
+                    }
+                    s += &format!("\n  Updates waiting: {}", self.queue.len());
+                    s
+                }
                 }
             }
         };
@@ -1197,6 +1216,13 @@ impl Net {
     pub fn host_tick(&mut self, play: &mut crate::play::Play, walked: bool) {
         let mut slot: Option<neopets_sim::save::Slot> = None;
         let mut extra = std::mem::take(&mut self.extra);
+        // Every player's ping by number, for each joiner's F3 view.
+        let mut pings = [0, u16::MAX, u16::MAX, u16::MAX];
+        for n in std::iter::once(&*self).chain(extra.iter()).filter(|n| n.peer.is_some()) {
+            if let Some(p) = pings.get_mut(n.seat + 1) {
+                *p = n.rtt_ms.round().clamp(0.0, 65_534.0) as u16;
+            }
+        }
         for n in std::iter::once(&mut *self).chain(extra.iter_mut()) {
             if n.peer.is_none() || n.apart {
                 continue;
@@ -1222,7 +1248,8 @@ impl Net {
                 n.push_own(Event::Rumble(s.level, s.count));
             }
             let started = std::time::Instant::now();
-            let s = play.net_state(n.generation, n.seat);
+            let mut s = play.net_state(n.generation, n.seat);
+            s.pings = pings;
             n.send_state(&s);
             n.cpu_us = n.cpu_us.saturating_add(started.elapsed().as_micros() as u64);
         }
@@ -2127,6 +2154,7 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                     net.peer_page = s.page;
                     net.seen_tick = s.tick as u32;
                     net.my_seat = s.seat as usize;
+                    net.pings = s.pings;
                     // The host carried out the item-screen command sent: the next one goes.
                     if !net.cmds.is_empty() && s.cmd_ack == net.cmds_done.wrapping_add(1) {
                         net.cmds.pop_front();

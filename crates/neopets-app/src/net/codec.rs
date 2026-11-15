@@ -234,6 +234,9 @@ pub struct State {
     pub blocks: Vec<(u16, [f32; 3])>,
     /// The host's multiplayer colours by player number (hero_colour.rs).
     pub colours: [u8; 4],
+    /// Each player's ping (round trip to the host, ms) by player number, for the F3 view:
+    /// player 1 (the host) 0, a player not in u16::MAX.
+    pub pings: [u16; 4],
 }
 
 /// The breakables of the current world (their states) and the live items of each resident world
@@ -934,6 +937,9 @@ impl State {
         for c in self.colours {
             w.u8(c);
         }
+        for p in self.pings {
+            w.u16(p);
+        }
         w.0
     }
 
@@ -1042,7 +1048,8 @@ impl State {
         let n = r.u8()? as usize;
         let blocks = (0..n).map(|_| Some((r.u16()?, r.v3()?))).collect::<Option<Vec<_>>>()?;
         let colours = [r.u8()?, r.u8()?, r.u8()?, r.u8()?];
-        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, seat, rtt, cmd_ack, input_seq, input_extra, equip, pet, blocks, colours })
+        let pings = [r.u16()?, r.u16()?, r.u16()?, r.u16()?];
+        Some(Self { tick, generation, pack, heroes, more, eye, focus, characters, flags, items, neopoints, talk, cut, events, shots, show, story, has_story, panels, p2_prompt, world_rev, world, moving, anim_times, page, seat, rtt, cmd_ack, input_seq, input_extra, equip, pet, blocks, colours, pings })
     }
 }
 

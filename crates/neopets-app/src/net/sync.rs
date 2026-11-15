@@ -114,6 +114,7 @@ impl crate::play::Play {
             equip: (self.equipment.entries, self.equipment.motes, self.cloak_worn),
             pet: self.petpet.as_ref().map(|p| (p.type_id, p.t, p.f)),
             colours: self.player_colours,
+            pings: [0, u16::MAX, u16::MAX, u16::MAX],
             // Moved blocks: the moving ones every state, all the moved ones every half second.
             blocks: self
                 .world
