@@ -53,6 +53,8 @@ pub const HEADINGS: [(usize, &str); 7] = [
 /// The rows drawn as a button (an action, not a choice): start or stop local co-op, host, join,
 /// remove the last joiner.
 pub const ACTION_ROWS: [usize; 4] = [COOP_ROW, HOST_ROW, JOIN_ROW, REMOVE_ROW];
+/// The rows typed into, drawn as a text box (the join address, the password, the port).
+pub const TEXT_ROWS: [usize; 3] = [ADDRESS_ROW, PASSWORD_ROW, PORT_ROW];
 /// The focus value of the Multiplayer page's tab bar (Left and Right change the tab).
 pub const TAB_FOCUS: usize = ROWS + 1;
 
@@ -70,8 +72,8 @@ pub fn visible_rows(page: u8, tab: u8, players: usize) -> Vec<usize> {
     v
 }
 /// Rows no page shows any more (27, the Player 2 partner choice: every player starts as Tor and
-/// switches on its own).
-pub const RETIRED_ROWS: [usize; 1] = [27];
+/// switches on its own; 8 and 23, Bloom and Light shafts, always off now).
+pub const RETIRED_ROWS: [usize; 3] = [27, 8, 23];
 /// Local co-op on this computer: start or stop it.
 pub const COOP_ROW: usize = 37;
 /// How many players local co-op has (2 to 4).
@@ -217,7 +219,7 @@ pub struct DisplaySettings {
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4], coop_tags: true, steady_turn: true, coop_colours: [0, 1, 2, 3] }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 0, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4], coop_tags: true, steady_turn: true, coop_colours: [0, 1, 2, 3] }
     }
 }
 
@@ -244,7 +246,9 @@ impl DisplaySettings {
                 "filter" => s.smooth = v != "sharp",
                 "antialiasing" => s.aa = v.parse().unwrap_or(s.aa).min(crate::graphics::AA.len() - 1),
                 "sharp textures" => s.sharp_textures = v == "true",
-                "bloom" => s.bloom = v.parse().unwrap_or(s.bloom).min(crate::graphics::BLOOM.len() - 1),
+                // Bloom and light shafts are gone (the user's choice: they did not suit this
+                // game); a saved value is passed over and both stay off.
+                "bloom" => {}
                 "colour" => s.colour = v.parse().unwrap_or(s.colour).min(crate::graphics::COLOUR.len() - 1),
                 "ambient occlusion" => s.ao = v == "true",
                 "original foliage" => s.original_foliage = v == "true",
@@ -260,7 +264,7 @@ impl DisplaySettings {
                 "dpad hud" => s.dpad_hud = v != "false",
                 "menu edges" => s.menu_edges = v != "false",
                 "original neighbour" => s.original_neighbour = v == "true",
-                "light shafts" => s.light_shafts = v == "true",
+                "light shafts" => {}
                 "water reflections" => s.water_reflections = v == "true",
                 "coop revive" => s.coop_revive = v == "true",
                 "coop split" => s.coop_split = v.parse().unwrap_or(0).min(SPLITS.len() - 1),
@@ -400,8 +404,8 @@ impl DisplaySettings {
     fn preset_values(p: usize) -> (usize, usize, bool, bool, usize) {
         match p {
             0 => (3, 0, false, false, 1),
-            1 => (2, 1, true, false, 2),
-            _ => (2, 1, true, true, 3),
+            1 => (2, 0, true, false, 2),
+            _ => (2, 0, true, true, 3),
         }
     }
 
@@ -809,6 +813,9 @@ pub struct DispHeading(usize);
 /// An action row's button.
 #[derive(Component)]
 pub struct DispAction(usize);
+/// A typing row's text box.
+#[derive(Component)]
+pub struct DispInput(usize);
 
 const PANEL: Color = Color::srgb(0.05, 0.06, 0.10);
 const ROW: Color = Color::srgba(1.0, 1.0, 1.0, 0.04);
@@ -830,6 +837,10 @@ const ACTION_HOT: Color = Color::srgb(0.30, 0.56, 0.98);
 const ACTION_STOP: Color = Color::srgb(0.62, 0.20, 0.22);
 const ACTION_STOP_HOT: Color = Color::srgb(0.80, 0.28, 0.30);
 const ACTION_OFF: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
+/// A text box: its field and edge, and the edge while it is being typed into or hovered.
+const INPUT: Color = Color::srgb(0.02, 0.03, 0.06);
+const INPUT_EDGE: Color = Color::srgba(1.0, 1.0, 1.0, 0.30);
+const INPUT_HOT: Color = Color::srgb(0.98, 0.80, 0.35);
 
 /// What each setting does, shown under the rows.
 const HELP: [&str; ROWS + 1] = [
@@ -937,6 +948,19 @@ pub fn spawn_window(mut commands: Commands) {
                     if back {
                         return;
                     }
+                    if TEXT_ROWS.contains(&k) {
+                        row.spawn((
+                            Button,
+                            Node { width: px(290), height: px(28), justify_content: JustifyContent::FlexStart, align_items: AlignItems::Center, padding: UiRect::horizontal(px(10)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() },
+                            BackgroundColor(INPUT),
+                            BorderColor::all(INPUT_EDGE),
+                            DispInput(k),
+                        ))
+                        .with_children(|b| {
+                            b.spawn((Text::default(), font(15.0), TextColor(TEXT), TextLayout::no_wrap(), DispValue(k)));
+                        });
+                        return;
+                    }
                     if ACTION_ROWS.contains(&k) {
                         row.spawn((
                             Button,
@@ -970,7 +994,7 @@ pub fn spawn_window(mut commands: Commands) {
 
 /// The mouse on the Display window: hovering a row focuses it, a click on < or > changes it (a
 /// click on the row steps it forward), and Back returns to Options.
-pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&Interaction, &DispRow), Changed<Interaction>>, steps: Query<(&Interaction, &DispStep), Changed<Interaction>>, (tabs, actions): (Query<(&Interaction, &DispTab), Changed<Interaction>>, Query<(&Interaction, &DispAction), Changed<Interaction>>)) {
+pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&Interaction, &DispRow), Changed<Interaction>>, steps: Query<(&Interaction, &DispStep), Changed<Interaction>>, (tabs, actions, inputs): (Query<(&Interaction, &DispTab), Changed<Interaction>>, Query<(&Interaction, &DispAction), Changed<Interaction>>, Query<(&Interaction, &DispInput), Changed<Interaction>>)) {
     let _span = crate::perf::span("window_mouse");
     let Some(mut menu) = menu else { return };
     let flow = &mut menu.flow;
@@ -991,6 +1015,12 @@ pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&
             stepped_action = true;
         }
     }
+    for (i, t) in &inputs {
+        if *i == Interaction::Pressed {
+            flow.display_focus = t.0;
+            stepped_action = true;
+        }
+    }
     let mut stepped = stepped_action;
     for (i, s) in &steps {
         if *i == Interaction::Pressed {
@@ -1004,7 +1034,9 @@ pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&
             Interaction::Hovered => flow.display_focus = r.0,
             Interaction::Pressed if !stepped => {
                 flow.display_focus = r.0;
-                if r.0 == ROWS {
+                if TEXT_ROWS.contains(&r.0) {
+                    // A typing row is clicked to type into it (before, a click stepped the port).
+                } else if r.0 == ROWS {
                     flow.display_back = true;
                 } else {
                     flow.display_requests.push((r.0, 1));
@@ -1033,6 +1065,7 @@ pub fn show_window(
     mut tab_chips: Query<(&DispTab, &Interaction, &mut BackgroundColor), (Without<DispRow>, Without<DispStep>, Without<DispAction>)>,
     mut headings: Query<(&DispHeading, &mut Node), (Without<DispWindow>, Without<DispRow>, Without<DispTabs>)>,
     mut actions: Query<(&DispAction, &Interaction, &mut BackgroundColor), (Without<DispRow>, Without<DispStep>, Without<DispTab>)>,
+    mut boxes: Query<(&DispInput, &Interaction, &mut BorderColor)>,
 ) {
     let _span = crate::perf::span("show_window");
     let flow = menu.as_ref().map(|m| &m.flow);
@@ -1053,7 +1086,10 @@ pub fn show_window(
             Role::Join => "Leave first to host".into(),
             _ => "Host".into(),
         };
-        shown[ADDRESS_ROW].1 = format!("{}{}", address.0, if focus == ADDRESS_ROW { "_" } else { "" });
+        shown[ADDRESS_ROW].1 = match (address.0.is_empty(), focus == ADDRESS_ROW) {
+            (true, false) => "Click to type an address".into(),
+            (_, f) => format!("{}{}", address.0, if f { "_" } else { "" }),
+        };
         shown[JOIN_ROW].1 = match net.role {
             Role::Join if net.following() => "Leave".into(),
             Role::Join => "Joining... (cancel)".into(),
@@ -1087,6 +1123,12 @@ pub fn show_window(
                 _ => 1,
             }
         };
+        for (t, i, mut edge) in &mut boxes {
+            let want = BorderColor::all(if t.0 == focus || *i != Interaction::None { INPUT_HOT } else { INPUT_EDGE });
+            if *edge != want {
+                *edge = want;
+            }
+        }
         for (a, i, mut bg) in &mut actions {
             let hot = a.0 == focus || *i != Interaction::None;
             let want = match (state(a.0), hot) {
@@ -1118,7 +1160,7 @@ pub fn show_window(
             };
         }
         shown[PASSWORD_ROW].1 = match (password.0.is_empty(), focus == PASSWORD_ROW) {
-            (true, false) => "None".into(),
+            (true, false) => "None (click to type one)".into(),
             (true, true) => "_".into(),
             (false, f) => "*".repeat(password.0.len()) + if f { "_" } else { "" },
         };
@@ -1207,7 +1249,7 @@ mod tests {
         assert_eq!(all, want);
         assert_eq!(visible_rows(2, 0, 2), [TAB_FOCUS, 37, 38, 26, 39, 40, ROWS]);
         assert_eq!(visible_rows(2, 0, 4).len(), 9);
-        assert_eq!(page_rows(0), (0..17).chain([21, 22, 23, 24]).collect::<Vec<_>>());
+        assert_eq!(page_rows(0), (0..17).filter(|&k| k != 8).chain([21, 22, 24]).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));
         // 21:9 in a 16:9 window: letterbox 823 high.
@@ -1221,7 +1263,7 @@ mod tests {
         // The new-player options are the Medium preset.
         assert_eq!((s.preset(), s.rows()[5].1.as_str()), (Some(1), "Medium"));
         s.change(5, 1, &sizes);
-        assert_eq!((s.preset(), s.aa, s.bloom, s.ao, s.world_shadows, s.shadow_quality), (Some(2), 2, 1, true, true, 3));
+        assert_eq!((s.preset(), s.aa, s.bloom, s.ao, s.world_shadows, s.shadow_quality), (Some(2), 2, 0, true, true, 3));
         s.change(5, 1, &sizes);
         assert_eq!((s.preset(), s.aa, s.bloom, s.ao, s.world_shadows, s.shadow_quality), (Some(0), 3, 0, false, false, 1));
         // Changing an option below shows Custom; Right from Custom goes to Low.
