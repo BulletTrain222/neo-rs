@@ -62,7 +62,10 @@ What it needs: about 25 to 30 KB/s from the host to the friend and 5 KB/s back (
 rest, walking and in a boss fight). A round trip under about 100 ms plays well; the game rides
 out lost messages and uneven delays.
 
-**The Multiplayer page.**
+**The Multiplayer page.** Its rows are in three tabs (L1 and R1, or Left and Right on the tab
+bar, or a click): **This computer** (local co-op, players, split screen, controllers),
+**Online** (host, join, password, port, doors) and **Players** (colours, tags, knocked out,
+stay together). Start, Host, Join and Remove are buttons.
 | Row | Choices | What it does |
 |---|---|---|
 | Local co-op | | Start or stop play on this computer (press again to stop) |
