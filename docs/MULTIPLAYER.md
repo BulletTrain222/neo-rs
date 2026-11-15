@@ -19,7 +19,10 @@ their own (two players may be the same hero). Local co-op is off while you host 
 **Controllers.** Each player's controller row picks Auto or Controller 1 to 4, numbered in the
 order the controllers were plugged in. Auto: player 1 has the keyboard and every controller no
 other player has; players 2 to 4 take the next free controllers in order. Player 1 always keeps
-the keyboard. In the menus every controller works.
+the keyboard. In the menus every controller works. To give a player a controller, select that player's
+row and press Cross (or click it), then press any button on the controller: the row reads
+"Press a button..." until one is pressed. A player who had that controller chosen takes the
+other's old choice. Esc, Backspace, a click or ten seconds cancel.
 
 **On two to four computers (home network).** Up to three friends can join one host (players 2,
 3 and 4), each on their own computer with their own copy of the game disc and the same build of

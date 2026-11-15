@@ -716,6 +716,58 @@ pub fn take_requests(
     settings.save();
 }
 
+/// How long the Multiplayer page waits for a controller's button, in seconds, and how long it
+/// passes over buttons at first (the press that started the wait).
+const LISTEN_SECONDS: f32 = 10.0;
+const LISTEN_GRACE: f32 = 0.25;
+
+/// The Multiplayer page waits for a button on a controller (Cross or a click on a Player N
+/// controller row): the first controller pressed is given to that player. A player who had that
+/// controller chosen takes the waiting player's old choice. Esc or Backspace on the keyboard,
+/// a click, or ten seconds cancel.
+pub fn listen_pads(menu: Option<ResMut<crate::menu_view::Menu>>, mut settings: ResMut<DisplaySettings>, pads: Query<(Entity, &Gamepad)>, keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut since: Local<f32>) {
+    let Some(mut menu) = menu else { return };
+    let flow = &mut menu.flow;
+    let Some(k) = flow.display_listen else {
+        *since = 0.0;
+        return;
+    };
+    if flow.current != crate::menus::DISPLAY || flow.display_page != 2 || k >= PAD_ROWS.len() {
+        flow.display_listen = None;
+        return;
+    }
+    *since += time.delta_secs();
+    let cancel = *since > LISTEN_SECONDS || keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::Backspace);
+    let mut connected: Vec<(Entity, &Gamepad)> = pads.iter().collect();
+    connected.sort_by_key(|(e, _)| *e);
+    let pressed = if *since < LISTEN_GRACE { None } else { connected.iter().position(|(_, g)| g.get_just_pressed().next().is_some()) };
+    if let Some(n) = pressed {
+        let choice = n as u8 + 1;
+        settings.coop_pads = give_pad(settings.coop_pads, k, choice);
+        settings.save();
+        flow.sounds.push(0x9A);
+    }
+    if cancel || pressed.is_some() {
+        // The press that ended the wait does not also act on the page.
+        flow.display_listen = None;
+        flow.pass = 0;
+        *since = 0.0;
+    }
+}
+
+/// Give controller `choice` (1 to 4) to player `k`; a player who had it chosen takes player `k`'s
+/// old choice.
+pub fn give_pad(mut pads: [u8; 4], k: usize, choice: u8) -> [u8; 4] {
+    let old = pads[k];
+    for (j, p) in pads.iter_mut().enumerate() {
+        if j != k && *p == choice {
+            *p = old;
+        }
+    }
+    pads[k] = choice;
+    pads
+}
+
 /// Apply the window mode and size when the settings change.
 pub fn apply_window(
     mut settings: ResMut<DisplaySettings>,
@@ -922,10 +974,10 @@ const HELP: [&str; ROWS + 1] = [
     "Both: a door anyone takes moves everyone. Only you: a joiner can go through a door alone into a world of its own, and comes back when they walk into the host's world.",
     "Starts (or stops) play on this computer: players 2 to 4 join beside player 1, each with a part of the screen. Not while online.",
     "Players on this computer: 2, 3 or 4. Three or four share the screen in quarters (with three, player 1 has the top half).",
-    "Player 1's controller. Auto: the keyboard and every controller no other player has. Player 1 always has the keyboard.",
-    "Player 2's controller. Auto: the next free one. Controllers are numbered in the order they were plugged in.",
-    "Player 3's controller (3 or 4 players). Auto: the next free controller.",
-    "Player 4's controller (4 players). Auto: the next free controller.",
+    "Player 1's controller: Cross or a click, then press a button on it. Auto: the keyboard and every controller no other player has. Player 1 always has the keyboard.",
+    "Player 2's controller: Cross or a click, then press a button on it. Left and right step through Auto and Controllers 1 to 4.",
+    "Player 3's controller: Cross or a click, then press a button on it. Auto: the next free controller.",
+    "Player 4's controller: Cross or a click, then press a button on it. Auto: the next free controller.",
     "On: a coloured tag (P1 to P4) over each other player, so you can tell who is who. Not in the original game.",
     "Steady: an attack turns your hero toward the enemy's body. Original: toward the game's aim point, which on some enemies (the Swamp Tentacle) swings with them and can turn a swing away.",
     "Player 1's Tor fur colour in multiplayer (Original keeps it yellow). The host's choices count online.",
@@ -1041,6 +1093,14 @@ pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&
     if flow.current != crate::menus::DISPLAY {
         return;
     }
+    // Waiting for a controller's button: a click anywhere cancels.
+    if flow.display_listen.is_some() {
+        if rows.iter().any(|(i, _)| *i == Interaction::Pressed) || steps.iter().any(|(i, _)| *i == Interaction::Pressed) || tabs.iter().any(|(i, _)| *i == Interaction::Pressed) || actions.iter().any(|(i, _)| *i == Interaction::Pressed) || inputs.iter().any(|(i, _)| *i == Interaction::Pressed) {
+            flow.display_listen = None;
+            flow.pass = 0;
+        }
+        return;
+    }
     let mut stepped_action = false;
     for (i, t) in &tabs {
         if *i == Interaction::Pressed {
@@ -1076,6 +1136,9 @@ pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&
                 flow.display_focus = r.0;
                 if TEXT_ROWS.contains(&r.0) {
                     // A typing row is clicked to type into it (before, a click stepped the port).
+                } else if PAD_ROWS.contains(&r.0) {
+                    // A controller row waits for a button on the controller to give that player.
+                    flow.display_listen = Some(r.0 - PAD_ROWS[0]);
                 } else if r.0 == ROWS {
                     flow.display_back = true;
                 } else {
@@ -1210,6 +1273,9 @@ pub fn show_window(
                 (_, c, None) => format!("{} (not connected)", pad_name(c)),
             };
         }
+        if let Some(k) = flow.display_listen.filter(|&k| k < PAD_ROWS.len()) {
+            shown[PAD_ROWS[k]].1 = "Press a button...".into();
+        }
         shown[PASSWORD_ROW].1 = match (password.0.is_empty(), focus == PASSWORD_ROW) {
             (true, false) => "None (click to type one)".into(),
             (true, true) => "_".into(),
@@ -1300,7 +1366,9 @@ pub fn show_window(
         }
     }
     // On the Multiplayer page the session's status follows the help line.
+    let listen_help = flow.display_listen.map(|k| format!("Press any button on the controller Player {} should use. Esc or a click cancels.", k + 1));
     let help_text = match (focus == TAB_FOCUS, flow.display_page) {
+        _ if listen_help.is_some() => listen_help.as_deref().unwrap_or(""),
         (true, 0) => "Screen: the window, picture size and frame rate. Graphics: the preset and the picture's detail and look. Shadows & distance: shadows and how far things are drawn.",
         (true, _) => "This computer: split screen and controllers. Online: host or join. Players: colours and the rules for everyone.",
         _ => HELP[focus],
@@ -1410,6 +1478,10 @@ mod tests {
         s.change(PAD_ROWS[3], 1, &sizes);
         assert_eq!(DisplaySettings::parse(&s.text()), s);
         assert_eq!(DisplaySettings::parse("coop pads = 9,x,2").coop_pads, [4, 0, 2, 0]);
+        // A pressed controller goes to the waiting player; one who had it takes the old choice.
+        assert_eq!(give_pad([0, 0, 0, 0], 1, 2), [0, 2, 0, 0]);
+        assert_eq!(give_pad([0, 3, 2, 0], 1, 2), [0, 2, 3, 0]);
+        assert_eq!(give_pad([1, 0, 0, 0], 2, 1), [0, 0, 1, 0]);
         // A settings file from before Very Low keeps its level.
         assert_eq!(SHADOW_QUALITY[DisplaySettings::parse("shadow quality = 1").shadow_quality], "Medium");
         assert_eq!(SHADOW_QUALITY[DisplaySettings::parse("shadow quality = 0").shadow_quality], "Low");
