@@ -200,9 +200,14 @@ fn ssao_quality() -> bevy::pbr::ScreenSpaceAmbientOcclusionQualityLevel {
     }
 }
 
-fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, state: Option<Res<crate::PlayState>>, cameras: Query<Entity, (With<Camera3d>, Without<crate::water_reflect::MirrorCam>)>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool, bool, bool)>>) {
+fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, state: Option<Res<crate::PlayState>>, cameras: Query<Entity, (With<Camera3d>, Without<crate::water_reflect::MirrorCam>)>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool, bool, bool, bool)>>) {
     let indoors = state.as_ref().is_some_and(|s| s.play.indoors());
-    let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows == 1, sun_on(&settings), indoors, settings.world_shadows);
+    // Split screen (coop.rs): player 1's camera draws into part of the picture (a viewport), and
+    // Bevy's ambient occlusion then lays a faded copy of the whole view over its top-left (the
+    // user's report). While split, the occlusion pass pauses for every player's view (the views
+    // match, and two to four views cost less); the lighting is otherwise as with it on.
+    let split = state.as_ref().is_some_and(|s| crate::coop::on_screen(&s.play) > 1);
+    let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows == 1, sun_on(&settings), indoors, settings.world_shadows, split);
     if *last == Some(key) {
         return;
     }
@@ -236,7 +241,7 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, state: O
         }
         // NEOPETS_GFX_LIT_ONLY: the lit surfaces without the occlusion pass (diagnostic, to
         // check the matched colours against the unlit ones).
-        if settings.ao && std::env::var_os("NEOPETS_GFX_LIT_ONLY").is_some() {
+        if settings.ao && (split || std::env::var_os("NEOPETS_GFX_LIT_ONLY").is_some()) {
             c.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass)>();
             c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings, indoors), affects_lightmapped_meshes: true });
         } else if settings.ao {
