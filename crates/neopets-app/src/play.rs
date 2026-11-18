@@ -19639,6 +19639,9 @@ impl Play {
                         if latch {
                             shoved.borrow_mut().push((id, [-ux * (min - d), -uz * (min - d)]));
                         } else {
+                            if std::env::var_os("NEOPETS_TRACE_BODYPUSH").is_some() {
+                                println!("BODYPUSH character {id} pushed the hero {:.3}", min - d);
+                            }
                             p[0] = q[0] + ux * min;
                             p[2] = q[2] + uz * min;
                             pushed = true;

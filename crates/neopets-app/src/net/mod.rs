@@ -256,8 +256,8 @@ pub struct Net {
     /// Joiner (diagnostic): this side's own hero's last step and the ticks its step jerked
     /// (turned back, or changed length by more than half, while moving).
     pub own_jerk: ([f32; 3], u32),
-    /// Joiner: the tick count of the jitter buffer's gradual catch-up (`next_state`).
-    catch_up: u32,
+    /// Joiner: the clock the host's states play by, in the host's ticks (`next_state`).
+    play_t: f64,
     /// Joiner, for the trace: the most states waiting in the buffer since the last line.
     pub queue_most: usize,
     /// For the trace: microseconds spent on the online work since the last trace line (the
@@ -297,7 +297,7 @@ pub struct Net {
     /// that applied no new state, and the ticks since one was.
     pub queue: std::collections::VecDeque<State>,
     pub repeats: u32,
-    starve: u32,
+    pub starve: u32,
     pub mismatch: u32,
     resync_asked: Option<Instant>,
     /// Bytes sent and received so far (for the bandwidth trace).
@@ -928,27 +928,20 @@ impl Net {
         }
     }
 
-    /// Joiner: the state for this tick from the jitter buffer: one a tick in order, keeping one
-    /// in hand when it can (states arrive unevenly), catching up when more than three wait, and
-    /// the last one again when none came.
+    /// Joiner: the state for this tick from the jitter buffer, played by a clock in the host's
+    /// ticks (`play_t`): the states it has passed are taken in order, and the other players and
+    /// the characters are shown between the last one passed and the next by the clock's
+    /// fraction (`blended`), or carried on by their last step (at most 4 ticks) when the next
+    /// has not come. The clock keeps a few ticks behind the newest state (`hold`, which follows
+    /// how unevenly they arrive) by running a little faster or slower, not by whole ticks.
+    /// Before, a tick with no new state carried the heroes on one tick and the late state then
+    /// showed them where they already were (a stop), and a buffer over its hold dropped a state
+    /// (a double step): the host's hero walked with a hitch every few seconds.
     pub fn next_state(&mut self) -> Option<State> {
         let loaded = self.loaded;
         // About the ticks with nothing new over the last few seconds (it fades by 1% a tick).
         self.jitter *= 0.99;
         while self.queue.front().is_some_and(|s| s.generation != loaded) && self.queue.iter().any(|s| s.generation == loaded) {
-            self.queue.pop_front();
-        }
-        // A burst (the host's states sent several to a frame, or this side's frame late) is kept
-        // and played down gradually: beyond the hold plus two, one extra state is skipped every
-        // fourth tick (a small step), and only past 12 are the oldest dropped at once. Before,
-        // everything past 3 was dropped in one go, and the heroes jumped on several ticks at
-        // once: with four games on one computer the joiners' walking jerked, most while the
-        // host ran about (user report 154).
-        while self.queue.len() > 12 {
-            self.queue.pop_front();
-        }
-        self.catch_up = self.catch_up.wrapping_add(1);
-        if self.queue.len() > self.hold + 2 && self.catch_up % 4 == 0 {
             self.queue.pop_front();
         }
         // The states kept in hand follow how unevenly they arrive (Default): one, two after
@@ -962,28 +955,70 @@ impl Net {
             1
         });
         self.hold = hold;
-        if self.queue.len() > hold || (!self.queue.is_empty() && self.starve >= 1) {
+        // No state yet, or one of another world (a welcome restarts the host's ticks): the clock
+        // starts at the first one waiting.
+        let restart = self.state.as_ref().is_none_or(|s| s.generation != loaded) || self.queue.front().is_some_and(|q| self.state.as_ref().is_some_and(|s| q.generation != s.generation || q.tick <= s.tick));
+        if restart {
+            let Some(next) = self.queue.pop_front() else {
+                return self.state.clone();
+            };
+            self.play_t = next.tick as f64;
+            self.prev_state = None;
+            self.state = Some(next);
+            self.starve = 0;
+            return self.state.clone();
+        }
+        let base = self.state.as_ref().map_or(0, |s| s.tick);
+        let newest = self.queue.back().map_or(base, |s| s.tick) as f64;
+        // The clock's lead over its target: far behind (a long stall), it jumps to the target;
+        // otherwise it runs up to a quarter faster or 15% slower, by how far it is off.
+        // NEOPETS_NET_STEADY (diagnostic): always one tick a tick.
+        let behind = newest - self.play_t - hold as f64;
+        if behind > 12.0 {
+            self.play_t = newest - hold as f64;
+        }
+        let rate = 1.0 + (behind * 0.05).clamp(-0.15, 0.25);
+        self.play_t += if std::env::var_os("NEOPETS_NET_STEADY").is_some() { 1.0 } else { rate };
+        // The states the clock has passed, in order.
+        let mut took = false;
+        while self.queue.front().is_some_and(|s| s.tick as f64 <= self.play_t) {
             let next = self.queue.pop_front();
             self.prev_state = std::mem::replace(&mut self.state, next);
+            took = true;
+        }
+        if took {
             self.starve = 0;
         } else {
             self.starve += 1;
             self.repeats += 1;
-            // Only a tick with nothing at all waiting counts as uneven arrival (not a tick held
-            // on purpose to build the buffer up).
-            if self.queue.is_empty() {
-                self.jitter += 1.0;
-            }
-            // No state for this tick: the heroes and characters carry on by their last tick's
-            // movement (at most 4 ticks, and only movement under 2 units a tick), and the next
-            // state puts them right. NEOPETS_NET_NOSMOOTH (diagnostic) holds them instead.
-            if self.starve <= 4 && std::env::var_os("NEOPETS_NET_NOSMOOTH").is_none() {
-                if let (Some(s), Some(p)) = (self.state.as_ref(), self.prev_state.as_ref()) {
-                    return Some(carried(s, p, self.starve as f32));
+        }
+        let s = self.state.as_ref()?;
+        let past = self.play_t - s.tick as f64;
+        match self.queue.front() {
+            // Between two states: the fraction of the way to the next.
+            Some(b) if past > 0.0 => Some(blended(s, b, (past / b.tick.saturating_sub(s.tick).max(1) as f64) as f32)),
+            Some(_) => Some(s.clone()),
+            None => {
+                // Nothing newer has come: uneven arrival (it raises the hold). The players and
+                // characters carry on by their last step for at most 4 ticks, the clock held
+                // there. NEOPETS_NET_NOSMOOTH (diagnostic) holds them instead.
+                if past > 0.0 {
+                    self.jitter += 1.0;
+                }
+                // Nothing for longer (the host paused, or a stall): the last state as it is,
+                // the clock back on it.
+                if self.starve > 8 {
+                    self.play_t = s.tick as f64;
+                    return Some(s.clone());
+                }
+                self.play_t = self.play_t.min(s.tick as f64 + 4.0);
+                let past = self.play_t - s.tick as f64;
+                match self.prev_state.as_ref().filter(|p| p.generation == s.generation && past > 0.0 && std::env::var_os("NEOPETS_NET_NOSMOOTH").is_none()) {
+                    Some(p) => Some(carried(s, p, past as f32 / s.tick.saturating_sub(p.tick).max(1) as f32)),
+                    None => Some(s.clone()),
                 }
             }
         }
-        self.state.clone()
     }
 
     /// Joiner: ask the host for a new welcome (at most every 2 seconds).
@@ -1518,6 +1553,43 @@ fn outage() -> bool {
     };
     let t = start.elapsed().as_secs_f32();
     t >= a && t < a + len
+}
+
+/// State `a` with the other players (player 1 and players 3 and 4) and the characters a share
+/// `f` of the way to their places in the next state `b` (a step of 2 units or more a tick is a
+/// teleport: no blend). This side's own player (`heroes[1]`) stays as the host had it for the
+/// input it played (the prediction compares it).
+fn blended(a: &State, b: &State, f: f32) -> State {
+    let f = f.clamp(0.0, 1.0);
+    let ticks = b.tick.saturating_sub(a.tick).max(1) as f32;
+    let mix = |p: [f32; 3], q: [f32; 3]| {
+        let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+        if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 4.0 * ticks * ticks { [p[0] + d[0] * f, p[1] + d[1] * f, p[2] + d[2] * f] } else { p }
+    };
+    let turn = |p: [f32; 3], q: [f32; 3]| {
+        let v = [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f];
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if l > 1e-3 { v.map(|x| x / l) } else { p }
+    };
+    let mut out = a.clone();
+    let hero = |h: &mut HeroState, n: &HeroState| {
+        if h.who == n.who {
+            h.position = mix(h.position, n.position);
+            h.facing = turn(h.facing, n.facing);
+        }
+    };
+    hero(&mut out.heroes[0], &b.heroes[0]);
+    for (h, n) in out.more.iter_mut().zip(b.more.iter()) {
+        hero(h, n);
+    }
+    for c in out.characters.iter_mut() {
+        if let Some(q) = b.characters.iter().find(|q| (q.pack, q.slot, q.ordinal) == (c.pack, c.slot, c.ordinal)) {
+            if !q.inactive && !c.inactive {
+                c.position = mix(c.position, q.position);
+            }
+        }
+    }
+    out
 }
 
 /// State `s` carried on `k` ticks by the movement from `p` to `s` (heroes and characters; a
@@ -2944,6 +3016,52 @@ mod tests {
         assert_eq!(c.heroes[0].position, [1.5, 0.0, 0.0]);
         assert_eq!(c.heroes[1].position, [5.0, 0.0, 0.0], "a teleport is not carried");
         assert_eq!(c.characters[0].position, [1.0, 0.0, 1.75]);
+    }
+
+    /// The host's states, some late and some in a burst, play at an even pace: the host's hero
+    /// moves the same each tick (no stop, no double step), and only between states.
+    #[test]
+    fn late_states_play_evenly() {
+        let mut n = Net { role: Role::Join, loaded: 1, ..Default::default() };
+        let at = |t: u64| {
+            let mut s = State { tick: t, generation: 1, ..Default::default() };
+            s.heroes[0].position = [t as f32 * 0.3, 0.0, 0.0];
+            s
+        };
+        // Ticks 1 to 5 in hand, then states come in fits: none for two ticks, then three at once.
+        for t in 1..=5 {
+            n.queue.push_back(at(t));
+        }
+        let mut next = 6;
+        let mut shown = Vec::new();
+        for k in 0..60 {
+            if k % 3 == 2 {
+                for _ in 0..3 {
+                    n.queue.push_back(at(next));
+                    next += 1;
+                }
+            }
+            shown.push(n.next_state().unwrap().heroes[0].position[0]);
+        }
+        let steps: Vec<f32> = shown.windows(2).map(|w| w[1] - w[0]).skip(10).collect();
+        assert!(steps.iter().all(|&d| d > 0.2 && d < 0.4), "{steps:?}");
+    }
+
+    /// The blend moves the other players and characters, not this side's own player, and not
+    /// across a teleport.
+    #[test]
+    fn blends_others_between_states() {
+        let mut a = State { tick: 10, ..Default::default() };
+        let mut b = State { tick: 11, ..Default::default() };
+        a.heroes[0].position = [0.0; 3];
+        b.heroes[0].position = [0.4, 0.0, 0.0];
+        b.heroes[1].position = [1.0, 0.0, 0.0];
+        a.characters = vec![CharState { pack: 9, slot: 1, ordinal: 2, position: [0.0; 3], ..Default::default() }];
+        b.characters = vec![CharState { pack: 9, slot: 1, ordinal: 2, position: [9.0, 0.0, 0.0], ..Default::default() }];
+        let m = blended(&a, &b, 0.5);
+        assert_eq!(m.heroes[0].position, [0.2, 0.0, 0.0]);
+        assert_eq!(m.heroes[1].position, [0.0; 3], "this side's own player is not blended");
+        assert_eq!(m.characters[0].position, [0.0; 3], "a teleport is not blended");
     }
 
     /// A new joiner starts the host's channels afresh: events from 1, nothing acknowledged, the

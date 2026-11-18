@@ -468,6 +468,25 @@
     - Options: "Enter Select", "Esc Back".
     - Quit box: "Esc Resume", "F Quit".
   - **Not verified:** Auto with a real gamepad.
+- **Multiplayer: the other players and characters play evenly on a joiner (user request: improve the joiner's movement more).** No protocol change. Measured with a host running in circles and a joiner walking in circles (NEOPETS_HOST_WALK, NEOPETS_NET_WALK=round, NEOPETS_TRACE_MOTION), counting the ticks where a moving hero stopped for a tick, took a double step, or moved more than 30% off its neighbours' average.
+  - **The joiner's own hero was already even.** Its remaining stops and double steps are the game's own: jump take-offs and landings, and sliding along walls, which the host's copy shows too.
+  - **The host's hero (and players 3 and 4, and the characters) hitched.** States were taken whole, one a tick:
+    - A tick with no new state carried them on one tick, and the late state then showed them where they already were (a stop).
+    - A buffer over its hold dropped a state (a double step).
+  - **Now a clock in the host's ticks plays the states** (net/mod.rs `next_state`, `play_t`).
+    - It keeps the same few ticks behind the newest state (the adaptive hold) by running up to a quarter faster or 15% slower, not by whole ticks.
+    - The other players and the characters are shown between the last state passed and the next, by the clock's fraction (`blended`; a step of 2 units or more a tick is a teleport and is not blended). This side's own player is not blended, because the prediction compares it.
+    - With nothing newer, they carry on by their last step for at most 4 ticks. After 8 ticks with nothing (a pause or a stall), the last state is shown as it is.
+  - **Measured, before → after** (host hero on the joiner's screen: stops, double steps, uneven steps; the host's own copy of that walk has 5, 9, 15):
+    - 60 ms delay, 10 ms jitter, 19 s: about 5, 9, 15–19 → 5, 6, 11.
+    - 60 ms delay, 30 ms jitter, 19 s: 78, 73, 212 → 4, 8, 16.
+    - A host and three joiners on this computer, 28 s each: 100, 96, 194 (joiner 1; joiners 2 and 3 alike) → 4, 12, 33 (joiners 2 and 3: 2, 15, 30 and 3, 13, 29).
+  - **Diagnostics:**
+    - NEOPETS_TRACE_MOTION: on a joiner, each tick's step of both heroes, the buffer and the state's host tick; on the host, its own hero's step.
+    - NEOPETS_NET_WALK=round: circles with no jumps.
+    - NEOPETS_NET_STEADY: the clock always one tick a tick.
+    - NEOPETS_TRACE_BODYPUSH: each character push on a hero.
+  - **Not tried:** by the user, or between two computers. Characters were not measured separately; they use the same blend.
 - **Multiplayer: smoother joiner movement (user report: the joiner's movement felt clunky and off).** Protocol 38. Measured with a host and a joiner on this computer (NEOPETS_NET_WALK=circle, jumps every 90 ticks; NEOPETS_TRACE_PREDICT). The joiner's own moves disagreed with the host's copy all the time; each disagreement was eased away, so the player was nudged every state. Four causes, each fixed:
   - **The host played the joiner's latest input, not each tick's.** When messages came unevenly it skipped some ticks' controls and played others twice, so its copy went where the joiner's had not.
     - Now each input message repeats the joiner's 7 earlier ticks (codec.rs `Step`, `EARLIER`; net/mod.rs `remember_step`, `send_input`).
@@ -1068,6 +1087,7 @@ The overnight run (2026-10-25) added character lights, the zone grids and query 
 - 2026-11-15 (Developer menu Shield row): Check.cmd passed: 103 data, 642 sim and 73 app tests, the Bevy build, the source audit and the clean-room audit.
 - 2026-11-18 (Menus: Esc back, mouse hover and clicks): Check.cmd passed: 103 data, 642 sim and 74 app tests, the Bevy build, the source audit and the clean-room audit.
 - 2026-11-18 (Button pictures: Keyboard and Auto): Check.cmd passed: 103 data, 642 sim and 75 app tests, the Bevy build, the source audit and the clean-room audit.
+- 2026-11-18 (Multiplayer: others play evenly on a joiner): Check.cmd passed: 103 data, 642 sim and 78 app tests, the Bevy build, the source audit and the clean-room audit.
 - 2026-11-18 (Multiplayer: smoother joiner movement): Check.cmd passed: 103 data, 642 sim and 76 app tests, the Bevy build, the source audit and the clean-room audit.
 - 2026-11-15 (Player colours for Roberta too): Check.cmd passed: 103 data, 642 sim and 73 app tests, the Bevy build, the source audit and the clean-room audit.
 - 2026-11-15 (F3: every player and their ping): Check.cmd passed: 103 data, 642 sim and 72 app tests, the Bevy build, the source audit and the clean-room audit.

@@ -656,7 +656,7 @@ stand-in on this computer, and left for the user to switch on.
 ### How the joiner feels
 15. [x] (built: play.rs `predict_own`, with the host playing the joiner's inputs one a tick in order, net/mod.rs `feed_inputs`; protocol 38; see STATUS) Player 2 moved at once on the joiner from its own controller (prediction), drawn
     toward the host's place as states arrive; the gap measured with 50 and 100 ms delay.
-16. [x] (stalls at 40 ms jitter 142 to 87) The jitter buffer that grows a state when states come unevenly and shrinks when they
+16. [x] (stalls at 40 ms jitter 142 to 87; since 2026-11-18 played by a clock that blends the other players and characters between states, net/mod.rs `next_state`; see STATUS) The jitter buffer that grows a state when states come unevenly and shrinks when they
     are even; the delay and stalls measured.
 17. [ ] (with item 15) The joiner's camera follows the predicted player 2 (no jump when the state arrives).
 18. [ ] (not built: a sound heard twice cannot be checked without the speakers) Sounds of player 2's own swings and jumps played at once on the joiner (Default),

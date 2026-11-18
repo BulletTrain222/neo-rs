@@ -2098,7 +2098,8 @@ fn step_sim(
                 }
                 if let Some(v) = std::env::var_os("NEOPETS_NET_WALK") {
                     input.forward = 1.0;
-                    if v == "circle" {
+                    // NEOPETS_NET_WALK=round: round in circles with no jumps (the motion trace).
+                    if v == "circle" || v == "round" {
                         input.side = 0.6;
                     }
                     // NEOPETS_NET_WALK=pulse: a second walking, a second standing, in turn (for
@@ -2109,7 +2110,7 @@ fn step_sim(
                         // NEOPETS_NET_WALK=slash: round in circles, a swing every 40 ticks.
                         input.side = 0.5;
                         input.attack = play.play.ticks % 40 == 20;
-                    } else {
+                    } else if v != "round" {
                         input.jump = play.play.ticks % 90 == 45;
                     }
                 }
@@ -2321,6 +2322,11 @@ fn step_sim(
                             if l0 > 0.02 && l1 > 0.02 && (prev[0] * step[0] + prev[2] * step[2] < 0.0 || (l1 - l0).abs() > 0.5 * l0.max(l1)) {
                                 netr.own_jerk.1 += 1;
                             }
+                            // NEOPETS_TRACE_MOTION (diagnostic): each tick's step of both heroes
+                            // here, whether this side's is predicted, and the buffer.
+                            if std::env::var_os("NEOPETS_TRACE_MOTION").is_some() {
+                                println!("MOTION tick {} own {:.4} host {:.4} predict {} starve {} queue {} state {} host state {} from {}", play.play.ticks, step[0].hypot(step[2]), netr.smooth.1, play.play.predict.active as u8, netr.starve, netr.queue.len(), play.play.others[0].loco.state, play.play.player.loco.state, s.tick);
+                            }
                             netr.own_jerk.0 = step;
                             netr.own_smooth.0 = Some(at);
                             netr.own_smooth.1 = d;
@@ -2462,6 +2468,12 @@ fn step_sim(
                     }
                     // Each joiner's welcome (after a world change), rumble and state.
                     netr.host_tick(&mut play.play, walked);
+                    // NEOPETS_TRACE_MOTION (diagnostic): the host's own hero's step each tick.
+                    if std::env::var_os("NEOPETS_TRACE_MOTION").is_some() {
+                        let at = play.play.player.loco.position();
+                        let b = std::mem::replace(&mut netr.own_smooth.0, Some(at)).unwrap_or(at);
+                        println!("HOSTMOTION tick {} step {:.4} state {}", play.play.ticks, (at[0] - b[0]).hypot(at[2] - b[2]), play.play.player.loco.state);
+                    }
                     if std::env::var_os("NEOPETS_TRACE_NETEV").is_some() && play.play.ticks % 300 == 0 {
                         let p = &play.play;
                         if let Some(o) = p.others.first() {
