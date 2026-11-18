@@ -205,13 +205,13 @@ pub fn key_icon(label: Option<&Rgba>, fit: Fit) -> Rgba {
     let n = SIZE as f32;
     let (c, half) = ([fit.cx * n, fit.cy * n], (fit.r * n).min(n / 2.0 - 0.5));
     // The label's height on the face, and the cap's half width that holds it.
-    let text_h = half * 0.95;
+    let text_h = half * 1.2;
     let text_w = label.filter(|l| l.height > 0).map_or(0.0, |l| l.width as f32 * text_h / l.height as f32);
-    let half_w = (text_w / 2.0 / 0.72).clamp(half, n / 2.0 - 0.5);
+    let half_w = (text_w / 2.0 / 0.8).clamp(half, n / 2.0 - 0.5);
     let hs = [half_w, half];
     let (corner, edge) = (half * 0.3, half * 0.07);
     // The top face: inset, raised a little toward the top.
-    let (face_c, face_hs) = ([c[0], c[1] - half * 0.08], [half_w - half * 0.2, half * 0.8]);
+    let (face_c, face_hs) = ([c[0], c[1] - half * 0.08], [half_w - half * 0.14, half * 0.8]);
     let face_h = face_hs[1];
     let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
     for y in 0..SIZE {
@@ -252,7 +252,7 @@ pub fn key_icon(label: Option<&Rgba>, fit: Fit) -> Rgba {
     // The label, scaled to fill the top face, drawn over it by its alpha with each output pixel
     // the mean of the label texels it covers, its colours lifted toward white.
     if let Some(l) = label.filter(|l| l.width > 0 && l.height > 0) {
-        let fw = face_hs[0] * 2.0 * 0.9;
+        let fw = face_hs[0] * 2.0 * 0.96;
         let k = (fw / l.width as f32).min(text_h / l.height as f32);
         let (w, h) = (l.width as f32 * k, l.height as f32 * k);
         let (x0, y0) = (face_c[0] - w / 2.0, face_c[1] - h / 2.0);
