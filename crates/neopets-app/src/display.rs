@@ -14,6 +14,9 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::window::{MonitorSelection, PrimaryWindow, VideoModeSelection, WindowMode};
 
 /// Where the settings are kept (local, not committed).
+/// The Button pictures choices (`DisplaySettings::buttons`).
+pub const BUTTON_PICTURES: [&str; 4] = ["PlayStation", "Xbox", "Keyboard", "Auto"];
+
 pub const SETTINGS_FILE: &str = "private/display.txt";
 
 /// Render scales in percent of the viewport.
@@ -203,9 +206,10 @@ pub struct DisplaySettings {
     /// Movie cutscenes played (on) or passed over at once, as if skipped (this build's testing
     /// option, not in the original).
     pub movies: bool,
-    /// Button pictures: the game's PlayStation icons (default) or Xbox-style A, B, X and Y
-    /// (button_style.rs; this build's option).
-    pub xbox_buttons: bool,
+    /// Button pictures (`BUTTON_PICTURES`): the game's PlayStation icons (default), Xbox-style
+    /// A, B, X and Y, keyboard keys, or Auto (Xbox after a gamepad press, keys after a key or
+    /// click) (button_style.rs; this build's option).
+    pub buttons: usize,
     /// The HUD's D-pad hint drawn (default) or hidden (this build's option, not in the original).
     pub dpad_hud: bool,
     /// Menu pictures carry their edges out to the window's sides (this build's option; off draws the original 512 x 448 frame).
@@ -254,7 +258,7 @@ pub struct DisplaySettings {
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 0, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4], coop_tags: true, steady_turn: true, coop_colours: [0, 1, 2, 3] }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 0, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, buttons: 0, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4], coop_tags: true, steady_turn: true, coop_colours: [0, 1, 2, 3] }
     }
 }
 
@@ -295,7 +299,7 @@ impl DisplaySettings {
                 "shadow distance" => s.shadow_distance = v.parse().unwrap_or(s.shadow_distance).min(SHADOW_DISTANCES.len() - 1),
                 "frame rate" => s.fps = v.parse().unwrap_or(s.fps).min(FPS_LIMITS.len() - 1),
                 "movies" => s.movies = v != "false",
-                "button pictures" => s.xbox_buttons = v == "xbox",
+                "button pictures" => s.buttons = BUTTON_PICTURES.iter().position(|b| b.eq_ignore_ascii_case(v)).unwrap_or(0),
                 "dpad hud" => s.dpad_hud = v != "false",
                 "menu edges" => s.menu_edges = v != "false",
                 "original neighbour" => s.original_neighbour = v == "true",
@@ -349,7 +353,7 @@ impl DisplaySettings {
             self.shadow_distance,
             self.fps,
             self.movies,
-            if self.xbox_buttons { "xbox" } else { "playstation" },
+            BUTTON_PICTURES[self.buttons].to_lowercase(),
             self.dpad_hud,
             self.menu_edges,
             self.original_neighbour,
@@ -401,9 +405,9 @@ impl DisplaySettings {
         if let Some(i) = std::env::var("NEOPETS_SCALE").ok().and_then(|v| v.trim().parse::<u32>().ok()).and_then(|p| SCALES.iter().position(|&x| x == p)) {
             s.scale = i;
         }
-        // NEOPETS_BUTTONS=xbox: the Xbox button pictures for this run (diagnostic).
+        // NEOPETS_BUTTONS=xbox, keyboard or auto: those button pictures for this run (diagnostic).
         if let Ok(v) = std::env::var("NEOPETS_BUTTONS") {
-            s.xbox_buttons = v.trim() == "xbox";
+            s.buttons = BUTTON_PICTURES.iter().position(|b| b.eq_ignore_ascii_case(v.trim())).unwrap_or(0);
         }
         // NEOPETS_MOVIES=0 or 1: Movie cutscenes for this run (diagnostic).
         if let Ok(v) = std::env::var("NEOPETS_MOVIES") {
@@ -474,7 +478,7 @@ impl DisplaySettings {
             ("Shadow distance".into(), format!("{}", SHADOW_DISTANCES[self.shadow_distance])),
             ("Frame rate limit".into(), match FPS_LIMITS[self.fps] { 0 => "Uncapped".into(), n => format!("{n}") }),
             ("Movie cutscenes".into(), if self.movies { "On".into() } else { "Off".into() }),
-            ("Button pictures".into(), if self.xbox_buttons { "Xbox".into() } else { "PlayStation".into() }),
+            ("Button pictures".into(), BUTTON_PICTURES[self.buttons].into()),
             ("D-pad HUD".into(), if self.dpad_hud { "On".into() } else { "Off".into() }),
             ("Menu edges".into(), if self.menu_edges { "Extended".into() } else { "Original".into() }),
             ("Neighbour world".into(), if self.original_neighbour { "Original".into() } else { "Full".into() }),
@@ -554,7 +558,7 @@ impl DisplaySettings {
             15 => self.shadow_distance = step(self.shadow_distance, SHADOW_DISTANCES.len()),
             16 => self.fps = step(self.fps, FPS_LIMITS.len()),
             17 => self.movies = !self.movies,
-            18 => self.xbox_buttons = !self.xbox_buttons,
+            18 => self.buttons = step(self.buttons, BUTTON_PICTURES.len()),
             19 => self.dpad_hud = !self.dpad_hud,
             20 => self.menu_edges = !self.menu_edges,
             21 => self.original_neighbour = !self.original_neighbour,
@@ -977,7 +981,7 @@ const HELP: [&str; ROWS + 1] = [
     "How far from the camera those shadows reach. Shorter is faster; shadows end at this distance.",
     "The most frames drawn each second; Uncapped draws as fast as it can. Exclusive full screen may tear. The game's speed does not change.",
     "Off passes over every movie cutscene at once, as if skipped (for testing). Not in the original game.",
-    "The button pictures in boxes and menus: the game's PlayStation ones, or Xbox A, B, X and Y.",
+    "The button pictures in boxes and menus: the game's PlayStation ones, Xbox A, B, X and Y, your keyboard keys, or Auto (Xbox after a gamepad press, keys after a key or click).",
     "The D-pad picture on the HUD during play. Off hides it; the D-pad still works.",
     "How menus fill a wide window. Extended carries each picture's edge colours out to the sides; Original keeps the 512 x 448 frame with bars.",
     "Full always draws the whole of the next area beside you; Original hides some of its pieces from parts of this area, as the PS2 game does.",
@@ -1498,7 +1502,7 @@ mod tests {
         s.change(4, 1, &sizes);
         assert!(!s.smooth);
         s.change(18, 1, &sizes);
-        assert!(s.xbox_buttons && s.rows()[18].1 == "Xbox");
+        assert!(s.buttons == 1 && s.rows()[18].1 == "Xbox");
         s.change(17, 1, &sizes);
         assert!(!s.movies && s.rows()[17].1 == "Off", "Movie cutscenes off");
         s.change(19, 1, &sizes);

@@ -1090,7 +1090,7 @@ fn main() {
     app.add_systems(Startup, story_run::spawn_goal_panel);
     app.add_systems(Update, (story_run::goal_walk_step.before(play_frame), story_run::show_goal_panel));
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
-    app.add_systems(Update, button_style::apply);
+    app.init_resource::<button_style::LastDevice>().add_systems(Update, (button_style::track_device, button_style::apply).chain());
     app.add_systems(Last, display::limit_frame);
     // NEOPETS_PERF_GPU: Bevy's render diagnostics (CPU and GPU time per render pass), logged
     // every 4 seconds (diagnostic).
