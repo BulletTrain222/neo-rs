@@ -1564,6 +1564,10 @@ pub struct Play {
     /// Characters hold the host's clips (net/sync.rs); released when this side stops following.
     pub net_pinned: bool,
     pub coop_remote: bool,
+    /// Hosting: the other players (by seat) whose joiner's controls for this tick have not come
+    /// yet (net/mod.rs `feed_inputs`): each is held where it is for the tick, its movement and
+    /// animation not run, so it moves as the joiner's own copy did, only later.
+    pub coop_hold: [bool; 3],
     /// A joiner: the host's scripted camera view while one runs.
     pub net_cut: Option<([f32; 3], [f32; 3], [f32; 3], f32)>,
     /// A joiner: the host's effect handles to this side's (net.rs events).
@@ -2596,6 +2600,7 @@ impl Play {
             net_follow: false,
             net_pinned: false,
             coop_remote: false,
+            coop_hold: [false; 3],
             net_cut: None,
             net_fx: HashMap::new(),
             coop_pack: 0,
@@ -19929,9 +19934,17 @@ impl Play {
     /// host's. Not while the host has the player busy (an attack, a hit, a fall, down), nor while
     /// a box, a scene or a fade holds the players. Returns whether it moved the player.
     pub fn predict_own(&mut self, input: &HeroInput, pad: CameraPad, seq: u32) -> bool {
+        self.predict.inputs.push_back((seq, *input, pad));
+        while self.predict.inputs.len() > 2 * PREDICT_REPLAY_MOST {
+            self.predict.inputs.pop_front();
+        }
         let ready = !self.others.is_empty() && self.net_follow && !self.predict.host_busy && !self.dialogue_open && !self.held && self.cut.is_none_or(|c| c.state == 0) && !self.fade.moving();
         // (A swing this side started is its own too: `predict.attacking`.)
-        let free_here = self.others.first().is_some_and(|o| (free_move(o.loco.state) || (o.loco.state == hero_states::ATTACK && o.attack.is_some())) && o.down.is_none() && o.loco.air_sub == 0);
+        // It starts (or starts again after the host had the player) only on the ground: the
+        // host's state gives a place and a state, not a jump's speed, and a start in the air
+        // fell differently here until the landing (a second of corrections).
+        let grounded = |state: u8| matches!(state, 1..=4 | 20 | 22 | 32 | 39 | 40);
+        let free_here = self.others.first().is_some_and(|o| (free_move(o.loco.state) || (o.loco.state == hero_states::ATTACK && o.attack.is_some())) && o.down.is_none() && o.loco.air_sub == 0 && (self.predict.active || grounded(o.loco.state)));
         if self.predict.cooldown > 0 {
             self.predict.cooldown -= 1;
         }
@@ -19952,6 +19965,31 @@ impl Play {
             self.predict.history.clear();
             return false;
         }
+        // Starting: the player stands where the host's latest state put it, which is the host's
+        // place after input `host_seq`, some ticks ago; this side's later ticks run again from
+        // there, so the player starts where this side's controls have taken it (before, it
+        // started that many ticks behind and the first comparison jumped it forward: a jump
+        // after every hit, fall or scene, longer the slower the connection).
+        if !self.predict.active {
+            let from = self.predict.host_seq;
+            let again: Vec<(u32, HeroInput, CameraPad)> = self.predict.inputs.iter().filter(|e| e.0 > from && e.0 < seq).copied().collect();
+            self.predict.replayed = if again.len() <= PREDICT_REPLAY_MOST { again.len() } else { 0 };
+            if self.predict.replayed > 0 {
+                for (k, i, p) in again {
+                    self.predict_step(&i, p, k);
+                }
+            }
+            if std::env::var_os("NEOPETS_TRACE_PREDICT").is_some() {
+                println!("PREDICT tick {} starts from the host's input {from}: {} ticks run again", self.ticks, self.predict.replayed);
+            }
+        }
+        self.predict_step(input, pad, seq);
+        true
+    }
+
+    /// One tick of this side's own player (`predict_own`): its movement and Tor's swings from
+    /// this side's controls, and its place kept by input number.
+    fn predict_step(&mut self, input: &HeroInput, pad: CameraPad, seq: u32) {
         self.swap_player(0);
         let saved = (self.hero_index, self.weapon, self.shield);
         self.coop_running = true;
@@ -20007,7 +20045,6 @@ impl Play {
         while self.predict.history.len() > 240 {
             self.predict.history.pop_front();
         }
-        true
     }
 
     pub fn coop_step(&mut self, inputs: &[(HeroInput, CameraPad)]) {
@@ -20157,6 +20194,10 @@ impl Play {
             }
             if self.others[i].down.is_some() || self.dialogue_open || self.held || self.cut.is_some_and(|c| c.state == 1) || self.fade.moving() {
                 input = HeroInput::default();
+            }
+            // A joiner's player whose controls for this tick have not come: held for the tick.
+            if self.coop_hold.get(i).copied().unwrap_or(false) {
+                continue;
             }
             self.swap_player(i);
             let saved = (self.hero_index, self.weapon, self.shield);
@@ -23146,7 +23187,22 @@ pub struct Predict {
     pub stuck: u32,
     pub cooldown: u32,
     pub cooldowns: u32,
+    /// This side's controls of its last ticks (by input number), and the input the host's
+    /// latest state had played: when the prediction starts, the ticks the host had not yet
+    /// played are run again from the host's place (`predict_own`).
+    pub inputs: std::collections::VecDeque<(u32, HeroInput, CameraPad)>,
+    pub host_seq: u32,
+    /// How many ticks the last start ran again (the trace).
+    pub replayed: usize,
+    /// The host tick of the last state compared: each state is compared once (a tick with no
+    /// new state applies the last one again, or one carried on by its movement, with the same
+    /// input number: compared, it put the player toward a guessed place).
+    pub compared: u64,
 }
+
+/// The most ticks a start of the prediction runs again (a second; more and it starts from the
+/// host's place as it is).
+pub const PREDICT_REPLAY_MOST: usize = 60;
 
 impl Predict {
     /// This side's place after input `seq` (None when it is no longer kept).

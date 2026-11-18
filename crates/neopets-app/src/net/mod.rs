@@ -36,7 +36,17 @@ pub use codec::{Event, State};
 /// The UDP port the host listens on.
 pub const PORT: u16 = 47817;
 const MAGIC: [u8; 4] = *b"NPCO";
-const PROTOCOL: u16 = 37;
+const PROTOCOL: u16 = 38;
+/// The host's queue of a joiner's controls (`Net::feed_inputs`): ticks waiting before play
+/// starts (at first, and at most: it grows a tick each time the queue runs dry, and shrinks a
+/// tick after IN_STEADY ticks without), more than the cushion waiting before catching up, ticks
+/// with none before the player lets go, and the most kept.
+const IN_CUSHION: usize = 2;
+const IN_CUSHION_MOST: usize = 5;
+const IN_STEADY: u32 = 600;
+const IN_SLACK: usize = 2;
+const IN_STOP: u32 = 10;
+const IN_LONGEST: usize = 60;
 /// No message for this long ends the session.
 const TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -366,6 +376,19 @@ pub struct Net {
     /// (a state's `input_extra`).
     input_last: u32,
     input_repeats: u8,
+    /// Host: the joiner's ticks of controls waiting to be played, one a tick in order
+    /// (`feed_inputs`); the last number queued; whether the queue has its cushion; the input
+    /// last played (its press counters are what the next one's presses are counted from).
+    in_queue: std::collections::VecDeque<Input>,
+    in_last: u32,
+    in_primed: bool,
+    in_applied: Option<Input>,
+    /// Host: the cushion now (0 before the first: IN_CUSHION), and ticks since the queue last
+    /// ran dry.
+    in_cushion: usize,
+    in_steady: u32,
+    /// Joiner: this side's last ticks of controls, repeated in each input message.
+    recent: std::collections::VecDeque<codec::Step>,
     /// Host: the made world (`Play::made_world`) the last welcome had; joiner: the one to make
     /// after loading a welcome.
     welcome_made: u8,
@@ -738,10 +761,9 @@ impl Net {
             let mut s = s.clone();
             s.rtt = self.rtt_ms.round().clamp(0.0, 65535.0) as u16;
             s.cmd_ack = self.cmd_done;
-            let seq = self.remote.map_or(0, |i| i.seq);
-            self.input_repeats = if seq == self.input_last { self.input_repeats.saturating_add(1) } else { 0 };
-            self.input_last = seq;
-            s.input_seq = seq;
+            // The joiner's input played this tick (`feed_inputs`), and how many ticks it was played
+            // again for want of a newer one.
+            s.input_seq = self.input_last;
             s.input_extra = self.input_repeats;
             let story = (s.flags.clone(), s.items.clone(), s.neopoints);
             if self.story_last.as_ref() != Some(&story) {
@@ -1040,9 +1062,136 @@ impl Net {
         }
     }
 
-    /// Joiner: this tick's input, sent to the host.
-    pub fn send_input(&mut self, i: Input) {
+    /// Host: a joiner's message's ticks of controls queued in order, each once (the ticks it
+    /// repeats that are already queued or played are passed over). A joiner whose numbers went
+    /// back (its game loaded again) starts a new queue.
+    fn queue_input(&mut self, i: &Input) {
+        if i.seq.saturating_add(120) < self.in_last {
+            self.in_queue.clear();
+            self.in_last = 0;
+            self.in_primed = false;
+        }
+        let n = (i.earlier_n as usize).min(codec::EARLIER);
+        for s in i.earlier[..n].iter().copied().chain(std::iter::once(i.step())) {
+            if s.seq > self.in_last {
+                self.in_queue.push_back(i.with_step(&s));
+                self.in_last = s.seq;
+            }
+        }
+        while self.in_queue.len() > IN_LONGEST {
+            self.in_queue.pop_front();
+        }
+    }
+
+    /// Host, before each tick: each joiner's next tick of controls goes to its player
+    /// (`Coop::take`), one a tick in the joiner's order, so the host's player moves as the
+    /// joiner's own copy did (the latest message alone, before, skipped some ticks' controls and
+    /// played others twice when messages came unevenly, and the joiner's player was put right
+    /// all the time). Play starts with a cushion of ticks waiting (IN_CUSHION, growing to
+    /// IN_CUSHION_MOST while messages come unevenly), so uneven messages do not run the queue
+    /// dry; with none waiting the player is held where it is for the tick (`Coop::hold`; the
+    /// state says how many ticks) and the cushion is waited for again; more than IN_SLACK past the cushion waiting are caught up (a
+    /// press in a tick passed over still counts: presses are counted from the last controls
+    /// played).
+    /// After IN_STOP ticks with none the player lets go of the stick; a paused joiner's player
+    /// lets go at once.
+    pub fn feed_inputs(&mut self, coop: &mut crate::coop::Coop) {
+        let mut extra = std::mem::take(&mut self.extra);
+        for n in std::iter::once(&mut *self).chain(extra.iter_mut()) {
+            n.feed_one(coop);
+        }
+        self.extra = extra;
+    }
+
+    fn feed_one(&mut self, coop: &mut crate::coop::Coop) {
+        if self.role != Role::Host || self.peer.is_none() || self.apart || self.seat >= coop.remote.len() {
+            return;
+        }
+        let let_go = |r: &mut Option<(HeroInput, CameraPad)>| {
+            if let Some((h, _)) = r.as_mut() {
+                *h = HeroInput::default();
+            }
+        };
+        coop.hold[self.seat] = false;
+        if self.peer_paused {
+            self.in_queue.clear();
+            self.in_primed = false;
+            let_go(&mut coop.remote[self.seat]);
+            return;
+        }
+        if self.in_cushion == 0 {
+            self.in_cushion = IN_CUSHION;
+        }
+        if !self.in_primed && self.in_queue.len() >= self.in_cushion {
+            self.in_primed = true;
+        }
+        let next = if self.in_primed { self.in_queue.pop_front() } else { None };
+        match next {
+            Some(mut i) => {
+                self.in_steady += 1;
+                if self.in_steady >= IN_STEADY && self.in_cushion > IN_CUSHION {
+                    self.in_cushion -= 1;
+                    self.in_steady = 0;
+                }
+                while self.in_queue.len() > self.in_cushion + IN_SLACK {
+                    if let Some(j) = self.in_queue.pop_front() {
+                        i = j;
+                    }
+                }
+                let last = self.in_applied.unwrap_or(i);
+                let (h, c) = i.to_hero(&last);
+                // NEOPETS_TRACE_NETINPUT (diagnostic): each jump press as the host plays it.
+                if h.jump && std::env::var_os("NEOPETS_TRACE_NETINPUT").is_some() {
+                    info!("net: jump {} played (input {})", i.jumps, i.seq);
+                }
+                coop.remote[self.seat] = Some((h, c));
+                self.in_applied = Some(i);
+                self.input_last = i.seq;
+                self.input_repeats = 0;
+            }
+            None => {
+                // Ran dry while playing: messages come less evenly than the cushion allows.
+                if self.in_primed {
+                    self.in_cushion = (self.in_cushion + 1).min(IN_CUSHION_MOST);
+                }
+                self.in_steady = 0;
+                self.in_primed = false;
+                self.input_repeats = self.input_repeats.saturating_add(1);
+                // The player waits where it is for its controls (moving it on with the last ones
+                // took it where the joiner's copy did not go); after IN_STOP ticks it lets go
+                // of the stick and moves on (a joiner gone quiet does not leave it in the air).
+                if self.input_repeats as u32 > IN_STOP {
+                    let_go(&mut coop.remote[self.seat]);
+                } else {
+                    coop.hold[self.seat] = true;
+                }
+            }
+        }
+    }
+
+    /// Host: the joiner's input last played and the ticks since (the feed trace).
+    pub fn fed_input(&self) -> (u32, u8) {
+        (self.input_last, self.input_repeats)
+    }
+
+    /// Joiner: this tick's controls remembered, to go again with the next messages.
+    pub fn remember_step(&mut self, s: codec::Step) {
+        if self.recent.back().is_some_and(|b| b.seq >= s.seq) {
+            self.recent.clear();
+        }
+        self.recent.push_back(s);
+        while self.recent.len() > codec::EARLIER + 1 {
+            self.recent.pop_front();
+        }
+    }
+
+    /// Joiner: this tick's input, sent to the host with the ticks before it.
+    pub fn send_input(&mut self, mut i: Input) {
         if self.role == Role::Join && self.target.is_some() {
+            let earlier: Vec<codec::Step> = self.recent.iter().filter(|s| s.seq < i.seq).copied().collect();
+            let earlier = &earlier[earlier.len().saturating_sub(codec::EARLIER)..];
+            i.earlier[..earlier.len()].copy_from_slice(earlier);
+            i.earlier_n = earlier.len() as u8;
             let bytes = i.encode();
             self.send(&bytes);
         }
@@ -1952,6 +2101,9 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
                     net.acked = net.acked.max(i.ack);
                     net.story_acked = net.story_acked.max(i.story);
                     net.world_acked = net.world_acked.max(i.world);
+                    if i.generation == net.generation {
+                        net.queue_input(&i);
+                    }
                     net.remote = Some(i);
                 }
             }
@@ -2335,19 +2487,8 @@ fn session_step(net: &mut Net, ready: Vec<(Vec<u8>, SocketAddr)>, now: Instant, 
     // gave the second none, and the player stood still for it: with four windows on one
     // computer the joiners' players stuttered), and a press stays until a tick takes it (a
     // frame that ran no tick lost the press to the next frame's input).
+    // (The hero's controls go in a tick at a time: `feed_inputs`.)
     if net.role == Role::Host && net.peer.is_some() && !net.apart && net.seat < coop.remote.len() {
-        let before = coop.remote[net.seat].map(|(h, _)| (h.jump, h.attack, h.square));
-        coop.remote[net.seat] = net.remote.map(|i| {
-            let (mut h, c) = i.to_hero(&net.seen);
-            // NEOPETS_TRACE_NETINPUT (diagnostic): each jump press as it reaches the host.
-            if h.jump && std::env::var_os("NEOPETS_TRACE_NETINPUT").is_some() {
-                info!("net: jump {} arrived", i.jumps);
-            }
-            if let Some((j, a, q)) = before {
-                (h.jump, h.attack, h.square) = (h.jump || j, h.attack || a, h.square || q);
-            }
-            (h, c)
-        });
         if let Some(i) = net.remote {
             let pl = i.to_panel(&net.seen);
             let q = &mut coop.seats[net.seat].panel;
@@ -2820,10 +2961,67 @@ mod tests {
 
     #[test]
     fn input_round_trips_with_ack() {
-        let i = Input { generation: 4, ack: 99, story: 6, world: 2, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5], seen: 7, cmd: (2, 3, 1, 160), seq: 12_345 };
+        let mut i = Input { generation: 4, ack: 99, story: 6, world: 2, side: 0.5, forward: -1.0, held: RUN | GUARD, right: [1, 255], jumps: 3, attacks: 4, squares: 5, dpad: [1, 2, 3, 4, 5], seen: 7, cmd: (2, 3, 1, 160), seq: 12_345, ..Input::default() };
+        i.earlier[0] = Step { seq: 12_343, side: -0.25, forward: 1.0, held: RUN, right: [9, 8], jumps: 2, attacks: 4, squares: 5 };
+        i.earlier[1] = Step { seq: 12_344, side: 0.0, forward: 0.5, held: 0, right: [128, 128], jumps: 3, attacks: 4, squares: 5 };
+        i.earlier_n = 2;
         let bytes = i.encode();
         let (kind, mut r) = Reader::open(&bytes).expect("header");
         assert_eq!(kind, INPUT);
         assert_eq!(Input::decode(&mut r), Some(i));
+    }
+
+    /// The host plays each tick of a joiner's controls once, in order, whatever order and
+    /// grouping the messages came in: a cushion of two first, the last played again with none
+    /// waiting (counted), a press in a caught-up tick kept.
+    #[test]
+    fn host_plays_each_joiner_tick_once_in_order() {
+        let mut n = Net { role: Role::Host, peer: Some("127.0.0.1:1".parse().unwrap()), ..Net::default() };
+        let mut coop = crate::coop::Coop::default();
+        // Joiner ticks 1 to 6: forward 0.1 a tick more each; a jump pressed on tick 4.
+        let tick = |k: u32| Input { seq: k, forward: k as f32 / 10.0, jumps: u8::from(k >= 4), ..Input::default() };
+        let msg = |k: u32, earlier: &[u32]| {
+            let mut i = tick(k);
+            for (j, &e) in earlier.iter().enumerate() {
+                i.earlier[j] = tick(e).step();
+            }
+            i.earlier_n = earlier.len() as u8;
+            i
+        };
+        // Tick 2's message carries tick 1 (tick 1's own was lost); tick 3's comes twice.
+        n.queue_input(&msg(2, &[1]));
+        n.queue_input(&msg(3, &[1, 2]));
+        n.queue_input(&msg(3, &[1, 2]));
+        let mut played = Vec::new();
+        for _ in 0..3 {
+            n.feed_inputs(&mut coop);
+            let (h, _) = coop.take(0);
+            played.push((n.input_last, n.input_repeats, h.forward, h.jump));
+        }
+        assert_eq!(played, [(1, 0, 0.1, false), (2, 0, 0.2, false), (3, 0, 0.3, false)]);
+        // None waiting: tick 3 again, counted; then 4 to 6 arrive together with the cushion
+        // waited for.
+        n.feed_inputs(&mut coop);
+        assert_eq!((n.input_last, n.input_repeats), (3, 1));
+        n.queue_input(&msg(6, &[4, 5]));
+        n.feed_inputs(&mut coop);
+        let (h, _) = coop.take(0);
+        assert_eq!((n.input_last, h.forward, h.jump), (4, 0.4, true), "tick 4's jump played once");
+        n.feed_inputs(&mut coop);
+        assert!(!coop.take(0).0.jump);
+        // The queue ran dry once: the cushion is three now. Far behind (nine waiting): caught up
+        // to five waiting (the cushion and IN_SLACK), the jump in a passed tick kept.
+        n.queue_input(&{
+            let mut i = Input { seq: 14, jumps: 2, ..Input::default() };
+            for (j, k) in (7..14).enumerate() {
+                i.earlier[j] = Input { seq: k, jumps: if k >= 8 { 2 } else { 1 }, ..Input::default() }.step();
+            }
+            i.earlier_n = 7;
+            i
+        });
+        assert_eq!(n.in_cushion, 3);
+        n.feed_inputs(&mut coop);
+        assert_eq!(n.input_last, 9);
+        assert!(coop.take(0).0.jump, "the passed tick's jump");
     }
 }

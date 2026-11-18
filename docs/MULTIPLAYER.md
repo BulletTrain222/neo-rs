@@ -654,7 +654,7 @@ stand-in on this computer, and left for the user to switch on.
 14. [x] Bandwidth at rest, walking and in a fight, written in "How to play together".
 
 ### How the joiner feels
-15. [ ] (not built: needs the screen to judge; see the design note in the report) Player 2 moved at once on the joiner from its own controller (prediction), drawn
+15. [x] (built: play.rs `predict_own`, with the host playing the joiner's inputs one a tick in order, net/mod.rs `feed_inputs`; protocol 38; see STATUS) Player 2 moved at once on the joiner from its own controller (prediction), drawn
     toward the host's place as states arrive; the gap measured with 50 and 100 ms delay.
 16. [x] (stalls at 40 ms jitter 142 to 87) The jitter buffer that grows a state when states come unevenly and shrinks when they
     are even; the delay and stalls measured.

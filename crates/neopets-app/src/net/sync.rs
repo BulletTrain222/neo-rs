@@ -172,24 +172,39 @@ impl crate::play::Play {
         // knockback or a door, put right at once). Otherwise (an attack, a hit, a fall, a scene)
         // the host's player is shown as before.
         let h1 = s.heroes[1];
+        // The input the host had played (a start of the prediction runs this side's later ticks
+        // again from here).
+        self.predict.host_seq = s.input_seq;
         // The host's attack state agrees with a swing this side started (instant attacks).
         let host_free = (crate::play::free_move(h1.state) || (h1.state == neopets_sim::hero::ATTACK && (self.predict.attacking || self.predict.attack_grace > 0))) && !h1.down && s.cut.is_none();
         self.predict.host_busy = !host_free;
         let predicting = self.predict.active && host_free;
         if let Some(o) = self.others.first_mut().filter(|_| predicting) {
-            let seq = s.input_seq.wrapping_add(s.input_extra as u32);
-            if let Some(at) = self.predict.at(seq).or_else(|| self.predict.at(s.input_seq)) {
+            // The host's place is its place after input `input_seq` (a player whose next controls
+            // had not come was held, not moved on: net/mod.rs `feed_inputs`). Only a state new
+            // from the host is compared (net/mod.rs `next_state` fills a tick with no new state
+            // with the last one, or with it carried on by its movement: the same input number
+            // with a guessed place).
+            let fresh = std::mem::replace(&mut self.predict.compared, s.tick) != s.tick;
+            if let Some(at) = self.predict.at(s.input_seq).filter(|_| fresh) {
                 let err = [h1.position[0] - at[0], h1.position[1] - at[1], h1.position[2] - at[2]];
                 let d = (err[0] * err[0] + err[1] * err[1] + err[2] * err[2]).sqrt();
-                if d > 0.02 {
-                    // The whole difference at once past PREDICT_SNAP, else a share: added to
-                    // where the player is now (and to the moves kept), not a move to the host's
-                    // place, which is some ticks old (moving there put the player behind again
-                    // and again). Moved, not teleported: a teleport stands the player still.
-                    let ease = if d > crate::play::PREDICT_SNAP { 1.0 } else { crate::play::predict_ease(d) };
-                    if ease >= 1.0 {
-                        self.predict.snaps += 1;
-                    }
+                if d > crate::play::PREDICT_SNAP {
+                    // Far apart (the host moved the player: a knockback, staying together, a
+                    // door): the host's player as it is (its place and state), and this side's
+                    // ticks since run again from there by the next tick's `predict_own` (before,
+                    // the place alone was moved and the two went on apart for half a second, the
+                    // host's player standing where this side's was walking).
+                    self.predict.snaps += 1;
+                    put(o, &h1);
+                    self.predict.history.clear();
+                    self.predict.active = false;
+                } else if d > 0.02 {
+                    // A share of the difference, added to where the player is now (and to the
+                    // moves kept), not a move to the host's place, which is some ticks old
+                    // (moving there put the player behind again and again). Moved, not
+                    // teleported: a teleport stands the player still.
+                    let ease = crate::play::predict_ease(d);
                     let c = err.map(|e| e * ease);
                     for k in 0..3 {
                         o.loco.body.position[k] += c[k];

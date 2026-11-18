@@ -2177,6 +2177,11 @@ fn step_sim(
                 if let Some(o) = netr.outgoing.as_mut() {
                     o.seq = seq;
                 }
+                // Each tick's controls go again with the next messages (a message lost or late,
+                // or a frame of two ticks, loses none).
+                if let Some(s) = netr.outgoing.map(|o| o.step()) {
+                    netr.remember_step(s);
+                }
                 // NEOPETS_TRACE_PREDICT (diagnostic): how many ticks from a press of the stick
                 // to this side's own player moving, and from an attack press to its swing.
                 if std::env::var_os("NEOPETS_TRACE_PREDICT").is_some() {
@@ -2368,6 +2373,11 @@ fn step_sim(
                 }
                 if !play.play.others.is_empty() {
                     let n = play.play.others.len();
+                    // Hosting: each joiner's next tick of controls, in its order.
+                    if play.play.coop_remote {
+                        netr.feed_inputs(&mut coop);
+                    }
+                    play.play.coop_hold = if play.play.coop_remote { coop.hold } else { [false; 3] };
                     let inputs: Vec<_> = (0..n).map(|i| coop.take(i)).collect();
                     for (i, o) in play.play.others.iter_mut().enumerate() {
                         let pl = coop.seats.get_mut(i).map(|s| std::mem::take(&mut s.panel)).unwrap_or_default();
@@ -2375,6 +2385,11 @@ fn step_sim(
                         (q.up, q.left, q.right, q.down, q.triangle) = (q.up | pl.up, q.left | pl.left, q.right | pl.right, q.down | pl.down, q.triangle | pl.triangle);
                     }
                     play.play.coop_step(&inputs);
+                    // NEOPETS_TRACE_FEED (diagnostic, hosting): each tick, whether each joiner's
+                    // player was held and player 2's place.
+                    if play.play.coop_remote && std::env::var_os("NEOPETS_TRACE_FEED").is_some() {
+                        println!("FEED tick {} hold {:?} input {:?} p2 {:?}", play.play.ticks, coop.hold, netr.fed_input(), play.play.others.first().map(|o| o.loco.position().map(|v| (v * 100.0).round() / 100.0)));
+                    }
                 }
                 // Doors take Only you: a joiner's player took a door alone; it goes off into its
                 // own world.

@@ -46,6 +46,9 @@ pub struct Coop {
     /// Online (net.rs): each joiner's input from its controller (by seat), in place of a local
     /// pad.
     pub remote: [Option<(HeroInput, CameraPad)>; MAX_PLAYERS - 1],
+    /// Online: the joiners' players held this tick for want of their controls (net/mod.rs
+    /// `feed_inputs`; play.rs `coop_hold`).
+    pub hold: [bool; MAX_PLAYERS - 1],
     /// The Local co-op row's press: start (true) or stop (false).
     pub request: Option<bool>,
     /// Local co-op is on: the other players are kept in play (added again after a load).

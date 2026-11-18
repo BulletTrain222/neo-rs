@@ -1053,6 +1053,24 @@ impl State {
     }
 }
 
+/// How many earlier ticks' controls each input message repeats (a lost or late message, or a
+/// frame that ran two ticks and sent once, loses none of them).
+pub const EARLIER: usize = 7;
+
+/// One tick's controls as an input message repeats them: its number, the stick, the held
+/// buttons, the right stick and the press counters.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Step {
+    pub seq: u32,
+    pub side: f32,
+    pub forward: f32,
+    pub held: u16,
+    pub right: [u8; 2],
+    pub jumps: u8,
+    pub attacks: u8,
+    pub squares: u8,
+}
+
 /// The joiner's controller for one tick: the held buttons and stick, the right stick, and press
 /// counters (so a press is not lost with a packet).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1080,6 +1098,10 @@ pub struct Input {
     /// This input's number (the joiner's play tick): the host's state says which it applied,
     /// so the joiner's own moves (made at once on its side) are compared with the host's.
     pub seq: u32,
+    /// The ticks before this one (oldest first, `earlier_n` of them): the host plays each tick's
+    /// controls once, in order (net/mod.rs `feed_inputs`).
+    pub earlier: [Step; EARLIER],
+    pub earlier_n: u8,
 }
 
 /// A joiner's item-screen command as it travels (kind, two values).
@@ -1140,7 +1162,19 @@ impl Input {
             seen: 0,
             cmd: (0, 0, 0, 0),
             seq: 0,
+            earlier: [Step::default(); EARLIER],
+            earlier_n: 0,
         }
+    }
+
+    /// This tick's controls as a step.
+    pub fn step(&self) -> Step {
+        Step { seq: self.seq, side: self.side, forward: self.forward, held: self.held, right: self.right, jumps: self.jumps, attacks: self.attacks, squares: self.squares }
+    }
+
+    /// This message with an earlier tick's controls in place of its own (no earlier steps).
+    pub fn with_step(&self, s: &Step) -> Self {
+        Self { seq: s.seq, side: s.side, forward: s.forward, held: s.held, right: s.right, jumps: s.jumps, attacks: s.attacks, squares: s.squares, earlier_n: 0, ..*self }
     }
 
     /// The D-pad and Triangle presses since `last` (the counters last seen).
@@ -1191,12 +1225,32 @@ impl Input {
         w.u16(self.cmd.2);
         w.u16(self.cmd.3);
         w.u32(self.seq);
+        let n = (self.earlier_n as usize).min(EARLIER);
+        w.u8(n as u8);
+        for s in &self.earlier[..n] {
+            w.u32(s.seq);
+            w.f32(s.side);
+            w.f32(s.forward);
+            w.u16(s.held);
+            w.u8(s.right[0]);
+            w.u8(s.right[1]);
+            w.u8(s.jumps);
+            w.u8(s.attacks);
+            w.u8(s.squares);
+        }
         w.0
     }
 
     pub(super) fn decode(r: &mut Reader) -> Option<Self> {
         // The stick reads within its range whatever the message says.
-        Some(Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?.clamp(-1.0, 1.0), forward: r.f32()?.clamp(-1.0, 1.0), held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?], seen: r.u32()?, cmd: (r.u8()?, r.u8()?, r.u16()?, r.u16()?), seq: r.u32()? })
+        let mut i = Self { generation: r.u32()?, ack: r.u32()?, story: r.u32()?, world: r.u32()?, side: r.f32()?.clamp(-1.0, 1.0), forward: r.f32()?.clamp(-1.0, 1.0), held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()?, dpad: [r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?], seen: r.u32()?, cmd: (r.u8()?, r.u8()?, r.u16()?, r.u16()?), seq: r.u32()?, ..Self::default() };
+        // The earlier ticks (at most EARLIER, whatever the message says).
+        let n = (r.u8()? as usize).min(EARLIER);
+        for k in 0..n {
+            i.earlier[k] = Step { seq: r.u32()?, side: r.f32()?.clamp(-1.0, 1.0), forward: r.f32()?.clamp(-1.0, 1.0), held: r.u16()?, right: [r.u8()?, r.u8()?], jumps: r.u8()?, attacks: r.u8()?, squares: r.u8()? };
+        }
+        i.earlier_n = n as u8;
+        Some(i)
     }
 }
 
