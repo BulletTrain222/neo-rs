@@ -203,11 +203,15 @@ fn rounded(p: [f32; 2], c: [f32; 2], h: [f32; 2], r: f32) -> f32 {
 /// samples a pixel.
 pub fn key_icon(label: Option<&Rgba>, fit: Fit) -> Rgba {
     let n = SIZE as f32;
-    let (c, half) = ([fit.cx * n, fit.cy * n], (fit.r * n).min(n / 2.0 - 0.5));
-    // The label's height on the face, and the cap's half width that holds it.
+    let (centre, half) = ([fit.cx * n, fit.cy * n], (fit.r * n).min(n / 2.0 - 0.5));
+    // The label's height on the face, and the cap's half width that holds it. The cap's right
+    // edge sits a little inside the circle's, and a wider cap grows to the left only: the
+    // prompt's word starts just right of the circle ("Use", "Exit" on the item screen).
+    let right = centre[0] + half * 0.92;
     let text_h = half * 1.2;
     let text_w = label.filter(|l| l.height > 0).map_or(0.0, |l| l.width as f32 * text_h / l.height as f32);
-    let half_w = (text_w / 2.0 / 0.8).clamp(half, n / 2.0 - 0.5);
+    let half_w = (text_w / 2.0 / 0.8).clamp(half * 0.92, (right - 0.5) / 2.0);
+    let c = [right - half_w, centre[1]];
     let hs = [half_w, half];
     let (corner, edge) = (half * 0.3, half * 0.07);
     // The top face: inset, raised a little toward the top.
