@@ -1141,8 +1141,10 @@ pub fn sync_textbox(
     canvas: Query<Entity, With<HudCanvas>>,
     mut parts: Query<(&BoxPart, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>)>,
     mut cache: Local<BoxCache>,
+    mut box_hits: ResMut<crate::menu_view::BoxHits>,
 ) {
     let _span = crate::perf::span("sync_textbox");
+    box_hits.0.clear();
     let (Some(state), Some(mut art)) = (state, art) else { return };
     let Some(window) = windows.iter().next() else { return };
     let Ok(root) = canvas.single() else { return };
@@ -1206,6 +1208,13 @@ pub fn sync_textbox(
     let visible = text.visible();
     let frame_h = (l * h + w.height_terms.1 + h + w.height_terms.0) as u32;
     let frame_w = (w.wrap + w.margin + w.width_term) as u32;
+    // A card box's prompts take the mouse (menu_view.rs `menu_mouse`): the right group is its
+    // icon's button (Square for Next, Circle for the first answer), the left group Triangle.
+    let right_button = match prompt {
+        Prompt::Continue(_) => crate::menus::SQUARE,
+        _ => crate::menus::CIRCLE,
+    };
+    let on_card = card.is_some();
     // The prompt groups: (icon key, label, x) for the right and the left group.
     let (right, left): (Option<(u32, &[u8], i32)>, Option<(u32, &[u8], i32)>) = match prompt {
         Prompt::None => (None, None),
@@ -1260,6 +1269,7 @@ pub fn sync_textbox(
         })
     };
     let (gr, gl) = (group(right), group(left));
+
     for (part, mut node, mut image, mut vis) in &mut parts {
         let Some((handle, iw, ih, base)) = cache.images.get(part) else {
             *vis = Visibility::Hidden;
@@ -1274,6 +1284,13 @@ pub fn sync_textbox(
             _ => (0, 0, false),
         };
         *vis = if show { Visibility::Inherited } else { Visibility::Hidden };
+        if show && on_card {
+            match part {
+                BoxPart::Icon | BoxPart::Label => box_hits.0.push(([x as f32, y as f32, *iw as f32, *ih as f32], right_button)),
+                BoxPart::Icon2 | BoxPart::Label2 => box_hits.0.push(([x as f32, y as f32, *iw as f32, *ih as f32], crate::menus::TRIANGLE)),
+                _ => {}
+            }
+        }
         node.left = Val::Px(x as f32 * s);
         node.top = Val::Px(y as f32 * s);
         node.width = Val::Px(*iw as f32 * s);

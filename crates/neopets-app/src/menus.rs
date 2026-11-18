@@ -185,6 +185,27 @@ pub enum Draw {
     Marker { node: usize, x: f32, y: f32, angle: f32, colour: [u8; 4] },
 }
 
+/// What the mouse pointer is over on a menu page (this build's mouse support, not in the
+/// original; menu_view.rs `menu_mouse`). A hover moves the page's cursor there; a click also
+/// presses Cross, or the button of a clicked prompt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hit {
+    /// A generic page's item, by focus index (the Options page's added rows included).
+    Focus(usize),
+    /// An item-screen cell (the Items and Quest-items tabs).
+    Cell(usize),
+    /// A Mote of the Charms tab's panel by its selection (0 to 13, 255 "No Mote").
+    Mote(u8),
+    /// One of the item screen's three tabs.
+    Tab(usize),
+    /// A row of the load or save picker, by slot.
+    Slot(usize),
+    /// A row of the quest journal.
+    Row(usize),
+    /// A button prompt (an icon and its label): that menu button.
+    Button(u16),
+}
+
 /// The map and journal's tables and words, read once: the quest rows (table 1), the treasure
 /// rows (table 3), the area names (table 5), the pulse words (0x2DD310), the icon label colour
 /// (0x2DD318) and the area name colour (0x2DD010).
@@ -349,6 +370,12 @@ pub struct Flow {
     pub controls_request: bool,
     /// The Display window's Back was clicked (this build; display.rs).
     pub display_back: bool,
+    /// The mouse (this build): what the pointer moved onto or clicked, taken by the next pass,
+    /// and whether it was a click.
+    pub pointer: Option<Hit>,
+    pub pointer_press: bool,
+    /// The pointer moved the Charms tab's Mote selection this pass (sent to the game).
+    pointed_mote: bool,
 }
 
 /// What the predicates read: the pass count, the option words of slots 66 to 68 (Vibration,
@@ -419,7 +446,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, style_masks: Vec::new(), display_focus: 0, display_page: 0, display_tab: 0, display_players: 2, display_found: 0, display_requests: Vec::new(), display_listen: None, controls_request: false, display_back: false };
+        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, style_masks: Vec::new(), display_focus: 0, display_page: 0, display_tab: 0, display_players: 2, display_found: 0, display_requests: Vec::new(), display_listen: None, controls_request: false, display_back: false, pointer: None, pointer_press: false, pointed_mote: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -490,6 +517,70 @@ impl Flow {
         ItemPc { tab, cursor, grid, selected, view: *v }
     }
 
+    /// The button that goes back from the current page (Esc and the right mouse button, this
+    /// build): Select on the pause page (it closes the page, as Select does in the original),
+    /// Triangle elsewhere (and in the pause page's quit box, where Triangle is Resume).
+    pub fn back_button(&self) -> u16 {
+        if self.current == PAUSE && !self.quit_box { SELECT } else { TRIANGLE }
+    }
+
+    /// The mouse (this build, menu_view.rs `menu_mouse`): a hover moves the page's cursor onto
+    /// what the pointer is over (cue 0x9A as for a direction press); a click does that and
+    /// presses Cross, or the clicked prompt's button. A tab click presses L1 or R1 towards it.
+    fn point(&mut self, fe: &Frontend, hit: Hit, press: bool, (edge, second): (&mut u16, &mut u16), ctx: &Ctx) {
+        let state = fe.screens.get(self.current).map_or(0xFFFF, |s| s.state);
+        let mut press_cross = press;
+        let moved = match hit {
+            Hit::Button(b) => {
+                if press {
+                    *edge |= b;
+                    *second |= b;
+                }
+                return;
+            }
+            Hit::Tab(t) => {
+                let tab = self.current.wrapping_sub(self.items());
+                if press && tab < 3 && t != tab {
+                    let b = if t == (tab + 1) % 3 { R1 } else { L1 };
+                    *edge |= b;
+                    *second |= b;
+                }
+                return;
+            }
+            Hit::Focus(k) => {
+                let list = items(fe, self.current);
+                let fits = (k < list.len() && item_ok(fe, list[k], self.current, ctx, self)) || (self.current == OPTIONS && (list.len()..list.len() + 4).contains(&k));
+                if !fits || self.quit_box || self.card.is_some() {
+                    return;
+                }
+                std::mem::replace(&mut self.focus, k) != k
+            }
+            Hit::Cell(k) if state == 8 && k < 20 => std::mem::replace(&mut self.item_cursor, k) != k,
+            Hit::Cell(k) if state == 10 && k < self.view.quests.iter().take_while(|&&c| c >= 0).count() => std::mem::replace(&mut self.quest_cursor, k) != k,
+            Hit::Mote(a) if state == 9 => {
+                let moved = std::mem::replace(&mut self.view.mote_selection, a) != a;
+                self.pointed_mote = moved;
+                if moved && press {
+                    // The selection reaches the game this pass; the press waits for the next.
+                    self.pointer = Some(hit);
+                    self.pointer_press = true;
+                    press_cross = false;
+                }
+                moved
+            }
+            Hit::Row(r) if state == 25 && r < self.map.rows.len() => std::mem::replace(&mut self.map.journal.cursor, r as i32) != r as i32,
+            Hit::Slot(k) if self.picker.rows && self.picker.stage == L_PICK && self.card.is_none() && k < save::SLOTS => std::mem::replace(&mut self.picker.cursor, k) != k,
+            _ => return,
+        };
+        if moved {
+            self.sounds.push(0x9A);
+        }
+        if press_cross {
+            *edge |= CROSS;
+            *second |= CROSS;
+        }
+    }
+
     /// One pass of the item screen's tab states 8, 9 and 10 (SPEC-0035 sections 14.1 and 14.2).
     fn item_screen(&mut self, tab: usize, edge: u16, second: u16, command: &mut Option<Command>) -> Option<usize> {
         let buttons = edge | second;
@@ -553,6 +644,10 @@ impl Flow {
                 if r.moved {
                     self.sounds.push(0x9A);
                     self.view.mote_selection = panel.selection;
+                    *command = Some(Command::MoteSelect(panel.selection));
+                }
+                // A Mote the mouse moved onto (this build): the selection goes to the game.
+                if std::mem::take(&mut self.pointed_mote) && command.is_none() && r.word.is_none() {
                     *command = Some(Command::MoteSelect(panel.selection));
                 }
                 match r.word {
@@ -643,7 +738,9 @@ impl Flow {
     /// Diagnostic: open the map of the hero map area (View Map) or the journal (View Quests).
     pub fn trace_open(&mut self, fe: &Frontend, page: &str) {
         let ctx = Ctx::default();
-        if page == "options" {
+        if page == "pause" {
+            self.enter(fe, PAUSE, &ctx);
+        } else if page == "options" {
             self.enter(fe, OPTIONS, &ctx);
         } else if page == "save" {
             self.open_save(fe);
@@ -917,6 +1014,14 @@ impl Flow {
         // The page driver runs on every pass while a book is loaded, whatever the screen.
         if let Some(b) = self.book.as_mut() {
             b.timer.tick();
+        }
+        // The mouse (this build): the pointer's hover or click, before the page reads its input.
+        let (mut edge, mut second) = (edge, second);
+        let pointer = (self.pointer.take(), std::mem::take(&mut self.pointer_press));
+        if let (Some(h), press) = pointer {
+            if self.current != DISPLAY {
+                self.point(fe, h, press, (&mut edge, &mut second), ctx);
+            }
         }
         if self.current == DISPLAY {
             self.display_tick(fe, edge, ctx);
@@ -1902,8 +2007,7 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
             for (k, &n) in pc.items.view.grid_counts.iter().enumerate().filter(|&(_, &n)| n > 1) {
                 let text = n.to_string().into_bytes();
                 let w = font.measure(&text, 0) as f32;
-                let cx = 208.0 + 51.0 * (k % 5) as f32;
-                let top = [141.0, 188.0, 237.0, 286.0][k / 5];
+                let (cx, top) = cell_place(k);
                 out.push(Draw::Text { font: 1, text, spacing: 0, x: (cx - w / 2.0).round().max(16.0), y: top + 40.0, colour: [128, 128, 128, 128] });
             }
         }
@@ -1915,6 +2019,144 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
         let (x, y) = node_xy(fe, n);
         Some(Draw::Text { font: v.font as usize, text: text.clone(), spacing: v.spacing as i32, x, y, colour: v.colour })
     }));
+    out
+}
+
+/// An item-screen cell's icon centre x and icon top (SPEC-0035 G.12: 51 apart from x 208; rows
+/// at 141, 188, 237 and 286).
+fn cell_place(k: usize) -> (f32, f32) {
+    (208.0 + 51.0 * (k % 5) as f32, [141.0, 188.0, 237.0, 286.0][(k / 5).min(3)])
+}
+
+/// The menu buttons of the face-button icons (button_style.rs `face_index` order).
+const FACE_BUTTONS: [u16; 4] = [CROSS, CIRCLE, SQUARE, TRIANGLE];
+
+/// Whether a page's own items take the mouse: not play, the box host, the item screen, the
+/// credits, the load and save pickers (their rows are the picker's), the book, the journal,
+/// the game-over page or the map.
+fn pointer_items(state: u16) -> bool {
+    !matches!(state, 8..=11 | 18 | 21..=26 | 30)
+}
+
+/// The mouse's targets among a page's draws (this build, not in the original): each draw index
+/// with what it stands for. A face-button icon and the labels and sprites beside it in its group
+/// (each with the nearest icon on its left) are that button's prompt; a draw under one of a
+/// generic page's items is that item; the Charms tab's Mote icons (where the panel puts them,
+/// not the equipped-Mote overlays drawn with the same art) are those Motes; on the item screen,
+/// journal and map a small picture at (within 8 of) the frame's left or right edge is the L2
+/// or R2 arrow.
+pub fn hits(fe: &Frontend, flow: &Flow, draws: &[Draw]) -> Vec<(usize, Hit)> {
+    let state = fe.screens.get(flow.current).map_or(0xFFFF, |s| s.state);
+    let node_of = |d: &Draw| match d {
+        Draw::Sprite { node, .. } | Draw::Label { node, .. } => Some(*node),
+        _ => None,
+    };
+    let face = |n: usize| fe.sprite(n).and_then(|s| crate::button_style::face_index(s.asset)).map(|k| FACE_BUTTONS[k]);
+    // The icons: (draw index, parent, x, button).
+    let icons: Vec<(usize, usize, f32, u16)> = draws
+        .iter()
+        .enumerate()
+        .filter_map(|(i, d)| match d {
+            Draw::Sprite { node, x, .. } => Some((i, fe.nodes[*node].parent?, *x, face(*node)?)),
+            _ => None,
+        })
+        .collect();
+    // A prompt group is small: its icons and their labels.
+    let small = |p: usize| draws.iter().filter(|d| node_of(d).is_some_and(|n| fe.nodes[n].parent == Some(p))).count() <= 6;
+    let list = if pointer_items(state) { items(fe, flow.current) } else { Vec::new() };
+    let mut out = Vec::new();
+    for (i, d) in draws.iter().enumerate() {
+        let Some(n) = node_of(d) else { continue };
+        if let Some(&(.., b)) = icons.iter().find(|ic| ic.0 == i) {
+            out.push((i, Hit::Button(b)));
+            continue;
+        }
+        let x = match d {
+            Draw::Sprite { x, .. } | Draw::Label { x, .. } => *x,
+            _ => 0.0,
+        };
+        let parent = fe.nodes[n].parent;
+        let beside = icons.iter().filter(|ic| Some(ic.1) == parent && ic.2 <= x + 1.0 && small(ic.1)).max_by(|a, b| a.2.total_cmp(&b.2));
+        if let Some(&(.., b)) = beside {
+            out.push((i, Hit::Button(b)));
+            continue;
+        }
+        if let Some(k) = list.iter().position(|&it| under(fe, n, it)) {
+            out.push((i, Hit::Focus(k)));
+            continue;
+        }
+        if state == 9 {
+            if let (Draw::Sprite { x, y, .. }, Some(a)) = (d, mote_of(fe, n)) {
+                let (nx, ny) = node_xy(fe, n);
+                if (nx - x).abs() < 1.0 && (ny - y).abs() < 1.0 {
+                    out.push((i, Hit::Mote(a)));
+                    continue;
+                }
+            }
+        }
+        if matches!(state, 8..=10 | 25 | 30) {
+            if let Draw::Sprite { x, w, .. } = d {
+                if *w < 256.0 && *x <= 8.0 {
+                    out.push((i, Hit::Button(L2)));
+                } else if *w < 256.0 && x + w >= 504.0 {
+                    out.push((i, Hit::Button(R2)));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The Mote panel index of a node under a handler-16 node (its argument, 0 to 13).
+fn mote_of(fe: &Frontend, n: usize) -> Option<u8> {
+    let mut at = Some(n);
+    while let Some(i) = at {
+        let d = fe.nodes[i];
+        if d.handler == 16 && d.arg < 14 {
+            return Some(d.arg);
+        }
+        at = d.parent;
+    }
+    None
+}
+
+/// The mouse's fixed targets of a page, as canvas rects (x, y, w, h): what the page's picture
+/// shows without a draw of its own. The item screen's three tabs and its L1 and R1 marks
+/// (measured on the screen), the 20 cells of the Items and Quest-items tabs, and the Charms
+/// tab's Mote places (each place's selection ring, whose art sits about 10 right and 12 below
+/// the Mote it circles), so a Mote not owned and "No Mote" can be pointed at too.
+pub fn zones(fe: &Frontend, flow: &Flow) -> Vec<([f32; 4], Hit)> {
+    let state = fe.screens.get(flow.current).map_or(0xFFFF, |s| s.state);
+    let mut out = Vec::new();
+    if !(8..=10).contains(&state) {
+        return out;
+    }
+    for (t, x) in [212.0, 287.0, 362.0].into_iter().enumerate() {
+        out.push(([x, 81.0, 48.0, 43.0], Hit::Tab(t)));
+    }
+    out.push(([175.0, 103.0, 24.0, 20.0], Hit::Button(L1)));
+    out.push(([424.0, 103.0, 24.0, 20.0], Hit::Button(R1)));
+    if state != 9 {
+        for k in 0..20 {
+            let (cx, top) = cell_place(k);
+            out.push(([cx - 25.0, top - 4.0, 50.0, 44.0], Hit::Cell(k)));
+        }
+        return out;
+    }
+    let Some(panel) = fe.key(0xC0) else { return out };
+    let mut stack = vec![panel];
+    while let Some(n) = stack.pop() {
+        stack.extend(fe.children(n));
+        let d = fe.nodes[n];
+        if d.kind == 5 && d.handler == 15 && (d.arg < 14 || d.arg == 255) {
+            if let Some(ring) = fe.children(n).into_iter().find(|&c| fe.nodes[c].kind == 1) {
+                let (x, y) = node_xy(fe, ring);
+                let (w, h) = (fe.nodes[ring].width as f32, fe.nodes[ring].height as f32);
+                let (cx, cy) = (x + w / 2.0 - 10.0, y + h / 2.0 - 12.0);
+                out.push(([cx - 20.0, cy - 20.0, 40.0, 40.0], Hit::Mote(d.arg)));
+            }
+        }
+    }
     out
 }
 
@@ -2043,7 +2285,15 @@ pub fn map_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
 /// side) with title and wrapped objective, treasure rows (type 2) with the name; the selected
 /// row's bar pulsed. No row is drawn on the first pass. The arrows, the empty-list message and
 /// the hints are not drawn (their nodes are not identified; R-0070).
-pub fn journal_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
+/// Returns the draws, and each shown row's bar (its draw index) with the row (the mouse's
+/// rows).
+pub fn journal_rows(fe: &Frontend, flow: &Flow) -> (Vec<Draw>, Vec<(usize, usize)>) {
+    let mut bars = Vec::new();
+    let out = journal_rows_into(fe, flow, &mut bars);
+    (out, bars)
+}
+
+fn journal_rows_into(fe: &Frontend, flow: &Flow, bars: &mut Vec<(usize, usize)>) -> Vec<Draw> {
     let mut out = Vec::new();
     if flow.current != JOURNAL || flow.pass == 0 {
         return out;
@@ -2080,6 +2330,7 @@ pub fn journal_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
         out.push(sprite(left, p, None, None));
         out.push(sprite(right, p, None, None));
         out.push(sprite(bar, p, Some(w.bar_width), Some(colour)));
+        bars.push((out.len() - 1, l.row));
         if let Some(&icon) = fe.children(icons).get(kind) {
             out.push(sprite(icon, p, None, None));
         }
@@ -2094,7 +2345,15 @@ pub fn journal_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
 
 /// The slot picker's rows (sections 7.1 and 14.3): four rows by the journal row drawer, each at
 /// offset p below the first; the cursor's row has its bar pulsed. Shown from the picker stage.
-pub fn picker_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
+/// Returns the draws, and each shown row's bar (its draw index) with the row's slot (the
+/// mouse's rows).
+pub fn picker_rows(fe: &Frontend, flow: &Flow) -> (Vec<Draw>, Vec<(usize, usize)>) {
+    let mut bars = Vec::new();
+    let out = picker_rows_into(fe, flow, &mut bars);
+    (out, bars)
+}
+
+fn picker_rows_into(fe: &Frontend, flow: &Flow, bars: &mut Vec<(usize, usize)>) -> Vec<Draw> {
     let mut out = Vec::new();
     if !matches!(flow.current, LOAD | SAVE) || !flow.picker.rows {
         return out;
@@ -2169,6 +2428,7 @@ pub fn picker_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
         out.push(sprite(left, p, None, None));
         out.push(sprite(right, p, None, None));
         out.push(sprite(bar, p, Some(w.bar_width), Some(colour)));
+        bars.push((out.len() - 1, k));
         if let Some(&icon) = fe.children(icons).get(kind) {
             out.push(sprite(icon, p, None, None));
         }
@@ -2406,6 +2666,44 @@ mod tests {
         assert_eq!(flow.current, GAME_OVER);
         flow.tick(&f, 0, 0, &Ctx { game_over: false, ..Default::default() });
         assert_eq!(flow.current, PLAY);
+    }
+
+    #[test]
+    fn mouse_pointer_hovers_and_clicks() {
+        let mut f = fe();
+        f.screens[PAUSE] = Screen { node: Some(6), back: -1, state: 7 };
+        let mut flow = Flow::new(&f);
+        let ctx = Ctx::default();
+        flow.set(&f, TITLE);
+        flow.tick(&f, 0, 0, &ctx);
+        flow.tick(&f, 0, 0, &ctx);
+        // A hover moves the focus (cue 0x9A); an item past the list is not pointed at.
+        flow.sounds.clear();
+        flow.pointer = Some(Hit::Focus(2));
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!((flow.focus, flow.sounds.first().copied()), (2, Some(0x9A)));
+        flow.pointer = Some(Hit::Focus(7));
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!(flow.focus, 2);
+        // A click focuses and presses Cross: item 1 opens record 11.
+        flow.pointer = Some(Hit::Focus(1));
+        flow.pointer_press = true;
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!(flow.current, 11);
+        // The back button: Triangle, Select on the pause page, Triangle in its quit box.
+        assert_eq!(flow.back_button(), TRIANGLE);
+        flow.pointer = Some(Hit::Button(TRIANGLE));
+        flow.pointer_press = true;
+        flow.tick(&f, 0, 0, &ctx);
+        flow.tick(&f, 0, 0, &ctx);
+        flow.pointer = Some(Hit::Button(TRIANGLE));
+        flow.pointer_press = true;
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!(flow.current, TITLE, "a clicked Triangle prompt goes back");
+        flow.set(&f, PAUSE);
+        assert_eq!(flow.back_button(), SELECT);
+        flow.quit_box = true;
+        assert_eq!(flow.back_button(), TRIANGLE);
     }
 
     #[test]

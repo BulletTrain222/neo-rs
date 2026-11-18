@@ -1033,6 +1033,8 @@ fn main() {
         .init_resource::<net::JoinAddress>()
         .init_resource::<net::NetPassword>()
         .init_resource::<bindings::MouseLook>()
+        .init_resource::<menu_view::MenuHits>()
+        .init_resource::<menu_view::BoxHits>()
         .init_resource::<controls_page::ControlsPage>()
         .init_resource::<perf::PerfOverlay>()
         .insert_resource(display::DisplaySettings::load())
@@ -1057,7 +1059,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, read_input, coop::read_coop, net::type_address, net::net_step, step_sim, stream_worlds).chain(),
+                (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_spawn::picker_input, dev_menu::dev_mouse, dev_menu::dev_input, menu_view::menu_mouse, read_input, coop::read_coop, net::type_address, net::net_step, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot, sync_haze, sync_atmos_overlay),
                 (show_sim, show_browser),
                 (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, coop::draw_others, coop::split_cameras, coop::player_tags, sync_hero_items, sync_hero_glows, sync_effect_models, debris_view::sync_debris).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_aim_marker, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, (hud_view::sync_hud::<0>, hud_view::sync_hud::<1>, hud_view::sync_hud::<2>, hud_view::sync_hud::<3>).chain(), hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
@@ -1546,6 +1548,17 @@ fn step_sim(
         // world is frozen and the hero's buttons are dropped.
         let (mut edge, mut buttons) = menu_view::menu_words(&vpad);
         let mut held = menu_view::menu_held(&vpad);
+        // Esc and the mouse on a menu page (menu_view.rs `menu_mouse`): their buttons, and a click
+        // the page took is not also the hero's attack or jump.
+        if let Some(m) = menu.as_deref_mut() {
+            let (add, drop) = std::mem::take(&mut m.extra);
+            edge = (edge & !drop) | add;
+            buttons = (buttons & !drop) | add;
+            if std::mem::take(&mut m.ate_click) {
+                let p = &mut play.play;
+                (p.attack_latch, p.square_latch, p.jump_latch) = (false, false, false);
+            }
+        }
         // The left stick's direction bits join the rising-edge and held words (never the
         // button-only word). Edges seen on a frame that runs no tick are kept for the next
         // tick, so no press is lost when the frame rate is above the 60 Hz tick rate.

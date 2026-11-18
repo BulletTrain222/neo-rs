@@ -4,7 +4,7 @@
 //! then the slot picker's rows on the load and save screens.
 
 use crate::hud_view::HudArt;
-use crate::menus::{self, Draw, Flow};
+use crate::menus::{self, Draw, Flow, Hit};
 use crate::PlayState;
 use bevy::prelude::*;
 use neopets_data::frontend::Asset;
@@ -17,11 +17,138 @@ pub struct Menu {
     /// button word), and last frame's stick direction bits.
     pub latched: (u16, u16),
     pub stick: u16,
+    /// Menu buttons from the keyboard's Esc and the mouse (this build; `menu_mouse`): buttons
+    /// to add to this frame's words and buttons to take out of them.
+    pub extra: (u16, u16),
+    /// The mouse clicked something on a menu page this frame: the click is not also the hero's
+    /// attack (the left button is Circle in play) when the page closes into play.
+    pub ate_click: bool,
 }
 
 impl Menu {
     pub fn new(flow: Flow) -> Self {
-        Self { flow, latched: (0, 0), stick: 0 }
+        Self { flow, latched: (0, 0), stick: 0, extra: (0, 0), ate_click: false }
+    }
+}
+
+/// The mouse's targets on the current menu page (this build): window rects (logical pixels) with
+/// what each stands for, the later over the earlier. Rebuilt by `sync_menu` each frame.
+#[derive(Resource, Default)]
+pub struct MenuHits(pub Vec<(Rect, Hit)>);
+
+/// A card box's prompts on the 512 x 448 canvas (x, y, w, h) with their menu buttons, from
+/// hud_view.rs `sync_textbox` (this build's mouse support).
+#[derive(Resource, Default)]
+pub struct BoxHits(pub Vec<([f32; 4], u16)>);
+
+/// The mouse and Esc in the menus (this build, not in the original game, whose menus take only
+/// the pad):
+///
+/// - Esc goes back a page (the page's back button: Triangle, or Select on the pause page, which
+///   closes it). Esc is bound to Select, so on other pages Select is taken out of that press.
+/// - With the pointer free (any menu page), moving onto an item, a cell, a Mote, a picker or
+///   journal row moves the page's cursor there; a left click does that and presses Cross. A
+///   click on a button prompt (an icon and its label: "Use", "Back") presses that button; on
+///   the item screen's tabs it changes tab. The right button goes back as Esc does.
+/// - A card box's prompts (a question's two answers, or Next) take a click as their buttons.
+#[allow(clippy::too_many_arguments)]
+pub fn menu_mouse(
+    windows: Query<(&Window, &bevy::window::CursorOptions), With<bevy::window::PrimaryWindow>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    hits: Res<MenuHits>,
+    menu: Option<ResMut<Menu>>,
+    dev: Res<crate::dev_menu::DevMenu>,
+    page: Res<crate::controls_page::ControlsPage>,
+    prompts: Res<BoxHits>,
+    mut last: Local<Option<(Vec2, usize)>>,
+    mut over: Local<Option<Hit>>,
+    (time, mut fired): (Res<Time<Real>>, Local<usize>),
+) {
+    let _span = crate::perf::span("menu_mouse");
+    let Some(mut m) = menu else { return };
+    // NEOPETS_TRACE_MOUSE="x,y@s;x,y,click@s;right@s;esc@s" (diagnostic): the pointer moved to
+    // canvas point (x, y) of the 512 x 448 frame, there with a left click, a right click or Esc,
+    // each once at s seconds.
+    let mut fake: Option<(Option<Vec2>, bool, bool, bool)> = None;
+    if let Ok(v) = std::env::var("NEOPETS_TRACE_MOUSE") {
+        let steps: Vec<&str> = v.split(';').collect();
+        if let Some((what, at)) = steps.get(*fired).and_then(|t| t.rsplit_once('@')) {
+            if at.trim().parse::<f32>().is_ok_and(|t| time.elapsed_secs() >= t) {
+                *fired += 1;
+                let parts: Vec<&str> = what.split(',').map(str::trim).collect();
+                let point = match (parts.first().and_then(|x| x.parse::<f32>().ok()), parts.get(1).and_then(|y| y.parse::<f32>().ok())) {
+                    (Some(x), Some(y)) => windows.single().ok().map(|(w, _)| {
+                        let s = (w.width() / 512.0).min(w.height() / 448.0);
+                        Vec2::new((w.width() - 512.0 * s) / 2.0 + x * s, (w.height() - 448.0 * s) / 2.0 + y * s)
+                    }),
+                    _ => None,
+                };
+                fake = Some((point, parts.contains(&"click"), what.trim() == "right", what.trim() == "esc"));
+                info!("NEOPETS_TRACE_MOUSE: {what} on page {}", m.flow.current);
+            }
+        }
+    }
+    let esc = keys.just_pressed(KeyCode::Escape) || fake.is_some_and(|f| f.3);
+    let right = mouse.just_pressed(MouseButton::Right) || fake.is_some_and(|f| f.2);
+    let left = mouse.just_pressed(MouseButton::Left) || fake.is_some_and(|f| f.1);
+    let current = m.flow.current;
+    let in_play = matches!(current, menus::PLAY | menus::BOX_HOST);
+    if dev.blocks_input() || page.open || in_play || current == menus::DISPLAY {
+        *over = None;
+        *last = None;
+        return;
+    }
+    if esc {
+        let b = m.flow.back_button();
+        m.extra.0 |= b;
+        m.extra.1 |= menus::SELECT & !b;
+    }
+    let Ok((window, cursor)) = windows.single() else { return };
+    if cursor.grab_mode != bevy::window::CursorGrabMode::None {
+        return;
+    }
+    if right {
+        let b = m.flow.back_button();
+        m.extra.0 |= b;
+        m.ate_click = true;
+        return;
+    }
+    let Some(pos) = fake.and_then(|f| f.0).or_else(|| window.cursor_position()) else {
+        *over = None;
+        return;
+    };
+    // A card box's prompts (Next, or a question's two answers): a click is that button.
+    if left && m.flow.card.as_ref().is_some_and(|c| c.text.open && !c.busy) {
+        let s = (window.width() / 512.0).min(window.height() / 448.0);
+        let (ox, oy) = ((window.width() - 512.0 * s) / 2.0, (window.height() - 448.0 * s) / 2.0);
+        let on = |r: &[f32; 4]| Rect::new(ox + r[0] * s, oy + r[1] * s, ox + (r[0] + r[2]) * s, oy + (r[1] + r[3]) * s).contains(pos);
+        if let Some(&(_, b)) = prompts.0.iter().find(|(r, _)| on(r)) {
+            m.extra.0 |= b;
+            m.ate_click = true;
+            return;
+        }
+    }
+    let hit = hits.0.iter().rev().find(|(r, _)| r.contains(pos)).map(|&(_, h)| h);
+    // A hover counts when the pointer moves (a still pointer does not take the cursor from the
+    // keys); a new page starts with nothing under it.
+    let moved = last.is_some_and(|(at, page)| page == current && at.distance(pos) > 0.5) || fake.is_some_and(|f| f.0.is_some());
+    if last.is_none_or(|(_, page)| page != current) {
+        *over = None;
+    }
+    *last = Some((pos, current));
+    if moved && hit != *over {
+        *over = hit;
+        if let Some(h) = hit.filter(|h| !matches!(h, Hit::Button(_) | Hit::Tab(_))) {
+            m.flow.pointer = Some(h);
+        }
+    }
+    if left {
+        if let Some(h) = hit {
+            m.flow.pointer = Some(h);
+            m.flow.pointer_press = true;
+            m.ate_click = true;
+        }
     }
 }
 
@@ -206,7 +333,9 @@ pub fn sync_menu(
     mut backdrop: Query<&mut Visibility, (With<MenuBackdrop>, Without<MenuItem>, Without<MenuEdge>)>,
     mut cache: Local<MenuCache>,
     mut pool: Local<usize>,
+    mut hits_out: ResMut<MenuHits>,
 ) {
+    hits_out.0.clear();
     let in_play = state.as_ref().is_some_and(|s| s.play.spawned);
     let _span = crate::perf::span("sync_menu");
     let (Some(_state), Some(menu), Some(art)) = (state, menu, art) else { return };
@@ -218,14 +347,27 @@ pub fn sync_menu(
     let flow = &menu.flow;
     // Play and the box host draw over the running world (the box itself is the HUD's).
     let mut draws = if matches!(flow.current, menus::PLAY | menus::BOX_HOST) { Vec::new() } else { menus::draw_list(&art.f, flow.current, flow.focus, flow.pc()) };
-    draws.extend(menus::picker_draws(&art.f, flow));
+    // The mouse's rows (this build): the picker's and the journal's bars, the Options page's
+    // added rows.
+    let mut tagged: Vec<(usize, Hit)> = Vec::new();
+    let (picker, bars) = menus::picker_rows(&art.f, flow);
+    tagged.extend(bars.into_iter().map(|(i, k)| (draws.len() + i, Hit::Slot(k))));
+    draws.extend(picker);
     draws.extend(menus::credits_draws(&art.f, flow));
     let lines = _state.play.item_lines(flow.pc().items.selected);
     draws.extend(menus::item_draws(&art.f, flow, &lines));
     draws.extend(menus::map_draws(&art.f, flow));
-    draws.extend(menus::journal_draws(&art.f, flow));
+    let (journal, bars) = menus::journal_rows(&art.f, flow);
+    tagged.extend(bars.into_iter().map(|(i, r)| (draws.len() + i, Hit::Row(r))));
+    draws.extend(journal);
     draws.extend(menus::book_draws(&art.f, flow));
+    let added = draws.len();
     draws.extend(menus::display_draws(&art.f, flow));
+    if flow.current == menus::OPTIONS {
+        let n = menus::items(&art.f, menus::OPTIONS).len();
+        tagged.extend((added..draws.len()).map(|i| (i, Hit::Focus(n + i - added))));
+    }
+    tagged.extend(menus::hits(&art.f, flow, &draws));
     // NEOPETS_TRACE_DRAWS: every menu draw with its node's ancestor chain (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_DRAWS").is_some() && flow.pass % 120 == 1 {
         for d in &draws {
@@ -387,6 +529,22 @@ pub fn sync_menu(
     for p in placed.iter_mut() {
         if p.as_ref().is_some_and(|&(_, x, y, w, h, _)| x >= 512.0 || y >= 448.0 || x + w <= 0.0 || y + h <= 0.0) {
             *p = None;
+        }
+    }
+    // The mouse's targets in window pixels: the page's fixed places, then its draws (a later
+    // draw over an earlier one, as drawn).
+    let to_window = |x: f32, y: f32, w: f32, h: f32| Rect::new(ox + x * s, oy + y * s, ox + (x + w) * s, oy + (y + h) * s);
+    hits_out.0.extend(menus::zones(&art.f, flow).into_iter().map(|(r, h)| (to_window(r[0], r[1], r[2], r[3]), h)));
+    tagged.sort_by_key(|t| t.0);
+    for (i, h) in tagged {
+        if let Some(Some((_, x, y, w, hh, _))) = placed.get(i) {
+            hits_out.0.push((to_window(*x, *y, *w, *hh), h));
+        }
+    }
+    // NEOPETS_TRACE_HITS (diagnostic): the mouse's targets, every 120 passes.
+    if std::env::var_os("NEOPETS_TRACE_HITS").is_some() && flow.pass % 120 == 1 {
+        for (r, h) in &hits_out.0 {
+            println!("hit {h:?} at {:.0},{:.0} to {:.0},{:.0}", r.min.x, r.min.y, r.max.x, r.max.y);
         }
     }
     // A wide window: the edge column of a picture reaching the frame's side is stretched out to the window's side, so its

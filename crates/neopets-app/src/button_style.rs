@@ -18,6 +18,12 @@ const FACE: [(u32, char, [u8; 3]); 4] = [
     (33, 'Y', [250, 200, 50]), // Triangle: top
 ];
 
+/// Which face button a sheet asset pictures: 0 Cross, 1 Circle, 2 Square, 3 Triangle (the menus'
+/// mouse support finds the button prompts by their icons).
+pub fn face_index(asset: u32) -> Option<usize> {
+    FACE.iter().position(|f| f.0 == asset)
+}
+
 /// The Cross (Xbox A) icon's sheet asset.
 pub const CROSS_ASSET: u32 = FACE[0].0;
 
