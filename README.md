@@ -1,4 +1,4 @@
-# neopets-rust
+# neo-rs
 
 Open-source Rust and Bevy recreation of **Neopets: The Darkest Faerie** (PlayStation 2), playing
 from your own copy of the game disc.
@@ -6,12 +6,12 @@ from your own copy of the game disc.
 A from-scratch reimplementation of **The Darkest Faerie's gameplay behaviour** in **Rust**, using
 the **Bevy** engine. It runs natively on Windows: no emulator and no PS2 BIOS.
 
-neopets-rust aims to play like the original: the same rules, timings, menus, story and fights,
+neo-rs aims to play like the original: the same rules, timings, menus, story and fights,
 wherever they have been implemented.
 
 **Important**
 
-neopets-rust is an independent project. It is **not** a decompiled copy of the game, **not** a
+neo-rs is an independent project. It is **not** a decompiled copy of the game, **not** a
 distribution of the game, **not** an emulator, and **not** an automated recompilation of the PS2
 program.
 
@@ -20,14 +20,14 @@ runtime from **an ISO image of your own disc**, so a legally obtained copy of th
 required.
 
 > Neopets is a trademark of Neopets, Inc. Neopets: The Darkest Faerie was developed by Idol Minds
-> and published by Sony Computer Entertainment America. neopets-rust is not affiliated with or
+> and published by Sony Computer Entertainment America. neo-rs is not affiliated with or
 > endorsed by any of them.
 
 ---
 
 ## Project status
 
-neopets-rust is **experimental and incomplete**. You can start a new game from the title screen,
+neo-rs is **experimental and incomplete**. You can start a new game from the title screen,
 play through much of the story as Tor and Roberta, and save and load. Many parts are still
 unverified against the original, and some are missing. Full compatibility is **not** claimed.
 
@@ -60,7 +60,7 @@ See [docs/STATUS.md](docs/STATUS.md) for the detailed list.
 ## How it works
 
 - **Original game data at runtime.**
-  neopets-rust reads the disc image directly: the archive, models, textures, animations,
+  neo-rs reads the disc image directly: the archive, models, textures, animations,
   levels, text, sound banks, streams and movies. Nothing is extracted to disk and the image is
   never modified.
 
@@ -100,11 +100,11 @@ See [docs/STATUS.md](docs/STATUS.md) for the detailed list.
 ### 2. Get the code
 
 ```powershell
-git clone https://github.com/BulletTrain222/neopets-rust.git
-cd neopets-rust
+git clone https://github.com/BulletTrain222/neo-rs.git
+cd neo-rs
 ```
 
-### 3. Tell neopets-rust where your ISO is
+### 3. Tell neo-rs where your ISO is
 
 Run **`Set-ISO.cmd`** and choose your ISO. The path is saved in `private/iso-path.txt`, which
 git ignores, so your local path is never committed. The ISO itself is never copied.
@@ -261,7 +261,7 @@ This runs, in order:
 ## Repository layout
 
 ```text
-neopets-rust/
+neo-rs/
 ├── Cargo.toml
 ├── crates/
 │   ├── neopets-data/   # ISO reader, archive, and decoders for every kind of disc data
