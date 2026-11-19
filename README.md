@@ -274,7 +274,8 @@ neo-rs/
 │   └── ps2-float/      # PS2 float arithmetic (MIT OR Apache-2.0)
 ├── assets/             # art made for this build (the Cloud Beast model), not from the disc
 ├── mods/               # your local replacement files (ignored by git)
-└── *.cmd               # Set-ISO, Inspect-ISO, Run, Check, Progress
+├── *.cmd               # Set-ISO, Inspect-ISO, Run, Check, Progress
+└── LICENSE             # BSD Zero Clause License (0BSD)
 ```
 
 ## Documentation
@@ -307,7 +308,11 @@ was written with one.
 
 ## License
 
-No license has been chosen yet for this project's own code, so it is all rights reserved for
-now. `third_party/ps2-float` is MIT OR Apache-2.0. See [docs/PROVENANCE.md](docs/PROVENANCE.md).
+neo-rs's original code is released under the [BSD Zero Clause License](LICENSE) (0BSD): use,
+copy, modify and share it for any purpose, with no conditions. `third_party/ps2-float` keeps its
+own license, MIT OR Apache-2.0. See [docs/PROVENANCE.md](docs/PROVENANCE.md).
+
+The license covers this repository's code only. It grants nothing for the game, its disc or its
+content.
 
 Neopets: The Darkest Faerie and all of its content remain the property of their owners.

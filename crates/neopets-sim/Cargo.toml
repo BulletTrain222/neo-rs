@@ -3,5 +3,6 @@ name = "neopets-sim"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 [dependencies]
 ps2-float.workspace = true

@@ -8,6 +8,7 @@ exclude = ["third_party/ps2-float"]
 version = "0.1.0"
 edition = "2024"
 publish = false
+license = "0BSD"
 
 [workspace.dependencies]
 bevy = { version = "=0.19.1", default-features = false, features = ["3d", "ui", "bevy_audio"] }
