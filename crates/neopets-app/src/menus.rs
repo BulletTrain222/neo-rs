@@ -748,10 +748,11 @@ impl Flow {
             self.enter(fe, OPTIONS, &ctx);
             self.focus = items(fe, OPTIONS).len() + 3;
             self.controls_request = true;
-        } else if page.starts_with("display") || page == "gameplay" || page.starts_with("multiplayer") {
+        } else if page.starts_with("display") || page == "gameplay" || page == "sound" || page.starts_with("multiplayer") {
             self.enter(fe, OPTIONS, &ctx);
             self.open_display(match page {
                 "gameplay" => 1,
+                "sound" => crate::display::SOUND_PAGE,
                 p if p.starts_with("multiplayer") => 2,
                 _ => 0,
             });
@@ -839,7 +840,11 @@ impl Flow {
                 self.current = OPTIONS;
                 self.pass = 0;
                 self.default_focus(fe, ctx);
-                self.focus = items(fe, OPTIONS).len() + self.display_page as usize;
+                // Back on the row that opened the page: the Audio item for the Sound page.
+                self.focus = match (self.display_page, audio_item(fe)) {
+                    (crate::display::SOUND_PAGE, Some(k)) => k,
+                    _ => items(fe, OPTIONS).len() + self.display_page as usize,
+                };
                 return;
             }
             if edge & DOWN != 0 {
@@ -1488,6 +1493,12 @@ impl Flow {
                             self.back(fe, ctx);
                             return command;
                         }
+                        // The Options page's Audio item opens this build's Sound page in place of
+                        // the original's Audio page (the user's request).
+                        _ if self.current == OPTIONS && audio_item(fe) == Some(self.focus) => {
+                            self.open_display(crate::display::SOUND_PAGE);
+                            return command;
+                        }
                         r if r >= 0 => result = Some(r as usize),
                         _ => {}
                     }
@@ -1623,6 +1634,16 @@ fn mode_passes(fe: &Frontend, n: usize, p: i32, focused: bool) -> bool {
 fn own_predicate(fe: &Frontend, n: usize, pc: Pc) -> i32 {
     let node = fe.nodes[n];
     if node.handler >= 0 { predicate(node.handler, node.arg, pc) } else { 1 }
+}
+
+/// The Options page's Audio item: the index of the item whose target page holds the Music slider
+/// (focus state 15, SPEC-0035 Behavior 3). This build opens its Sound page from it.
+pub fn audio_item(fe: &Frontend) -> Option<usize> {
+    let list = items(fe, OPTIONS);
+    list.iter().position(|i| {
+        let Some(t) = fe.targets.get(i) else { return false };
+        t.target >= 0 && t.target as usize != OPTIONS && items(fe, t.target as usize).iter().any(|j| fe.targets.get(j).is_some_and(|u| u.state == 15))
+    })
 }
 
 /// A selectable item passes when the mode tests from its parent up to the record's node pass.

@@ -2,6 +2,13 @@
 //! Behavior 3): window mode, resolution, aspect ratio, render scale and the upscale filter,
 //! changed on the Options menu's Display page and kept in a settings file.
 //!
+//! The Sound page (this build's feature, the user's request; it takes the place of the
+//! original's Audio page with its three sliders, SPEC-0035 Behavior 3) sets a volume for each
+//! kind of sound: master, music, ambience (the looping recorded tracks and placed ambient loops,
+//! such as the farm's birds), sound effects, voices, jingles, menu sounds and movies. The
+//! defaults (75% for the kinds the original's sliders covered) give the original's mix after its
+//! options are applied; see `SoundLevels`.
+//!
 //! The 3D scene is drawn into an offscreen image the size of the game viewport (the window
 //! fitted to the chosen aspect ratio) times the render scale, and a window camera shows that
 //! image in the viewport, scaled with a sharp or smooth filter. Menus and the HUD draw on top at
@@ -27,7 +34,12 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 53;
+pub const ROWS: usize = 61;
+/// The Sound page's rows (page 3): Master, Music, Ambience, Sound effects, Voices, Jingles,
+/// Menu sounds, Movies.
+pub const SOUND_ROWS: [usize; 8] = [53, 54, 55, 56, 57, 58, 59, 60];
+/// The Sound page's number.
+pub const SOUND_PAGE: u8 = 3;
 /// The rows on the Gameplay page, which shares the Display page's window and settings file; the
 /// other rows are the Display page's.
 pub const GAMEPLAY_ROWS: [usize; 5] = [17, 18, 19, 20, ATTACK_TURN_ROW];
@@ -143,12 +155,13 @@ pub const DOORS_ROW: usize = 36;
 /// Split screen layouts.
 pub const SPLITS: [&str; 2] = ["Top and bottom", "Side by side"];
 
-/// The rows of the Display page (0), the Gameplay page (1) or the Multiplayer page (2), in the
-/// order shown.
+/// The rows of the Display page (0), the Gameplay page (1), the Multiplayer page (2) or the Sound
+/// page (3), in the order shown.
 pub fn page_rows(page: u8) -> Vec<usize> {
     match page {
         1 => GAMEPLAY_ROWS.to_vec(),
         2 => MULTI_ROWS.to_vec(),
+        SOUND_PAGE => SOUND_ROWS.to_vec(),
         _ => DISPLAY_TABS.iter().flat_map(|t| t.1.iter().copied()).collect(),
     }
 }
@@ -162,6 +175,107 @@ pub const SHADOW_QUALITY: [&str; 4] = ["Very Low", "Low", "Medium", "High"];
 pub const SHADOW_DISTANCES: [f32; 5] = [50.0, 100.0, 150.0, 200.0, 300.0];
 /// The frame rate limits, frames per second; 0 is uncapped.
 pub const FPS_LIMITS: [u32; 4] = [30, 60, 120, 0];
+
+/// The volume of each kind of sound, in percent (0 is off; this build's Sound page). A kind's
+/// gain is its level times the master level. The original's three sliders (SPEC-0035 Behavior 3,
+/// SPEC-0009 Gains) were Music (the bank music), Sound effects (the cues, the looping streams and
+/// the stingers) and Voice (the emote clips), each 75 by default; here the streams have their own
+/// Ambience level, the stingers Jingles, the hero's voice cues join Voices, and menu sounds and
+/// movies (fixed in the original) have their own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SoundLevels {
+    pub master: u8,
+    pub music: u8,
+    pub ambience: u8,
+    pub effects: u8,
+    pub voices: u8,
+    pub jingles: u8,
+    pub menu: u8,
+    pub movies: u8,
+}
+
+impl Default for SoundLevels {
+    fn default() -> Self {
+        Self { master: 100, music: 75, ambience: 75, effects: 75, voices: 75, jingles: 75, menu: 100, movies: 100 }
+    }
+}
+
+/// The Sound page's step, in percent.
+pub const SOUND_STEP: i32 = 5;
+
+impl SoundLevels {
+    /// The names, in row order, as the settings file keys and the rows show them.
+    pub const NAMES: [(&'static str, &'static str); 8] = [
+        ("master volume", "Master volume"),
+        ("music volume", "Music"),
+        ("ambience volume", "Ambience"),
+        ("effects volume", "Sound effects"),
+        ("voices volume", "Voices"),
+        ("jingles volume", "Jingles"),
+        ("menu volume", "Menu sounds"),
+        ("movies volume", "Movies"),
+    ];
+
+    pub fn get(&self, k: usize) -> u8 {
+        [self.master, self.music, self.ambience, self.effects, self.voices, self.jingles, self.menu, self.movies][k.min(7)]
+    }
+
+    pub fn get_mut(&mut self, k: usize) -> &mut u8 {
+        match k {
+            0 => &mut self.master,
+            1 => &mut self.music,
+            2 => &mut self.ambience,
+            3 => &mut self.effects,
+            4 => &mut self.voices,
+            5 => &mut self.jingles,
+            6 => &mut self.menu,
+            _ => &mut self.movies,
+        }
+    }
+
+    /// A kind's gain, 0 to 1: its level times the master level.
+    fn gain(&self, level: u8) -> f32 {
+        (self.master.min(100) as f32 / 100.0) * (level.min(100) as f32 / 100.0)
+    }
+
+    pub fn music(&self) -> f32 {
+        self.gain(self.music)
+    }
+
+    pub fn ambience(&self) -> f32 {
+        self.gain(self.ambience)
+    }
+
+    pub fn effects(&self) -> f32 {
+        self.gain(self.effects)
+    }
+
+    pub fn voices(&self) -> f32 {
+        self.gain(self.voices)
+    }
+
+    pub fn jingles(&self) -> f32 {
+        self.gain(self.jingles)
+    }
+
+    pub fn menu(&self) -> f32 {
+        self.gain(self.menu)
+    }
+
+    pub fn movies(&self) -> f32 {
+        self.gain(self.movies)
+    }
+
+    /// The sound manager's group levels (neopets_sim::sound EFFECTS, VOICES, AMBIENCE, MENU).
+    pub fn mix(&self) -> [f32; neopets_sim::sound::GROUPS] {
+        [self.effects(), self.voices(), self.ambience(), self.menu()]
+    }
+
+    /// A level as shown: "Off" at 0, else a percentage.
+    pub fn shown(level: u8) -> String {
+        if level == 0 { "Off".into() } else { format!("{level}%") }
+    }
+}
 
 /// The graphics APIs on offer (main.rs `render_settings`; Windows only, read at start).
 pub const GRAPHICS_APIS: [&str; 2] = ["Vulkan", "DX12"];
@@ -254,11 +368,13 @@ pub struct DisplaySettings {
     /// point (SPEC-0040 Behavior 20 item 7, attachment point 7, which on some enemies swings
     /// with their limbs). This build's option, Steady by default (user report 150).
     pub steady_turn: bool,
+    /// The Sound page's volumes.
+    pub sound: SoundLevels,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 0, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, buttons: 0, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4], coop_tags: true, steady_turn: true, coop_colours: [0, 1, 2, 3] }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 0, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, buttons: 0, dpad_hud: true, menu_edges: true, original_neighbour: false, graphics_api: 0, light_shafts: false, water_reflections: false, coop_revive: true, coop_split: 0, coop_partner: true, upnp: false, net_port: crate::net::PORT, coop_together: true, coop_doors_alone: false, coop_players: 2, coop_pads: [0; 4], coop_tags: true, steady_turn: true, coop_colours: [0, 1, 2, 3], sound: SoundLevels::default() }
     }
 }
 
@@ -326,7 +442,13 @@ impl DisplaySettings {
                 }
                 "net port" => s.net_port = v.parse().ok().filter(|&p: &u16| p > 0).unwrap_or(crate::net::PORT),
                 "graphics api" => s.graphics_api = GRAPHICS_APIS.iter().position(|a| a.eq_ignore_ascii_case(v)).unwrap_or(s.graphics_api),
-                _ => {}
+                k => {
+                    if let Some(i) = SoundLevels::NAMES.iter().position(|n| n.0 == k) {
+                        if let Ok(n) = v.parse::<u8>() {
+                            *s.sound.get_mut(i) = n.min(100);
+                        }
+                    }
+                }
             }
         }
         s
@@ -372,7 +494,7 @@ impl DisplaySettings {
             self.coop_tags,
             if self.steady_turn { "steady" } else { "original" },
             self.coop_colours.map(|n| n.to_string()).join(",")
-        )
+        ) + &SoundLevels::NAMES.iter().enumerate().map(|(k, n)| format!("{} = {}\n", n.0, self.sound.get(k))).collect::<String>()
     }
 
     pub fn load() -> Self {
@@ -516,6 +638,15 @@ impl DisplaySettings {
             ("Game 2".into(), String::new()),
             ("Game 3".into(), String::new()),
             ("Game 4".into(), String::new()),
+            // The Sound page.
+            (SoundLevels::NAMES[0].1.into(), SoundLevels::shown(self.sound.get(0))),
+            (SoundLevels::NAMES[1].1.into(), SoundLevels::shown(self.sound.get(1))),
+            (SoundLevels::NAMES[2].1.into(), SoundLevels::shown(self.sound.get(2))),
+            (SoundLevels::NAMES[3].1.into(), SoundLevels::shown(self.sound.get(3))),
+            (SoundLevels::NAMES[4].1.into(), SoundLevels::shown(self.sound.get(4))),
+            (SoundLevels::NAMES[5].1.into(), SoundLevels::shown(self.sound.get(5))),
+            (SoundLevels::NAMES[6].1.into(), SoundLevels::shown(self.sound.get(6))),
+            (SoundLevels::NAMES[7].1.into(), SoundLevels::shown(self.sound.get(7))),
         ]
     }
 
@@ -580,6 +711,11 @@ impl DisplaySettings {
                 self.coop_colours[k] = step(self.coop_colours[k] as usize, crate::hero_colour::COLOURS.len()) as u8;
             }
             PLAYERS_ROW => self.coop_players = 2 + step(self.coop_players.clamp(2, 4) - 2, 3),
+            // A volume: Left and Right step it by 5% (0 to 100, no wrap).
+            r if SOUND_ROWS.contains(&r) => {
+                let v = self.sound.get_mut(r - SOUND_ROWS[0]);
+                *v = (*v as i32 + delta * SOUND_STEP).clamp(0, 100) as u8;
+            }
             r if PAD_ROWS.contains(&r) => {
                 let k = r - PAD_ROWS[0];
                 self.coop_pads[k] = step(self.coop_pads[k] as usize, PAD_CHOICES as usize + 1) as u8;
@@ -1016,6 +1152,14 @@ const HELP: [&str; ROWS + 1] = [
     "Games hosting on this home network. Press or click a game to join it.",
     "Games hosting on this home network. Press or click a game to join it.",
     "Games hosting on this home network. Press or click a game to join it.",
+    "Turns every sound up or down together.",
+    "The background music.",
+    "The looping background sounds of a place, such as the birds on the farm, water and wind. Off silences them.",
+    "Swords, footsteps, doors, enemies and everything else that makes a noise.",
+    "The heroes' grunts and shouts and the characters' spoken lines.",
+    "The short tunes for finding items and finishing quests.",
+    "The clicks and beeps of the menus.",
+    "The sound of the movie cutscenes.",
     "Back to Options.",
 ];
 
@@ -1055,7 +1199,7 @@ pub fn spawn_window(mut commands: Commands) {
                     });
                 }
             });
-            let order: Vec<usize> = (0..3u8).flat_map(page_rows).chain([ROWS]).collect();
+            let order: Vec<usize> = (0..=SOUND_PAGE).flat_map(page_rows).chain([ROWS]).collect();
             for k in order {
                 let back = k == ROWS;
                 if let Some(&(_, text)) = HEADINGS.iter().find(|h| h.0 == k) {
@@ -1387,7 +1531,7 @@ pub fn show_window(
             n.display = d;
         }
     }
-    let title = ["Display", "Gameplay", "Multiplayer"][flow.display_page.min(2) as usize];
+    let title = ["Display", "Gameplay", "Multiplayer", "Sound"][flow.display_page.min(SOUND_PAGE) as usize];
     for mut t in &mut titles {
         if t.0 != title {
             t.0 = title.to_string();
@@ -1457,7 +1601,7 @@ mod tests {
         // The Display page's tabs hold every row no other page has, once each.
         let mut display = page_rows(0);
         display.sort();
-        assert_eq!(display, (0..ROWS).filter(|k| !GAMEPLAY_ROWS.contains(k) && !MULTI_ROWS.contains(k) && !RETIRED_ROWS.contains(k)).collect::<Vec<_>>());
+        assert_eq!(display, (0..ROWS).filter(|k| !GAMEPLAY_ROWS.contains(k) && !MULTI_ROWS.contains(k) && !SOUND_ROWS.contains(k) && !RETIRED_ROWS.contains(k)).collect::<Vec<_>>());
         assert_eq!(visible_rows(0, 1, 2, 0), [TAB_FOCUS, 5, 6, 7, 10, 9, 24, ROWS]);
         assert!(tabs(1).is_empty() && visible_rows(1, 0, 2, 0)[0] == 17);
         // Every heading comes before a row of a tabbed page.
@@ -1549,5 +1693,29 @@ mod tests {
         let mut t = DisplaySettings { size: (1100, 650), ..Default::default() };
         t.change(1, -1, &sizes);
         assert_eq!(t.size, (1280, 720));
+    }
+
+    #[test]
+    fn sound_levels() {
+        let sizes = [(1000, 600)];
+        let mut s = DisplaySettings::default();
+        assert_eq!(page_rows(SOUND_PAGE), SOUND_ROWS.to_vec());
+        assert_eq!((s.rows()[SOUND_ROWS[2]].0.as_str(), s.rows()[SOUND_ROWS[2]].1.as_str()), ("Ambience", "75%"));
+        // Ambience down to Off in 5% steps, and no further; Master up stops at 100.
+        for _ in 0..20 {
+            s.change(SOUND_ROWS[2], -1, &sizes);
+        }
+        assert_eq!((s.sound.ambience, s.rows()[SOUND_ROWS[2]].1.as_str()), (0, "Off"));
+        s.change(SOUND_ROWS[0], 1, &sizes);
+        assert_eq!(s.sound.master, 100);
+        s.change(SOUND_ROWS[0], -1, &sizes);
+        assert_eq!(s.sound.master, 95);
+        // Gains: level x master; the mixer groups in the sound manager's order.
+        assert!((s.sound.music() - 0.75 * 0.95).abs() < 1e-6);
+        assert_eq!(s.sound.mix()[neopets_sim::sound::AMBIENCE], 0.0);
+        // Saved and read back; an old file without the keys keeps the defaults; bad values clamp.
+        assert_eq!(DisplaySettings::parse(&s.text()), s);
+        assert_eq!(DisplaySettings::parse("mode = 0\n").sound, SoundLevels::default());
+        assert_eq!(DisplaySettings::parse("music volume = 250\n").sound.music, 100);
     }
 }

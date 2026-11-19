@@ -4,6 +4,11 @@
 //! the positional volume and the pan angle (the original's sum, kept as written), the per-pass
 //! voice update with the keep-alive counter, and the slot block rules for the hero's weapon,
 //! shield and power. Requests for the driver are queued for the audio side.
+//!
+//! This build's mixer (no spec; the user's Sound page): each voice belongs to a group (sound
+//! effects, voices, ambience or menu sounds) and its volume is scaled by that group's level in
+//! `mix`, on start and on every resend, so a level change is heard at once. All levels 1.0
+//! leaves every volume as the original computes it.
 
 /// Slot numbers used here (the original's slot numbers are run-time choices; these are fixed).
 pub const MAIN: usize = 0;
@@ -16,6 +21,16 @@ pub const SLOTS: usize = 25;
 pub const POOL: usize = 48;
 /// The manager's hearing radius (set at sound-system start).
 pub const RADIUS: f32 = 200.0;
+
+/// The mixer groups (this build): an index into `SoundManager::mix`.
+pub const EFFECTS: usize = 0;
+/// Character voices: the voice slot's cues (the hero's grunts and shouts).
+pub const VOICES: usize = 1;
+/// Background ambience: the placed ambient loops of a world.
+pub const AMBIENCE: usize = 2;
+/// Front-end menu sounds.
+pub const MENU: usize = 3;
+pub const GROUPS: usize = 4;
 
 /// A request for the driver side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +107,7 @@ struct Voice {
     r0: f32,
     mode: Mode,
     counter: i32,
+    group: usize,
 }
 
 /// How a cue is played.
@@ -105,6 +121,9 @@ pub struct Play {
     pub volume: Option<i32>,
     /// Hearing and full-volume radii (R, r0); None for the manager radius and 0.
     pub radius: Option<(f32, f32)>,
+    /// The mixer group (this build); None for the slot's own (VOICES on the voice slot, else
+    /// EFFECTS).
+    pub group: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -118,13 +137,17 @@ pub struct SoundManager {
     pub default_volume: i32,
     pub requests: Vec<Request>,
     pub listener: Listener,
+    /// The mixer's group levels (this build; 0 to 1, all 1.0 by default).
+    pub mix: [f32; GROUPS],
+    /// The levels the playing voices were last sent at (a change resends unpositioned voices).
+    mix_sent: [f32; GROUPS],
 }
 
 impl Default for SoundManager {
     fn default() -> Self {
         let mut slots = [None; SLOTS];
         slots[MAIN] = Some(347);
-        Self { slots, loaded: Default::default(), voices: Vec::new(), next: 1, default_volume: 1024, requests: Vec::new(), listener: Listener::default() }
+        Self { slots, loaded: Default::default(), voices: Vec::new(), next: 1, default_volume: 1024, requests: Vec::new(), listener: Listener::default(), mix: [1.0; GROUPS], mix_sent: [1.0; GROUPS] }
     }
 }
 
@@ -158,6 +181,12 @@ pub fn power_block(mote: Option<u16>) -> u32 {
 }
 
 impl SoundManager {
+    /// A base volume scaled by its group's mixer level.
+    fn mixed(&self, base: i32, group: usize) -> i32 {
+        let level = self.mix.get(group).copied().unwrap_or(1.0).clamp(0.0, 1.0);
+        if level >= 1.0 { base } else { (base as f32 * level) as i32 }
+    }
+
     /// The cue call (Cue playback rules 2 to 10). Returns whether a voice started.
     pub fn play(&mut self, slot: usize, cue: i32, how: Play) -> bool {
         let Some(block) = self.slots.get(slot).copied().flatten() else { return false };
@@ -165,7 +194,8 @@ impl SoundManager {
             return false;
         }
         let base = how.volume.unwrap_or(self.default_volume);
-        if base < 1 {
+        let group = how.group.unwrap_or(if slot == VOICE { VOICES } else { EFFECTS });
+        if self.mixed(base, group) < 1 {
             return false;
         }
         let matches = |v: &Voice| v.block == block && v.cue == cue && (how.emitter.is_none() || v.emitter == how.emitter);
@@ -183,16 +213,17 @@ impl SoundManager {
             return false;
         }
         let (r, r0) = how.radius.filter(|x| x.0 > 0.0).unwrap_or((RADIUS, 0.0));
+        let heard = self.mixed(base, group);
         let (volume, pan) = match how.emitter {
-            Some(e) => match self.listener.volume(e, base, r, r0) {
+            Some(e) => match self.listener.volume(e, heard, r, r0) {
                 Some(v) if v > 0 => (v, Some(self.listener.pan(e))),
                 _ => return false,
             },
-            None => (base, None),
+            None => (heard, None),
         };
         let id = self.next;
         self.next += 1;
-        self.voices.push(Voice { id, slot, block, cue, emitter: how.emitter, base, r, r0, mode, counter: 4 });
+        self.voices.push(Voice { id, slot, block, cue, emitter: how.emitter, base, r, r0, mode, counter: 4, group });
         self.requests.push(Request::Play { id, block, cue, volume, pan });
         true
     }
@@ -242,7 +273,7 @@ impl SoundManager {
     /// radii (None for a voice with no emitter), so a second computer can hear it from its own
     /// listener.
     pub fn source(&self, id: usize) -> Option<([f32; 3], i32, f32, f32)> {
-        self.voices.iter().find(|v| v.id == id).and_then(|v| Some((v.emitter?, v.base, v.r, v.r0)))
+        self.voices.iter().find(|v| v.id == id).and_then(|v| Some((v.emitter?, self.mixed(v.base, v.group), v.r, v.r0)))
     }
 
     /// Voices the driver never started (its block not loaded yet, or the cue refused): forgotten
@@ -263,6 +294,15 @@ impl SoundManager {
         let listener = self.listener;
         let mut stops = Vec::new();
         let mut sets = Vec::new();
+        let mix = self.mix.map(|l| l.clamp(0.0, 1.0));
+        let mixed = |base: i32, group: usize| {
+            let level = mix.get(group).copied().unwrap_or(1.0);
+            if level >= 1.0 { base } else { (base as f32 * level) as i32 }
+        };
+        // A mixer change: the unpositioned voices are resent at their new volume (the
+        // positioned ones are resent below every pass).
+        let remix = mix != self.mix_sent;
+        self.mix_sent = mix;
         for v in &mut self.voices {
             if v.mode == Mode::KeepAlive {
                 v.counter -= 1;
@@ -271,12 +311,15 @@ impl SoundManager {
                     continue;
                 }
             }
+            let heard = mixed(v.base, v.group);
             if let Some(e) = v.emitter {
-                match listener.volume(e, v.base, v.r, v.r0) {
+                match listener.volume(e, heard, v.r, v.r0) {
                     Some(vol) if vol > 0 => sets.push((v.id, vol, Some(listener.pan(e)))),
                     _ if v.mode == Mode::Loop => {}
                     _ => stops.push(v.id),
                 }
+            } else if remix {
+                sets.push((v.id, heard, None));
             }
         }
         self.voices.retain(|v| !stops.contains(&v.id));
@@ -300,6 +343,32 @@ mod tests {
 
     /// A looping voice the driver never started is forgotten (no volume and pan sent for it
     /// again); a finished loop alone is kept.
+    #[test]
+    fn mixer_groups_scale_their_voices() {
+        let mut m = SoundManager::default();
+        m.loaded.insert(347);
+        m.slots[VOICE] = Some(348);
+        m.loaded.insert(348);
+        m.mix = [0.5, 0.25, 0.0, 1.0];
+        // Effects at half, the voice slot at a quarter, ambience off (refused), menu untouched.
+        assert!(m.play(MAIN, 1, Play::default()));
+        assert!(m.play(VOICE, 2, Play::default()));
+        assert!(!m.play(MAIN, 3, Play { group: Some(AMBIENCE), ..Default::default() }));
+        assert!(m.play(MAIN, 4, Play { volume: Some(1024), group: Some(MENU), ..Default::default() }));
+        let volumes: Vec<i32> = m.requests.iter().filter_map(|r| match r { Request::Play { volume, .. } => Some(*volume), _ => None }).collect();
+        assert_eq!(volumes, vec![512, 256, 1024]);
+        // A level change resends the unpositioned voices at once; no change, nothing.
+        m.requests.clear();
+        m.update(&[]);
+        m.requests.clear();
+        m.mix[EFFECTS] = 1.0;
+        m.update(&[]);
+        assert!(m.requests.contains(&Request::Set { id: 1, volume: 1024, pan: None }), "{:?}", m.requests);
+        m.requests.clear();
+        m.update(&[]);
+        assert!(m.requests.is_empty());
+    }
+
     #[test]
     fn a_voice_never_started_is_forgotten() {
         let mut m = SoundManager::default();

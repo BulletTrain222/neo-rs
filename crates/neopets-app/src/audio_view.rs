@@ -1,8 +1,11 @@
 //! Sound in the window (SPEC-0009, SPEC-0031): decoded PCM as a Bevy audio source; the music
 //! controller's two stereo-stream channels played as looping voices whose volume follows the
 //! channel volume (1/1024 units, linear); and the bank music, rendered by the sim's engine
-//! (sequencer and synth) into an endless 48 kHz source. The sound blocks and the cues are not
-//! played yet.
+//! (sequencer and synth) into an endless 48 kHz source; the sound blocks' cues through the sim's
+//! cue engine; the stingers and emote clips.
+//!
+//! The volumes follow the Options menu's Sound page (display.rs `SoundLevels`, this build's
+//! feature): `sync_levels` hands them to the game each frame, and sets the movie voice's volume.
 
 use crate::PlayState;
 use bevy::audio::{AddAudioSource, AudioPlayer, AudioSink, AudioSinkPlayback, ChannelCount, Decodable, PlaybackSettings, SampleRate, Source, Volume};
@@ -257,6 +260,26 @@ pub fn sync_effects(
     p.sound.not_started(&not_started);
 }
 
+/// The Sound page's volumes, handed to the game each frame (play.rs `sound_levels`), and the
+/// movie voice's volume (the Movies level).
+pub fn sync_levels(
+    settings: Res<crate::display::DisplaySettings>,
+    state: Option<ResMut<PlayState>>,
+    mut movie: Query<&mut AudioSink, With<crate::movie_view::MovieVoice>>,
+) {
+    if let Some(mut state) = state {
+        if state.play.sound_levels != settings.sound {
+            state.play.sound_levels = settings.sound;
+        }
+    }
+    let v = settings.sound.movies();
+    for mut sink in &mut movie {
+        if (sink.volume().to_linear() - v).abs() > 1e-4 {
+            sink.set_volume(Volume::Linear(v));
+        }
+    }
+}
+
 /// A bank's instruments and child tracks for the sim's engine: the directory groups with their
 /// voices, each voice's sample by pool offset, and the MMID children (SPEC-0031 sections 3 to 8).
 pub fn instruments(bank: &neopets_data::bank::Bank) -> (neopets_sim::synth::Instruments, Vec<neopets_sim::sequencer::Track>) {
@@ -505,8 +528,8 @@ pub fn sync_music(
 #[derive(Component)]
 pub struct StingerVoice;
 
-/// Play requested stingers: clip k is VAG resource 256 + k at volume trunc(1024 x
-/// Sound-effects gain) (gain 1.0 here), as a one-shot; the game learns whether one is playing.
+/// Play requested stingers: clip k is VAG resource 256 + k at volume trunc(1024 x gain) (the
+/// Sound page's Jingles level), as a one-shot; the game learns whether one is playing.
 pub fn sync_stingers(
     mut commands: Commands,
     state: Option<ResMut<PlayState>>,
@@ -545,7 +568,7 @@ pub fn sync_stingers(
         }
     }
     // Emote clips share the handle: a VAG-headed clip at its directory position (2,048-byte
-    // units) of bank 144 or 145, at volume trunc(1024 x Voice gain) (gain 1.0 here).
+    // units) of bank 144 or 145, at volume trunc(1024 x gain) (the Sound page's Voices level).
     for (bank, start, len) in std::mem::take(&mut p.emote_requests) {
         // Banks 144 and 145 only (online, a host's request for any other file of the disc, which
         // would be read whole and kept, is passed over).

@@ -1055,7 +1055,7 @@ fn main() {
         .add_systems(First, ui_lazy::sync_windows)
         .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
         .add_systems(Update, debug_tools::trace_assets)
-        .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
+        .add_systems(Update, (audio_view::sync_levels, audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).chain().after(step_sim))
         .add_systems(
             Update,
             (
@@ -2524,8 +2524,8 @@ fn step_sim(
                     play.play.books.cursor = v;
                 }
             }
-            // NEOPETS_TRACE_PAGE="map@n", "journal@n" or "options@n": View Map, View Quests or
-            // the Options page on play tick n
+            // NEOPETS_TRACE_PAGE="map@n", "journal@n", "options@n" or "sound@n": View Map, View Quests,
+            // the Options page or the Sound page on play tick n
             // (diagnostic, for a screenshot).
             if let Some((page, k)) = std::env::var("NEOPETS_TRACE_PAGE").ok().and_then(|v| v.split_once('@').map(|(a, b)| (a.to_string(), b.trim().parse::<u64>().ok()))) {
                 if k == Some(play.play.ticks) {

@@ -9,7 +9,7 @@ use neopets_data::{Disc, fingerprint, iso_path, png};
 use std::collections::BTreeMap;
 
 const USAGE: &str = "usage: neopets-data [--iso <path>] [--sha256 <disc file>]... \
-                     [--resources] [--resource <n>]... [--texture <n>]... [--materials] [--meshes] [--clips] [--ground] [--areas] [--scene <n>]... [--coverage] [--lights]";
+                     [--resources] [--resource <n>]... [--stream <n>]... [--texture <n>]... [--materials] [--meshes] [--clips] [--ground] [--areas] [--scene <n>]... [--coverage] [--lights]";
 
 fn main() {
     if let Err(e) = run() {
@@ -47,6 +47,7 @@ fn run() -> Result<(), String> {
     let mut shadow: Option<u32> = None;
     let mut movie: Option<(usize, usize)> = None;
     let mut parts_of: Vec<u32> = Vec::new();
+    let mut streams: Vec<u32> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--iso" => explicit = Some(args.next().ok_or("--iso needs a path")?.into()),
@@ -109,6 +110,12 @@ fn run() -> Result<(), String> {
             "--monster-row" => {
                 let n = args.next().ok_or("--monster-row needs a row index")?;
                 monster_row = Some(n.parse().map_err(|_| format!("Bad row {n}"))?);
+            }
+            "--stream" => {
+                // `--stream N`: decode music stream resource N (a KPV stream, SPEC-0009) to
+                // private/audio/stream-N.wav, for listening to what a world plays.
+                let n = args.next().ok_or("--stream needs a resource number")?;
+                streams.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
             }
             "--resource" => {
                 let n = args.next().ok_or("--resource needs a number")?;
@@ -178,7 +185,7 @@ fn run() -> Result<(), String> {
             println!("  audio {:.3} s at {rate} Hz; mixed {:.3} s at {} Hz; {n} frames play {:.3} s", samples as f64 / c / rate as f64, mixed as f64 / c / neopets_data::bink::MIX_RATE as f64, neopets_data::bink::MIX_RATE, n as f64 / mv.header.fps());
         }
     }
-    if !(monster_word.is_some() || monster_row.is_some() || groups.is_some() || shadow.is_some() || !parts_of.is_empty() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(monster_word.is_some() || monster_row.is_some() || groups.is_some() || shadow.is_some() || !parts_of.is_empty() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !streams.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -188,6 +195,14 @@ fn run() -> Result<(), String> {
     );
     for &n in &show {
         describe(&mut disc, &index, n)?;
+    }
+    for &n in &streams {
+        let pcm = neopets_data::audio::kpv(&index.read(&mut disc, n)?)?;
+        let out = root.join("private").join("audio");
+        std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        let path = out.join(format!("stream-{n}.wav"));
+        std::fs::write(&path, wav(&pcm)).map_err(|e| e.to_string())?;
+        println!("Stream {n}: {:.1} s, {} channels at {} Hz: {}", pcm.seconds(), pcm.channels, pcm.rate, path.display());
     }
     for &n in &textures {
         export_textures(&root, &mut disc, &index, n)?;
@@ -823,4 +838,27 @@ fn block_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     }
     println!("movable blocks: {total} in {packs} packs, {meshes} with an inline mesh");
     Ok(())
+}
+
+/// 16-bit PCM as a WAV file.
+fn wav(p: &neopets_data::audio::Pcm) -> Vec<u8> {
+    let (c, r) = (p.channels.max(1), p.rate);
+    let data = (p.samples.len() * 2) as u32;
+    let mut w = Vec::with_capacity(44 + data as usize);
+    w.extend(b"RIFF");
+    w.extend((36 + data).to_le_bytes());
+    w.extend(b"WAVEfmt ");
+    w.extend(16u32.to_le_bytes());
+    w.extend(1u16.to_le_bytes());
+    w.extend(c.to_le_bytes());
+    w.extend(r.to_le_bytes());
+    w.extend((r * c as u32 * 2).to_le_bytes());
+    w.extend((c * 2).to_le_bytes());
+    w.extend(16u16.to_le_bytes());
+    w.extend(b"data");
+    w.extend(data.to_le_bytes());
+    for v in &p.samples {
+        w.extend(v.to_le_bytes());
+    }
+    w
 }

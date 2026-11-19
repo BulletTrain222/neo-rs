@@ -1533,6 +1533,9 @@ pub struct Play {
     pub net_seat: usize,
     /// The Gameplay page's Attack turn (Steady: toward the enemy's body, not its target point).
     pub steady_turn: bool,
+    /// The Sound page's volumes (display.rs `SoundLevels`; this build's feature). They take the
+    /// place of the options block's gains for every sound.
+    pub sound_levels: crate::display::SoundLevels,
     /// Multiplayer colours by player number (1 to 4; hero_colour.rs): the Multiplayer page's
     /// here and on a host, the host's on a joiner. `p1_colour`: the colour player 1 is drawn in.
     pub player_colours: [u8; 4],
@@ -2588,6 +2591,7 @@ impl Play {
             net_apart_ok: false,
             net_seat: 0,
             steady_turn: true,
+            sound_levels: Default::default(),
             player_colours: [0; 4],
             p1_colour: 0,
             apart_door: None,
@@ -20955,7 +20959,7 @@ impl Play {
                 self.world.ambient_counters[i] += 1;
                 if self.world.ambient_counters[i] >= 3 {
                     let volume = (default as f32 * a.factor) as i32;
-                    self.sound.play(AREA, a.cue, Play { emitter, do_not_restart: true, keep_alive: true, volume: Some(volume), radius: Some((a.radius, a.inner)), ..Default::default() });
+                    self.sound.play(AREA, a.cue, Play { emitter, do_not_restart: true, keep_alive: true, volume: Some(volume), radius: Some((a.radius, a.inner)), group: Some(neopets_sim::sound::AMBIENCE), ..Default::default() });
                 }
             }
         }
@@ -20966,7 +20970,7 @@ impl Play {
             if self.sound.has(AREA, s.cue, Some(s.centre)) {
                 self.sound.keep_alive(AREA, s.cue, Some(s.centre));
             } else {
-                self.sound.play(AREA, s.cue, Play { emitter: Some(s.centre), do_not_restart: true, keep_alive: true, radius: Some((s.hearing.max(30.0), 0.0)), ..Default::default() });
+                self.sound.play(AREA, s.cue, Play { emitter: Some(s.centre), do_not_restart: true, keep_alive: true, radius: Some((s.hearing.max(30.0), 0.0)), group: Some(neopets_sim::sound::AMBIENCE), ..Default::default() });
             }
         }
     }
@@ -21080,9 +21084,17 @@ impl Play {
     }
 
     /// A cue on the main slot with no position (menus, items, the HUD).
-    /// A front-end menu sound (the menu sound table): always at the fixed volume 1,024.
+    /// A front-end menu sound (the menu sound table): at the fixed volume 1,024, times the Sound
+    /// page's Menu sounds level (this build).
     pub fn cue_fixed(&mut self, cue: i32) {
-        self.sound.play(neopets_sim::sound::MAIN, cue, neopets_sim::sound::Play { volume: Some(1024), ..Default::default() });
+        self.sound.play(neopets_sim::sound::MAIN, cue, neopets_sim::sound::Play { volume: Some(1024), group: Some(neopets_sim::sound::MENU), ..Default::default() });
+    }
+
+    /// The sound manager's default cue volume, trunc(row Scale) (the original's Sound-effects gain
+    /// is the mixer's Sound effects level here), and the mixer's group levels from the Sound page.
+    fn set_cue_levels(&mut self, scale: i32) {
+        self.sound.default_volume = scale;
+        self.sound.mix = self.sound_levels.mix();
     }
 
     /// The music controller on a front-end pass (SPEC-0009 Pass gate; SPEC-0035 Behaviors 3a and
@@ -21097,25 +21109,26 @@ impl Play {
         let flag = neopets_sim::music::runtime_flag(selector, &|n| state.flag(n));
         let bank = bank_override.unwrap_or(r.bank + if flag { 67 } else { 0 });
         let duck = if self.stinger_playing { 0.7 } else { 1.0 };
+        let music = self.sound_levels.music();
         if pause {
-            let level = (400.0 * self.options.music()) as i32;
+            let level = (400.0 * music) as i32;
             self.bank_music.tick(bank, level, duck);
         } else {
-            self.bank_music.tick(bank, r.level, self.options.music() * duck);
+            self.bank_music.tick(bank, r.level, music * duck);
         }
-        self.sound.default_volume = (r.scale as f32 * self.options.effects()) as i32;
+        self.set_cue_levels(r.scale);
         let finished = std::mem::take(&mut self.sound_finished);
         self.sound.update(&finished);
     }
 
-    /// The stinger volume, trunc(1024 x Sound-effects gain), and the emote-clip volume,
-    /// trunc(1024 x Voice gain).
+    /// The stinger volume, trunc(1024 x gain), and the emote-clip volume, trunc(1024 x gain): the
+    /// original's Sound-effects and Voice gains are the Sound page's Jingles and Voices levels.
     pub fn stinger_volume(&self) -> i32 {
-        (1024.0 * self.options.effects()) as i32
+        (1024.0 * self.sound_levels.jingles()) as i32
     }
 
     pub fn emote_volume(&self) -> i32 {
-        (1024.0 * self.options.voice()) as i32
+        (1024.0 * self.sound_levels.voices()) as i32
     }
 
     pub fn cue(&mut self, cue: i32) {
@@ -21133,13 +21146,15 @@ impl Play {
         let state = &self.state;
         let flag = neopets_sim::music::runtime_flag(selector, &|n| state.flag(n));
         let s = neopets_sim::music::select(r.bank, r.stream, r.block, flag);
-        self.music.tick(s.stream, s.stop, r.cap, self.options.effects());
-        // The default cue volume: trunc(row Scale x Sound-effects gain).
-        self.sound.default_volume = (r.scale as f32 * self.options.effects()) as i32;
+        // The stream ceiling trunc(Cap x gain): the original's Sound-effects gain is the Sound
+        // page's Ambience level here (the streams are the looping background tracks).
+        self.music.tick(s.stream, s.stop, r.cap, self.sound_levels.ambience());
+        // The default cue volume (trunc(row Scale)) and the mixer levels.
+        self.set_cue_levels(r.scale);
         self.music_selection = Some(s);
         // The bank: the row's offset with the flag's +67 (added to negative offsets too).
         let duck = if self.stinger_playing { 0.7 } else { 1.0 };
-        self.bank_music.tick(r.bank + if flag { 67 } else { 0 }, r.level, self.options.music() * duck);
+        self.bank_music.tick(r.bank + if flag { 67 } else { 0 }, r.level, self.sound_levels.music() * duck);
         // A progress flag that rose since the last tick plays its table-2 stinger (v - 1).
         let risen: Vec<u16> = self.state.flags.difference(&self.flags_seen).copied().collect();
         self.flags_seen = self.state.flags.clone();
