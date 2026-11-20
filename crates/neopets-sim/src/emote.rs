@@ -134,12 +134,20 @@ impl<C: Copy> Queues<C> {
                 None => -1,
             };
         }
-        let face_clip = self.face.first().and_then(|e| e.clip);
+        // A queued entry's clip starts once: taken from the entry when it starts (this build).
+        // In the original the main request takes at once, so the second branch, which starts
+        // a clip, runs once per body emote; here other steps (a scripted walk, an idle) could
+        // put the main id back while the talk ran, and the clip restarted every time the last
+        // one ended (user reports 155 and 165, "they will loop their sounds").
         if !body || a.main == b {
-            let clip = if a.face != f { face_clip } else { None };
+            let clip = if a.face != f { self.face.first_mut().and_then(|e| e.clip.take()) } else { None };
             Consumed { request_main: None, face: f, clip }
         } else {
-            Consumed { request_main: Some(b), face: f, clip: face_clip.or(self.body.first().and_then(|e| e.clip)) }
+            let clip = match self.face.first_mut().and_then(|e| e.clip.take()) {
+                Some(c) => Some(c),
+                None => self.body.first_mut().and_then(|e| e.clip.take()),
+            };
+            Consumed { request_main: Some(b), face: f, clip }
         }
     }
 }
@@ -151,6 +159,19 @@ mod tests {
     fn fixed(values: Vec<u32>) -> impl FnMut(u32) -> u32 {
         let mut it = values.into_iter();
         move |_| it.next().unwrap_or(0)
+    }
+
+    /// A body emote whose main id is put back by something else each tick still starts its clip
+    /// once (user reports 155 and 165).
+    #[test]
+    fn clip_starts_once() {
+        let mut q: Queues<u32> = Queues::default();
+        q.push(PARTNER_BODY, Entry { clip: Some(7), id: 44 });
+        let idle = Actor { main: 0, main_progress: 0.5, ..Actor::default() };
+        let first = q.consume(idle, true);
+        assert_eq!((first.request_main, first.clip), (Some(44), Some(7)));
+        let again = q.consume(idle, true);
+        assert_eq!((again.request_main, again.clip), (Some(44), None));
     }
 
     #[test]

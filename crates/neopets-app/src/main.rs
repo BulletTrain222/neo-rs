@@ -4089,8 +4089,10 @@ fn sync_zones(
     mut toggles: Local<(std::collections::HashMap<Entity, (u32, String)>, u32)>,
     sigs: Res<SceneSigs>,
     mut dups: Local<(u32, usize, std::collections::HashMap<Entity, bool>)>,
+    mut frame_no: Local<u32>,
 ) {
     let _span = crate::perf::span("sync_zones");
+    *frame_no += 1;
     let Some(state) = state else { return };
     // The instance draw distance applies only with Distant foliage set to Original; Full (the
     // default) draws every instance at any distance.
@@ -4121,6 +4123,15 @@ fn sync_zones(
         // Skipped at D1 or more (squared values compared).
         let near = no_cull || cull.is_none_or(|c| eye.is_none_or(|e| e.distance_squared(c.0) < c.1 * c.1));
         let want = if zone_ok && !dup && near { Visibility::Inherited } else { Visibility::Hidden };
+        // NEOPETS_TRACE_ZONEGATE=n: once, on frame n, every zone-gated part of the current world
+        // with its zone column, the row's answer and its box (diagnostic).
+        if std::env::var("NEOPETS_TRACE_ZONEGATE").ok().and_then(|v| v.parse::<u32>().ok()) == Some(*frame_no) {
+            if let (Some(g), Some(s)) = (g, s) {
+                if g.0 == current {
+                    println!("ZONEGATE part zone {} ok {zone_ok} verts {} lo {:?} hi {:?}", g.1, s.count, s.lo, s.hi);
+                }
+            }
+        }
         if *v != want {
             if trace {
                 let t = (*toggles).0.entry(e).or_insert((0, String::new()));
@@ -6220,10 +6231,11 @@ fn play_trace(
                 if let Ok(m) = neopets_data::model::build_world(&bytes, &chain.chunks, u32::MAX) {
                     for (i, q) in m.parts.iter().enumerate() {
                         let (lo, hi) = q.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| (std::array::from_fn(|k| lo[k].min(p[k])), std::array::from_fn(|k| hi[k].max(p[k]))));
-                        if hi[0] >= v[0] && lo[0] <= v[2] && hi[2] >= v[1] && lo[2] <= v[3] && hi[0] - lo[0] < 150.0 && hi[2] - lo[2] < 150.0 {
+                        if hi[0] >= v[0] && lo[0] <= v[2] && hi[2] >= v[1] && lo[2] <= v[3] && (std::env::var_os("NEOPETS_TRACE_PARTS_ALL").is_some() || (hi[0] - lo[0] < 150.0 && hi[2] - lo[2] < 150.0)) {
                             let g = play.world.ground_at(0.5 * (lo[0] + hi[0]), 0.5 * (lo[2] + hi[2]), hi[1] + 8.0);
                             let placed = neopets_data::world::scene(&bytes, &chain.chunks).trees.get(q.tree).map(|t| (t.source, t.matrix.map(|m| [m[12], m[13], m[14]])));
-                            println!("      PART {i} tree {} {placed:?} verts {} lo {lo:?} hi {hi:?} zone {:?} group {:?} tex {:?} lit {} pass {} bucket {:?} ground {g:?}", q.tree, q.positions.len(), q.zone, q.group, q.texture, q.lit, q.pass, q.bucket);
+                            let shown = q.zone.is_none_or(|z| play.zone_visible(play.world.pack, z));
+                            println!("      PART {i} tree {} {placed:?} verts {} lo {lo:?} hi {hi:?} zone {:?} shown {shown} group {:?} tex {:?} lit {} pass {} bucket {:?} ground {g:?}", q.tree, q.positions.len(), q.zone, q.group, q.texture, q.lit, q.pass, q.bucket);
                         }
                     }
                 }

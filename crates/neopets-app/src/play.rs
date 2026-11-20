@@ -19240,6 +19240,12 @@ impl Play {
             let p = self.player.loco.position();
             let other = self.other.as_ref().map(|o| (o.pack, o.world_id, o.probe(p[0], p[2], p[1] + 2.5)));
             println!("      zone tick {}: current {} id {} found {} zone {:?}; other {:?}; row now {:?}", self.ticks, self.world.pack, self.world.world_id, hit.found, hit.zone, other.map(|(pk, id, h)| (pk, id, h.found, h.zone)), self.zones);
+            if let Some(g) = self.world.zones.as_ref() {
+                for b in &g.blocks {
+                    let rows: Vec<String> = (0..b.height).map(|r| b.cells.iter().skip((r * b.width) as usize).take(b.width as usize).map(|c| if *c != 0 { '1' } else { '.' }).collect()).collect();
+                    println!("      zone grid block key {} {}x{} after {}: {}", b.key, b.width, b.height, b.after, rows.join(" "));
+                }
+            }
         }
         self.zones.active = Some(0);
         self.zones.update(self.world.zones.as_ref(), self.world.world_id, hit.zone.filter(|_| hit.found));
@@ -21106,6 +21112,11 @@ impl Play {
             let view = c.anim.emote_view();
             let busy = matches!(view.main, 65..=74 | 78 | 97 | 98 | 146 | 147);
             let out = c.emotes.consume(view, !busy);
+            // NEOPETS_TRACE_EMOTES: each partner clip the consumer starts, with the main and face
+            // ids it saw (diagnostic, for clips that repeat through a talk).
+            if out.clip.is_some() && std::env::var_os("NEOPETS_TRACE_EMOTES").is_some() {
+                println!("EMOTE partner {} main {} face {} -> request {:?} face {} clip {:?}", c.name, view.main, view.face, out.request_main, out.face, out.clip);
+            }
             clips.extend(apply(&mut c.anim, out));
         }
         for (bank, start, len) in clips {
