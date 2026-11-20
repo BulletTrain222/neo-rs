@@ -6303,13 +6303,15 @@ fn reg_at(index: u16, routine: u8) -> Action {
 /// object).
 const BREAKER_735: [(usize, usize, usize, usize); 7] = [(4, 3, 59, 5), (7, 2, 60, 6), (9, 4, 61, 7), (13, 4, 62, 8), (17, 5, 63, 9), (22, 6, 64, 10), (28, 4, 65, 11)];
 
-/// SPEC-0044 735 break scene of group k: the look-at camera of track 21 (played as its track),
+/// SPEC-0044 735 break scene of group k: the look-at camera of track 21 on the falling object
+/// (PlayLookAtAnimObjCamera, SPEC-0030 row 38; report 161: played as a plain track it showed
+/// an angle with nothing in it),
 /// the group's breakables made breakable and broken, sound 10, the falling object's animation
 /// (waited) and the object off, effect 0, the platform object on and animated at 0.7, 30 ticks,
 /// effect 0 off and the normal camera.
 fn break_scene_735(k: usize) -> Vec<Action> {
     let Some(&(first, n, fall, plat)) = BREAKER_735.get(k.wrapping_sub(1)) else { return Vec::new() };
-    let mut v = vec![Action::PlayCamera { track: 21, wait: false, end: 1, speed: 1.0 }];
+    let mut v = vec![Action::PlayTarget { track: 21, wait: false, end: 1, speed: 1.0, target: CameraTarget::Object(fall) }];
     for id in first..first + n {
         v.extend([Action::MakeBreakable { id, on: true }, Action::Break { id }]);
     }
