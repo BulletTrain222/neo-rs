@@ -4759,6 +4759,10 @@ impl Play {
                 Action::PlaySound { cue, locator } | Action::PlaySoundNoRestart { cue, locator } | Action::LoopSound { cue, locator } | Action::VisitLoopSound { cue, locator } | Action::KillSound { cue, locator } => {
                     use neopets_sim::sound::{Play as Cue, AREA};
                     let at = locator.and_then(|i| self.world.entries.get(i)).map(|e| e.0);
+                    // NEOPETS_TRACE_AREA: each script sound call (diagnostic).
+                    if std::env::var_os("NEOPETS_TRACE_AREA").is_some() {
+                        println!("AREA tick {}: script {a:?} at {at:?}", self.ticks);
+                    }
                     match a {
                         Action::PlaySound { .. } => {
                             self.sound.play(AREA, cue, Cue { emitter: at, ..Default::default() });
@@ -12415,6 +12419,10 @@ impl Play {
                 for (i, o) in w.object_anims.iter().enumerate() {
                     if o.sound_start.is_some() || o.sound_stop.is_some() {
                         let at = w.objects.get(i).and_then(|ob| ob.as_ref()).map(|ob| [ob.rest[12], ob.rest[13], ob.rest[14]]);
+                        // NEOPETS_TRACE_AREA: each animated-object sound start and stop (diagnostic).
+                        if std::env::var_os("NEOPETS_TRACE_AREA").is_some() {
+                            println!("AREA tick {}: object {i} of {} sound start {:?} stop {:?} at {at:?} (state {}, time {:.3})", self.ticks, w.pack, o.sound_start, o.sound_stop, o.state, o.time);
+                        }
                         object_sounds.push((o.sound_start, o.sound_stop, at));
                     }
                 }
@@ -20790,9 +20798,15 @@ impl Play {
     fn sound_step(&mut self) {
         use neopets_sim::sound::{self as snd, Play};
         let s = &mut self.sound;
-        s.slots[snd::VOICE] = Some(348);
-        s.slots[snd::WEAPON] = Some(snd::weapon_block(false, self.weapon));
-        s.slots[snd::SHIELD] = Some(snd::shield_block(false, self.shield));
+        // The selected hero's blocks (SPEC-0031 Slot map): Tor's voice 348, weapon 461 + (sword
+        // - 98) and shield 455 + (shield - 105); Roberta's voice 349, weapon 469 + (wand - 111)
+        // and shield 459. Before, Tor's rules were used for both, so Roberta's wand 116 gave
+        // block 479 (a weapon-Mote power block): her unsheath cue 0 played its endless loop
+        // there, a bubbling hum that never stopped (report 157).
+        let roberta = self.hero_index == 1;
+        s.slots[snd::VOICE] = Some(if roberta { 349 } else { 348 });
+        s.slots[snd::WEAPON] = Some(snd::weapon_block(roberta, self.weapon));
+        s.slots[snd::SHIELD] = Some(snd::shield_block(roberta, self.shield));
         s.slots[snd::POWER] = Some(snd::power_block(None));
         if let Some(sel) = self.music_selection {
             match sel.block {
@@ -20913,6 +20927,10 @@ impl Play {
             let Some(w) = c.anim.sound_word(action) else { continue };
             let (Some(block), Some((cue, keep))) = (crate::character::sound_block(w), crate::character::sound_cue(w)) else { continue };
             if changed || keep {
+                // NEOPETS_TRACE_CREATURE_SOUNDS: each creature animation sound (diagnostic).
+                if changed && std::env::var_os("NEOPETS_TRACE_CREATURE_SOUNDS").is_some() {
+                    println!("CREATURE tick {}: {} (id {}, type {}) action {action} plays {block}:{cue} keep {keep}", self.ticks, c.name, c.id, c.pet_type);
+                }
                 plays.push((block, cue, keep, c.position));
             }
         }

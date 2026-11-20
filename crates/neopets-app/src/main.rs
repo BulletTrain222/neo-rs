@@ -1515,6 +1515,10 @@ fn step_sim(
                 }
             }
         }
+        // NEOPETS_TRACE_ATTACK also works in the window: the attack pressed on those play ticks.
+        if std::env::var("NEOPETS_TRACE_ATTACK").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.play.ticks + 1))) {
+            play.play.attack_latch = true;
+        }
         // NEOPETS_TRACE_SWITCH also works in the window: the chord on those play ticks.
         if std::env::var("NEOPETS_TRACE_SWITCH").ok().is_some_and(|v| v.split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| (k..k + 3).contains(&(play.play.ticks + 1)))) {
             play.play.l1_latch = true;
