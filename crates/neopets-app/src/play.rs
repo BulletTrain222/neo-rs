@@ -19482,6 +19482,11 @@ impl Play {
                 .filter(|(q, ..)| (q[0] - hero_at[0]).powi(2) + (q[1] - hero_at[1]).powi(2) + (q[2] - hero_at[2]).powi(2) < 400.0)
                 .collect()
         };
+        // The class 20 creatures in their shell, with the top of their hurt shapes in this pose:
+        // the body does not push then (SPEC-0047 Class 20 Body), and the hero can stand on the
+        // shell (this build's choice, report 164 and the user's memory of the original; R-0288
+        // asks what the two contact shapes the shell queues for the hero do).
+        let shells: Vec<(u64, Option<f32>)> = self.characters.iter().filter(|c| c.class20.as_ref().is_some_and(|k| k.in_shell())).map(|c| (c.id, c.hurt_top())).collect();
         // SPEC-0018 Breakable cylinders against characters (the list B walk; a cell's list only
         // narrows the same set): each state 1 or 3 breakable with an upright cylinder volume.
         let breakable_cylinders = if noclip { Vec::new() } else { self.world.breakable_cylinders(hero_at, 40.0) };
@@ -19639,6 +19644,20 @@ impl Play {
                     }
                     let (dx, dz) = (p[0] - q[0], p[2] - q[2]);
                     let d = dx.hypot(dz);
+                    // A class 20 creature in its shell: no push; a hero over it with his feet
+                    // within 1.0 under the shell top, or on it, stands on the top while not
+                    // rising (this build's choice, report 164), so its pop-up launches him.
+                    if let Some(&(_, shell)) = shells.iter().find(|s| s.0 == id) {
+                        let top = shell.unwrap_or(q[1] + 1.5);
+                        let up = top - p[1];
+                        if d < contact::HERO_RADIUS + r && up < 1.0 && up > -0.05 && vel[1] <= 0.0 {
+                            p[1] = p[1].max(top);
+                            vel[1] = 0.0;
+                            on_top = true;
+                            touch_ids.borrow_mut().push(id);
+                        }
+                        continue;
+                    }
                     // SPEC-0040 the character push rule (R-0245): with the hero's axis upright and
                     // the axes closer than the hero radius, feet 3.1 to 3.5 over the body's origin
                     // are pulled down onto 3.1 (the cap normal points into the body) with a

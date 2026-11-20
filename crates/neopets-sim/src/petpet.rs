@@ -701,6 +701,13 @@ impl Class20 {
         Self { state: 0, sub: 0, wait: 0, point: None, latched: false, target: None, home }
     }
 
+    /// In the shell: state 1, sub-steps 1 and 2 (after animation 14), when the hero-reaction
+    /// routine clears the collidable word every tick, so the body no longer pushes the hero
+    /// (SPEC-0047 Class 20 State 1, Body).
+    pub fn in_shell(&self) -> bool {
+        self.state == 1 && self.sub >= 1
+    }
+
     /// One tick. `waits` is the 4 to 5 s range in ticks.
     pub fn tick(&mut self, v: &Class20View, waits: (i32, i32), rng: &mut Rng) -> Class20Act {
         self.tick_on(v, waits, rng, &|_| true)

@@ -142,6 +142,7 @@ SCENARIOS = [
     ('a Bogshot house floor plays wooden footsteps, not metal grate (report 156)', 'SPEC-0031 Footsteps (the surface word at +0x40)', 120, 745, ['--start', '-0.5,-2.4'], {'NEOPETS_TRACE_PUSH': '3,7', 'NEOPETS_TRACE_NOAUTO': '1'}, both(has(r'"347:25 at'), lacks(r'"347:24 at'))),
     ('the wooden stepping platforms on the way to the 735 serpent arena are drawn (report 158)', 'SPEC-0044 735 Init (objects 50 to 54 and 12 on); SPEC-0016 Arena build guide, Approach', 6, 735, ['--start', '3679.9,-669.2,114'], {'NEOPETS_TRACE_OBJS': '5,50-54', 'NEOPETS_TRACE_NOAUTO': '1'}, both(has(r'obj 50: drawn at Some'), has(r'obj 54: drawn at Some'))),
     ('house 752 in pack 722 can be entered, not left at once (report 163)', 'SPEC-0006 Doors and stale confirm; this build clears the flag at the enter job, R-0287', 400, 722, ['--start', '2624.8,-1015.3'], {'NEOPETS_TRACE_SQUARE': '20', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_NOAUTO': '1'}, both(has(r'entered interior 752'), lacks(r'left the interior'))),
+    ('the hero stands on the hidden shell petpet and is thrown up when it pops out (report 164)', 'SPEC-0047 Class 20 State 1 and Body; this build stands the hero on the shell, R-0288', 560, 1056, ['--give', '99', '--start', '73.5,709,23'], {'NEOPETS_TRACE_NOAUTO': '1', 'NEOPETS_TRACE_FACE': '2:76,709;90:76,709;159:76,709', 'NEOPETS_TRACE_ATTACK': '100,101', 'NEOPETS_TRACE_PUSH': '76,709', 'NEOPETS_TRACE_PLACE': '240:76,709,0,26'}, both(has(r'  320 pos \(\s+76\.000\s+24\.3\d+'), has(r'pos \(\s+76\.000\s+3[3-9]\.\d+\s+709\.000\) state  7'))),
 ]
 
 
