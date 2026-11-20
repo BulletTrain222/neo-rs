@@ -795,7 +795,9 @@ impl Locomotion {
             SLOW_WALK | WALK | RUN => self.state as u32 + if self.p1 { 5 } else { 0 },
             STRAFE => self.strafe_id,
             43..=46 => self.request,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | HERO_LOOP | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE | ROPE => self.request,
+            // The get-up state 54 plays its clip 137 too (report 159: left out, the hero stood in
+            // idle 0 for good, waiting for a clip that was never asked for).
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | HERO_LOOP | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE | ROPE | GET_UP => self.request,
             ARRIVAL => 175,
             HELD => 143,
             SNEAK if self.slow_patch => 0,
@@ -1327,6 +1329,21 @@ mod tests {
         let z = h.position()[2];
         h.travel([0.0, 0.0, 1.0]);
         assert!((h.position()[2] - z - 1.0).abs() < 1e-5);
+    }
+
+    /// SPEC-0016 Hero get-up state 54: the clip 137 is asked for, and at its progress 0.99 the
+    /// hero stands (state 1). Report 159: the state asked for idle 0 and never ended.
+    #[test]
+    fn get_up_plays_its_clip_and_ends() {
+        let (c, left) = ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        let mut h = Locomotion::spawn([0.0; 3], FWD);
+        h.state = GET_UP;
+        h.update(&HeroInput::default(), c, left, ClipState { action: 0, progress: 0.99, finished: false });
+        assert_eq!((h.state, h.action()), (GET_UP, ANIM_LONG_LAND));
+        h.update(&HeroInput::default(), c, left, ClipState { action: ANIM_LONG_LAND, progress: 0.5, finished: false });
+        assert_eq!(h.state, GET_UP);
+        h.update(&HeroInput::default(), c, left, ClipState { action: ANIM_LONG_LAND, progress: 0.99, finished: false });
+        assert_eq!(h.state, STANCE);
     }
 
     /// SPEC-0036 State 17: back to state 32 only with L2 held and state 32 before the hit.
