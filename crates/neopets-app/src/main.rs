@@ -6061,6 +6061,11 @@ fn play_trace(
     if std::env::var_os("NEOPETS_TRACE_DOORS").is_some() {
         let doors: Vec<Option<u16>> = (0..play.world.planes.len()).map(|n| neopets_sim::level::teleport_context(play.world.pack, n)).collect();
         println!("DOORS {} scripted {} {:?}", play.world.pack, play.world.scripted_doors, doors);
+        for (n, d) in play.world.planes.iter().enumerate() {
+            println!("DOOR {n}: p {:?} f {:?} d {:?} w {:.2} h {:.2}", d.p, d.f, d.d, d.w, d.h);
+        }
+        let h = play.player.loco.position();
+        println!("DOORS hero at {h:?} touches {:?}", play.world.touched_door(h));
     }
     // NEOPETS_TRACE_CATALOG=1: the developer menu's character list, one line each (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_CATALOG").is_some() {

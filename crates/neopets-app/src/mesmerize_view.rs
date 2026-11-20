@@ -12,7 +12,7 @@ use crate::PlayState;
 /// Rings per beam.
 const RINGS: usize = 16;
 /// Ticks for a ring to travel the whole beam.
-const TRAVEL_TICKS: f32 = 48.0;
+const TRAVEL_TICKS: f32 = 150.0;
 /// Ring radius at the hand and at the hero.
 const RADIUS: (f32, f32) = (0.35, 1.35);
 

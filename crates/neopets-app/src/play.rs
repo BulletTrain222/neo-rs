@@ -10827,6 +10827,12 @@ impl Play {
                 let (l, g) = self.world.entries.first().copied().unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
                 let l = self.world.snap(l, 6.0);
                 self.arrive((l, g));
+                // This build's choice (report 163; request R-0287): the script door that started
+                // the job left the door-confirm flag set (SPEC-0006 Edge cases, stale confirm),
+                // and pack 752's entry record 0 lies 0.9 inside its exit door's touch zone, so the
+                // exit door consumed the flag on the first tick and sent the hero straight back
+                // out, every time. The flag is cleared on arrival, so an exit door asks first.
+                self.confirm = false;
                 self.last_door = format!("entered interior {} at entry record 0", self.world.pack);
                 self.activated();
             }
