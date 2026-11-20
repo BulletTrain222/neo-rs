@@ -396,6 +396,19 @@ impl Effects {
         self.instances.iter().any(|i| i.id == id)
     }
 
+    /// The running instances, for a trace: "block:cue #id" with its volume, its parent and
+    /// whether it is stopping or done (this build's test tool).
+    pub fn describe(&self) -> Vec<String> {
+        self.instances
+            .iter()
+            .map(|i| {
+                let parent = i.parent.map_or(String::new(), |p| format!(" child of #{p}"));
+                let state = if i.stopping { " stopping" } else if i.done { " done" } else { "" };
+                format!("{}:{} #{} vol {} ch {}{parent}{state}", i.block.number, i.cue, i.id, i.volume, i.channels.iter().flatten().count())
+            })
+            .collect()
+    }
+
     /// Run records of instance k while its countdown is 0 or less (Play rule step 5).
     fn run(&mut self, k: usize) {
         for _ in 0..10_000 {

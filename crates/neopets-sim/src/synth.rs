@@ -349,6 +349,11 @@ impl Synth {
         }
     }
 
+    /// The sounding voices, for a trace: "owner id/channel/note level" (this build's test tool).
+    pub fn describe(&self) -> Vec<String> {
+        self.voices.iter().flatten().filter(|v| !v.env.off()).map(|v| format!("{}/{}/{} lv {} loop {}", v.owner.0, v.owner.1, v.owner.2, v.env.level, v.sample.loop_start.is_some())).collect()
+    }
+
     /// The voices an instance still has sounding.
     pub fn sounding(&self, owner: usize) -> usize {
         self.voices.iter().flatten().filter(|v| v.owner.0 == owner && !v.env.off()).count()

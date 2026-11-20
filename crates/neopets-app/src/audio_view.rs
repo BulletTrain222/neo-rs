@@ -256,6 +256,11 @@ pub fn sync_effects(
             }
         }
         p.sound_finished.extend(e.take_finished());
+        // NEOPETS_TRACE_VOICES: the engine's running cues once a second, with the game's voice
+        // count (a test tool of this build, for sounds that do not stop).
+        if p.ticks % 60 == 0 && std::env::var_os("NEOPETS_TRACE_VOICES").is_some() {
+            println!("VOICES tick {} ({} kept by the game): {:?}; synth {:?}; streams {:?}; bank {:?} at {}; stinger {}", p.ticks, p.sound.voices(), e.describe(), e.synth.describe(), p.music.channels, p.bank_music.playing, p.bank_music.volume, p.stinger_playing);
+        }
     }
     p.sound.not_started(&not_started);
 }

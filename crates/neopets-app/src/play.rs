@@ -20814,7 +20814,10 @@ impl Play {
         let p = self.player.loco.position();
         let state = self.player.loco.state;
         let grounded = self.player.loco.body.gap < 0.1;
-        let code = self.world.probe(p[0], p[2], p[1] + neopets_sim::motion::PROBE_CEILING).kind;
+        // The ground material code: the surface word at the ground entry's +0x40 (SPEC-0031
+        // Footsteps), not its ground kind at +0x38 (report 156: a wooden floor of kind 4 played
+        // metal grate steps).
+        let code = self.world.probe(p[0], p[2], p[1] + neopets_sim::motion::PROBE_CEILING).surface.map(u32::from);
         // Footsteps: a new layer-0 frame with bit 0x80 or 0x100 while grounded; gait by state.
         let frame = self.player.hero.layer0();
         if frame.map(|f| f.0) != self.foot_frame.map(|f| f.0) {

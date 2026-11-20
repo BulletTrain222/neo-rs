@@ -67,6 +67,12 @@ def has(pattern):
     return test
 
 
+def lacks(pattern):
+    def test(out):
+        return f'a match of {pattern!r}' if re.search(pattern, out) else None
+    return test
+
+
 def both(a, b):
     def test(out):
         return a(out) or b(out)
@@ -133,6 +139,7 @@ SCENARIOS = [
     ('co-op: with Stay together off player 2 walks more than 60 units away', 'this build (co-op Stay together option)', 1500, 934, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_APART': '1', 'NEOPETS_COOP_CLIMB': '1', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GOD': '1'}, has(r'COOP 1500 p2 \(-1(1[7-9]|2\d)\d\.\d')),
     ('co-op: player 2 stepping into the next area comes back beside player 1 (report 142)', 'this build (co-op rules; user report 142)', 60, 1066, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_STILL': '1', 'NEOPETS_COOP_APART': '1', 'NEOPETS_COOP_AT': '-286.86,670.9,50@30', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GOD': '1'}, has(r'COOP 50 p2 at \(-74\d\.\d+, 4\d\.\d+, 83\d\.\d+\)')),
     ('co-op: a second Tor guards with a shield', 'this build (co-op guard)', 100, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_TOR': '1', 'NEOPETS_COOP_GUARD': '1', 'NEOPETS_TRACE_GIVE': '2:106:1'}, has(r'COOP 90 p2 .* state 20 clip 63')),
+    ('a Bogshot house floor plays wooden footsteps, not metal grate (report 156)', 'SPEC-0031 Footsteps (the surface word at +0x40)', 120, 745, ['--start', '-0.5,-2.4'], {'NEOPETS_TRACE_PUSH': '3,7', 'NEOPETS_TRACE_NOAUTO': '1'}, both(has(r'"347:25 at'), lacks(r'"347:24 at'))),
 ]
 
 
