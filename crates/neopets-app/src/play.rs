@@ -9194,7 +9194,8 @@ impl Play {
             return vec![
                 head(format!("phase {}", s.phase)),
                 format!("{doing}: {}", if open { "STUNNED, hit its head!" } else { "can't be hurt" }),
-                "hurt: block (L1) its lunge, then hit the head".to_string(),
+                "hurt: face it and hold L1 only once it lunges,".to_string(),
+                "then hit the head; held in its wind-up, it spits".to_string(),
                 "stay off the swamp; its belch poisons".to_string(),
             ];
         }

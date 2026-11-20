@@ -54,12 +54,15 @@ pub enum Mode {
 pub struct Listener {
     pub point: [f32; 3],
     pub rows: [[f32; 3]; 3],
+    /// The original's pan sum (true), whose stereo side swaps as the camera turns; false (this
+    /// build's default, report 160) gives each sound its side from the camera.
+    pub original_pan: bool,
 }
 
 impl Listener {
     pub fn from_camera(position: [f32; 3], rows: [[f32; 3]; 3]) -> Self {
         let f = rows[2];
-        Self { point: [position[0] + 5.0 * f[0], position[1] + 5.0 * f[1], position[2] + 5.0 * f[2]], rows }
+        Self { point: [position[0] + 5.0 * f[0], position[1] + 5.0 * f[1], position[2] + 5.0 * f[2]], rows, original_pan: false }
     }
 
     /// The positional volume of base volume `v` with radii `r` and `r0`: None out of range.
@@ -78,13 +81,31 @@ impl Listener {
         Some(out)
     }
 
-    /// The pan angle: u = v.x row0 + v.y row1 + v.z row2 (as the original sums it), phi from u,
-    /// pan = trunc((1 - (phi / pi + 0.5) / 2) x 359).
+    /// The pan angle (SPEC-0031 Positional volume and pan, Direction of the listener rotation).
+    /// This build's default is the spec's correct stereo: x = v . right and z = v . forward, phi
+    /// their angle and pan = 90 - phi degrees, so a sound on the screen's right is 90 (heard on
+    /// the right), ahead 0, on the left 270 and behind 180. The screen's right is forward x world
+    /// up, as the app's camera draws the view (row 0 of the play camera, up x forward, is the
+    /// screen's left in this build's picture, so it is not used here). Before (report 160: "his sounds are coming from the
+    /// wrong directions") every sound used the original's sum u = v.x row0 + v.y row1 + v.z row2
+    /// and pan = trunc((1 - (phi / pi + 0.5) / 2) x 359), whose side swaps as the camera turns
+    /// (a sound on the right heard on the left with the camera along z); `original_pan` keeps it.
     pub fn pan(&self, emitter: [f32; 3]) -> i32 {
         let v = [emitter[0] - self.point[0], emitter[1] - self.point[1], emitter[2] - self.point[2]];
         let r = &self.rows;
-        let u: [f32; 3] = std::array::from_fn(|k| v[0] * r[0][k] + v[1] * r[1][k] + v[2] * r[2][k]);
         let pi = std::f32::consts::PI;
+        if !self.original_pan {
+            let dot = |row: [f32; 3]| v[0] * row[0] + v[1] * row[1] + v[2] * row[2];
+            let f = r[2];
+            let right = [-f[2], 0.0, f[0]];
+            let (x, z) = (dot(right), dot(f));
+            if x.abs() < 1e-6 && z.abs() < 1e-6 {
+                return 0;
+            }
+            let phi = z.atan2(x).to_degrees();
+            return ((90.0 - phi).rem_euclid(360.0) as i32).min(359);
+        }
+        let u: [f32; 3] = std::array::from_fn(|k| v[0] * r[0][k] + v[1] * r[1][k] + v[2] * r[2][k]);
         let phi = if u[0].abs() < 1e-6 {
             if u[2] >= 0.0 { pi / 2.0 } else { -pi / 2.0 }
         } else {
@@ -399,10 +420,20 @@ mod tests {
         assert_eq!(l.volume(at(5.0), 768, 30.0, 10.0), Some(768));
         assert_eq!(l.volume(at(20.0), 768, 30.0, 10.0), Some(384));
         assert_eq!(l.volume(at(30.0), 768, 30.0, 10.0), None);
-        // Pan: u = (1, 0, 0) gives 269; (-1, 0, 0) 89; (0, 0, 1) 179; (0, 0, -1) 359.
+        // The original's pan: u = (1, 0, 0) gives 269; (-1, 0, 0) 89; (0, 0, 1) 179; (0, 0, -1) 359.
+        let original = Listener { original_pan: true, ..l };
         for (u, p) in [([1.0, 0.0, 0.0], 269), ([-1.0, 0.0, 0.0], 89), ([0.0, 0.0, 1.0], 179), ([0.0, 0.0, -1.0], 359)] {
-            assert_eq!(l.pan(u), p);
+            assert_eq!(original.pan(u), p);
         }
+        // This build's, looking along +z (the screen's right is -x): -x is 90 (right), +x 270
+        // (left), ahead 0, behind 180 (the listener is 5 ahead of the camera at the origin).
+        for (u, p) in [([-1.0, 0.0, 0.0], 90), ([1.0, 0.0, 0.0], 270), ([0.0, 0.0, 1.0], 0), ([0.0, 0.0, -10.0], 180)] {
+            assert_eq!(l.pan(u), p, "{u:?}");
+        }
+        // Turned to look along +x, the screen's right is +z: a sound there is on the right.
+        let turned = Listener::from_camera([0.0; 3], [[0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]);
+        assert_eq!(turned.pan([5.0, 0.0, 3.0]), 90);
+        assert_eq!(turned.pan([5.0, 0.0, -3.0]), 270);
     }
 
     #[test]
