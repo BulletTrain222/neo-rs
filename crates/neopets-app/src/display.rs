@@ -7,7 +7,8 @@
 //! kind of sound: master, music, ambience (the looping recorded tracks and placed ambient loops,
 //! such as the farm's birds), sound effects, voices, jingles, menu sounds and movies. The
 //! defaults (75% for the kinds the original's sliders covered) give the original's mix after its
-//! options are applied; see `SoundLevels`.
+//! options are applied; see `SoundLevels`. Each volume is a slider bar: left and right step it
+//! by 5%, and the mouse can click or drag it (`slider_mouse`).
 //!
 //! The 3D scene is drawn into an offscreen image the size of the game viewport (the window
 //! fitted to the chosen aspect ratio) times the render scale, and a window camera shows that
@@ -274,6 +275,13 @@ impl SoundLevels {
     /// A level as shown: "Off" at 0, else a percentage.
     pub fn shown(level: u8) -> String {
         if level == 0 { "Off".into() } else { format!("{level}%") }
+    }
+
+    /// The level at a point on a slider bar, `x` from -0.5 (left end) to 0.5 (right end), in
+    /// steps of 5%; past either end gives that end.
+    pub fn at(x: f32) -> u8 {
+        let steps = 100 / SOUND_STEP;
+        (((x + 0.5).clamp(0.0, 1.0) * steps as f32).round() as i32 * SOUND_STEP) as u8
     }
 }
 
@@ -1070,6 +1078,17 @@ pub struct DispAction(usize);
 #[derive(Component)]
 pub struct DispInput(usize);
 
+/// A Sound row's slider bar, and the gold part of it that shows the level.
+#[derive(Component)]
+pub struct DispSlider(usize);
+#[derive(Component)]
+pub struct DispFill(usize);
+
+/// A slider bar's track and its edge, plain and while selected or under the mouse.
+const TRACK: Color = Color::srgb(0.03, 0.03, 0.04);
+const TRACK_EDGE: Color = Color::srgba(1.0, 1.0, 1.0, 0.22);
+const TRACK_HOT: Color = Color::srgba(0.98, 0.80, 0.35, 0.80);
+
 const PANEL: Color = Color::srgb(0.05, 0.06, 0.10);
 const ROW: Color = Color::srgba(1.0, 1.0, 1.0, 0.04);
 const ROW_HOVER: Color = Color::srgba(1.0, 1.0, 1.0, 0.10);
@@ -1249,9 +1268,27 @@ pub fn spawn_window(mut commands: Commands) {
                             });
                         };
                         arrow(r, -1);
-                        r.spawn(Node { width: px(230), justify_content: JustifyContent::Center, ..default() }).with_children(|v| {
-                            v.spawn((Text::default(), font(15.0), TextColor(GOLD), TextLayout::no_wrap(), DispValue(k)));
-                        });
+                        if SOUND_ROWS.contains(&k) {
+                            // A volume: a slider bar with its level beside it, in the same width.
+                            r.spawn(Node { width: px(230), flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(10), ..default() }).with_children(|v| {
+                                v.spawn((
+                                    Button,
+                                    Node { width: px(166), height: px(14), padding: UiRect::all(px(2)), border: UiRect::all(px(1)), ..default() },
+                                    BackgroundColor(TRACK),
+                                    BorderColor::all(TRACK_EDGE),
+                                    bevy::ui::RelativeCursorPosition::default(),
+                                    DispSlider(k),
+                                ))
+                                .with_children(|t| {
+                                    t.spawn((Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(GOLD), DispFill(k)));
+                                });
+                                v.spawn((Text::default(), font(15.0), TextColor(GOLD), TextLayout::justify(Justify::Right).with_no_wrap(), Node { width: px(44), ..default() }, DispValue(k)));
+                            });
+                        } else {
+                            r.spawn(Node { width: px(230), justify_content: JustifyContent::Center, ..default() }).with_children(|v| {
+                                v.spawn((Text::default(), font(15.0), TextColor(GOLD), TextLayout::no_wrap(), DispValue(k)));
+                            });
+                        }
                         arrow(r, 1);
                     });
                 });
@@ -1322,6 +1359,48 @@ pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// The mouse on a Sound slider: while its button is held the level follows the mouse along the
+/// bar (past its ends too) in 5% steps, live, and the settings file is written when it is let go.
+pub fn slider_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, mut settings: ResMut<DisplaySettings>, sliders: Query<(&Interaction, &bevy::ui::RelativeCursorPosition, &DispSlider)>, mut held: Local<bool>) {
+    let Some(mut menu) = menu else { return };
+    let mut holding = false;
+    if menu.flow.current == crate::menus::DISPLAY && menu.flow.display_listen.is_none() {
+        for (i, at, s) in &sliders {
+            let Some(n) = at.normalized.filter(|_| *i == Interaction::Pressed) else { continue };
+            holding = true;
+            if menu.flow.display_focus != s.0 {
+                menu.flow.display_focus = s.0;
+            }
+            let (k, want) = (s.0 - SOUND_ROWS[0], SoundLevels::at(n.x));
+            if settings.sound.get(k) != want {
+                *settings.sound.get_mut(k) = want;
+            }
+        }
+    }
+    if *held && !holding {
+        settings.save();
+    }
+    *held = holding;
+}
+
+/// The Sound sliders: each bar's gold part as long as its level, and the bar's edge gold while
+/// its row is selected or the mouse is on it.
+pub fn show_sliders(menu: Option<Res<crate::menu_view::Menu>>, settings: Res<DisplaySettings>, mut fills: Query<(&DispFill, &mut Node)>, mut bars: Query<(&DispSlider, &Interaction, &mut BorderColor)>) {
+    let Some(flow) = menu.as_ref().map(|m| &m.flow).filter(|f| f.current == crate::menus::DISPLAY && f.display_page == SOUND_PAGE) else { return };
+    for (f, mut node) in &mut fills {
+        let want = percent(settings.sound.get(f.0 - SOUND_ROWS[0]).min(100) as f32);
+        if node.width != want {
+            node.width = want;
+        }
+    }
+    for (s, i, mut edge) in &mut bars {
+        let want = BorderColor::all(if s.0 == flow.display_focus || *i != Interaction::None { TRACK_HOT } else { TRACK_EDGE });
+        if *edge != want {
+            *edge = want;
         }
     }
 }
@@ -1519,7 +1598,13 @@ pub fn show_window(
         }
         colour.0 = if t.0 == flow.display_tab { GOLD } else { DIM };
     }
-    let keys_line = if tabbed { "Up/down pick, left/right change, L1/R1 switch tabs, Esc or B go back." } else { "Up and down pick, left and right or a click change. Esc or B go back." };
+    let keys_line = if tabbed {
+        "Up/down pick, left/right change, L1/R1 switch tabs, Esc or B go back."
+    } else if flow.display_page == SOUND_PAGE {
+        "Up/down pick, left/right change, or drag a bar. Esc or B go back."
+    } else {
+        "Up and down pick, left and right or a click change. Esc or B go back."
+    };
     for mut t in &mut keys {
         if t.0 != keys_line {
             t.0 = keys_line.to_string();
@@ -1717,5 +1802,8 @@ mod tests {
         assert_eq!(DisplaySettings::parse(&s.text()), s);
         assert_eq!(DisplaySettings::parse("mode = 0\n").sound, SoundLevels::default());
         assert_eq!(DisplaySettings::parse("music volume = 250\n").sound.music, 100);
+        // A slider bar: the ends are Off and 100%, the middle 50%, in 5% steps, past the ends clamped.
+        assert_eq!([SoundLevels::at(-0.5), SoundLevels::at(0.0), SoundLevels::at(0.5)], [0, 50, 100]);
+        assert_eq!([SoundLevels::at(0.26), SoundLevels::at(-0.9), SoundLevels::at(3.0)], [75, 0, 100]);
     }
 }
