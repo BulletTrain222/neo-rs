@@ -2785,6 +2785,12 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.extend([(14, 0.1), (15, 0.2), (16, 0.1)].map(|(obj, speed)| Action::LoopAnim { obj, speed }));
             // The breaker groups' falling objects 59 to 65 on (initial flag false).
             v.extend(BREAKER_735.iter().map(|g| Action::InitObjOn { obj: g.2, end: false }));
+            // Then the five platform-time objects 54, 50, 51, 52 and 53 and, last, object 12 (the
+            // bridge pad), all initial flag false (SPEC-0044 735 Init, the setup helper). 50 to 54
+            // are the pictures of the approach stones whose ground is the pack's own patches
+            // (SPEC-0016 Arena build guide, Approach); left off, the stones were solid but unseen
+            // (report 158).
+            v.extend([54, 50, 51, 52, 53, 12].map(|obj| Action::InitObjOn { obj, end: false }));
             let f = |n| state.flag(n);
             let ritual = f(530) && !f(531);
             let set = if f(76) { ritual as u32 } else if f(75) { 0 } else if ritual { 3 } else { 2 };
@@ -21413,7 +21419,10 @@ mod tests {
     #[test]
     fn module_735_boss_and_callback() {
         let mut s = GameState::default();
-        assert!(on_init(735, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(738) }));
+        let init = on_init(735, &mut s);
+        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(738) }));
+        // The approach stones' pictures 50 to 54 and the bridge pad 12 are switched on (report 158).
+        assert!([50, 51, 52, 53, 54, 12].iter().all(|&obj| init.contains(&Action::InitObjOn { obj, end: false })));
         let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         on_trigger(735, 23, enter(23), &mut s);
         assert!(s.level(8));

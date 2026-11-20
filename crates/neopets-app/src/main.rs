@@ -4099,6 +4099,8 @@ fn sync_zones(
     // (diagnostic, for flicker).
     let trace = std::env::var_os("NEOPETS_TRACE_VIS").is_some();
     let no_zones = std::env::var_os("NEOPETS_NO_ZONES").is_some();
+    // NEOPETS_NO_CULL: no part skipped at its draw distance (diagnostic).
+    let no_cull = std::env::var_os("NEOPETS_NO_CULL").is_some();
     for (e, g, s, cull, mut v) in &mut parts {
         // NEOPETS_NO_ZONES: every zone-gated part drawn (diagnostic).
         // The neighbouring world's parts skip the zone gate unless its Original setting is on.
@@ -4110,13 +4112,13 @@ fn sync_zones(
             s.pack != current && *dups.2.entry(e).or_insert_with(|| mine.iter().any(|m| m.same(s)) || (dup_level() >= 4 && mine.iter().map(|m| m.contains(s)).sum::<f32>() >= 0.9))
         });
         // Skipped at D1 or more (squared values compared).
-        let near = cull.is_none_or(|c| eye.is_none_or(|e| e.distance_squared(c.0) < c.1 * c.1));
+        let near = no_cull || cull.is_none_or(|c| eye.is_none_or(|e| e.distance_squared(c.0) < c.1 * c.1));
         let want = if zone_ok && !dup && near { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
             if trace {
                 let t = (*toggles).0.entry(e).or_insert((0, String::new()));
                 t.0 += 1;
-                t.1 = format!("zone {:?} sig {:?} zone_ok {zone_ok} dup {dup} near {near}", g.map(|g| (g.0, g.1)), s.map(|s| (s.pack, s.count, s.lo, s.hi)));
+                t.1 = format!("zone {:?} sig {:?} zone_ok {zone_ok} dup {dup} near {near} cull {:?}", g.map(|g| (g.0, g.1)), s.map(|s| (s.pack, s.count, s.lo, s.hi)), cull.map(|c| (c.0, c.1)));
             }
             *v = want;
         }
@@ -6208,7 +6210,8 @@ fn play_trace(
                         let (lo, hi) = q.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| (std::array::from_fn(|k| lo[k].min(p[k])), std::array::from_fn(|k| hi[k].max(p[k]))));
                         if hi[0] >= v[0] && lo[0] <= v[2] && hi[2] >= v[1] && lo[2] <= v[3] && hi[0] - lo[0] < 150.0 && hi[2] - lo[2] < 150.0 {
                             let g = play.world.ground_at(0.5 * (lo[0] + hi[0]), 0.5 * (lo[2] + hi[2]), hi[1] + 8.0);
-                            println!("      PART {i} tree {} verts {} lo {lo:?} hi {hi:?} zone {:?} group {:?} tex {:?} lit {} pass {} bucket {:?} ground {g:?}", q.tree, q.positions.len(), q.zone, q.group, q.texture, q.lit, q.pass, q.bucket);
+                            let placed = neopets_data::world::scene(&bytes, &chain.chunks).trees.get(q.tree).map(|t| (t.source, t.matrix.map(|m| [m[12], m[13], m[14]])));
+                            println!("      PART {i} tree {} {placed:?} verts {} lo {lo:?} hi {hi:?} zone {:?} group {:?} tex {:?} lit {} pass {} bucket {:?} ground {g:?}", q.tree, q.positions.len(), q.zone, q.group, q.texture, q.lit, q.pass, q.bucket);
                         }
                     }
                 }
@@ -7033,6 +7036,14 @@ fn play_trace(
                     }
                 }
             }
+        }
+        // NEOPETS_TRACE_UNDERFOOT=1: every 30 ticks, the ground entry under the hero: its patch
+        // (owner 0 the pack's own, else a placed object), ground kind, surface word and height
+        // (diagnostic, for ground that is solid but not drawn).
+        if play.ticks % 30 == 0 && std::env::var_os("NEOPETS_TRACE_UNDERFOOT").is_some() {
+            let h = play.player.loco.position();
+            let g = play.world.probe(h[0], h[2], h[1] + neopets_sim::motion::PROBE_CEILING);
+            println!("      UNDERFOOT tick {} at ({:.2}, {:.2}, {:.2}): patch {:?} kind {:?} surface {:?} height {:.2}", play.ticks, h[0], h[1], h[2], g.patch, g.kind, g.surface, g.height);
         }
         // NEOPETS_TRACE_OBJON="tick,obj": InitObjOn for that object on that tick (diagnostic).
         if let Some((t, o)) = std::env::var("NEOPETS_TRACE_OBJON").ok().and_then(|v| { let (a, b) = v.split_once(',')?; Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<usize>().ok()?)) }) {

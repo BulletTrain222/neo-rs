@@ -669,7 +669,7 @@ impl World {
         neopets_sim::block::Floor { height: h.found.then_some(h.height), patch: h.patch.map(|p| (p.owner, p.index)) }
     }
 
-    fn probe(&self, x: f32, z: f32, c: f32) -> ProbeHit {
+    pub fn probe(&self, x: f32, z: f32, c: f32) -> ProbeHit {
         // The test stage: one level floor everywhere, found from at or above it.
         if let Some(h) = self.flat.filter(|&h| c >= h - 0.5) {
             return ProbeHit { height: h, normal: UP, kind: None, found: true, respawn: None, surface: None, zone: None, patch: None };

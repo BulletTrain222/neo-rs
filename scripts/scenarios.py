@@ -140,6 +140,7 @@ SCENARIOS = [
     ('co-op: player 2 stepping into the next area comes back beside player 1 (report 142)', 'this build (co-op rules; user report 142)', 60, 1066, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_STILL': '1', 'NEOPETS_COOP_APART': '1', 'NEOPETS_COOP_AT': '-286.86,670.9,50@30', 'NEOPETS_TRACE_STAND': '1', 'NEOPETS_TRACE_GOD': '1'}, has(r'COOP 50 p2 at \(-74\d\.\d+, 4\d\.\d+, 83\d\.\d+\)')),
     ('co-op: a second Tor guards with a shield', 'this build (co-op guard)', 100, 909, [], {'NEOPETS_COOP': '1', 'NEOPETS_COOP_TOR': '1', 'NEOPETS_COOP_GUARD': '1', 'NEOPETS_TRACE_GIVE': '2:106:1'}, has(r'COOP 90 p2 .* state 20 clip 63')),
     ('a Bogshot house floor plays wooden footsteps, not metal grate (report 156)', 'SPEC-0031 Footsteps (the surface word at +0x40)', 120, 745, ['--start', '-0.5,-2.4'], {'NEOPETS_TRACE_PUSH': '3,7', 'NEOPETS_TRACE_NOAUTO': '1'}, both(has(r'"347:25 at'), lacks(r'"347:24 at'))),
+    ('the wooden stepping platforms on the way to the 735 serpent arena are drawn (report 158)', 'SPEC-0044 735 Init (objects 50 to 54 and 12 on); SPEC-0016 Arena build guide, Approach', 6, 735, ['--start', '3679.9,-669.2,114'], {'NEOPETS_TRACE_OBJS': '5,50-54', 'NEOPETS_TRACE_NOAUTO': '1'}, both(has(r'obj 50: drawn at Some'), has(r'obj 54: drawn at Some'))),
 ]
 
 
