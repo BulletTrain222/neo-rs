@@ -40,6 +40,7 @@ mod book_view;
 mod menu_view;
 mod pick_view;
 mod menus;
+mod mesmerize_view;
 mod movie_view;
 mod placeholder;
 mod play;
@@ -1088,6 +1089,8 @@ fn main() {
     app.add_systems(Update, (debug_tools::track_events, debug_tools::save_report, debug_tools::note_input, states_menu::states_menu, debug_tools::show_panel, debug_tools::hide_hud, debug_tools::show_lines).after(play_frame));
     app.insert_resource(goal_start.map_or_else(story_run::GoalWalk::default, story_run::GoalWalk::open));
     app.add_systems(Startup, story_run::spawn_goal_panel);
+    // The Plague Serpent's mesmerize beams (a stand-in, request R-0286).
+    app.add_systems(Startup, mesmerize_view::setup).add_systems(Update, mesmerize_view::sync.after(step_sim));
     app.add_systems(Update, (story_run::goal_walk_step.before(play_frame), story_run::show_goal_panel));
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
     app.init_resource::<button_style::LastDevice>().add_systems(Update, (button_style::track_device, button_style::apply).chain());

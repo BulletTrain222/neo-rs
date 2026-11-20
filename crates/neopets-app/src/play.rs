@@ -17093,6 +17093,15 @@ impl Play {
         if ids.is_empty() {
             return;
         }
+        // NEOPETS_TRACE_MESMERIZE=t: the serpent starts a mesmerize on play tick t, wherever it is
+        // (diagnostic, for the beams' stand-in).
+        if std::env::var("NEOPETS_TRACE_MESMERIZE").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(self.ticks) {
+            for c in self.characters.iter_mut().filter(|c| ids.contains(&c.id)) {
+                if let Some(s) = c.serpent.as_mut() {
+                    s.state = neopets_sim::serpent::State::Bite(neopets_sim::serpent::Bite::Mesmerize { ticks: 0 });
+                }
+            }
+        }
         let hplace = placement(hero, hf);
         let hframes = self.player.hero.bone_frames();
         let caps: Vec<Cylinder> = self
@@ -21080,6 +21089,26 @@ impl Play {
                 self.emote_requests.push((bank, start, len));
             }
         }
+    }
+
+    /// A stand-in of this build (user report 162, the user's choice; request R-0286 asks for the
+    /// real effects): while the Plague Serpent's mesmerize (bite sub 1) is past its 10-tick delay
+    /// (SPEC-0016 Sub 1: "two beam effects ... from the serpent's two hand joints (0x13 and 0x17)
+    /// to the hero's chest (hero position plus 1.5 up)"), the two hands, the chest and the ticks
+    /// since the beams began, for mesmerize_view.rs to draw.
+    pub fn mesmerize_beams(&self) -> Option<([f32; 3], [f32; 3], [f32; 3], i32)> {
+        use neopets_sim::serpent::{Bite, State};
+        let c = self.characters.iter().find(|c| c.pack == self.world.pack && c.dying.is_none() && c.serpent.is_some())?;
+        let State::Bite(Bite::Mesmerize { ticks }) = c.serpent.as_ref()?.state else { return None };
+        if ticks <= 10 {
+            return None;
+        }
+        let place = placement(c.position, c.facing);
+        let frames = c.anim.bone_frames();
+        let a = place.mul(frames.get(0x13)?).t;
+        let b = place.mul(frames.get(0x17)?).t;
+        let h = self.player.loco.position();
+        Some((a, b, [h[0], h[1] + 1.5, h[2]], ticks - 10))
     }
 
     /// The talk partner's main id and face override, for the trace.
